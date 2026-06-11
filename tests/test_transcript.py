@@ -254,6 +254,32 @@ def test_transcript_renderer_events_off_tracks_activity_without_event_blocks() -
     assert renderer.activity_label is None
 
 
+def test_transcript_renderer_stops_activity_before_manual_approval_prompt() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console, events_mode="off")
+
+    renderer.begin_run(activity_context="mode=single model=primary:demo")
+    renderer.render(
+        RiskAssessmentEvent(
+            call_id="call-2",
+            tool="shell.run",
+            risk_level="medium",
+            summary="Lists active processes.",
+            recommended_decision="requires_approval",
+            model_role="risk_evaluator",
+            profile_name="primary",
+        )
+    )
+    assert renderer.activity_label == (
+        "Reviewing risk for shell.run... | mode=single model=primary:demo"
+    )
+
+    renderer.render(ApprovalRequestedEvent(call_id="call-2", reason="Needs permission."))
+
+    assert renderer.activity_label is None
+    assert "approval requested" not in console.export_text()
+
+
 def test_transcript_renderer_streaming_delta_stops_activity_before_output() -> None:
     console = Console(record=True, width=100)
     renderer = TranscriptRenderer(console, events_mode="off")

@@ -280,7 +280,7 @@ class TranscriptRenderer:
             self._set_activity(f"Reviewing risk for {event.tool}...")
             return
         if isinstance(event, ApprovalRequestedEvent):
-            self._set_activity("Waiting for approval...")
+            self._stop_activity()
             return
         if isinstance(event, ApprovalAutoGrantedEvent):
             self._set_activity("Approval auto-granted; working...")
