@@ -13,11 +13,14 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.application.current import get_app_or_none
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 from rich.console import Console
+from rich.markdown import Markdown
+from rich.prompt import Prompt
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
@@ -26,16 +29,19 @@ from colossus.application.context import ContextService
 from colossus.application.defaults import default_agent
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
+from colossus.application.planning import PlanService
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.skills import SkillResolver
 from colossus.application.tasks import TaskService
 from colossus.domain.agents import AgentSpec
 from colossus.domain.context import ContextStatus
 from colossus.domain.errors import ColossusError
+from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences, TranscriptStylePreference
 from colossus.domain.requests import AgentRunRequest
 from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolSpec
+from colossus.domain.user_prompts import UserPromptAnswer, UserPromptChoice
 from colossus.interfaces.trace import EventDisplayMode, TraceRenderTheme
 from colossus.interfaces.transcript import TranscriptRenderer, TranscriptRenderTheme
 from colossus.ports.model_provider import ModelProvider
@@ -55,6 +61,7 @@ SlashCommand = Literal[
     "repl",
     "status",
     "tasks",
+    "plan",
     "help",
     "audit",
     "compact",
@@ -63,6 +70,19 @@ SlashCommand = Literal[
     "exit",
 ]
 RunStatus = Literal["idle", "running", "done", "failed"]
+ReplInteractionMode = Literal["chat", "plan"]
+
+PLAN_MODE_INSTRUCTIONS = (
+    "You are Colossus operating in REPL Plan Mode. Create a concise markdown "
+    "implementation plan only. You may inspect context with tools when useful, but do "
+    "not make code changes, do not apply patches, do not run mutating commands, and do "
+    "not claim that implementation is complete. If a missing requirement or user "
+    "preference materially changes the plan, ask exactly one structured question with "
+    "user.ask before finalizing. When the plan contains clear trackable work, use "
+    "task.create to create concise session tasks that mirror the major work items; "
+    "skip task creation for trivial plans or when tasks already exist. Include a title, "
+    "summary, key changes, tests, and assumptions."
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +106,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/repl",
     "/status",
     "/tasks",
+    "/plan",
     "/help",
     "/audit",
     "/compact",
@@ -109,6 +130,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/repl": "Show, save, or reset REPL preferences.",
     "/status": "Show full REPL, model, session, and context status.",
     "/tasks": "Show session task records.",
+    "/plan": "Toggle or manage REPL Plan Mode.",
     "/help": "Show REPL commands.",
     "/audit": "Reserved audit view.",
     "/compact": "Create a context snapshot for the current session.",
@@ -126,7 +148,7 @@ class SlashCommandCompleter(Completer):
     ) -> Iterable[Completion]:
         del complete_event
         text = document.text_before_cursor
-        if not text.startswith("/") or any(character.isspace() for character in text):
+        if not _is_slash_command_draft(text):
             return
         prefix = text.lower()
         for command in SLASH_COMMANDS:
@@ -406,6 +428,9 @@ class ReplDisplayState:
     model: str
     approval_mode: str
     stream_model_output: bool = True
+    interaction_mode: ReplInteractionMode = "chat"
+    active_plan_id: str | None = None
+    active_plan_status: str | None = None
     events_mode: EventDisplayMode = "compact"
     show_reasoning: bool = True
     transcript_style: TranscriptStylePreference = "comfortable"
@@ -419,6 +444,37 @@ class ReplDisplayState:
     saved_preferences: ReplPreferences = field(default_factory=ReplPreferences)
 
 
+@dataclass
+class RichUserPromptHandler:
+    console: Console
+
+    async def ask(
+        self,
+        *,
+        question: str,
+        choices: tuple[UserPromptChoice, ...] = (),
+        allow_freeform: bool = True,
+    ) -> UserPromptAnswer:
+        self.console.print("[bold cyan]question[/bold cyan]", question)
+        if choices:
+            table = Table("Option", "ID", "Label", "Description")
+            for index, choice in enumerate(choices, start=1):
+                table.add_row(str(index), choice.id, choice.label, choice.description)
+            self.console.print(table)
+        while True:
+            response = self._ask_user("Choose an option or type an answer").strip()
+            answer = _match_user_prompt_answer(response, choices, allow_freeform)
+            if answer is not None:
+                return answer
+            if choices and not allow_freeform:
+                self.console.print("Please choose one of the listed options.")
+            else:
+                self.console.print("Please enter an answer.")
+
+    def _ask_user(self, prompt: str) -> str:
+        return Prompt.ask(prompt, console=self.console)
+
+
 async def run_repl(
     orchestrator: AgentOrchestrator,
     skills: SkillResolver,
@@ -427,6 +483,7 @@ async def run_repl(
     agent: AgentSpec | None = None,
     *,
     task_service: TaskService | None = None,
+    plan_service: PlanService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -626,6 +683,17 @@ async def run_repl(
                 )
                 await _refresh_task_status(display_state, task_service)
                 continue
+            if command.command == "plan":
+                await _handle_plan_command(
+                    console,
+                    plan_service,
+                    display_state,
+                    command.argument,
+                    orchestrator,
+                    agent,
+                    trace_renderer,
+                )
+                continue
             if command.command == "help":
                 _render_help(console, display_state)
                 continue
@@ -667,6 +735,32 @@ async def run_repl(
                 console.print(f"[dim]{_format_submit_summary(display_state, line)}[/dim]")
             display_state.last_status = "running"
             trace_renderer.begin_run(activity_context=_format_run_toolbar(display_state, line))
+            if display_state.interaction_mode == "plan":
+                result = await orchestrator.run(
+                    AgentRunRequest(
+                        prompt=line,
+                        agent=_plan_agent(agent),
+                        session_id=display_state.session_id,
+                    )
+                )
+                plan = await _save_repl_plan(
+                    plan_service,
+                    display_state,
+                    prompt=line,
+                    content=result.final_output,
+                )
+                trace_renderer.end_run()
+                display_state.last_run_id = result.run_id
+                display_state.last_status = "done"
+                if not trace_renderer.rendered_model_output:
+                    trace_renderer.render_final_answer(result.final_output)
+                console.print(
+                    f"Saved draft plan {plan.id}. "
+                    "Next: /plan approve, /plan execute, or /plan off."
+                )
+                await _refresh_context_status(display_state, context_service)
+                await _refresh_task_status(display_state, task_service)
+                continue
             result = await orchestrator.run(
                 AgentRunRequest(
                     prompt=line,
@@ -730,6 +824,7 @@ def run_repl_sync(
     agent: AgentSpec | None = None,
     *,
     task_service: TaskService | None = None,
+    plan_service: PlanService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -748,6 +843,7 @@ def run_repl_sync(
             provider,
             agent,
             task_service=task_service,
+            plan_service=plan_service,
             model_router=model_router,
             active_model_role=active_model_role,
             orchestrator_factory=orchestrator_factory,
@@ -766,7 +862,8 @@ def _render_repl_startup(console: Console, state: ReplDisplayState) -> None:
     console.print("[bold]Colossus REPL[/bold]  Type /exit to leave.")
     console.print(
         f"[dim]session_id={state.session_id} "
-        f"mode={'multi' if state.multiline else 'single'} "
+        f"mode={state.interaction_mode} "
+        f"composer={'multi' if state.multiline else 'single'} "
         f"theme={state.theme.name} stream={_on_off(state.stream_model_output)} "
         f"events={state.events_mode} "
         f"transcript={state.transcript_style} "
@@ -1076,6 +1173,225 @@ async def _handle_repl_command(
     console.print("Use /repl prefs, /repl save, or /repl reset.")
 
 
+async def _handle_plan_command(
+    console: Console,
+    plan_service: PlanService | None,
+    state: ReplDisplayState,
+    argument: str,
+    orchestrator: AgentOrchestrator,
+    agent: AgentSpec,
+    trace_renderer: TranscriptRenderer,
+) -> None:
+    if plan_service is None:
+        console.print("Plan service is not configured.")
+        return
+    action = argument.strip().lower()
+    if action in {"", "toggle"}:
+        state.interaction_mode = "chat" if state.interaction_mode == "plan" else "plan"
+        console.print(f"Plan Mode is {state.interaction_mode}.")
+        return
+    if action == "on":
+        state.interaction_mode = "plan"
+        console.print("Plan Mode is on.")
+        return
+    if action == "off":
+        state.interaction_mode = "chat"
+        console.print("Plan Mode is off.")
+        return
+    if action == "discard":
+        state.active_plan_id = None
+        state.active_plan_status = None
+        console.print("Cleared active plan.")
+        return
+    if action == "list":
+        _render_plan_list(
+            console,
+            await plan_service.list_plans(state.session_id),
+            active_plan_id=state.active_plan_id,
+        )
+        return
+    if action == "show":
+        plan = await _active_plan(console, plan_service, state)
+        if plan is not None:
+            _render_plan(console, plan)
+        return
+    if action == "approve":
+        plan = await _active_plan(console, plan_service, state)
+        if plan is None:
+            return
+        if plan.status == "executed":
+            console.print("Plan has already been executed.")
+            return
+        approved = await plan_service.approve_plan(plan.id)
+        state.active_plan_status = approved.status
+        console.print(f"Approved plan {approved.id}.")
+        return
+    if action == "execute":
+        await _execute_active_plan(
+            console,
+            plan_service,
+            state,
+            orchestrator,
+            agent,
+            trace_renderer,
+        )
+        return
+    console.print("Use /plan [on|off|show|approve|execute|list|discard].")
+
+
+async def _save_repl_plan(
+    plan_service: PlanService | None,
+    state: ReplDisplayState,
+    *,
+    prompt: str,
+    content: str,
+) -> Plan:
+    if plan_service is None:
+        raise ColossusError("Plan service is not configured.")
+    if state.active_plan_id is not None:
+        try:
+            current = await plan_service.get_plan(state.active_plan_id)
+        except ColossusError:
+            current = None
+        if current is not None and current.status == "draft":
+            plan = await plan_service.replace_draft_plan(current.id, prompt, content)
+            state.active_plan_status = plan.status
+            return plan
+    plan = await plan_service.create_plan(prompt, state.session_id, content=content)
+    state.active_plan_id = plan.id
+    state.active_plan_status = plan.status
+    return plan
+
+
+async def _active_plan(
+    console: Console,
+    plan_service: PlanService,
+    state: ReplDisplayState,
+) -> Plan | None:
+    if state.active_plan_id is None:
+        console.print("No active plan.")
+        return None
+    try:
+        plan = await plan_service.get_plan(state.active_plan_id)
+    except ColossusError as exc:
+        state.active_plan_id = None
+        state.active_plan_status = None
+        console.print(f"Active plan is unavailable: {exc}")
+        return None
+    state.active_plan_status = plan.status
+    return plan
+
+
+async def _execute_active_plan(
+    console: Console,
+    plan_service: PlanService,
+    state: ReplDisplayState,
+    orchestrator: AgentOrchestrator,
+    agent: AgentSpec,
+    trace_renderer: TranscriptRenderer,
+) -> None:
+    plan = await _active_plan(console, plan_service, state)
+    if plan is None:
+        return
+    if plan.status == "draft":
+        console.print("Approve first with /plan approve.")
+        return
+    if plan.status == "executed":
+        console.print("Plan has already been executed.")
+        return
+    approved_plan = await plan_service.require_approved(plan.id)
+    prompt = _execution_prompt(approved_plan)
+    state.last_status = "running"
+    trace_renderer.begin_run(activity_context=_format_run_toolbar(state, prompt))
+    try:
+        result = await orchestrator.run(
+            AgentRunRequest(
+                prompt=prompt,
+                agent=agent,
+                session_id=state.session_id,
+                plan_id=plan.id,
+            )
+        )
+    except ColossusError as exc:
+        trace_renderer.end_run()
+        state.last_status = "failed"
+        console.print(f"[red]Plan execution failed:[/red] {exc}")
+        return
+    trace_renderer.end_run()
+    state.last_run_id = result.run_id
+    state.last_status = "done"
+    executed = await plan_service.mark_executed(plan.id, result.run_id)
+    state.active_plan_status = executed.status
+    state.interaction_mode = "chat"
+    if not trace_renderer.rendered_model_output:
+        trace_renderer.render_final_answer(result.final_output)
+    console.print(f"Executed plan {plan.id}.")
+
+
+def _plan_agent(agent: AgentSpec) -> AgentSpec:
+    return agent.model_copy(
+        update={"instructions": f"{agent.instructions}\n\n{PLAN_MODE_INSTRUCTIONS}"}
+    )
+
+
+def _execution_prompt(plan: Plan) -> str:
+    if plan.content.strip():
+        return (
+            "Execute the approved plan.\n\n"
+            f"Original request:\n{plan.prompt}\n\n"
+            f"Plan:\n{plan.content}"
+        )
+    return f"Execute the approved plan.\n\nOriginal request:\n{plan.prompt}"
+
+
+def _match_user_prompt_answer(
+    response: str,
+    choices: tuple[UserPromptChoice, ...],
+    allow_freeform: bool,
+) -> UserPromptAnswer | None:
+    if not response:
+        return None
+    for index, choice in enumerate(choices, start=1):
+        if response == str(index) or response == choice.id:
+            return UserPromptAnswer(answer=choice.label, choice_id=choice.id)
+    if allow_freeform:
+        return UserPromptAnswer(answer=response)
+    return None
+
+
+def _render_plan(console: Console, plan: Plan) -> None:
+    console.print(f"[bold]Plan:[/bold] {plan.id}")
+    console.print(f"Status: {plan.status}")
+    console.print(f"Prompt: {plan.prompt}")
+    if plan.content.strip():
+        console.print(Markdown(plan.content))
+        return
+    table = Table("Step", "Title", "Mutation", "Detail")
+    for step in plan.steps:
+        table.add_row(str(step.index), step.title, str(step.requires_mutation), step.detail)
+    console.print(table)
+
+
+def _render_plan_list(
+    console: Console,
+    plans: tuple[Plan, ...],
+    *,
+    active_plan_id: str | None = None,
+) -> None:
+    if not plans:
+        console.print("No plans.")
+        return
+    table = Table("Active", "Status", "ID", "Prompt")
+    for plan in plans:
+        table.add_row(
+            "*" if plan.id == active_plan_id else "",
+            plan.status,
+            plan.id,
+            _short_text(plan.prompt, 80),
+        )
+    console.print(table)
+
+
 def _events_mode(argument: str) -> EventDisplayMode:
     normalized = argument.strip().lower()
     if normalized in {"compact", "verbose", "off"}:
@@ -1096,6 +1412,8 @@ def _trace_events_mode(argument: str, current: EventDisplayMode) -> EventDisplay
 
 def _prompt_message(state: ReplDisplayState) -> AnyFormattedText:
     mode = "MULTI" if state.multiline else "SINGLE"
+    if state.interaction_mode == "plan":
+        mode = "PLAN"
     model = _short_text(f"{state.active_model_role}:{state.model}", 36)
     theme = state.theme
     return [
@@ -1112,18 +1430,40 @@ def _prompt_message(state: ReplDisplayState) -> AnyFormattedText:
 def _composer_key_bindings() -> KeyBindings:
     bindings = KeyBindings()
 
-    @bindings.add("escape", "enter")
-    def _accept(event) -> None:  # type: ignore[no-untyped-def]
-        event.current_buffer.validate_and_handle()
-
     @bindings.add("/")
     def _slash(event) -> None:  # type: ignore[no-untyped-def]
         before_cursor = event.current_buffer.document.text_before_cursor
         event.current_buffer.insert_text("/")
-        if not before_cursor:
+        after_cursor = event.current_buffer.document.text_before_cursor
+        if not before_cursor and _is_slash_command_draft(after_cursor):
             event.current_buffer.start_completion(select_first=False)
 
+    for key in "abcdefghijklmnopqrstuvwxyz":
+        _bind_slash_completion_key(bindings, key)
+
+    @bindings.add("escape", "enter")
+    def _accept(event) -> None:  # type: ignore[no-untyped-def]
+        event.current_buffer.validate_and_handle()
+
     return bindings
+
+
+def _bind_slash_completion_key(bindings: KeyBindings, key: str) -> None:
+    @bindings.add(key, filter=Condition(_current_buffer_is_slash_command_draft))
+    def _slash_command_key(event) -> None:  # type: ignore[no-untyped-def]
+        event.current_buffer.insert_text(event.data)
+        event.current_buffer.start_completion(select_first=False)
+
+
+def _current_buffer_is_slash_command_draft() -> bool:
+    app = get_app_or_none()
+    if app is None:
+        return False
+    return _is_slash_command_draft(app.current_buffer.document.text_before_cursor)
+
+
+def _is_slash_command_draft(text: str) -> bool:
+    return text.startswith("/") and not any(character.isspace() for character in text)
 
 
 def _prompt_continuation(
@@ -1155,7 +1495,7 @@ def _right_prompt(state: ReplDisplayState) -> AnyFormattedText:
 
 
 def _format_slash_suggestions(draft_text: str) -> str:
-    if not draft_text.startswith("/") or any(character.isspace() for character in draft_text):
+    if not _is_slash_command_draft(draft_text):
         return ""
     prefix = draft_text.lower()
     matches = tuple(command for command in SLASH_COMMANDS if command.lower().startswith(prefix))
@@ -1217,7 +1557,9 @@ def _format_repl_toolbar(
     cursor_line: int,
     cursor_column: int,
 ) -> str:
-    mode = "multi" if state.multiline else "single"
+    mode = state.interaction_mode if state.interaction_mode == "plan" else (
+        "multi" if state.multiline else "single"
+    )
     lines = _line_count(draft_text)
     return (
         f"mode={mode} model={state.active_model_role}:{_short_text(state.model, 28)} "
@@ -1227,7 +1569,7 @@ def _format_repl_toolbar(
         f"reasoning={_on_off(state.show_reasoning)} "
         f"session={_short_id(state.session_id)} pos={cursor_line}:{cursor_column} "
         f"chars={len(draft_text)} lines={lines} {_context_label(state)} "
-        f"{state.task_summary} "
+        f"{state.task_summary} {_plan_label(state)} "
         f"last={state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
     )
 
@@ -1236,7 +1578,8 @@ def _format_run_toolbar(state: ReplDisplayState, prompt: str) -> str:
     return (
         f"model={state.active_model_role}:{_short_text(state.model, 24)} "
         f"{_context_label(state)} session={_short_id(state.session_id)} "
-        f"{state.task_summary} chars={len(prompt)} lines={_line_count(prompt)}"
+        f"{state.task_summary} {_plan_label(state)} chars={len(prompt)} "
+        f"lines={_line_count(prompt)}"
     )
 
 
@@ -1244,7 +1587,8 @@ def _format_submit_summary(state: ReplDisplayState, prompt: str) -> str:
     return (
         f"submit chars={len(prompt)} lines={_line_count(prompt)} "
         f"model={state.active_model_role}:{_short_text(state.model, 40)} "
-        f"session={_short_id(state.session_id)} {_context_label(state)} {state.task_summary}"
+        f"session={_short_id(state.session_id)} {_context_label(state)} "
+        f"{state.task_summary} {_plan_label(state)}"
     )
 
 
@@ -1270,6 +1614,13 @@ def _context_label(state: ReplDisplayState) -> str:
     )
 
 
+def _plan_label(state: ReplDisplayState) -> str:
+    if state.active_plan_id is None:
+        return "plan=-"
+    status = state.active_plan_status or "unknown"
+    return f"plan={status}:{_short_id(state.active_plan_id)}"
+
+
 def _render_status(console: Console, state: ReplDisplayState) -> None:
     table = Table("Field", "Value")
     rows = {
@@ -1277,6 +1628,9 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
         "model_role": state.active_model_role,
         "model": state.model,
         "approval_mode": state.approval_mode,
+        "mode": state.interaction_mode,
+        "active_plan": state.active_plan_id or "",
+        "active_plan_status": state.active_plan_status or "",
         "theme": state.theme.name,
         "activity_spinner": state.theme.transcript.activity_spinner,
         "composer_mode": "multiline" if state.multiline else "single-line",
@@ -1350,6 +1704,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Show session task records.",
     )
     table.add_row(
+        Text("/plan [on|off|show|approve|execute|list|discard]"),
+        _help_current(state, "plan"),
+        "Toggle or manage REPL Plan Mode.",
+    )
+    table.add_row(
         "/context [snapshots|restore ID]",
         _help_current(state, "context"),
         "Inspect or restore context snapshots.",
@@ -1386,6 +1745,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return f"{state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
     if field == "tasks":
         return state.task_summary
+    if field == "plan":
+        return f"{state.interaction_mode} {_plan_label(state)}"
     if field == "context":
         return _context_label(state)
     if field == "submit":

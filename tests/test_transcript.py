@@ -280,6 +280,23 @@ def test_transcript_renderer_stops_activity_before_manual_approval_prompt() -> N
     assert "approval requested" not in console.export_text()
 
 
+def test_transcript_renderer_stops_activity_before_user_ask_prompt() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console, events_mode="off")
+
+    renderer.begin_run(activity_context="mode=plan model=primary:demo")
+    renderer.render(
+        ToolCallRequestedEvent(
+            call_id="call-ask",
+            name="user.ask",
+            arguments={"question": "Which path?"},
+        )
+    )
+
+    assert renderer.activity_label is None
+    assert "Using user.ask" not in console.export_text()
+
+
 def test_transcript_renderer_compact_skips_sticky_approval_requested_block() -> None:
     console = Console(record=True, width=100)
     renderer = TranscriptRenderer(console, events_mode="compact")

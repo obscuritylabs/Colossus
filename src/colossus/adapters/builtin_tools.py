@@ -19,7 +19,9 @@ from colossus.application.tasks import TaskService
 from colossus.application.tools import ToolHandler
 from colossus.domain.errors import ToolExecutionError
 from colossus.domain.tools import ToolPermission, ToolSpec
+from colossus.domain.user_prompts import UserPromptChoice
 from colossus.ports.model_provider import ModelProvider
+from colossus.ports.user_prompt import UserPromptHandler
 
 JsonObject = dict[str, Any]
 HandlerMap = dict[str, ToolHandler]
@@ -34,9 +36,10 @@ def create_builtin_tools(
     context_provider: ModelProvider | None = None,
     context_model: str = "default",
     task_service: TaskService | None = None,
+    user_prompt_handler: UserPromptHandler | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     broker = SubprocessBroker()
-    handlers = BuiltinToolHandlers(workspace, broker)
+    handlers = BuiltinToolHandlers(workspace, broker, user_prompt_handler=user_prompt_handler)
     core_specs = (
         _filesystem_list_spec(),
         _filesystem_read_spec(),
@@ -60,7 +63,11 @@ def create_builtin_tools(
         provider=context_provider,
         default_model=context_model,
     )
-    specs = (*core_specs, *roadmap_specs, *context_specs, _echo_spec())
+    user_prompt_specs = (_user_ask_spec(),) if user_prompt_handler is not None else ()
+    specs = (*core_specs, *roadmap_specs, *context_specs, *user_prompt_specs, _echo_spec())
+    user_prompt_handlers = (
+        {"user.ask": handlers.user_ask} if user_prompt_handler is not None else {}
+    )
     catalog.extend(specs)
     return specs, {
         "filesystem.list": handlers.filesystem_list,
@@ -74,17 +81,42 @@ def create_builtin_tools(
         "shell.run": handlers.shell_run,
         **roadmap_handlers,
         **context_handlers,
+        **user_prompt_handlers,
         "echo": handlers.echo,
     }
 
 
 class BuiltinToolHandlers:
-    def __init__(self, workspace: Workspace, broker: SubprocessBroker) -> None:
+    def __init__(
+        self,
+        workspace: Workspace,
+        broker: SubprocessBroker,
+        *,
+        user_prompt_handler: UserPromptHandler | None = None,
+    ) -> None:
         self._workspace = workspace
         self._broker = broker
+        self._user_prompt_handler = user_prompt_handler
 
     async def echo(self, arguments: JsonObject) -> str:
         return str(arguments.get("text", ""))
+
+    async def user_ask(self, arguments: JsonObject) -> str:
+        if self._user_prompt_handler is None:
+            raise ToolExecutionError("user.ask is unavailable in this surface.")
+        question = _required_string_arg(arguments, "question")
+        choices = _prompt_choices_arg(arguments)
+        allow_freeform = _bool_arg(arguments, "allow_freeform", True)
+        if not choices and not allow_freeform:
+            raise ToolExecutionError(
+                "user.ask requires choices when free-form answers are disabled."
+            )
+        answer = await self._user_prompt_handler.ask(
+            question=question,
+            choices=choices,
+            allow_freeform=allow_freeform,
+        )
+        return _json(answer.model_dump())
 
     async def filesystem_list(self, arguments: JsonObject) -> str:
         root = self._workspace.resolve(_string_arg(arguments, "path", "."))
@@ -370,6 +402,31 @@ def _string_list_arg(arguments: JsonObject, name: str) -> list[str]:
     return value
 
 
+def _prompt_choices_arg(arguments: JsonObject) -> tuple[UserPromptChoice, ...]:
+    value = arguments.get("choices", [])
+    if not isinstance(value, list):
+        raise ToolExecutionError("Argument choices must be an array.")
+    choices: list[UserPromptChoice] = []
+    seen_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise ToolExecutionError("Argument choices must contain objects.")
+        choice_id = item.get("id")
+        label = item.get("label")
+        description = item.get("description", "")
+        if not isinstance(choice_id, str) or not choice_id:
+            raise ToolExecutionError("Choice id must be a non-empty string.")
+        if not isinstance(label, str) or not label:
+            raise ToolExecutionError("Choice label must be a non-empty string.")
+        if not isinstance(description, str):
+            raise ToolExecutionError("Choice description must be a string.")
+        if choice_id in seen_ids:
+            raise ToolExecutionError(f"Choice id is duplicated: {choice_id}")
+        seen_ids.add(choice_id)
+        choices.append(UserPromptChoice(id=choice_id, label=label, description=description))
+    return tuple(choices)
+
+
 def _json(value: JsonObject) -> str:
     return json.dumps(value, sort_keys=True)
 
@@ -575,6 +632,41 @@ def _shell_run_spec() -> ToolSpec:
         ),
         timeout_seconds=30.0,
         max_output_bytes=64_000,
+    )
+
+
+def _user_ask_spec() -> ToolSpec:
+    choice_schema = _object_schema(
+        {
+            "id": {"type": "string", "minLength": 1},
+            "label": {"type": "string", "minLength": 1},
+            "description": {"type": "string"},
+        },
+        ["id", "label"],
+    )
+    return ToolSpec(
+        name="user.ask",
+        description=(
+            "Ask the user one structured question and return their selected choice or "
+            "free-form answer. Use this when the next step depends on user preference "
+            "or missing requirements."
+        ),
+        input_schema=_object_schema(
+            {
+                "question": {"type": "string", "minLength": 1},
+                "choices": {"type": "array", "items": choice_schema, "maxItems": 10},
+                "allow_freeform": {"type": "boolean", "default": True},
+            },
+            ["question"],
+        ),
+        output_schema=_object_schema(
+            {
+                "answer": {"type": "string"},
+                "choice_id": {"type": ["string", "null"]},
+            }
+        ),
+        permissions=ToolPermission(working_root_required=False, risk="low"),
+        max_output_bytes=4_000,
     )
 
 

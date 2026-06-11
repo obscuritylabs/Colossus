@@ -21,6 +21,7 @@ from colossus.domain.context import ContextConfig
 from colossus.domain.errors import ToolExecutionError
 from colossus.domain.messages import UserMessage
 from colossus.domain.tools import ToolCall, ToolSpec
+from colossus.domain.user_prompts import UserPromptAnswer, UserPromptChoice
 
 
 def _executor(root: Path) -> FunctionToolExecutor:
@@ -36,6 +37,25 @@ class CapturingBroker(SubprocessBroker):
     async def run(self, command: SubprocessCommand) -> SubprocessResult:
         self.commands.append(command)
         return SubprocessResult(exit_code=0, stdout="ok", stderr="")
+
+
+class FakeUserPromptHandler:
+    def __init__(self) -> None:
+        self.question = ""
+        self.choices: tuple[UserPromptChoice, ...] = ()
+        self.allow_freeform = True
+
+    async def ask(
+        self,
+        *,
+        question: str,
+        choices: tuple[UserPromptChoice, ...] = (),
+        allow_freeform: bool = True,
+    ) -> UserPromptAnswer:
+        self.question = question
+        self.choices = choices
+        self.allow_freeform = allow_freeform
+        return UserPromptAnswer(answer=choices[0].label, choice_id=choices[0].id)
 
 
 def test_builtin_tool_catalog_has_handlers_and_roadmap_families(tmp_path: Path) -> None:
@@ -54,9 +74,25 @@ def test_builtin_tool_catalog_has_handlers_and_roadmap_families(tmp_path: Path) 
     assert "mcp.call" in names
     assert "trace.export" in names
     assert "eval.run" in names
+    assert "user.ask" not in names
     assert "structured argv" in shell_spec.description
     assert "pipes" in shell_spec.description
     assert specs[-1].name == "echo"
+
+
+def test_builtin_tool_catalog_includes_user_ask_when_handler_is_wired(tmp_path: Path) -> None:
+    specs, handlers = create_builtin_tools(
+        Workspace(tmp_path),
+        user_prompt_handler=FakeUserPromptHandler(),
+    )
+    names = {spec.name for spec in specs}
+    user_ask = next(spec for spec in specs if spec.name == "user.ask")
+
+    assert "user.ask" in names
+    assert "user.ask" in handlers
+    assert user_ask.permissions.risk == "low"
+    assert user_ask.permissions.mutation is False
+    assert user_ask.permissions.working_root_required is False
 
 
 def test_tool_registry_rejects_duplicate_names() -> None:
@@ -64,6 +100,54 @@ def test_tool_registry_rejects_duplicate_names() -> None:
 
     with pytest.raises(ValueError, match="Duplicate tool names"):
         InMemoryToolRegistry((spec, spec))
+
+
+@pytest.mark.asyncio
+async def test_user_ask_tool_returns_structured_answer(tmp_path: Path) -> None:
+    handler = FakeUserPromptHandler()
+    specs, handlers = create_builtin_tools(Workspace(tmp_path), user_prompt_handler=handler)
+    executor = FunctionToolExecutor(handlers, InMemoryToolRegistry(specs))
+
+    result = await executor.execute(
+        ToolCall(
+            call_id="ask-1",
+            name="user.ask",
+            arguments={
+                "question": "Pick a path",
+                "choices": [
+                    {
+                        "id": "minimal",
+                        "label": "Minimal",
+                        "description": "Smallest useful change",
+                    }
+                ],
+                "allow_freeform": False,
+            },
+        )
+    )
+
+    assert json.loads(result.output) == {"answer": "Minimal", "choice_id": "minimal"}
+    assert handler.question == "Pick a path"
+    assert handler.choices[0].id == "minimal"
+    assert handler.allow_freeform is False
+
+
+@pytest.mark.asyncio
+async def test_user_ask_tool_requires_choices_when_freeform_is_disabled(tmp_path: Path) -> None:
+    specs, handlers = create_builtin_tools(
+        Workspace(tmp_path),
+        user_prompt_handler=FakeUserPromptHandler(),
+    )
+    executor = FunctionToolExecutor(handlers, InMemoryToolRegistry(specs))
+
+    with pytest.raises(ToolExecutionError, match="requires choices"):
+        await executor.execute(
+            ToolCall(
+                call_id="ask-1",
+                name="user.ask",
+                arguments={"question": "Pick a path", "allow_freeform": False},
+            )
+        )
 
 
 @pytest.mark.asyncio

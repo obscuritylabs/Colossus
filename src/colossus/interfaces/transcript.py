@@ -273,6 +273,9 @@ class TranscriptRenderer:
             self._set_activity("Thinking...")
             return
         if isinstance(event, ToolCallRequestedEvent):
+            if event.name == "user.ask":
+                self._stop_activity()
+                return
             self._set_activity(f"Using {event.name}...")
             return
         if isinstance(event, ToolCallCompletedEvent):
