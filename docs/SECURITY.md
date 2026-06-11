@@ -1,0 +1,138 @@
+# Security Model
+
+Colossus starts with capability-based policy, brokered execution, and append-only audit
+logs. OS-level isolation can be added behind the subprocess broker without changing tool
+contracts.
+
+## Core Rules
+
+- Tools declare command, argument schema, working-root policy, environment allowlist,
+  timeout, output cap, and network policy.
+- Subprocess execution goes through the broker.
+- `shell=True` is not used.
+- Tool inputs are validated before execution.
+- Approval is required when policy returns `requires_approval`.
+- Audit records are hash-chained JSONL entries.
+- Redaction is on by default for command inputs and environment values.
+
+Airgapped installs should be verified from signed bundles containing wheelhouse,
+lockfiles, SBOM, manifests, signatures, and skills.
+
+## Trust Boundaries
+
+- User interfaces collect input and render output only.
+- Application services decide orchestration flow and call ports.
+- Adapters interact with subprocesses, model providers, local state, filesystem skills,
+  and audit sinks.
+- Domain objects carry policy, tool, request, event, and audit data without depending
+  on infrastructure.
+
+Changes to subprocess execution, approval policy, audit records, bundle handling, or
+skill loading should include security-focused tests.
+
+## Tool Execution
+
+Tools are expected to declare their execution permissions up front. Policy can allow,
+deny, or require approval before execution. The broker validates tool inputs and runs
+commands without a shell so arguments are passed explicitly.
+
+Security-sensitive defaults:
+
+- Keep environment allowlists narrow.
+- Keep output caps and timeouts bounded.
+- Require approval for mutation, elevated filesystem access, or network access.
+- Preserve command and decision audit records.
+
+## Built-in Tool Permission Matrix
+
+| Tool family | Filesystem | Network | Approval | Offline default |
+| --- | --- | --- | --- | --- |
+| `filesystem.list/read/search` | Read | Denied | No | Enabled |
+| `filesystem.write/replace` | Write | Denied | Yes | Enabled |
+| `git.status/diff/show` | Read | Denied | No | Enabled |
+| `shell.run` | Write-capable | Denied | Yes | Enabled |
+| `task.*` | None | Denied | No | Enabled, runtime-local |
+| `plan.create/show` | None | Denied | No | Enabled, runtime-local |
+| `plan.approve_request` | None | Denied | Yes | Enabled, runtime-local |
+| `test.run/lint.run/typecheck.run/build.run/eval.run` | Read | Denied | Yes | Enabled |
+| `patch.preview` | Read | Denied | No | Enabled |
+| `patch.apply/reverse` | Write | Denied | Yes | Enabled |
+| `repo.*` | Read | Denied | No | Enabled |
+| `agent.*` | None | Denied | No | Enabled, records requests only |
+| `web.fetch` and `docs.fetch` | None | Allowed by spec | Yes | Bounded HTTP(S) fetch after approval |
+| `web.search` | None | Allowed by spec | Yes | Adapter extension point |
+| `mcp.servers/tools` | None | Denied | No | Returns unconfigured state |
+| `mcp.call` | None | Allowed by spec | Yes | Handler denies by default |
+| `trace.show` | Read | Denied | No | Enabled |
+| `trace.export` | Write | Denied | Yes | Enabled |
+| `context.show/compact/snapshots` | None | Denied | No | Enabled |
+| `context.restore` | None | Denied | Yes | Enabled |
+
+The default policy requires approval for declared mutations, explicit approval flags,
+network-capable tools, and high-risk tools. The orchestrator validates model-provided
+tool arguments against the tool schema before requesting approval.
+
+## Model-Assisted Risk Review
+
+`shell.run` is reviewed by the `risk_evaluator` model role when configured. Review happens
+after deterministic schema and policy checks, before approval prompts. The evaluator sees
+redacted structured metadata and runs with tools disabled. It may add risk explanation,
+require approval, deny a call, or auto-approve only when `--approval-mode risk-auto` is
+explicitly enabled and the review returns `risk_level=low` with
+`recommended_decision=allow`. It cannot make deterministic denies executable. If risk
+review is unavailable or returns invalid JSON, Colossus records `risk.review_unavailable`
+and continues with deterministic policy.
+
+## Context Compaction
+
+Context snapshots are derived from raw session messages and persisted in SQLite. They are
+used to reduce what is sent to a provider, but they do not delete, rewrite, or replace
+raw message history. `context.restore` is approval-required because it changes which
+snapshot is active for future model requests. Model-assisted compaction is best-effort;
+deterministic offline compaction remains the fallback.
+
+## Reasoning Visibility
+
+Colossus may render provider-supplied reasoning summaries when an endpoint exposes a
+safe summary field. It does not render raw hidden reasoning text in the default CLI or
+REPL paths. Stream chunks are normalized into typed events; raw provider chunks are not
+persisted unless a future explicit debug mode adds that capability.
+
+The REPL transcript labels these safe summaries as `thinking` only when they arrive as
+typed `ReasoningSummaryEvent` values. Local activity such as tool calls, approvals, and
+risk assessments is rendered as harness activity, not as hidden model reasoning.
+
+## REPL Themes And Preferences
+
+REPL preferences are stored as typed JSON in SQLite state. They control display behavior
+only and do not change provider, policy, tool, or approval decisions. User theme files
+are data-only JSON/TOML loaded from the config themes directory. Prompt, trace, and
+transcript style keys are validated against allowlists, executable plugins are not loaded
+through the theme path, and invalid theme files fail fast rather than being partially
+applied.
+
+## Audit Logs
+
+Audit records are append-only JSONL and hash chained. They are intended to support
+debugging, release review, and incident response. Redaction is enabled by default for
+command inputs and environment values, but operators should still treat audit logs as
+sensitive operational records.
+
+## Offline Bundles
+
+Offline bundles must be verified before installation or use:
+
+```bash
+uv run colossus bundle verify ./bundle
+```
+
+The current verifier checks that the bundle manifest exists, that file entries are
+well-formed, and that every listed file matches its SHA-256 checksum. Release bundles
+should also include signatures, SBOMs, lockfiles, wheels, and reviewed skill manifests.
+
+See [Offline Bundle Format](BUNDLE_FORMAT.md) for the directory and manifest format.
+
+## Vulnerability Reporting
+
+See the root [Security Policy](../SECURITY.md) for supported versions and vulnerability
+reporting expectations.

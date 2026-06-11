@@ -1,0 +1,64 @@
+# Built-in Tools
+
+Colossus exposes built-in tools through `ToolSpec` objects with strict JSON Schema
+inputs, optional JSON output schemas, permission metadata, timeouts, and output caps.
+All model-callable tools go through policy, approval, audit, and the brokered execution
+path where applicable.
+
+List the installed catalog:
+
+```bash
+uv run colossus tools list
+```
+
+## Permission Defaults
+
+| Family | Tools | Approval | Offline | Notes |
+| --- | --- | --- | --- | --- |
+| Filesystem read | `filesystem.list`, `filesystem.read`, `filesystem.search` | No | Yes | Workspace-scoped text discovery, read, and search. |
+| Filesystem write | `filesystem.write`, `filesystem.replace` | Yes | Yes | Exact text mutation inside the workspace. |
+| Git inspect | `git.status`, `git.diff`, `git.show` | No | Yes | Brokered structured git argv, bounded output. |
+| Shell | `shell.run` | Yes | Yes | Structured argv only; shell wrappers are denied by default. |
+| Task state | `task.create`, `task.update`, `task.list` | No | Yes | Runtime-local progress tracking for the active tool harness. |
+| Plan state | `plan.create`, `plan.show`, `plan.approve_request` | Approval request only | Yes | Draft plans are runtime-local; approval is policy-gated. |
+| Verification | `test.run`, `lint.run`, `typecheck.run`, `build.run` | Yes | Yes | Fixed command templates through `uv` and the subprocess broker. |
+| Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Apply/reverse only | Yes | Exact text patch preview and mutation. |
+| Repo context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | No | Yes | Local file map, symbol extraction, references, and summaries. |
+| Subagents | `agent.delegate`, `agent.result`, `agent.list` | No in v1 | Yes | Records bounded local delegation requests; child-run adapters come later. |
+| Web/docs | `web.fetch`, `web.search`, `docs.fetch` | Yes | Partial | `web.fetch` and `docs.fetch` make approval-gated HTTP(S) requests; `web.search` remains an adapter extension point. |
+| MCP/discovery | `mcp.servers`, `mcp.tools`, `mcp.call`, `tool.search` | `mcp.call` only | Partial | MCP listing returns unconfigured state; `tool.search` searches the local catalog. |
+| Trace/eval | `trace.show`, `trace.export`, `eval.run` | Export/eval only | Yes | Trace export writes a bounded snapshot; eval wraps local pytest. |
+| Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Restore only | Yes | Durable snapshots reduce model input without deleting raw history. |
+| Smoke test | `echo` | No | Yes | Deterministic smoke-test tool. |
+
+## Input And Output Shapes
+
+Every tool input schema uses `additionalProperties: false`. Important shapes:
+
+- File tools accept workspace-relative `path` values and return relative paths.
+- Search tools return arrays of `{path, line, text}` style match objects plus
+  `truncated` when applicable.
+- Command wrappers return `{command, exit_code, stdout, stderr}`.
+- Patch preview returns `{path, replacements, diff}`; patch apply/reverse return
+  `{path, replacements}`.
+- Task, plan, and agent tools return a single structured `task`, `plan`, or `agent`
+  object, or arrays for list commands.
+- `web.fetch` and `docs.fetch` return `{url, status_code, content_type, content,
+  truncated}` for bounded HTTP(S) responses. `web.search` and networked MCP calls remain
+  extension points.
+- Context tools return session budget/status, snapshot records, or restore confirmation.
+
+## Security Notes
+
+- The default policy requires approval for high-risk tools, network-capable tools,
+  declared mutations, and tools with explicit `approval_required`.
+- Subprocess-backed tools use fixed argv templates or structured argv arrays. Colossus
+  does not use `shell=True`.
+- Web fetch tools require explicit approval and depend on network availability. In
+  airgapped environments they should not be approved or will fail at the network layer.
+  Web search and MCP calls remain adapter extension points.
+- Runtime-local task, plan, and subagent records are not durable yet. Durable state
+  should be wired through the existing SQLite state port rather than hidden workspace
+  files.
+- Context snapshots are durable SQLite records, but raw session messages remain the
+  source of truth.
