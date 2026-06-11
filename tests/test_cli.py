@@ -296,6 +296,21 @@ def test_cli_creates_lists_approves_and_executes_plan(tmp_path, monkeypatch) -> 
     assert "session_id=session-1" in executed.stdout
 
 
+def test_cli_plans_show_renders_markdown_content(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    service = cli_module.create_plan_service(cli_module.data_dir())
+    plan = cli_module.asyncio.run(
+        service.create_plan("ship it", "session-1", content="# Ship It\n\n- Verify")
+    )
+
+    result = CliRunner().invoke(app, ["plans", "show", plan.id])
+
+    assert result.exit_code == 0
+    assert "Ship It" in result.stdout
+    assert "Verify" in result.stdout
+    assert "Clarify Objective" not in result.stdout
+
+
 def test_cli_context_commands(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     runner = CliRunner()

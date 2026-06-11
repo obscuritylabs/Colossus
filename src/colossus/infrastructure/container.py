@@ -29,6 +29,7 @@ from colossus.infrastructure.config import (
 )
 from colossus.ports.approval import ApprovalHandler
 from colossus.ports.model_provider import ModelProvider
+from colossus.ports.user_prompt import UserPromptHandler
 
 
 def create_default_orchestrator(
@@ -44,6 +45,7 @@ def create_default_orchestrator(
     context_provider: ModelProvider | None = None,
     event_observer: RunEventObserver | None = None,
     approval_handler: ApprovalHandler | None = None,
+    user_prompt_handler: UserPromptHandler | None = None,
     risk_assessment_service: RiskAssessmentService | None = None,
     risk_auto_approve: bool = False,
 ) -> AgentOrchestrator:
@@ -65,6 +67,7 @@ def create_default_orchestrator(
         context_provider=context_provider or resolved_provider,
         context_model=context_model,
         task_service=TaskService(resolved_state, resolved_audit),
+        user_prompt_handler=user_prompt_handler,
     )
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)

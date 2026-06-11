@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import typer
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.table import Table
 
 from colossus.adapters.bundles import ManifestBundleVerifier
@@ -52,7 +53,12 @@ from colossus.infrastructure.container import (
 from colossus.infrastructure.logging import configure_logging
 from colossus.infrastructure.paths import config_path, data_dir
 from colossus.interfaces.approval import RichApprovalHandler
-from colossus.interfaces.repl import load_user_repl_themes, repl_theme_names, run_repl_sync
+from colossus.interfaces.repl import (
+    RichUserPromptHandler,
+    load_user_repl_themes,
+    repl_theme_names,
+    run_repl_sync,
+)
 from colossus.interfaces.trace import EventDisplayMode, RichRunEventRenderer
 from colossus.interfaces.tui import run_tui
 from colossus.ports.model_provider import ModelProvider
@@ -457,6 +463,7 @@ def repl(
         context_config=config.context,
         model_context_windows=model_context_windows,
     )
+    user_prompt_handler = RichUserPromptHandler(console)
 
     def build_orchestrator(model_role: str) -> AgentOrchestrator:
         route = router.resolve(model_role)
@@ -475,6 +482,7 @@ def repl(
                 if resolved_approval_mode in {"ask", "risk-auto"}
                 else None
             ),
+            user_prompt_handler=user_prompt_handler,
             risk_assessment_service=RiskAssessmentService(router),
             risk_auto_approve=resolved_approval_mode == "risk-auto",
         )
@@ -495,6 +503,7 @@ def repl(
         history_path=history_path,
         preferences_service=create_repl_preferences_service(data_dir()),
         task_service=create_task_service(data_dir()),
+        plan_service=create_plan_service(data_dir()),
         theme_name=theme,
         theme_dirs=theme_dirs,
     )
@@ -843,14 +852,17 @@ def tasks_list(
 
 
 def _print_plan(plan: Plan) -> None:
-    table = Table("Step", "Title", "Mutation", "Detail")
-    for step in plan.steps:
-        table.add_row(str(step.index), step.title, str(step.requires_mutation), step.detail)
     console.print(f"[bold]Plan:[/bold] {plan.id}")
     console.print(f"Session: {plan.session_id}")
     console.print(f"Status: {plan.status}")
     console.print(f"Requires approval: {plan.requires_approval}")
     console.print(f"Prompt: {plan.prompt}")
+    if plan.content.strip():
+        console.print(Markdown(plan.content))
+        return
+    table = Table("Step", "Title", "Mutation", "Detail")
+    for step in plan.steps:
+        table.add_row(str(step.index), step.title, str(step.requires_mutation), step.detail)
     console.print(table)
 
 

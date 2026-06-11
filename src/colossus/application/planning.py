@@ -3,7 +3,7 @@
 from uuid import uuid4
 
 from colossus.domain.errors import ColossusError
-from colossus.domain.plans import Plan, PlanStep
+from colossus.domain.plans import Plan, PlanStep, utc_now_iso
 from colossus.ports.audit import AuditSink
 from colossus.ports.state import StateStore
 
@@ -13,12 +13,13 @@ class PlanService:
         self._state_store = state_store
         self._audit_sink = audit_sink
 
-    async def create_plan(self, prompt: str, session_id: str) -> Plan:
+    async def create_plan(self, prompt: str, session_id: str, content: str = "") -> Plan:
         await self._state_store.ensure_session(session_id, title=prompt[:80])
         plan = Plan(
             id=str(uuid4()),
             session_id=session_id,
             prompt=prompt,
+            content=content,
             steps=(
                 PlanStep(
                     index=1,
@@ -64,16 +65,35 @@ class PlanService:
         )
         return plan
 
+    async def replace_draft_plan(self, plan_id: str, prompt: str, content: str) -> Plan:
+        plan = await self._require_plan(plan_id)
+        if plan.status != "draft":
+            raise ColossusError(f"Plan {plan_id} is not a draft.")
+        updated = plan.model_copy(
+            update={
+                "prompt": prompt,
+                "content": content,
+                "updated_at": utc_now_iso(),
+            }
+        )
+        await self._state_store.save_plan(updated)
+        await self._audit_sink.record(
+            "agent",
+            "plan.updated",
+            {"plan_id": plan_id, "session_id": updated.session_id},
+        )
+        return updated
+
     async def approve_plan(self, plan_id: str) -> Plan:
         plan = await self._require_plan(plan_id)
-        approved = plan.model_copy(update={"status": "approved"})
+        approved = plan.model_copy(update={"status": "approved", "updated_at": utc_now_iso()})
         await self._state_store.save_plan(approved)
         await self._audit_sink.record("user", "plan.approved", {"plan_id": plan_id})
         return approved
 
     async def mark_executed(self, plan_id: str, run_id: str) -> Plan:
         plan = await self._require_plan(plan_id)
-        executed = plan.model_copy(update={"status": "executed"})
+        executed = plan.model_copy(update={"status": "executed", "updated_at": utc_now_iso()})
         await self._state_store.save_plan(executed)
         await self._audit_sink.record(
             "agent",
