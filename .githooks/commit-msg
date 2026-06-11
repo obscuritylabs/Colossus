@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if command -v uv >/dev/null 2>&1; then
+  exec uv run python scripts/check_conventional_commit.py "$1"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 scripts/check_conventional_commit.py "$1"
+fi
+
+echo "No Python runtime found for Conventional Commits validation." >&2
+exit 1

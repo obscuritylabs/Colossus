@@ -59,6 +59,7 @@ uv run colossus run --approval-mode risk-auto "Use shell.run with argv [\"echo\"
 ## Documentation
 
 - [Installation](docs/INSTALLATION.md)
+- [Contributing](docs/CONTRIBUTING.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Context compaction](docs/CONTEXT.md)
 - [Offline and airgapped operation](docs/OFFLINE_AIRGAP.md)

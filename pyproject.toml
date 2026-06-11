@@ -73,6 +73,8 @@ packages = ["src/colossus"]
 include = [
   "src",
   "tests",
+  "scripts",
+  ".githooks",
   "README.md",
   "LICENSE",
   "CHANGELOG.md",

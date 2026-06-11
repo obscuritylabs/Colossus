@@ -20,6 +20,7 @@ Install development dependencies and run the release readiness checks:
 
 ```bash
 uv sync --extra dev
+./scripts/install-git-hooks.sh
 uv run pytest
 uv run ruff check .
 uv run mypy src/colossus
