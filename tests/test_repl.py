@@ -318,10 +318,12 @@ def test_toolbar_shows_operational_state_and_prompt_metrics() -> None:
             model="very-long-local-model-name-for-toolbar",
             message_count=3,
             token_estimate=350,
+            raw_token_estimate=1200,
             context_window_tokens=1000,
             threshold_tokens=700,
             target_tokens=450,
             latest_snapshot_id="snapshot-abcdef",
+            compacted=True,
             auto_compaction=True,
         ),
     )
@@ -344,6 +346,7 @@ def test_toolbar_shows_operational_state_and_prompt_metrics() -> None:
     assert "chars=11" in toolbar
     assert "lines=2" in toolbar
     assert "ctx=350/700(50%)" in toolbar
+    assert "raw=1200" in toolbar
     assert "msgs=3" in toolbar
     assert "snap=snapshot" in toolbar
     assert "tasks=2/5" in toolbar

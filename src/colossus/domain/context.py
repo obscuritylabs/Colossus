@@ -85,8 +85,10 @@ class ContextStatus(BaseModel):
     model: str
     message_count: int
     token_estimate: int
+    raw_token_estimate: int | None = None
     context_window_tokens: int
     threshold_tokens: int
     target_tokens: int
     latest_snapshot_id: str | None = None
+    compacted: bool = False
     auto_compaction: bool = True

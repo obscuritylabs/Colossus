@@ -1261,9 +1261,12 @@ def _context_label(state: ReplDisplayState) -> str:
     threshold = max(status.threshold_tokens, 1)
     percent = int(status.token_estimate / threshold * 100)
     snapshot = _short_id(status.latest_snapshot_id) if status.latest_snapshot_id else "-"
+    raw = ""
+    if status.raw_token_estimate is not None and status.raw_token_estimate != status.token_estimate:
+        raw = f" raw={status.raw_token_estimate}"
     return (
         f"ctx={status.token_estimate}/{status.threshold_tokens}({percent}%) "
-        f"msgs={status.message_count} snap={snapshot}"
+        f"msgs={status.message_count}{raw} snap={snapshot}"
     )
 
 

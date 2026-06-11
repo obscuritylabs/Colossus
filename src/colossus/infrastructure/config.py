@@ -51,6 +51,7 @@ class ProviderOverrides(BaseModel):
 
     kind: ProviderKind | None = None
     model: str | None = None
+    context_window_tokens: int | None = Field(default=None, gt=0)
     base_url: str | None = None
     api_key: str | None = None
     api_key_env: str | None = None
@@ -198,6 +199,7 @@ def _has_primary_override(overrides: ProviderOverrides) -> bool:
         for value in (
             overrides.kind,
             overrides.model,
+            overrides.context_window_tokens,
             overrides.base_url,
             overrides.api_key_env,
             overrides.ca_bundle,
@@ -211,6 +213,8 @@ def _profile_with_overrides(profile: ModelProfile, overrides: ProviderOverrides)
         update={
             "provider": overrides.kind or profile.provider,
             "model": overrides.model or profile.model,
+            "context_window_tokens": overrides.context_window_tokens
+            or profile.context_window_tokens,
             "base_url": overrides.base_url or profile.base_url,
             "api_key_env": overrides.api_key_env or profile.api_key_env,
             "ca_bundle": str(overrides.ca_bundle) if overrides.ca_bundle else profile.ca_bundle,

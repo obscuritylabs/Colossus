@@ -60,15 +60,28 @@ class ContextService:
     async def status(self, session_id: str, model: str) -> ContextStatus:
         messages = await self._state_store.list_messages(session_id)
         snapshot = await self._state_store.latest_context_snapshot(session_id)
+        raw_token_estimate = self.estimate_tokens(messages)
+        token_estimate = raw_token_estimate
+        compacted = False
+        if snapshot is not None:
+            compacted_messages = self._messages_from_snapshot(
+                snapshot,
+                messages,
+                self.target_tokens(model),
+            )
+            token_estimate = self.estimate_tokens(compacted_messages)
+            compacted = token_estimate != raw_token_estimate
         return ContextStatus(
             session_id=session_id,
             model=model,
             message_count=len(messages),
-            token_estimate=self.estimate_tokens(messages),
+            token_estimate=token_estimate,
+            raw_token_estimate=raw_token_estimate,
             context_window_tokens=self.context_window_tokens(model),
             threshold_tokens=self.threshold_tokens(model),
             target_tokens=self.target_tokens(model),
             latest_snapshot_id=snapshot.id if snapshot is not None else None,
+            compacted=compacted,
             auto_compaction=self._config.auto_compaction,
         )
 

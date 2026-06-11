@@ -296,6 +296,8 @@ approval controls. Network-capable tools require explicit approval. `web.fetch` 
 Context budgets are calculated as a percentage of the selected model window. Add exact
 model windows under `models.profiles.*.context_window_tokens` or the legacy
 `provider.model_context_windows`; unknown models use `context.default_context_window_tokens`.
+For ad-hoc model overrides, pass `--context-window-tokens` with `--model` so the REPL and
+context service do not fall back to the default window.
 
 ```json
 {

@@ -86,6 +86,7 @@ class CliState:
     verbose: bool = False
     provider: str | None = None
     model: str | None = None
+    context_window_tokens: int | None = None
     base_url: str | None = None
     api_key: str | None = None
     api_key_env: str | None = None
@@ -106,6 +107,13 @@ def callback(
     model: Annotated[
         str | None,
         typer.Option("--model", help="Override model name for the selected provider."),
+    ] = None,
+    context_window_tokens: Annotated[
+        int | None,
+        typer.Option(
+            "--context-window-tokens",
+            help="Override context window tokens for the selected primary model.",
+        ),
     ] = None,
     base_url: Annotated[
         str | None,
@@ -140,6 +148,7 @@ def callback(
         verbose=verbose,
         provider=provider,
         model=model,
+        context_window_tokens=context_window_tokens,
         base_url=base_url,
         api_key=api_key,
         api_key_env=api_key_env,
@@ -159,6 +168,7 @@ def _provider_overrides(ctx: typer.Context) -> ProviderOverrides:
     return ProviderOverrides(
         kind=provider_kind,
         model=state.model,
+        context_window_tokens=state.context_window_tokens,
         base_url=state.base_url,
         api_key=state.api_key,
         api_key_env=state.api_key_env,

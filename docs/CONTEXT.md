@@ -58,6 +58,20 @@ The REPL supports:
 
 The TUI includes a context panel in the side column.
 
+`context show`, `/context`, `/status`, and the REPL toolbar report the effective prompt
+estimate after the active snapshot is applied. When a snapshot is active, they also show
+the raw append-only history estimate separately. Raw history can remain above the
+threshold while the effective prompt sent to the model is below it.
+
+For one-off provider/model overrides, set the model window on the command line:
+
+```bash
+uv run colossus --provider local-openai-chat \
+  --model "nex-agi/nex-n2-pro:free" \
+  --context-window-tokens 131072 \
+  repl
+```
+
 ## Model-Callable Tools
 
 The built-in context tools are:

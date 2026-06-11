@@ -113,6 +113,23 @@ def test_model_routing_supports_multiple_profiles_and_cli_primary_override() -> 
     assert routing.roles["risk_evaluator"] == "risk"
 
 
+def test_model_routing_primary_override_can_set_context_window() -> None:
+    config = ColossusConfig(
+        models=ModelRoutingConfig(
+            profiles={"main": ModelProfile(provider="echo", model="main-model")},
+            roles={"primary": "main"},
+        )
+    )
+
+    routing = effective_model_routing(
+        config,
+        ProviderOverrides(model="override-model", context_window_tokens=131_072),
+    )
+
+    assert routing.profiles["main"].model == "override-model"
+    assert routing.profiles["main"].context_window_tokens == 131_072
+
+
 def test_model_routing_rejects_unknown_profile_references() -> None:
     config = ColossusConfig(
         models=ModelRoutingConfig(

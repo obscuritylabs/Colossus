@@ -316,6 +316,31 @@ def test_cli_context_commands(tmp_path, monkeypatch) -> None:
     assert f"Restored snapshot {snapshot_id}" in restore.stdout
 
 
+def test_cli_context_window_override_updates_context_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--provider",
+            "echo",
+            "--model",
+            "large-model",
+            "--context-window-tokens",
+            "131072",
+            "context",
+            "show",
+            "--session",
+            "session-large",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "context_window_tokens" in result.stdout
+    assert "131072" in result.stdout
+
+
 def test_cli_tasks_list_shows_persisted_tasks(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     service = cli_module.create_task_service(cli_module.data_dir())

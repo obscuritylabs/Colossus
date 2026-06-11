@@ -181,6 +181,40 @@ async def test_context_reuses_existing_snapshot_with_new_tail(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_context_status_reports_effective_snapshot_size_and_raw_history(
+    tmp_path: Path,
+) -> None:
+    service, state = _context_service(
+        tmp_path,
+        config=ContextConfig(
+            default_context_window_tokens=1024,
+            compact_at_percent=0.2,
+            target_percent=0.1,
+            recent_tail_messages=1,
+            model_assisted=False,
+        ),
+    )
+    messages = (
+        UserMessage(content="Need compaction. " + "x" * 1200),
+        AssistantMessage(content="Large reply. " + "y" * 1200),
+        UserMessage(content="tail"),
+    )
+    for message in messages:
+        await state.append_message("session-1", "run-1", message)
+
+    await service.compact_session(session_id="session-1", model="model-a")
+
+    status = await service.status("session-1", "model-a")
+
+    assert status.compacted is True
+    assert status.latest_snapshot_id == "snapshot-1"
+    assert status.raw_token_estimate is not None
+    assert status.raw_token_estimate > status.token_estimate
+    assert status.raw_token_estimate > status.threshold_tokens
+    assert status.token_estimate < status.raw_token_estimate
+
+
+@pytest.mark.asyncio
 async def test_model_assisted_summary_success_and_failure_paths(tmp_path: Path) -> None:
     successful, success_state = _context_service(
         tmp_path / "success",
