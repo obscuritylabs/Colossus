@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -17,8 +17,10 @@ from colossus.adapters.subprocess_broker import (
     SubprocessCommand,
 )
 from colossus.adapters.workspace import Workspace
+from colossus.application.tasks import TaskService
 from colossus.application.tools import ToolHandler
-from colossus.domain.errors import ToolExecutionError
+from colossus.domain.errors import ColossusError, ToolExecutionError
+from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolPermission, ToolSpec
 
 JsonObject = dict[str, Any]
@@ -50,12 +52,14 @@ def create_roadmap_tools(
     broker: SubprocessBroker,
     catalog_provider: ToolCatalogProvider | None = None,
     http_transport: HttpTransport | None = None,
+    task_service: TaskService | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     handlers = RoadmapToolHandlers(
         workspace,
         broker,
         catalog_provider or (lambda: ()),
         http_transport=http_transport,
+        task_service=task_service,
     )
     specs = (
         _task_create_spec(),
@@ -130,17 +134,33 @@ class RoadmapToolHandlers:
         broker: SubprocessBroker,
         catalog_provider: ToolCatalogProvider,
         http_transport: HttpTransport | None = None,
+        task_service: TaskService | None = None,
     ) -> None:
         self._workspace = workspace
         self._broker = broker
         self._catalog_provider = catalog_provider
         self._http_transport = http_transport
+        self._task_service = task_service
         self._tasks: list[JsonObject] = []
         self._plans: list[JsonObject] = []
         self._agents: list[JsonObject] = []
 
     async def task_create(self, arguments: JsonObject) -> str:
-        task: JsonObject = {
+        if self._task_service is not None:
+            status = _validated_task_status(_string_arg(arguments, "status", "pending"))
+            task_id = _optional_non_empty_string(arguments, "id")
+            try:
+                created_task = await self._task_service.create_task(
+                    session_id=_required_string_arg(arguments, "session_id"),
+                    task_id=task_id,
+                    title=_required_string_arg(arguments, "title"),
+                    description=_string_arg(arguments, "description", ""),
+                    status=status,
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"task": _task_payload(created_task)})
+        task_record: JsonObject = {
             "id": _string_arg(arguments, "id", f"task-{uuid.uuid4().hex[:12]}"),
             "title": _required_string_arg(arguments, "title"),
             "description": _string_arg(arguments, "description", ""),
@@ -148,25 +168,51 @@ class RoadmapToolHandlers:
             "created_at": _now(),
             "updated_at": _now(),
         }
-        if task["status"] not in _task_statuses():
+        if task_record["status"] not in _task_statuses():
             raise ToolExecutionError("task.create status is not supported.")
-        self._tasks.append(task)
-        return _json({"task": task})
+        self._tasks.append(task_record)
+        return _json({"task": task_record})
 
     async def task_update(self, arguments: JsonObject) -> str:
         task_id = _required_string_arg(arguments, "id")
-        task = _find_record(self._tasks, task_id, "task")
+        if self._task_service is not None:
+            title = _optional_string(arguments, "title")
+            description = _optional_string(arguments, "description")
+            raw_status = _optional_string(arguments, "status")
+            status = _validated_task_status(raw_status) if raw_status is not None else None
+            try:
+                updated_task = await self._task_service.update_task(
+                    task_id,
+                    session_id=_optional_non_empty_string(arguments, "session_id"),
+                    title=title,
+                    description=description,
+                    status=status,
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"task": _task_payload(updated_task)})
+        task_record = _find_record(self._tasks, task_id, "task")
         for field in ("title", "description", "status"):
             value = arguments.get(field)
             if isinstance(value, str) and value:
                 if field == "status" and value not in _task_statuses():
                     raise ToolExecutionError("task.update status is not supported.")
-                task[field] = value
-        task["updated_at"] = _now()
-        return _json({"task": task})
+                task_record[field] = value
+        task_record["updated_at"] = _now()
+        return _json({"task": task_record})
 
     async def task_list(self, arguments: JsonObject) -> str:
         status = _string_arg(arguments, "status", "")
+        if self._task_service is not None:
+            task_status = _validated_task_status(status) if status else None
+            try:
+                tasks = await self._task_service.list_tasks(
+                    session_id=_required_string_arg(arguments, "session_id"),
+                    status=task_status,
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"tasks": [_task_payload(task) for task in tasks]})
         records = self._tasks
         if status:
             records = [record for record in records if record.get("status") == status]
@@ -641,6 +687,18 @@ def _string_arg(arguments: JsonObject, name: str, default: str) -> str:
     return value if isinstance(value, str) else default
 
 
+def _optional_string(arguments: JsonObject, name: str) -> str | None:
+    value = arguments.get(name)
+    return value if isinstance(value, str) else None
+
+
+def _optional_non_empty_string(arguments: JsonObject, name: str) -> str | None:
+    value = _optional_string(arguments, name)
+    if value is None or not value:
+        return None
+    return value
+
+
 def _bool_arg(arguments: JsonObject, name: str, default: bool) -> bool:
     value = arguments.get(name, default)
     return value if isinstance(value, bool) else default
@@ -672,6 +730,16 @@ def _json(value: JsonObject) -> str:
 
 def _task_statuses() -> set[str]:
     return {"pending", "in_progress", "completed", "blocked", "cancelled"}
+
+
+def _validated_task_status(value: str) -> TaskStatus:
+    if value not in _task_statuses():
+        raise ToolExecutionError("Task status is not supported.")
+    return cast(TaskStatus, value)
+
+
+def _task_payload(task: Task) -> JsonObject:
+    return task.model_dump(mode="json")
 
 
 def _object_schema(properties: JsonObject, required: list[str] | None = None) -> JsonObject:
@@ -743,6 +811,7 @@ def _task_create_spec() -> ToolSpec:
         input_schema=_object_schema(
             {
                 "id": {"type": "string"},
+                "session_id": {"type": "string"},
                 "title": {"type": "string", "minLength": 1},
                 "description": {"type": "string"},
                 "status": {"type": "string", "enum": sorted(_task_statuses())},
@@ -761,6 +830,7 @@ def _task_update_spec() -> ToolSpec:
         input_schema=_object_schema(
             {
                 "id": {"type": "string", "minLength": 1},
+                "session_id": {"type": "string"},
                 "title": {"type": "string"},
                 "description": {"type": "string"},
                 "status": {"type": "string", "enum": sorted(_task_statuses())},
@@ -777,7 +847,10 @@ def _task_list_spec() -> ToolSpec:
         name="task.list",
         description="List model-visible task records.",
         input_schema=_object_schema(
-            {"status": {"type": "string", "enum": sorted(_task_statuses())}}
+            {
+                "session_id": {"type": "string"},
+                "status": {"type": "string", "enum": sorted(_task_statuses())},
+            }
         ),
         output_schema=_object_schema({"tasks": {"type": "array"}}),
         permissions=ToolPermission(working_root_required=False, risk="low"),

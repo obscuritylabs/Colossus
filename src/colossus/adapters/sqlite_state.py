@@ -11,6 +11,7 @@ from colossus.domain.events import RunEvent
 from colossus.domain.messages import Message
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.tasks import Task, TaskStatus
 
 _RUN_EVENT_ADAPTER: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
 _MESSAGE_ADAPTER: TypeAdapter[Message] = TypeAdapter(Message)
@@ -112,6 +113,50 @@ class SQLiteStateStore:
         with closing(sqlite3.connect(self._path)) as conn:
             rows = conn.execute(query, params).fetchall()
         return tuple(Plan.model_validate_json(row[0]) for row in rows)
+
+    async def save_task(self, task: Task) -> None:
+        await self.ensure_session(task.session_id)
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into tasks(id, session_id, status, payload)
+                values (?, ?, ?, ?)
+                on conflict(id) do update set
+                    session_id = excluded.session_id,
+                    status = excluded.status,
+                    payload = excluded.payload
+                """,
+                (task.id, task.session_id, task.status, task.model_dump_json()),
+            )
+            conn.commit()
+
+    async def get_task(self, task_id: str) -> Task | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute("select payload from tasks where id = ?", (task_id,)).fetchone()
+        if row is None:
+            return None
+        return Task.model_validate_json(row[0])
+
+    async def list_tasks(
+        self,
+        session_id: str | None = None,
+        status: TaskStatus | None = None,
+    ) -> tuple[Task, ...]:
+        query = "select payload from tasks"
+        clauses: list[str] = []
+        params: list[str] = []
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            query += f" where {' and '.join(clauses)}"
+        query += " order by created_at, id"
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return tuple(Task.model_validate_json(row[0]) for row in rows)
 
     async def save_context_snapshot(self, snapshot: ContextSnapshot) -> None:
         await self.ensure_session(snapshot.session_id)
@@ -287,6 +332,19 @@ class SQLiteStateStore:
                 """
             )
             conn.execute("create index if not exists idx_plans_session on plans(session_id)")
+            conn.execute(
+                """
+                create table if not exists tasks (
+                    id text primary key,
+                    session_id text not null,
+                    status text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute("create index if not exists idx_tasks_session on tasks(session_id)")
+            conn.execute("create index if not exists idx_tasks_status on tasks(status)")
             conn.execute(
                 """
                 create table if not exists context_snapshots (

@@ -17,6 +17,7 @@ from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.skills import SkillResolver
+from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig
 from colossus.domain.models import ResolvedModelProfile
@@ -63,6 +64,7 @@ def create_default_orchestrator(
         context_service=resolved_context,
         context_provider=context_provider or resolved_provider,
         context_model=context_model,
+        task_service=TaskService(resolved_state, resolved_audit),
     )
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)
@@ -145,6 +147,10 @@ def create_context_service(
 
 def create_plan_service(data_dir: Path) -> PlanService:
     return PlanService(create_state_store(data_dir), create_audit_sink(data_dir))
+
+
+def create_task_service(data_dir: Path) -> TaskService:
+    return TaskService(create_state_store(data_dir), create_audit_sink(data_dir))
 
 
 def create_repl_preferences_service(data_dir: Path) -> ReplPreferencesService:

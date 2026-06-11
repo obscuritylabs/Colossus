@@ -26,6 +26,7 @@ from colossus.domain.providers import (
     ProviderReadinessCheck,
 )
 from colossus.domain.requests import AgentRunRequest
+from colossus.domain.tasks import Task
 from colossus.infrastructure.config import (
     ColossusConfig,
     ProviderOverrides,
@@ -45,6 +46,7 @@ from colossus.infrastructure.container import (
     create_plan_service,
     create_repl_preferences_service,
     create_state_store,
+    create_task_service,
 )
 from colossus.infrastructure.logging import configure_logging
 from colossus.infrastructure.paths import config_path, data_dir
@@ -64,6 +66,7 @@ provider_app = typer.Typer(help="Inspect provider readiness and model catalogs."
 models_app = typer.Typer(help="Inspect configured model roles and profiles.")
 bundle_app = typer.Typer(help="Verify and install offline bundles.")
 plans_app = typer.Typer(help="Manage persisted plans.")
+tasks_app = typer.Typer(help="Inspect persisted session tasks.")
 context_app = typer.Typer(help="Inspect and manage context compaction.")
 app.add_typer(config_app, name="config")
 app.add_typer(skills_app, name="skills")
@@ -72,6 +75,7 @@ app.add_typer(provider_app, name="provider")
 app.add_typer(models_app, name="models")
 app.add_typer(bundle_app, name="bundle")
 app.add_typer(plans_app, name="plans")
+app.add_typer(tasks_app, name="tasks")
 app.add_typer(context_app, name="context")
 
 console = Console()
@@ -430,6 +434,7 @@ def repl(
         approval_mode=resolved_approval_mode,
         history_path=history_path,
         preferences_service=create_repl_preferences_service(data_dir()),
+        task_service=create_task_service(data_dir()),
         theme_name=theme,
         theme_dirs=theme_dirs,
     )
@@ -763,6 +768,18 @@ def plans_approve(plan_id: Annotated[str, typer.Argument(help="Plan id.")]) -> N
     console.print(f"Approved plan {plan.id}")
 
 
+@tasks_app.command("list")
+def tasks_list(
+    session: Annotated[str | None, typer.Option("--session")] = None,
+    status: Annotated[str | None, typer.Option("--status")] = None,
+) -> None:
+    """List persisted session tasks."""
+    tasks = asyncio.run(create_task_service(data_dir()).list_tasks(session_id=session))
+    if status:
+        tasks = tuple(task for task in tasks if task.status == status)
+    _print_tasks(tasks)
+
+
 def _print_plan(plan: Plan) -> None:
     table = Table("Step", "Title", "Mutation", "Detail")
     for step in plan.steps:
@@ -772,6 +789,19 @@ def _print_plan(plan: Plan) -> None:
     console.print(f"Status: {plan.status}")
     console.print(f"Requires approval: {plan.requires_approval}")
     console.print(f"Prompt: {plan.prompt}")
+    console.print(table)
+
+
+def _print_tasks(tasks: tuple[Task, ...]) -> None:
+    table = Table("Status", "ID", "Session", "Title", "Description")
+    for task in tasks:
+        table.add_row(
+            task.status,
+            task.id,
+            task.session_id,
+            task.title,
+            task.description[:80],
+        )
     console.print(table)
 
 

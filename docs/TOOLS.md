@@ -19,7 +19,7 @@ uv run colossus tools list
 | Filesystem write | `filesystem.write`, `filesystem.replace` | Yes | Yes | Exact text mutation inside the workspace. |
 | Git inspect | `git.status`, `git.diff`, `git.show` | No | Yes | Brokered structured git argv, bounded output. |
 | Shell | `shell.run` | Yes | Yes | Structured argv only; shell wrappers are denied by default. |
-| Task state | `task.create`, `task.update`, `task.list` | No | Yes | Runtime-local progress tracking for the active tool harness. |
+| Task state | `task.create`, `task.update`, `task.list` | No | Yes | Session-scoped progress tracking persisted in SQLite state. |
 | Plan state | `plan.create`, `plan.show`, `plan.approve_request` | Approval request only | Yes | Draft plans are runtime-local; approval is policy-gated. |
 | Verification | `test.run`, `lint.run`, `typecheck.run`, `build.run` | Yes | Yes | Fixed command templates through `uv` and the subprocess broker. |
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Apply/reverse only | Yes | Exact text patch preview and mutation. |
@@ -60,8 +60,8 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
 - Web fetch tools require explicit approval and depend on network availability. In
   airgapped environments they should not be approved or will fail at the network layer.
   Web search and MCP calls remain adapter extension points.
-- Runtime-local task, plan, and subagent records are not durable yet. Durable state
-  should be wired through the existing SQLite state port rather than hidden workspace
-  files.
+- Task records are durable per session and are visible with `/tasks` in the REPL or
+  `colossus tasks list`. Plan and subagent records created by model-callable tools remain
+  runtime-local; durable workflow plans use the separate `colossus plans` surface.
 - Context snapshots are durable SQLite records, but raw session messages remain the
   source of truth.

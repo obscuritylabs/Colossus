@@ -59,6 +59,21 @@ class InvalidToolThenFinalProvider:
             )
 
 
+class TaskToolThenFinalProvider:
+    name = "task-tool-then-final"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        has_tool_result = any(message.role == "tool" for message in request.messages)
+        if has_tool_result:
+            yield FinalOutputEvent(text="done")
+        else:
+            yield ToolCallRequestedEvent(
+                call_id="call-1",
+                name="task.create",
+                arguments={"title": "Track work"},
+            )
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_executes_tool_and_continues(tmp_path) -> None:
     async def echo(arguments: dict[str, object]) -> str:
@@ -103,6 +118,48 @@ async def test_orchestrator_executes_tool_and_continues(tmp_path) -> None:
         "tool.call.completed",
         "final.output",
     ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_injects_session_id_for_task_tools(tmp_path) -> None:
+    observed_arguments: dict[str, object] = {}
+
+    async def task_create(arguments: dict[str, object]) -> str:
+        observed_arguments.update(arguments)
+        return '{"task": {"id": "task-1"}}'
+
+    spec = ToolSpec(
+        name="task.create",
+        description="Create task",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "session_id": {"type": "string"},
+            },
+            "required": ["title"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object"},
+    )
+    registry = InMemoryToolRegistry((spec,))
+    orchestrator = AgentOrchestrator(
+        provider=TaskToolThenFinalProvider(),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({"task.create": task_create}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+    )
+
+    result = await orchestrator.run(
+        AgentRunRequest(prompt="make tasks", agent=default_agent(), session_id="session-1")
+    )
+
+    assert result.final_output == "done"
+    assert observed_arguments["session_id"] == "session-1"
 
 
 @pytest.mark.asyncio

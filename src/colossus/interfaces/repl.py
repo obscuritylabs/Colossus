@@ -28,11 +28,13 @@ from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.skills import SkillResolver
+from colossus.application.tasks import TaskService
 from colossus.domain.agents import AgentSpec
 from colossus.domain.context import ContextStatus
 from colossus.domain.errors import ColossusError
 from colossus.domain.preferences import ReplPreferences, TranscriptStylePreference
 from colossus.domain.requests import AgentRunRequest
+from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolSpec
 from colossus.interfaces.trace import EventDisplayMode, TraceRenderTheme
 from colossus.interfaces.transcript import TranscriptRenderer, TranscriptRenderTheme
@@ -52,6 +54,7 @@ SlashCommand = Literal[
     "theme",
     "repl",
     "status",
+    "tasks",
     "help",
     "audit",
     "compact",
@@ -82,6 +85,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/theme",
     "/repl",
     "/status",
+    "/tasks",
     "/help",
     "/audit",
     "/compact",
@@ -104,6 +108,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/theme": "Show, preview, switch, save, or reset REPL theme.",
     "/repl": "Show, save, or reset REPL preferences.",
     "/status": "Show full REPL, model, session, and context status.",
+    "/tasks": "Show session task records.",
     "/help": "Show REPL commands.",
     "/audit": "Reserved audit view.",
     "/compact": "Create a context snapshot for the current session.",
@@ -409,6 +414,7 @@ class ReplDisplayState:
     last_status: RunStatus = "idle"
     context_status: ContextStatus | None = None
     context_error: str | None = None
+    task_summary: str = "tasks=n/a"
     theme: ReplTheme = field(default_factory=lambda: REPL_THEMES["default"])
     saved_preferences: ReplPreferences = field(default_factory=ReplPreferences)
 
@@ -420,6 +426,7 @@ async def run_repl(
     provider: ModelProvider | None = None,
     agent: AgentSpec | None = None,
     *,
+    task_service: TaskService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -480,6 +487,7 @@ async def run_repl(
     while True:
         try:
             await _refresh_context_status(display_state, context_service)
+            await _refresh_task_status(display_state, task_service)
             line = await session.prompt_async(
                 _prompt_message(display_state),
                 multiline=display_state.multiline,
@@ -606,7 +614,17 @@ async def run_repl(
                 continue
             if command.command == "status":
                 await _refresh_context_status(display_state, context_service)
+                await _refresh_task_status(display_state, task_service)
                 _render_status(console, display_state)
+                continue
+            if command.command == "tasks":
+                await _handle_tasks_command(
+                    console,
+                    task_service,
+                    display_state.session_id,
+                    command.argument,
+                )
+                await _refresh_task_status(display_state, task_service)
                 continue
             if command.command == "help":
                 _render_help(console, display_state)
@@ -660,12 +678,14 @@ async def run_repl(
             trace_renderer.end_run()
             display_state.last_status = "failed"
             await _refresh_context_status(display_state, context_service)
+            await _refresh_task_status(display_state, task_service)
             console.print(f"[red]Run failed:[/red] {exc}")
             continue
         trace_renderer.end_run()
         display_state.last_run_id = result.run_id
         display_state.last_status = "done"
         await _refresh_context_status(display_state, context_service)
+        await _refresh_task_status(display_state, task_service)
         if not trace_renderer.rendered_model_output:
             trace_renderer.render_final_answer(result.final_output)
         if not trace_renderer.rendered_model_output:
@@ -709,6 +729,7 @@ def run_repl_sync(
     provider: ModelProvider | None = None,
     agent: AgentSpec | None = None,
     *,
+    task_service: TaskService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -726,6 +747,7 @@ def run_repl_sync(
             context_service,
             provider,
             agent,
+            task_service=task_service,
             model_router=model_router,
             active_model_role=active_model_role,
             orchestrator_factory=orchestrator_factory,
@@ -1173,6 +1195,22 @@ async def _refresh_context_status(
         state.context_error = None
 
 
+async def _refresh_task_status(
+    state: ReplDisplayState,
+    task_service: TaskService | None,
+) -> None:
+    if task_service is None:
+        state.task_summary = "tasks=n/a"
+        return
+    try:
+        tasks = await task_service.list_tasks(session_id=state.session_id)
+    except ColossusError as exc:
+        state.task_summary = f"tasks=error:{_short_text(str(exc), 20)}"
+        return
+    open_count = sum(1 for task in tasks if task.status not in {"completed", "cancelled"})
+    state.task_summary = f"tasks={open_count}/{len(tasks)}"
+
+
 def _format_repl_toolbar(
     state: ReplDisplayState,
     draft_text: str,
@@ -1189,6 +1227,7 @@ def _format_repl_toolbar(
         f"reasoning={_on_off(state.show_reasoning)} "
         f"session={_short_id(state.session_id)} pos={cursor_line}:{cursor_column} "
         f"chars={len(draft_text)} lines={lines} {_context_label(state)} "
+        f"{state.task_summary} "
         f"last={state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
     )
 
@@ -1197,7 +1236,7 @@ def _format_run_toolbar(state: ReplDisplayState, prompt: str) -> str:
     return (
         f"model={state.active_model_role}:{_short_text(state.model, 24)} "
         f"{_context_label(state)} session={_short_id(state.session_id)} "
-        f"chars={len(prompt)} lines={_line_count(prompt)}"
+        f"{state.task_summary} chars={len(prompt)} lines={_line_count(prompt)}"
     )
 
 
@@ -1205,7 +1244,7 @@ def _format_submit_summary(state: ReplDisplayState, prompt: str) -> str:
     return (
         f"submit chars={len(prompt)} lines={_line_count(prompt)} "
         f"model={state.active_model_role}:{_short_text(state.model, 40)} "
-        f"session={_short_id(state.session_id)} {_context_label(state)}"
+        f"session={_short_id(state.session_id)} {_context_label(state)} {state.task_summary}"
     )
 
 
@@ -1244,6 +1283,7 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
         "reasoning": _on_off(state.show_reasoning),
         "last_status": state.last_status,
         "last_run": state.last_run_id or "",
+        "tasks": state.task_summary,
     }
     for key, value in rows.items():
         table.add_row(key, value)
@@ -1302,6 +1342,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Show full REPL, model, session, and context status.",
     )
     table.add_row(
+        Text("/tasks [open|all|STATUS]"),
+        _help_current(state, "tasks"),
+        "Show session task records.",
+    )
+    table.add_row(
         "/context [snapshots|restore ID]",
         _help_current(state, "context"),
         "Inspect or restore context snapshots.",
@@ -1336,6 +1381,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return state.theme.name
     if field == "status":
         return f"{state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
+    if field == "tasks":
+        return state.task_summary
     if field == "context":
         return _context_label(state)
     if field == "submit":
@@ -1516,3 +1563,69 @@ def _render_model(
     table.add_row("model", route.profile.model)
     table.add_row("base_url", route.profile.base_url or "")
     console.print(table)
+
+
+async def _handle_tasks_command(
+    console: Console,
+    task_service: TaskService | None,
+    session_id: str,
+    argument: str,
+) -> None:
+    if task_service is None:
+        console.print("Task service is not configured.")
+        return
+    try:
+        tasks = await task_service.list_tasks(session_id=session_id)
+    except ColossusError as exc:
+        console.print(f"Task list failed: {exc}")
+        return
+    filtered = _filter_tasks(tasks, argument)
+    _render_tasks(console, filtered, argument)
+
+
+def _filter_tasks(tasks: tuple[Task, ...], argument: str) -> tuple[Task, ...]:
+    normalized = argument.strip().lower()
+    if normalized in {"", "open", "active"}:
+        return tuple(task for task in tasks if task.status not in {"completed", "cancelled"})
+    if normalized in {"all", "*"}:
+        return tasks
+    if normalized == "done":
+        normalized = "completed"
+    if normalized == "in-progress":
+        normalized = "in_progress"
+    if normalized in _task_statuses():
+        return tuple(task for task in tasks if task.status == normalized)
+    return tasks
+
+
+def _render_tasks(console: Console, tasks: tuple[Task, ...], argument: str = "") -> None:
+    if not tasks:
+        scope = argument.strip() or "open"
+        console.print(f"No {scope} tasks.")
+        return
+    table = Table("State", "Status", "ID", "Title", "Description")
+    for task in tasks:
+        table.add_row(
+            Text(_task_marker(task.status)),
+            task.status,
+            task.id,
+            task.title,
+            _short_text(task.description, 72),
+        )
+    console.print(table)
+
+
+def _task_marker(status: TaskStatus) -> str:
+    if status == "completed":
+        return "[x]"
+    if status == "blocked":
+        return "[!]"
+    if status == "in_progress":
+        return "[~]"
+    if status == "cancelled":
+        return "[-]"
+    return "[ ]"
+
+
+def _task_statuses() -> frozenset[str]:
+    return frozenset({"pending", "in_progress", "completed", "blocked", "cancelled"})

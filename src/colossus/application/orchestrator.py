@@ -29,6 +29,7 @@ from colossus.ports.tools import ToolExecutor, ToolRegistry
 
 RunIdFactory = Callable[[], str]
 RunEventObserver = Callable[[RunEvent], None]
+SESSION_CONTEXT_TOOLS = frozenset({"task.create", "task.update", "task.list"})
 
 
 class AgentOrchestrator:
@@ -148,7 +149,7 @@ class AgentOrchestrator:
                 )
 
             for call in pending_tool_calls:
-                result = await self._execute_tool(run_id, call)
+                result = await self._execute_tool(run_id, call, request.session_id)
                 tool_message = ToolResultMessage(
                     call_id=result.call_id,
                     name=result.name,
@@ -174,7 +175,13 @@ class AgentOrchestrator:
     def tool_specs(self) -> tuple[ToolSpec, ...]:
         return self._tool_registry.list_specs()
 
-    async def _execute_tool(self, run_id: str, call: ToolCall) -> ToolCallCompletedEvent:
+    async def _execute_tool(
+        self,
+        run_id: str,
+        call: ToolCall,
+        session_id: str | None = None,
+    ) -> ToolCallCompletedEvent:
+        call = _with_session_context(call, session_id)
         spec = self._tool_registry.get_spec(call.name)
         if spec is None:
             return await self._record_tool_error(
@@ -345,3 +352,11 @@ class AgentOrchestrator:
     def _observe_event(self, event: RunEvent) -> None:
         if self._event_observer is not None:
             self._event_observer(event)
+
+
+def _with_session_context(call: ToolCall, session_id: str | None) -> ToolCall:
+    if session_id is None or call.name not in SESSION_CONTEXT_TOOLS:
+        return call
+    if "session_id" in call.arguments:
+        return call
+    return call.model_copy(update={"arguments": {**call.arguments, "session_id": session_id}})

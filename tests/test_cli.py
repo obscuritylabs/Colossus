@@ -176,6 +176,7 @@ def test_cli_repl_passes_selected_model_to_agent(tmp_path, monkeypatch) -> None:
         captured["model"] = agent.model
         captured["approval_mode"] = kwargs["approval_mode"]
         captured["history_path"] = kwargs["history_path"]
+        captured["task_service"] = kwargs["task_service"]
         captured["theme_name"] = kwargs["theme_name"]
 
     monkeypatch.setattr(cli_module, "run_repl_sync", fake_run_repl_sync)
@@ -190,6 +191,7 @@ def test_cli_repl_passes_selected_model_to_agent(tmp_path, monkeypatch) -> None:
     assert captured["approval_mode"] == "ask"
     assert captured["history_path"].name == "repl_history.txt"
     assert captured["history_path"].parent.exists()
+    assert captured["task_service"] is not None
     assert captured["theme_name"] == "mono"
 
 
@@ -312,6 +314,22 @@ def test_cli_context_commands(tmp_path, monkeypatch) -> None:
     assert snapshot_id in snapshots.stdout
     assert restore.exit_code == 0
     assert f"Restored snapshot {snapshot_id}" in restore.stdout
+
+
+def test_cli_tasks_list_shows_persisted_tasks(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    service = cli_module.create_task_service(cli_module.data_dir())
+
+    task = cli_module.asyncio.run(
+        service.create_task(session_id="session-task", title="Show task UX")
+    )
+
+    result = CliRunner().invoke(app, ["tasks", "list", "--session", "session-task"])
+
+    assert result.exit_code == 0
+    assert task.id in result.stdout
+    assert "session-task" in result.stdout
+    assert "Show task UX" in result.stdout
 
 
 def test_cli_main_suppresses_expected_error_tracebacks(monkeypatch) -> None:

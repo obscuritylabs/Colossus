@@ -51,7 +51,7 @@ Security-sensitive defaults:
 | `filesystem.write/replace` | Write | Denied | Yes | Enabled |
 | `git.status/diff/show` | Read | Denied | No | Enabled |
 | `shell.run` | Write-capable | Denied | Yes | Enabled |
-| `task.*` | None | Denied | No | Enabled, runtime-local |
+| `task.*` | None | Denied | No | Enabled, session-persisted |
 | `plan.create/show` | None | Denied | No | Enabled, runtime-local |
 | `plan.approve_request` | None | Denied | Yes | Enabled, runtime-local |
 | `test.run/lint.run/typecheck.run/build.run/eval.run` | Read | Denied | Yes | Enabled |

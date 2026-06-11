@@ -7,6 +7,7 @@ from colossus.domain.events import RunEvent
 from colossus.domain.messages import Message
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.tasks import Task, TaskStatus
 
 
 class StateStore(Protocol):
@@ -40,6 +41,22 @@ class StateStore(Protocol):
 
     async def list_plans(self, session_id: str | None = None) -> tuple[Plan, ...]:
         """List plans, optionally scoped to a session."""
+        ...
+
+    async def save_task(self, task: Task) -> None:
+        """Persist a session task."""
+        ...
+
+    async def get_task(self, task_id: str) -> Task | None:
+        """Load a task by id."""
+        ...
+
+    async def list_tasks(
+        self,
+        session_id: str | None = None,
+        status: TaskStatus | None = None,
+    ) -> tuple[Task, ...]:
+        """List tasks, optionally scoped to a session and status."""
         ...
 
     async def save_context_snapshot(self, snapshot: ContextSnapshot) -> None:

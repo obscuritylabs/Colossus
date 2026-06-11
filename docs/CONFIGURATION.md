@@ -134,7 +134,7 @@ text, safe reasoning summaries, tool calls/results, approvals, risks, and errors
 theme-aware spacing and colors. The status bar shows composer mode, active model
 role/model, theme, approval mode, stream/events/reasoning settings, session id, cursor
 position, draft chars/lines, cached context budget, message count, latest snapshot, and
-last run status.
+the current `tasks=open/total` summary for the session, and last run status.
 
 The prompt bottom bar is owned by the active input composer, so it naturally disappears
 after submit. While a run is active, Colossus keeps compact orientation data visible in a
@@ -153,6 +153,7 @@ Runtime controls:
 - `/stream on|off`
 - `/events compact|verbose|off`
 - `/reasoning on|off`
+- `/tasks [open|all|STATUS]`
 - `/transcript comfortable|compact`
 - `/multiline on|off|toggle`
 - `/theme [NAME]`

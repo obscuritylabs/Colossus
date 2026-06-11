@@ -12,6 +12,7 @@ from colossus.domain.context import ContextStatus
 from colossus.domain.errors import ColossusError
 from colossus.domain.models import ResolvedModelProfile
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.tasks import Task
 from colossus.domain.tools import ToolPermission, ToolSpec
 from colossus.interfaces.repl import (
     REPL_THEMES,
@@ -31,6 +32,7 @@ from colossus.interfaces.repl import (
     _render_repl_preferences,
     _render_repl_startup,
     _render_status,
+    _render_tasks,
     _render_theme_preview,
     _render_themes,
     _render_tools,
@@ -104,6 +106,7 @@ def test_parse_context_commands() -> None:
     theme = parse_slash_command("/theme carrot")
     repl = parse_slash_command("/repl prefs")
     status = parse_slash_command("/status")
+    tasks = parse_slash_command("/tasks all")
     help_command = parse_slash_command("/help")
 
     assert compact is not None
@@ -134,6 +137,9 @@ def test_parse_context_commands() -> None:
     assert repl.argument == "prefs"
     assert status is not None
     assert status.command == "status"
+    assert tasks is not None
+    assert tasks.command == "tasks"
+    assert tasks.argument == "all"
     assert help_command is not None
     assert help_command.command == "help"
 
@@ -321,6 +327,7 @@ def test_toolbar_shows_operational_state_and_prompt_metrics() -> None:
     )
     state.last_run_id = "run-abcdef"
     state.last_status = "done"
+    state.task_summary = "tasks=2/5"
 
     toolbar = _format_repl_toolbar(state, "hello\nthere", 2, 3)
 
@@ -339,6 +346,7 @@ def test_toolbar_shows_operational_state_and_prompt_metrics() -> None:
     assert "ctx=350/700(50%)" in toolbar
     assert "msgs=3" in toolbar
     assert "snap=snapshot" in toolbar
+    assert "tasks=2/5" in toolbar
     assert "last=done:run-abcd" in toolbar
 
     state.last_status = "running"
@@ -346,6 +354,7 @@ def test_toolbar_shows_operational_state_and_prompt_metrics() -> None:
     assert "model=primary:very-long-local-model..." in run_toolbar
     assert "ctx=350/700(50%)" in run_toolbar
     assert "session=session-" in run_toolbar
+    assert "tasks=2/5" in run_toolbar
     assert "chars=11" in run_toolbar
     assert "lines=2" in run_toolbar
     assert "last=running" not in run_toolbar
@@ -442,10 +451,12 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "theme" in status_output
     assert "activity_spinner" in status_output
     assert "transcript" in status_output
+    assert "tasks" in status_output
     assert "/multiline on|off|toggle" in help_output
     assert "/transcript comfortable|compact" in help_output
     assert "/theme [NAME]" in help_output
     assert "/repl prefs|save|reset" in help_output
+    assert "/tasks [open|all|STATUS]" in help_output
     assert "Current" in help_output
     assert "primary:model-a" in help_output
     assert "off" in help_output
@@ -454,6 +465,38 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "multiline" in help_output
     assert "hacker" in help_output
     assert "Esc+Enter" in help_output
+
+
+def test_render_tasks_shows_session_task_rows() -> None:
+    console = Console(record=True, width=140)
+    tasks = (
+        Task(
+            id="task-1",
+            session_id="session-1",
+            title="Persist tasks",
+            description="Make tasks visible in the REPL",
+            status="in_progress",
+            created_at="2026-06-10T00:00:00+00:00",
+            updated_at="2026-06-10T00:00:00+00:00",
+        ),
+        Task(
+            id="task-2",
+            session_id="session-1",
+            title="Ship",
+            status="completed",
+            created_at="2026-06-10T00:00:00+00:00",
+            updated_at="2026-06-10T00:00:00+00:00",
+        ),
+    )
+
+    _render_tasks(console, tasks)
+
+    output = console.export_text()
+    assert "in_progress" in output
+    assert "[~]" in output
+    assert "completed" in output
+    assert "[x]" in output
+    assert "Persist tasks" in output
 
 
 def test_render_themes_lists_available_theme_pack() -> None:

@@ -15,6 +15,7 @@ from colossus.adapters.subprocess_broker import (
 )
 from colossus.adapters.workspace import Workspace
 from colossus.application.context import ContextService
+from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig
 from colossus.domain.errors import ToolExecutionError
@@ -254,6 +255,44 @@ async def test_task_plan_and_agent_tools_track_runtime_state(tmp_path: Path) -> 
     assert json.loads(plan_shown.output)["plan"]["id"] == "plan-1"
     assert json.loads(agent_created.output)["agent"]["status"] == "completed"
     assert json.loads(agent_listed.output)["agents"][0]["id"] == "agent-1"
+
+
+@pytest.mark.asyncio
+async def test_task_tools_persist_session_state_when_service_is_available(tmp_path: Path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    task_service = TaskService(state, JsonlAuditSink(tmp_path / "audit.jsonl"))
+    specs, handlers = create_builtin_tools(Workspace(tmp_path), task_service=task_service)
+    registry = InMemoryToolRegistry(specs)
+    executor = FunctionToolExecutor(handlers, registry)
+
+    await executor.execute(
+        ToolCall(
+            call_id="1",
+            name="task.create",
+            arguments={
+                "id": "task-1",
+                "session_id": "session-1",
+                "title": "Persist task",
+            },
+        )
+    )
+    await executor.execute(
+        ToolCall(
+            call_id="2",
+            name="task.update",
+            arguments={
+                "id": "task-1",
+                "session_id": "session-1",
+                "status": "completed",
+            },
+        )
+    )
+
+    reloaded = SQLiteStateStore(tmp_path / "state.sqlite3")
+    tasks = await reloaded.list_tasks(session_id="session-1")
+    assert len(tasks) == 1
+    assert tasks[0].title == "Persist task"
+    assert tasks[0].status == "completed"
 
 
 @pytest.mark.asyncio
