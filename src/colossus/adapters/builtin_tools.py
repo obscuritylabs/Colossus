@@ -541,7 +541,11 @@ def _git_show_spec() -> ToolSpec:
 def _shell_run_spec() -> ToolSpec:
     return ToolSpec(
         name="shell.run",
-        description="Run a structured argv command inside the workspace.",
+        description=(
+            "Run a local command inside the workspace as structured argv. "
+            "Use direct executable arguments only; pipes, redirects, glob expansion, "
+            "and shell wrappers are not available."
+        ),
         input_schema=_object_schema(
             {
                 "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1},

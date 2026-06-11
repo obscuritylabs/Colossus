@@ -40,6 +40,7 @@ class CapturingBroker(SubprocessBroker):
 def test_builtin_tool_catalog_has_handlers_and_roadmap_families(tmp_path: Path) -> None:
     specs, handlers = create_builtin_tools(Workspace(tmp_path))
     names = {spec.name for spec in specs}
+    shell_spec = next(spec for spec in specs if spec.name == "shell.run")
 
     assert names == set(handlers)
     assert "task.create" in names
@@ -52,6 +53,8 @@ def test_builtin_tool_catalog_has_handlers_and_roadmap_families(tmp_path: Path) 
     assert "mcp.call" in names
     assert "trace.export" in names
     assert "eval.run" in names
+    assert "structured argv" in shell_spec.description
+    assert "pipes" in shell_spec.description
     assert specs[-1].name == "echo"
 
 

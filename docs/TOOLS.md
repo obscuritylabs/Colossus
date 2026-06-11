@@ -54,6 +54,9 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
   declared mutations, and tools with explicit `approval_required`.
 - Subprocess-backed tools use fixed argv templates or structured argv arrays. Colossus
   does not use `shell=True`.
+- For `shell.run`, pass the executable and each argument as separate `argv` entries. A
+  process-count request should use `["ps", "-A", "-o", "pid="]` and count returned
+  lines; `["ps", "-A", "|", "wc", "-l"]` passes `|` literally and is not a pipeline.
 - Web fetch tools require explicit approval and depend on network availability. In
   airgapped environments they should not be approved or will fail at the network layer.
   Web search and MCP calls remain adapter extension points.
