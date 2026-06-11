@@ -218,6 +218,8 @@ class TranscriptRenderer:
             self._render_tool_result(event)
             return
         if isinstance(event, ApprovalRequestedEvent):
+            if self.events_mode != "verbose":
+                return
             self._render_status_block("approval requested", event.reason, self.theme.approval)
             return
         if isinstance(event, ApprovalAutoGrantedEvent):

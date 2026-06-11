@@ -65,8 +65,8 @@ async def test_rich_approval_handler_clears_terminal_prompt_after_approval(
 
     output = stream.getvalue()
     assert approved is True
-    assert "\x1b[s" in output
-    assert output.endswith("\x1b[u\x1b[J")
+    assert "\x1b7" in output
+    assert output.endswith("\x1b8\x1b[J")
 
 
 async def test_rich_approval_handler_keeps_terminal_prompt_after_denial(monkeypatch) -> None:
@@ -96,5 +96,5 @@ async def test_rich_approval_handler_keeps_terminal_prompt_after_denial(monkeypa
 
     output = stream.getvalue()
     assert approved is False
-    assert "\x1b[s" in output
-    assert "\x1b[u\x1b[J" not in output
+    assert "\x1b7" in output
+    assert "\x1b8\x1b[J" not in output

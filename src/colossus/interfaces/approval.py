@@ -53,6 +53,6 @@ def _truncate(value: str, limit: int) -> str:
     return f"{value[: max(0, limit - 3)]}..."
 
 
-_SAVE_CURSOR = "\x1b[s"
-_RESTORE_CURSOR = "\x1b[u"
+_SAVE_CURSOR = "\x1b7"
+_RESTORE_CURSOR = "\x1b8"
 _CLEAR_TO_END = "\x1b[J"

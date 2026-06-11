@@ -169,7 +169,7 @@ def test_transcript_renderer_verbose_shows_larger_tool_details_and_done() -> Non
 
 def test_transcript_renderer_status_blocks_are_distinct() -> None:
     console = Console(record=True, width=100)
-    renderer = TranscriptRenderer(console)
+    renderer = TranscriptRenderer(console, events_mode="verbose")
 
     renderer.render(ApprovalRequestedEvent(call_id="call-1", reason="Needs permission."))
     renderer.render(
@@ -277,6 +277,15 @@ def test_transcript_renderer_stops_activity_before_manual_approval_prompt() -> N
     renderer.render(ApprovalRequestedEvent(call_id="call-2", reason="Needs permission."))
 
     assert renderer.activity_label is None
+    assert "approval requested" not in console.export_text()
+
+
+def test_transcript_renderer_compact_skips_sticky_approval_requested_block() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console, events_mode="compact")
+
+    renderer.render(ApprovalRequestedEvent(call_id="call-1", reason="Needs permission."))
+
     assert "approval requested" not in console.export_text()
 
 
