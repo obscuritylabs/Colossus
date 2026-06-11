@@ -298,6 +298,11 @@ model windows under `models.profiles.*.context_window_tokens` or the legacy
 `provider.model_context_windows`; unknown models use `context.default_context_window_tokens`.
 For ad-hoc model overrides, pass `--context-window-tokens` with `--model` so the REPL and
 context service do not fall back to the default window.
+If a provider's model catalog advertises a window, Colossus uses that as a best-effort
+default only when no explicit window is configured. This is useful for providers such as
+OpenRouter that include `context_length` in `/models`; OpenAI's official `/models`
+response only exposes basic model identity metadata, so explicit config is still needed
+there.
 
 ```json
 {

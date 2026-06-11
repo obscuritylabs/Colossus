@@ -2,10 +2,12 @@ from click.exceptions import Exit as ClickExit
 from typer.testing import CliRunner
 
 import colossus.cli as cli_module
+from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.cli import app
 from colossus.domain.errors import ColossusError
-from colossus.domain.models import ModelProfile, ModelRoutingConfig
-from colossus.infrastructure.config import ColossusConfig
+from colossus.domain.models import ModelProfile, ModelRoutingConfig, ResolvedModelProfile
+from colossus.domain.providers import ProviderModelInfo
+from colossus.infrastructure.config import ColossusConfig, ProviderConfig
 from colossus.infrastructure.paths import config_path
 
 
@@ -339,6 +341,71 @@ def test_cli_context_window_override_updates_context_budget(tmp_path, monkeypatc
     assert result.exit_code == 0
     assert "context_window_tokens" in result.stdout
     assert "131072" in result.stdout
+
+
+def test_cli_context_show_uses_provider_discovered_window(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+    class CatalogProvider:
+        name = "catalog-provider"
+
+        async def list_models(self) -> tuple[ProviderModelInfo, ...]:
+            return (ProviderModelInfo(id="catalog-model", context_window_tokens=200_000),)
+
+    profile = ResolvedModelProfile(
+        role="primary",
+        profile_name="primary",
+        provider="echo",
+        model="catalog-model",
+    )
+    route = ModelRoute(
+        role="primary",
+        profile_name="primary",
+        provider=CatalogProvider(),
+        profile=profile,
+    )
+    router = ModelRouter({"primary": route, "context_summarizer": route})
+    monkeypatch.setattr(cli_module, "create_model_router", lambda *args, **kwargs: router)
+
+    result = CliRunner().invoke(app, ["context", "show", "--session", "session-catalog"])
+
+    assert result.exit_code == 0
+    assert "context_window_tokens" in result.stdout
+    assert "200000" in result.stdout
+
+
+def test_cli_model_context_windows_prefers_explicit_config() -> None:
+    config = ColossusConfig(
+        provider=ProviderConfig(
+            model_context_windows={
+                "discovered-model": 65_536,
+                "legacy-model": 98_304,
+            },
+        ),
+        models=ModelRoutingConfig(
+            profiles={
+                "main": ModelProfile(
+                    provider="echo",
+                    model="discovered-model",
+                    context_window_tokens=131_072,
+                )
+            },
+            roles={"primary": "main"},
+        ),
+    )
+
+    windows = cli_module._model_context_windows(
+        config,
+        discovered={
+            "discovered-model": 32_000,
+            "discovered-only-model": 200_000,
+        },
+    )
+
+    assert windows["discovered-model"] == 131_072
+    assert windows["legacy-model"] == 98_304
+    assert windows["discovered-only-model"] == 200_000
 
 
 def test_cli_tasks_list_shows_persisted_tasks(tmp_path, monkeypatch) -> None:

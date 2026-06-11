@@ -4,6 +4,7 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
+import colossus.cli as cli_module
 from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
 from colossus.adapters.openai_responses import OpenAIResponsesProvider
 from colossus.application.providers import ProviderDiagnostics
@@ -73,6 +74,29 @@ def test_provider_models_lists_echo_model(tmp_path, monkeypatch) -> None:
     assert "colossus" in result.stdout
 
 
+def test_provider_models_lists_discovered_limits(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    class LimitProvider(ToolCallingProbeProvider):
+        async def list_models(self) -> tuple[ProviderModelInfo, ...]:
+            return (
+                ProviderModelInfo(
+                    id="limit-model",
+                    context_window_tokens=131_072,
+                    max_output_tokens=8_192,
+                ),
+            )
+
+    monkeypatch.setattr(cli_module, "provider_from_config", lambda *args, **kwargs: LimitProvider())
+
+    result = CliRunner().invoke(app, ["provider", "models"])
+
+    assert result.exit_code == 0
+    assert "limit-model" in result.stdout
+    assert "131072" in result.stdout
+    assert "8192" in result.stdout
+
+
 def test_provider_doctor_reports_missing_openai_api_key(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -127,6 +151,65 @@ async def test_openai_responses_provider_lists_models() -> None:
     assert [model.id for model in models] == ["gpt-test", "missing-metadata"]
     assert models[0].owner == "openai"
     assert models[0].created == 123
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_extracts_model_limits() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "openrouter-model",
+                        "context_length": 131_072,
+                        "top_provider": {"max_completion_tokens": 8_192},
+                    }
+                ]
+            },
+            request=request,
+        )
+    )
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://api.example.test/v1",
+        transport=transport,
+    )
+
+    models = await provider.list_models()
+
+    assert models[0].context_window_tokens == 131_072
+    assert models[0].max_output_tokens == 8_192
+
+
+@pytest.mark.asyncio
+async def test_local_openai_chat_provider_extracts_openrouter_model_limits() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "openrouter/chat-model",
+                        "top_provider": {
+                            "context_length": 200_000,
+                            "max_completion_tokens": 16_384,
+                        },
+                    }
+                ]
+            },
+            request=request,
+        )
+    )
+    provider = LocalOpenAIChatProvider(
+        base_url="https://openrouter.ai/api/v1",
+        transport=transport,
+    )
+
+    models = await provider.list_models()
+
+    assert models[0].context_window_tokens == 200_000
+    assert models[0].max_output_tokens == 16_384
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from colossus.domain.providers import (
     ProviderCapability,
     ProviderReadiness,
     ProviderReadinessCheck,
+    model_context_windows_from_provider_models,
 )
 from colossus.domain.requests import AgentRunRequest
 from colossus.domain.tasks import Task
@@ -186,10 +187,11 @@ def _context_runtime(
     primary_route = router.resolve("primary")
     context_route = router.resolve("context_summarizer")
     selected_model = model or primary_route.profile.model
+    model_context_windows = _resolved_model_context_windows(config, overrides, router)
     service = create_context_service(
         data_dir(),
         context_config=config.context,
-        model_context_windows=_model_context_windows(config, overrides),
+        model_context_windows=model_context_windows,
     )
     return service, selected_model, context_route.provider, context_route.profile.model
 
@@ -197,12 +199,58 @@ def _context_runtime(
 def _model_context_windows(
     config: ColossusConfig,
     overrides: ProviderOverrides | None = None,
+    discovered: dict[str, int] | None = None,
 ) -> dict[str, int]:
     routing = effective_model_routing(config, overrides)
     return {
+        **(discovered or {}),
         **config.provider.model_context_windows,
         **model_context_windows_from_routing(routing),
     }
+
+
+def _resolved_model_context_windows(
+    config: ColossusConfig,
+    overrides: ProviderOverrides | None,
+    router: ModelRouter,
+) -> dict[str, int]:
+    configured = _model_context_windows(config, overrides)
+    discovered = asyncio.run(_discover_model_context_windows(router, configured))
+    return _model_context_windows(config, overrides, discovered)
+
+
+async def _discover_model_context_windows(
+    router: ModelRouter,
+    configured: dict[str, int],
+) -> dict[str, int]:
+    missing_models = {
+        route.profile.model
+        for route in router.list_routes()
+        if route.profile.model not in configured
+    }
+    if not missing_models:
+        return {}
+
+    discovered: dict[str, int] = {}
+    seen_catalogs: set[tuple[str, str | None, str | None, str | None]] = set()
+    for route in router.list_routes():
+        catalog_key = (
+            route.profile.provider,
+            route.profile.base_url,
+            route.profile.api_key_env,
+            route.profile.ca_bundle,
+        )
+        if catalog_key in seen_catalogs:
+            continue
+        seen_catalogs.add(catalog_key)
+        try:
+            models = await ProviderDiagnostics(route.provider).list_models()
+        except Exception:
+            continue
+        discovered.update(model_context_windows_from_provider_models(models))
+        if missing_models.issubset(discovered):
+            break
+    return discovered
 
 
 def _resolve_approval_mode(value: str | None, *, ask_approval: bool = False) -> ApprovalMode:
@@ -308,6 +356,7 @@ def run(
     router = create_model_router(config, overrides)
     route = router.resolve(model_role)
     context_route = router.resolve("context_summarizer")
+    model_context_windows = _resolved_model_context_windows(config, overrides, router)
     resolved_approval_mode = _resolve_approval_mode(approval_mode, ask_approval=ask_approval)
     events_mode = _resolve_events_mode(events)
     if trace and events_mode == "off":
@@ -323,7 +372,7 @@ def run(
         data_dir(),
         route.provider,
         context_config=config.context,
-        model_context_windows=_model_context_windows(config, overrides),
+        model_context_windows=model_context_windows,
         context_model=context_route.profile.model,
         context_provider=context_route.provider,
         event_observer=trace_renderer.render,
@@ -397,6 +446,7 @@ def repl(
     router = create_model_router(config, overrides)
     primary_route = router.resolve("primary")
     context_route = router.resolve("context_summarizer")
+    model_context_windows = _resolved_model_context_windows(config, overrides, router)
     resolved_approval_mode = _resolve_approval_mode(approval_mode)
     state = create_state_store(data_dir())
     audit = create_audit_sink(data_dir())
@@ -405,7 +455,7 @@ def repl(
         state_store=state,
         audit_sink=audit,
         context_config=config.context,
-        model_context_windows=_model_context_windows(config, overrides),
+        model_context_windows=model_context_windows,
     )
 
     def build_orchestrator(model_role: str) -> AgentOrchestrator:
@@ -417,7 +467,7 @@ def repl(
             audit_sink=audit,
             context_service=context_service,
             context_config=config.context,
-            model_context_windows=_model_context_windows(config, overrides),
+            model_context_windows=model_context_windows,
             context_model=context_route.profile.model,
             context_provider=context_route.provider,
             approval_handler=(
@@ -631,12 +681,14 @@ def provider_models(ctx: typer.Context) -> None:
     config = load_config(config_path())
     provider = provider_from_config(config, _provider_overrides(ctx))
     models = asyncio.run(ProviderDiagnostics(provider).list_models())
-    table = Table("Model", "Owner", "Created")
+    table = Table("Model", "Owner", "Created", "Context", "Max Output")
     for model in models:
         table.add_row(
             model.id,
             model.owner or "",
             str(model.created) if model.created is not None else "",
+            str(model.context_window_tokens) if model.context_window_tokens is not None else "",
+            str(model.max_output_tokens) if model.max_output_tokens is not None else "",
         )
     console.print(table)
 

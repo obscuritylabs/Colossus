@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+from colossus.adapters.model_catalog import extract_model_infos
 from colossus.domain.errors import ProviderError
 from colossus.domain.events import (
     FinalOutputEvent,
@@ -108,7 +109,7 @@ class LocalOpenAIChatProvider:
     async def list_models(self) -> tuple[ProviderModelInfo, ...]:
         response = await self._get_models_response()
         response.raise_for_status()
-        return _extract_model_infos(response.json())
+        return extract_model_infos(response.json())
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
         messages: list[dict[str, object]] = [
@@ -395,27 +396,3 @@ def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
         f"{exc.request.url}{suffix}"
     )
 
-
-def _extract_model_infos(data: object) -> tuple[ProviderModelInfo, ...]:
-    if not isinstance(data, dict):
-        return ()
-    entries = data.get("data")
-    if not isinstance(entries, list):
-        return ()
-    models: list[ProviderModelInfo] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        model_id = entry.get("id")
-        if not isinstance(model_id, str):
-            continue
-        owner = entry.get("owned_by")
-        created = entry.get("created")
-        models.append(
-            ProviderModelInfo(
-                id=model_id,
-                owner=owner if isinstance(owner, str) else None,
-                created=created if isinstance(created, int) else None,
-            )
-        )
-    return tuple(models)

@@ -40,6 +40,12 @@ Configure model-specific windows:
 }
 ```
 
+Colossus can also discover model windows from provider catalogs when they expose that
+metadata. Discovered values fill gaps only: explicit `models.profiles.*.context_window_tokens`,
+CLI `--context-window-tokens`, and legacy `provider.model_context_windows` values take
+precedence. OpenRouter-compatible model catalogs commonly include `context_length`;
+official OpenAI model catalogs do not currently include context windows.
+
 ## Commands
 
 ```bash
