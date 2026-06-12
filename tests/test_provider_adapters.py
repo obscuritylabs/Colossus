@@ -31,6 +31,19 @@ def _tool() -> ToolSpec:
     )
 
 
+def _dotted_tool(name: str = "filesystem.read") -> ToolSpec:
+    return ToolSpec(
+        name=name,
+        description="Read a file.",
+        input_schema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_openai_responses_provider_maps_payload_and_events() -> None:
     captured: dict[str, Any] = {}
@@ -47,14 +60,14 @@ async def test_openai_responses_provider_maps_payload_and_events() -> None:
                     {
                         "type": "function_call",
                         "call_id": "call_1",
-                        "name": "lookup",
-                        "arguments": '{"query":"alpha"}',
+                        "name": "filesystem_read",
+                        "arguments": '{"path":"README.md"}',
                     },
                     {
                         "type": "custom_tool_call",
                         "call_id": "call_2",
-                        "name": "shell",
-                        "input": "pwd",
+                        "name": "filesystem_read",
+                        "input": "README.md",
                     },
                     {"type": "message", "content": [{"type": "text", "text": "there"}]},
                 ]
@@ -71,10 +84,23 @@ async def test_openai_responses_provider_maps_payload_and_events() -> None:
         instructions="Be terse.",
         messages=(
             UserMessage(content="hello"),
-            AssistantMessage(content="working"),
-            ToolResultMessage(call_id="call_0", name="lookup", content='{"ok":true}'),
+            AssistantMessage(
+                content="working",
+                tool_calls=(
+                    ToolCall(
+                        call_id="call_0",
+                        name="filesystem.read",
+                        arguments={"path": "README.md"},
+                    ),
+                ),
+            ),
+            ToolResultMessage(
+                call_id="call_0",
+                name="filesystem.read",
+                content='{"ok":true}',
+            ),
         ),
-        tools=(_tool(),),
+        tools=(_dotted_tool(),),
     )
 
     events = [event async for event in provider.stream(request)]
@@ -84,13 +110,28 @@ async def test_openai_responses_provider_maps_payload_and_events() -> None:
     assert captured["payload"]["input"] == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "working"},
+        {
+            "type": "function_call",
+            "call_id": "call_0",
+            "name": "filesystem_read",
+            "arguments": '{"path": "README.md"}',
+        },
         {"type": "function_call_output", "call_id": "call_0", "output": '{"ok":true}'},
     ]
+    assert captured["payload"]["tools"][0]["name"] == "filesystem_read"
     assert captured["payload"]["tools"][0]["strict"] is True
     assert events == [
         ModelDeltaEvent(text="hi "),
-        ToolCallRequestedEvent(call_id="call_1", name="lookup", arguments={"query": "alpha"}),
-        ToolCallRequestedEvent(call_id="call_2", name="shell", arguments={"input": "pwd"}),
+        ToolCallRequestedEvent(
+            call_id="call_1",
+            name="filesystem.read",
+            arguments={"path": "README.md"},
+        ),
+        ToolCallRequestedEvent(
+            call_id="call_2",
+            name="filesystem.read",
+            arguments={"input": "README.md"},
+        ),
         ModelDeltaEvent(text="there"),
         FinalOutputEvent(text="hi there"),
     ]
@@ -115,8 +156,8 @@ async def test_local_openai_chat_provider_maps_payload_and_events() -> None:
                                 {
                                     "id": "call_1",
                                     "function": {
-                                        "name": "lookup",
-                                        "arguments": '{"query":"beta"}',
+                                        "name": "filesystem_read",
+                                        "arguments": '{"path":"README.md"}',
                                     },
                                 }
                             ],
@@ -137,9 +178,13 @@ async def test_local_openai_chat_provider_maps_payload_and_events() -> None:
         messages=(
             UserMessage(content="question"),
             AssistantMessage(content="answer so far"),
-            ToolResultMessage(call_id="call_0", name="lookup", content="tool output"),
+            ToolResultMessage(
+                call_id="call_0",
+                name="filesystem.read",
+                content="tool output",
+            ),
         ),
-        tools=(_tool(),),
+        tools=(_dotted_tool(),),
     )
 
     events = [event async for event in provider.stream(request)]
@@ -152,10 +197,14 @@ async def test_local_openai_chat_provider_maps_payload_and_events() -> None:
         {"role": "assistant", "content": "answer so far"},
         {"role": "tool", "tool_call_id": "call_0", "content": "tool output"},
     ]
-    assert captured["payload"]["tools"][0]["function"]["name"] == "lookup"
+    assert captured["payload"]["tools"][0]["function"]["name"] == "filesystem_read"
     assert captured["payload"]["stream"] is True
     assert events == [
-        ToolCallRequestedEvent(call_id="call_1", name="lookup", arguments={"query": "beta"}),
+        ToolCallRequestedEvent(
+            call_id="call_1",
+            name="filesystem.read",
+            arguments={"path": "README.md"},
+        ),
         ModelDeltaEvent(text="done"),
         FinalOutputEvent(text="done"),
     ]
@@ -205,8 +254,8 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
                                     "id": "call_1",
                                     "type": "function",
                                     "function": {
-                                        "name": "lookup",
-                                        "arguments": '{"query"',
+                                        "name": "filesystem_read",
+                                        "arguments": '{"path"',
                                     },
                                 }
                             ]
@@ -224,7 +273,7 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
                                 {
                                     "index": 0,
                                     "function": {
-                                        "arguments": ':"gamma"}',
+                                        "arguments": ':"README.md"}',
                                     },
                                 }
                             ]
@@ -258,7 +307,7 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
                 model="model-b",
                 instructions="System text.",
                 messages=(UserMessage(content="question"),),
-                tools=(_tool(),),
+                tools=(_dotted_tool(),),
             )
         )
     ]
@@ -272,7 +321,11 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
         ),
         ModelDeltaEvent(text="hel"),
         ModelDeltaEvent(text="lo"),
-        ToolCallRequestedEvent(call_id="call_1", name="lookup", arguments={"query": "gamma"}),
+        ToolCallRequestedEvent(
+            call_id="call_1",
+            name="filesystem.read",
+            arguments={"path": "README.md"},
+        ),
         FinalOutputEvent(text="hello"),
     ]
 
@@ -304,14 +357,18 @@ async def test_local_openai_chat_provider_serializes_assistant_tool_calls() -> N
                 tool_calls=(
                     ToolCall(
                         call_id="call_1",
-                        name="lookup",
-                        arguments={"query": "beta"},
+                        name="filesystem.read",
+                        arguments={"path": "README.md"},
                     ),
                 ),
             ),
-            ToolResultMessage(call_id="call_1", name="lookup", content="tool output"),
+            ToolResultMessage(
+                call_id="call_1",
+                name="filesystem.read",
+                content="tool output",
+            ),
         ),
-        tools=(_tool(),),
+        tools=(_dotted_tool(),),
     )
 
     _ = [event async for event in provider.stream(request)]
@@ -327,8 +384,8 @@ async def test_local_openai_chat_provider_serializes_assistant_tool_calls() -> N
                     "id": "call_1",
                     "type": "function",
                     "function": {
-                        "name": "lookup",
-                        "arguments": '{"query": "beta"}',
+                        "name": "filesystem_read",
+                        "arguments": '{"path": "README.md"}',
                     },
                 }
             ],
@@ -355,4 +412,25 @@ async def test_local_openai_chat_provider_wraps_http_errors() -> None:
     )
 
     with pytest.raises(ProviderError, match=r"404.*model not found"):
+        _ = [event async for event in provider.stream(request)]
+
+
+@pytest.mark.asyncio
+async def test_openai_like_provider_rejects_tool_name_alias_collisions() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("request should fail before provider I/O")
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    request = ModelRequest(
+        model="model-b",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(_dotted_tool("a.b"), _dotted_tool("a_b")),
+    )
+
+    with pytest.raises(ProviderError, match="collide"):
         _ = [event async for event in provider.stream(request)]

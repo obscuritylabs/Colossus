@@ -48,6 +48,7 @@ def create_default_orchestrator(
     user_prompt_handler: UserPromptHandler | None = None,
     risk_assessment_service: RiskAssessmentService | None = None,
     risk_auto_approve: bool = False,
+    auto_approve_required_tools: bool = False,
 ) -> AgentOrchestrator:
     data_dir.mkdir(parents=True, exist_ok=True)
     resolved_provider = provider or EchoModelProvider()
@@ -85,6 +86,7 @@ def create_default_orchestrator(
         event_observer=event_observer,
         risk_assessment_service=risk_assessment_service,
         risk_auto_approve=risk_auto_approve,
+        auto_approve_required_tools=auto_approve_required_tools,
     )
 
 

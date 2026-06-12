@@ -23,6 +23,7 @@ from colossus.domain.user_prompts import UserPromptChoice
 from colossus.interfaces.repl import (
     REPL_THEMES,
     ReplDisplayState,
+    ReplInteractionMode,
     RichUserPromptHandler,
     SlashCommandCompleter,
     _events_mode,
@@ -37,6 +38,7 @@ from colossus.interfaces.repl import (
     _plan_agent,
     _preferences_from_state,
     _prompt_continuation,
+    _prompt_for_plan_review,
     _prompt_message,
     _render_help,
     _render_model,
@@ -878,6 +880,103 @@ async def test_plan_execute_runs_approved_active_plan(tmp_path) -> None:
     assert trace.ended is True
     assert trace.final_answer == "executed"
     assert f"Executed plan {plan.id}." in console.export_text()
+
+
+@pytest.mark.asyncio
+async def test_plan_review_prompt_approves_and_executes(tmp_path, monkeypatch) -> None:
+    service = PlanService(
+        SQLiteStateStore(tmp_path / "state.sqlite3"),
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+    )
+    state = ReplDisplayState(
+        session_id="session-plan",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+        interaction_mode="plan",
+    )
+    console = Console(record=True, width=140)
+    orchestrator = FakePlanOrchestrator()
+    trace = FakeTraceRenderer()
+    plan = await _save_repl_plan(service, state, prompt="ship it", content="# Ship")
+    monkeypatch.setattr(
+        "colossus.interfaces.repl.RichUserPromptHandler",
+        lambda console: QueuedUserPromptHandler(console, ["1"]),
+    )
+
+    await _prompt_for_plan_review(
+        console,
+        service,
+        state,
+        plan,
+        orchestrator,  # type: ignore[arg-type]
+        default_agent("model-a"),
+        trace,  # type: ignore[arg-type]
+    )
+
+    assert orchestrator.request is not None
+    assert orchestrator.request.plan_id == plan.id
+    assert (await service.get_plan(plan.id)).status == "executed"
+    assert state.active_plan_status == "executed"
+    assert state.interaction_mode == "chat"
+    output = console.export_text()
+    assert "Approve this plan?" in output
+    assert "Approved plan" in output
+    assert "Executed plan" in output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("choice", "expected_mode", "expected_active", "expected_text"),
+    (
+        ("2", "chat", True, "Kept draft plan."),
+        ("3", "plan", True, "Plan Mode is still on."),
+        ("4", "chat", False, "Discarded active plan."),
+    ),
+)
+async def test_plan_review_prompt_handles_non_execute_choices(
+    tmp_path,
+    monkeypatch,
+    choice: str,
+    expected_mode: ReplInteractionMode,
+    expected_active: bool,
+    expected_text: str,
+) -> None:
+    service = PlanService(
+        SQLiteStateStore(tmp_path / "state.sqlite3"),
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+    )
+    state = ReplDisplayState(
+        session_id="session-plan",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+        interaction_mode="plan",
+    )
+    console = Console(record=True, width=140)
+    orchestrator = FakePlanOrchestrator()
+    trace = FakeTraceRenderer()
+    plan = await _save_repl_plan(service, state, prompt="ship it", content="# Ship")
+    monkeypatch.setattr(
+        "colossus.interfaces.repl.RichUserPromptHandler",
+        lambda console: QueuedUserPromptHandler(console, [choice]),
+    )
+
+    await _prompt_for_plan_review(
+        console,
+        service,
+        state,
+        plan,
+        orchestrator,  # type: ignore[arg-type]
+        default_agent("model-a"),
+        trace,  # type: ignore[arg-type]
+    )
+
+    assert orchestrator.request is None
+    assert state.interaction_mode == expected_mode
+    assert (state.active_plan_id is not None) is expected_active
+    assert expected_text in console.export_text()
+    assert (await service.get_plan(plan.id)).status == "draft"
 
 
 def test_render_themes_lists_available_theme_pack() -> None:
