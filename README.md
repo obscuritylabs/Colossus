@@ -49,12 +49,18 @@ uv run colossus --provider local-openai-chat --base-url http://localhost:8000/v1
 uv run colossus --provider openai-responses --model gpt-4.1-mini --api-key-env OPENAI_API_KEY run "hello"
 ```
 
-For approval-required tools, one-shot runs can prompt or use model-gated auto approval:
+For approval-required tools, one-shot runs can prompt, use model-gated auto approval,
+or intentionally run without approval prompts:
 
 ```bash
 uv run colossus run --approval-mode ask "Use shell.run with argv [\"echo\", \"ok\"]."
 uv run colossus run --approval-mode risk-auto "Use shell.run with argv [\"echo\", \"ok\"]."
+uv run colossus run --approval-mode full-access "Use shell.run with argv [\"echo\", \"ok\"]."
 ```
+
+`full-access` means approval-required tools are auto-approved without prompting. It does
+not expand filesystem roots, network implementations, tool schemas, or deterministic
+policy denies.
 
 ## Documentation
 

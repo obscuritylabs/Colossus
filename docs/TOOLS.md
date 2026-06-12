@@ -52,6 +52,9 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
 
 - The default policy requires approval for high-risk tools, network-capable tools,
   declared mutations, and tools with explicit `approval_required`.
+- `--approval-mode full-access` auto-approves approval-required tools without prompting,
+  but it does not change tool schemas, filesystem roots, network implementations, or
+  deterministic policy denies.
 - Subprocess-backed tools use fixed argv templates or structured argv arrays. Colossus
   does not use `shell=True`.
 - For `shell.run`, pass the executable and each argument as separate `argv` entries. A

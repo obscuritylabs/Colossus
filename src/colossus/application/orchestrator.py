@@ -50,6 +50,7 @@ class AgentOrchestrator:
         event_observer: RunEventObserver | None = None,
         risk_assessment_service: RiskAssessmentService | None = None,
         risk_auto_approve: bool = False,
+        auto_approve_required_tools: bool = False,
     ) -> None:
         self._provider = provider
         self._tool_registry = tool_registry
@@ -65,6 +66,7 @@ class AgentOrchestrator:
         self._event_observer = event_observer
         self._risk_assessment_service = risk_assessment_service
         self._risk_auto_approve = risk_auto_approve
+        self._auto_approve_required_tools = auto_approve_required_tools
 
     def set_event_observer(self, event_observer: RunEventObserver | None) -> None:
         self._event_observer = event_observer
@@ -276,6 +278,21 @@ class AgentOrchestrator:
                 "agent",
                 "risk.auto_approved",
                 {"run_id": run_id, "tool": call.name, "summary": risk.summary},
+            )
+        elif decision.decision == "requires_approval" and self._auto_approve_required_tools:
+            reason = f"Full-access auto-approved {call.name}: {decision.reason}"
+            auto_event = ApprovalAutoGrantedEvent(call_id=call.call_id, reason=reason)
+            await self._state_store.append_event(run_id, auto_event)
+            self._observe_event(auto_event)
+            await self._audit_sink.record(
+                "agent",
+                "tool.auto_approved",
+                {
+                    "run_id": run_id,
+                    "tool": call.name,
+                    "mode": "full-access",
+                    "reason": decision.reason,
+                },
             )
         elif decision.decision == "requires_approval":
             approval_event = ApprovalRequestedEvent(call_id=call.call_id, reason=decision.reason)

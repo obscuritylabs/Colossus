@@ -63,7 +63,14 @@ from colossus.interfaces.trace import EventDisplayMode, RichRunEventRenderer
 from colossus.interfaces.tui import run_tui
 from colossus.ports.model_provider import ModelProvider
 
-ApprovalMode = Literal["deny", "ask", "risk-auto"]
+ApprovalMode = Literal["deny", "ask", "risk-auto", "full-access"]
+APPROVAL_MODE_HELP = "deny, ask, risk-auto, or full-access"
+APPROVAL_MODE_ALIASES: dict[str, ApprovalMode] = {
+    "full": "full-access",
+    "full-access": "full-access",
+    "never": "full-access",
+    "yolo": "full-access",
+}
 
 app = typer.Typer(help="Colossus secure CLI agentic harness.")
 config_app = typer.Typer(help="Manage configuration.")
@@ -263,9 +270,11 @@ def _resolve_approval_mode(value: str | None, *, ask_approval: bool = False) -> 
     if value is None:
         return "ask" if ask_approval else "deny"
     normalized = value.strip().lower()
-    if normalized in {"deny", "ask", "risk-auto"}:
+    if normalized in {"deny", "ask", "risk-auto", "full-access"}:
         return normalized  # type: ignore[return-value]
-    console.print("[red]Invalid approval mode.[/red] Use deny, ask, or risk-auto.")
+    if normalized in APPROVAL_MODE_ALIASES:
+        return APPROVAL_MODE_ALIASES[normalized]
+    console.print(f"[red]Invalid approval mode.[/red] Use {APPROVAL_MODE_HELP}.")
     raise typer.Exit(code=2)
 
 
@@ -341,7 +350,7 @@ def run(
         str | None,
         typer.Option(
             "--approval-mode",
-            help="Approval mode: deny, ask, or risk-auto.",
+            help=f"Approval mode: {APPROVAL_MODE_HELP}.",
         ),
     ] = None,
 ) -> None:
@@ -389,6 +398,7 @@ def run(
         ),
         risk_assessment_service=RiskAssessmentService(router),
         risk_auto_approve=resolved_approval_mode == "risk-auto",
+        auto_approve_required_tools=resolved_approval_mode == "full-access",
     )
     plan_id = execute_plan
     if execute_plan is not None:
@@ -428,7 +438,10 @@ def repl(
         str,
         typer.Option(
             "--approval-mode",
-            help="Approval mode: ask or risk-auto. Use deny only for non-interactive testing.",
+            help=(
+                "Approval mode: ask, risk-auto, or full-access. "
+                "Use deny only for non-interactive testing."
+            ),
         ),
     ] = "ask",
     theme: Annotated[
@@ -485,6 +498,7 @@ def repl(
             user_prompt_handler=user_prompt_handler,
             risk_assessment_service=RiskAssessmentService(router),
             risk_auto_approve=resolved_approval_mode == "risk-auto",
+            auto_approve_required_tools=resolved_approval_mode == "full-access",
         )
 
     history_path = data_dir() / "repl_history.txt"

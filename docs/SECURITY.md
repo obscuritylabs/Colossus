@@ -11,7 +11,8 @@ contracts.
 - Subprocess execution goes through the broker.
 - `shell=True` is not used.
 - Tool inputs are validated before execution.
-- Approval is required when policy returns `requires_approval`.
+- Approval is required when policy returns `requires_approval`, unless the user
+  explicitly selects a no-prompt approval mode.
 - Audit records are hash-chained JSONL entries.
 - Redaction is on by default for command inputs and environment values.
 
@@ -71,6 +72,18 @@ Security-sensitive defaults:
 The default policy requires approval for declared mutations, explicit approval flags,
 network-capable tools, and high-risk tools. The orchestrator validates model-provided
 tool arguments against the tool schema before requesting approval.
+
+## Approval Modes
+
+`deny` blocks approval-required tools, `ask` prompts interactively, and `risk-auto` may
+auto-approve low-risk `shell.run` calls after model-assisted risk review. `full-access`
+auto-approves approval-required tools without prompting and records
+`tool.auto_approved` audit entries plus `ApprovalAutoGrantedEvent` events.
+
+`full-access` is a no-prompt approval policy, not a broader sandbox profile. It does not
+expand filesystem roots, network implementations, tool schemas, or deterministic policy
+denies. Unknown tools, invalid arguments, policy `deny`, and risk-review `deny` still
+stop before execution.
 
 ## Model-Assisted Risk Review
 

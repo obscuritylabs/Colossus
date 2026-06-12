@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from colossus.adapters.model_catalog import extract_model_infos
+from colossus.adapters.tool_name_codec import ToolNameCodec
 from colossus.domain.events import (
     FinalOutputEvent,
     ModelDeltaEvent,
@@ -121,11 +122,14 @@ class OpenAIResponsesProvider:
         return extract_model_infos(response.json())
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        tool_name_codec = ToolNameCodec.from_tools(request.tools)
         payload = {
             "model": request.model,
             "instructions": request.instructions,
-            "input": _messages_to_responses_input(request.messages),
-            "tools": [_tool_to_responses_tool(tool) for tool in request.tools],
+            "input": _messages_to_responses_input(request.messages, tool_name_codec),
+            "tools": [
+                _tool_to_responses_tool(tool, tool_name_codec) for tool in request.tools
+            ],
             "store": False,
         }
         async with httpx.AsyncClient(
@@ -152,13 +156,13 @@ class OpenAIResponsesProvider:
             elif item_type == "function_call":
                 yield ToolCallRequestedEvent(
                     call_id=str(item["call_id"]),
-                    name=str(item["name"]),
+                    name=tool_name_codec.decode(str(item["name"])),
                     arguments=json.loads(str(item.get("arguments") or "{}")),
                 )
             elif item_type == "custom_tool_call":
                 yield ToolCallRequestedEvent(
                     call_id=str(item["call_id"]),
-                    name=str(item["name"]),
+                    name=tool_name_codec.decode(str(item["name"])),
                     arguments={"input": str(item.get("input", ""))},
                 )
         if output_text:
@@ -176,14 +180,20 @@ class OpenAIResponsesProvider:
             )
 
 
-def _messages_to_responses_input(messages: tuple[Message, ...]) -> list[dict[str, object]]:
+def _messages_to_responses_input(
+    messages: tuple[Message, ...],
+    tool_name_codec: ToolNameCodec,
+) -> list[dict[str, object]]:
     items: list[dict[str, object]] = []
     for message in messages:
-        items.extend(_message_to_responses_input(message))
+        items.extend(_message_to_responses_input(message, tool_name_codec))
     return items
 
 
-def _message_to_responses_input(message: Message) -> list[dict[str, object]]:
+def _message_to_responses_input(
+    message: Message,
+    tool_name_codec: ToolNameCodec,
+) -> list[dict[str, object]]:
     if isinstance(message, UserMessage):
         return [{"role": "user", "content": message.content}]
     if isinstance(message, AssistantMessage):
@@ -195,7 +205,7 @@ def _message_to_responses_input(message: Message) -> list[dict[str, object]]:
                 {
                     "type": "function_call",
                     "call_id": call.call_id,
-                    "name": call.name,
+                    "name": tool_name_codec.encode(call.name),
                     "arguments": json.dumps(call.arguments),
                 }
             )
@@ -213,10 +223,13 @@ def _message_to_responses_input(message: Message) -> list[dict[str, object]]:
     raise TypeError(f"Unsupported message: {message!r}")
 
 
-def _tool_to_responses_tool(tool: ToolSpec) -> dict[str, object]:
+def _tool_to_responses_tool(
+    tool: ToolSpec,
+    tool_name_codec: ToolNameCodec,
+) -> dict[str, object]:
     return {
         "type": "function",
-        "name": tool.name,
+        "name": tool_name_codec.encode(tool.name),
         "description": tool.description,
         "parameters": tool.input_schema,
         "strict": True,
@@ -234,4 +247,3 @@ def _extract_message_text(item: dict[str, object]) -> str:
             if isinstance(text, str):
                 chunks.append(text)
     return "".join(chunks)
-

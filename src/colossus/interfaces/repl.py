@@ -754,9 +754,14 @@ async def run_repl(
                 display_state.last_status = "done"
                 if not trace_renderer.rendered_model_output:
                     trace_renderer.render_final_answer(result.final_output)
-                console.print(
-                    f"Saved draft plan {plan.id}. "
-                    "Next: /plan approve, /plan execute, or /plan off."
+                await _prompt_for_plan_review(
+                    console,
+                    plan_service,
+                    display_state,
+                    plan,
+                    orchestrator,
+                    agent,
+                    trace_renderer,
                 )
                 await _refresh_context_status(display_state, context_service)
                 await _refresh_task_status(display_state, task_service)
@@ -1261,6 +1266,76 @@ async def _save_repl_plan(
     state.active_plan_id = plan.id
     state.active_plan_status = plan.status
     return plan
+
+
+async def _prompt_for_plan_review(
+    console: Console,
+    plan_service: PlanService | None,
+    state: ReplDisplayState,
+    plan: Plan,
+    orchestrator: AgentOrchestrator,
+    agent: AgentSpec,
+    trace_renderer: TranscriptRenderer,
+) -> None:
+    if plan_service is None:
+        console.print(
+            f"Saved draft plan {plan.id}. Next: /plan approve, /plan execute, or /plan off."
+        )
+        return
+    console.print(f"Saved draft plan {plan.id}.")
+    handler = RichUserPromptHandler(console)
+    answer = await handler.ask(
+        question="Approve this plan?",
+        choices=(
+            UserPromptChoice(
+                id="approve_execute",
+                label="Approve and execute",
+                description="Approve the active draft and immediately run it.",
+            ),
+            UserPromptChoice(
+                id="keep_draft",
+                label="Keep draft",
+                description="Leave the plan saved without executing it.",
+            ),
+            UserPromptChoice(
+                id="revise",
+                label="Revise plan",
+                description="Stay in Plan Mode so your next message replaces the draft.",
+            ),
+            UserPromptChoice(
+                id="discard",
+                label="Discard",
+                description="Clear the active plan from this REPL session.",
+            ),
+        ),
+        allow_freeform=False,
+    )
+    if answer.choice_id == "approve_execute":
+        approved = await plan_service.approve_plan(plan.id)
+        state.active_plan_status = approved.status
+        console.print(f"Approved plan {approved.id}.")
+        await _execute_active_plan(
+            console,
+            plan_service,
+            state,
+            orchestrator,
+            agent,
+            trace_renderer,
+        )
+        return
+    if answer.choice_id == "keep_draft":
+        state.interaction_mode = "chat"
+        console.print("Kept draft plan. Use /plan show, /plan approve, or /plan execute.")
+        return
+    if answer.choice_id == "revise":
+        state.interaction_mode = "plan"
+        console.print("Plan Mode is still on. Send the revision request next.")
+        return
+    if answer.choice_id == "discard":
+        state.active_plan_id = None
+        state.active_plan_status = None
+        state.interaction_mode = "chat"
+        console.print("Discarded active plan.")
 
 
 async def _active_plan(

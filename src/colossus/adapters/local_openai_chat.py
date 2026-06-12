@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 
 from colossus.adapters.model_catalog import extract_model_infos
+from colossus.adapters.tool_name_codec import ToolNameCodec
 from colossus.domain.errors import ProviderError
 from colossus.domain.events import (
     FinalOutputEvent,
@@ -112,14 +113,18 @@ class LocalOpenAIChatProvider:
         return extract_model_infos(response.json())
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        tool_name_codec = ToolNameCodec.from_tools(request.tools)
         messages: list[dict[str, object]] = [
             {"role": "system", "content": request.instructions},
-            *[_message_to_chat_message(message) for message in request.messages],
+            *[
+                _message_to_chat_message(message, tool_name_codec)
+                for message in request.messages
+            ],
         ]
         payload: dict[str, object] = {
             "model": request.model,
             "messages": messages,
-            "tools": [_tool_to_chat_tool(tool) for tool in request.tools],
+            "tools": [_tool_to_chat_tool(tool, tool_name_codec) for tool in request.tools],
         }
         async with httpx.AsyncClient(
             timeout=self._timeout_seconds,
@@ -127,11 +132,15 @@ class LocalOpenAIChatProvider:
             transport=self._transport,
         ) as client:
             try:
-                async for event in self._stream_chat_completion(client, payload):
+                async for event in self._stream_chat_completion(client, payload, tool_name_codec):
                     yield event
                 return
             except _StreamingFallbackRequired:
-                async for event in self._non_stream_chat_completion(client, payload):
+                async for event in self._non_stream_chat_completion(
+                    client,
+                    payload,
+                    tool_name_codec,
+                ):
                     yield event
 
     async def _get_models_response(self) -> httpx.Response:
@@ -149,6 +158,7 @@ class LocalOpenAIChatProvider:
         self,
         client: httpx.AsyncClient,
         payload: dict[str, object],
+        tool_name_codec: ToolNameCodec,
     ) -> AsyncIterator[RunEvent]:
         streamed_payload = {**payload, "stream": True}
         async with client.stream(
@@ -164,7 +174,10 @@ class LocalOpenAIChatProvider:
             content_type = response.headers.get("content-type", "")
             if "text/event-stream" not in content_type:
                 body = await response.aread()
-                async for event in _events_from_chat_completion(json.loads(body.decode())):
+                async for event in _events_from_chat_completion(
+                    json.loads(body.decode()),
+                    tool_name_codec,
+                ):
                     yield event
                 return
 
@@ -174,7 +187,7 @@ class LocalOpenAIChatProvider:
                 async for event in _events_from_stream_chunk(item, tool_calls, output_text):
                     yield event
 
-            for event in _tool_call_events(tool_calls):
+            for event in _tool_call_events(tool_calls, tool_name_codec):
                 yield event
             if output_text:
                 yield FinalOutputEvent(text="".join(output_text))
@@ -183,6 +196,7 @@ class LocalOpenAIChatProvider:
         self,
         client: httpx.AsyncClient,
         payload: dict[str, object],
+        tool_name_codec: ToolNameCodec,
     ) -> AsyncIterator[RunEvent]:
         response = await client.post(
             f"{self._base_url}/chat/completions",
@@ -193,11 +207,14 @@ class LocalOpenAIChatProvider:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(_http_error_detail(exc)) from exc
-        async for event in _events_from_chat_completion(response.json()):
+        async for event in _events_from_chat_completion(response.json(), tool_name_codec):
             yield event
 
 
-def _message_to_chat_message(message: Message) -> dict[str, object]:
+def _message_to_chat_message(
+    message: Message,
+    tool_name_codec: ToolNameCodec,
+) -> dict[str, object]:
     if isinstance(message, UserMessage):
         return {"role": "user", "content": message.content}
     if isinstance(message, AssistantMessage):
@@ -210,7 +227,7 @@ def _message_to_chat_message(message: Message) -> dict[str, object]:
                         "id": call.call_id,
                         "type": "function",
                         "function": {
-                            "name": call.name,
+                            "name": tool_name_codec.encode(call.name),
                             "arguments": json.dumps(call.arguments),
                         },
                     }
@@ -223,18 +240,21 @@ def _message_to_chat_message(message: Message) -> dict[str, object]:
     raise TypeError(f"Unsupported message: {message!r}")
 
 
-def _tool_to_chat_tool(tool: ToolSpec) -> dict[str, object]:
+def _tool_to_chat_tool(tool: ToolSpec, tool_name_codec: ToolNameCodec) -> dict[str, object]:
     return {
         "type": "function",
         "function": {
-            "name": tool.name,
+            "name": tool_name_codec.encode(tool.name),
             "description": tool.description,
             "parameters": tool.input_schema,
         },
     }
 
 
-async def _events_from_chat_completion(data: object) -> AsyncIterator[RunEvent]:
+async def _events_from_chat_completion(
+    data: object,
+    tool_name_codec: ToolNameCodec,
+) -> AsyncIterator[RunEvent]:
     if not isinstance(data, dict):
         return
     choices = data.get("choices")
@@ -256,7 +276,7 @@ async def _events_from_chat_completion(data: object) -> AsyncIterator[RunEvent]:
             continue
         yield ToolCallRequestedEvent(
             call_id=str(tool_call.get("id", "")),
-            name=str(function.get("name", "")),
+            name=tool_name_codec.decode(str(function.get("name", ""))),
             arguments=json.loads(str(function.get("arguments") or "{}")),
         )
     content = message.get("content")
@@ -338,6 +358,7 @@ def _accumulate_tool_calls(value: object, tool_calls: dict[int, "_StreamToolCall
 
 def _tool_call_events(
     tool_calls: dict[int, "_StreamToolCall"],
+    tool_name_codec: ToolNameCodec,
 ) -> tuple[ToolCallRequestedEvent, ...]:
     events: list[ToolCallRequestedEvent] = []
     for index in sorted(tool_calls):
@@ -348,7 +369,7 @@ def _tool_call_events(
         events.append(
             ToolCallRequestedEvent(
                 call_id=call.call_id,
-                name=call.name,
+                name=tool_name_codec.decode(call.name),
                 arguments=json.loads(arguments_text),
             )
         )
@@ -395,4 +416,3 @@ def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
         f"{exc.response.status_code} from "
         f"{exc.request.url}{suffix}"
     )
-

@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
@@ -13,6 +14,7 @@ from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.errors import PolicyDeniedError
 from colossus.domain.events import (
+    ApprovalAutoGrantedEvent,
     ApprovalRequestedEvent,
     FinalOutputEvent,
     RunEvent,
@@ -36,6 +38,11 @@ class SingleToolProvider:
             yield FinalOutputEvent(text="done")
             return
         yield ToolCallRequestedEvent(call_id="call-1", name=self._name, arguments=self._arguments)
+
+
+class FailingApprovalHandler:
+    async def approve(self, call: Any, decision: Any) -> bool:
+        raise AssertionError("approval handler should not be called")
 
 
 def _orchestrator(tmp_path, provider, approval_handler) -> AgentOrchestrator:
@@ -91,6 +98,37 @@ async def test_write_tool_emits_approval_event_when_allowed(tmp_path) -> None:
 
     assert any(isinstance(event, ApprovalRequestedEvent) for event in events)
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "hello"
+
+
+@pytest.mark.asyncio
+async def test_full_access_auto_approves_without_prompt_event(tmp_path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    specs, handlers = create_builtin_tools(Workspace(tmp_path))
+    registry = InMemoryToolRegistry(specs)
+    orchestrator = AgentOrchestrator(
+        provider=SingleToolProvider(
+            "filesystem.write",
+            {"path": "note.txt", "content": "hello", "mode": "create"},
+        ),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor(handlers, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=FailingApprovalHandler(),
+        state_store=state,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        auto_approve_required_tools=True,
+    )
+
+    await orchestrator.run(AgentRunRequest(prompt="write", agent=default_agent()))
+    events = await state.list_events("run-1")
+    audit = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+    assert any(isinstance(event, ApprovalAutoGrantedEvent) for event in events)
+    assert not any(isinstance(event, ApprovalRequestedEvent) for event in events)
+    assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "hello"
+    assert "tool.auto_approved" in audit
+    assert "full-access" in audit
 
 
 @pytest.mark.asyncio

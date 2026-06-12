@@ -76,6 +76,40 @@ def test_cli_run_risk_auto_approval_mode_sets_risk_auto_flag(tmp_path, monkeypat
     assert "[echo:default] hello" in result.stdout
 
 
+def test_cli_run_full_access_approval_mode_sets_auto_approval_flag(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    captured: dict[str, object] = {}
+    create_default_orchestrator = cli_module.create_default_orchestrator
+
+    def capture_orchestrator(*args, **kwargs):
+        captured["approval_handler"] = kwargs.get("approval_handler")
+        captured["risk_auto_approve"] = kwargs.get("risk_auto_approve")
+        captured["auto_approve_required_tools"] = kwargs.get("auto_approve_required_tools")
+        return create_default_orchestrator(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "create_default_orchestrator", capture_orchestrator)
+
+    result = CliRunner().invoke(app, ["run", "--approval-mode", "full-access", "hello"])
+
+    assert result.exit_code == 0
+    assert captured["approval_handler"] is None
+    assert captured["risk_auto_approve"] is False
+    assert captured["auto_approve_required_tools"] is True
+    assert "[echo:default] hello" in result.stdout
+
+
+def test_cli_run_full_access_approval_aliases_normalize(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    for alias in ("full", "never", "yolo"):
+        result = CliRunner().invoke(app, ["run", "--approval-mode", alias, "hello"])
+
+        assert result.exit_code == 0
+        assert "[echo:default] hello" in result.stdout
+
+
 def test_cli_run_rejects_unknown_approval_mode(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
 
@@ -83,6 +117,7 @@ def test_cli_run_rejects_unknown_approval_mode(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "Invalid approval mode" in result.stdout
+    assert "full-access" in result.stdout
 
 
 def test_cli_run_accepts_global_ca_bundle_option(tmp_path, monkeypatch) -> None:
@@ -236,6 +271,32 @@ def test_cli_repl_passes_risk_auto_approval_mode(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert captured["approval_mode"] == "risk-auto"
+
+
+def test_cli_repl_passes_full_access_approval_mode(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    captured: dict[str, object] = {}
+    create_default_orchestrator = cli_module.create_default_orchestrator
+
+    def capture_orchestrator(*args, **kwargs):
+        captured["approval_handler"] = kwargs.get("approval_handler")
+        captured["risk_auto_approve"] = kwargs.get("risk_auto_approve")
+        captured["auto_approve_required_tools"] = kwargs.get("auto_approve_required_tools")
+        return create_default_orchestrator(*args, **kwargs)
+
+    def fake_run_repl_sync(*args, **kwargs) -> None:
+        captured["approval_mode"] = kwargs["approval_mode"]
+
+    monkeypatch.setattr(cli_module, "create_default_orchestrator", capture_orchestrator)
+    monkeypatch.setattr(cli_module, "run_repl_sync", fake_run_repl_sync)
+
+    result = CliRunner().invoke(app, ["repl", "--approval-mode", "never"])
+
+    assert result.exit_code == 0
+    assert captured["approval_mode"] == "full-access"
+    assert captured["approval_handler"] is None
+    assert captured["risk_auto_approve"] is False
+    assert captured["auto_approve_required_tools"] is True
 
 
 def test_cli_repl_rejects_unknown_theme(tmp_path, monkeypatch) -> None:
