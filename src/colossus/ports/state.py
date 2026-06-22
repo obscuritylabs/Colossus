@@ -3,10 +3,13 @@
 from typing import Protocol
 
 from colossus.domain.context import ContextSnapshot
+from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.events import RunEvent
+from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import Message
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 
 
@@ -57,6 +60,57 @@ class StateStore(Protocol):
         status: TaskStatus | None = None,
     ) -> tuple[Task, ...]:
         """List tasks, optionally scoped to a session and status."""
+        ...
+
+    async def save_decision(self, decision: KeyDecision) -> None:
+        """Persist a key decision."""
+        ...
+
+    async def get_decision(self, decision_id: str) -> KeyDecision | None:
+        """Load a key decision by id."""
+        ...
+
+    async def list_decisions(
+        self,
+        session_id: str | None = None,
+        status: DecisionStatus | None = None,
+    ) -> tuple[KeyDecision, ...]:
+        """List key decisions, optionally scoped to a session and status."""
+        ...
+
+    async def save_memory(self, memory: MemoryItem) -> None:
+        """Persist a durable memory."""
+        ...
+
+    async def get_memory(self, memory_id: str) -> MemoryItem | None:
+        """Load a durable memory by id."""
+        ...
+
+    async def list_memories(
+        self,
+        scope: MemoryScope | None = None,
+        kind: MemoryKind | None = None,
+        status: MemoryStatus | None = None,
+        repo_root: str | None = None,
+        session_id: str | None = None,
+    ) -> tuple[MemoryItem, ...]:
+        """List memories with optional scope, kind, status, and owner filters."""
+        ...
+
+    async def save_subagent_job(self, job: SubagentJob) -> None:
+        """Persist a subagent job."""
+        ...
+
+    async def get_subagent_job(self, job_id: str) -> SubagentJob | None:
+        """Load a subagent job by id."""
+        ...
+
+    async def list_subagent_jobs(
+        self,
+        session_id: str | None = None,
+        status: SubagentStatus | None = None,
+    ) -> tuple[SubagentJob, ...]:
+        """List subagent jobs, optionally scoped to a session and status."""
         ...
 
     async def save_context_snapshot(self, snapshot: ContextSnapshot) -> None:

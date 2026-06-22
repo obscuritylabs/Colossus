@@ -47,6 +47,14 @@ The current config is strict: unknown fields are rejected.
     "recent_tail_messages": 8,
     "model_assisted": true
   },
+  "subagents": {
+    "max_concurrent": 4
+  },
+  "memory": {
+    "index": {
+      "kind": "sqlite_fts"
+    }
+  },
   "allow_user_skill_overrides": false
 }
 ```
@@ -112,6 +120,20 @@ uv run colossus run --model-role risk_evaluator "hello"
 Global provider/model/base-url/API-key/CA CLI overrides apply to the `primary` role for
 that invocation.
 
+## Subagents
+
+`subagents.max_concurrent` controls how many queued child-agent jobs may run at the same
+time in a Colossus process. The default is `4`. Subagents use the `subagent_default`
+model role unless a delegated job names another role.
+
+Inspect durable jobs with:
+
+```bash
+uv run colossus agents list
+uv run colossus agents show agent-123
+uv run colossus agents cancel agent-123
+```
+
 ## Run and REPL display
 
 One-shot runs show compact activity events by default. Add `--stream` to print assistant
@@ -154,6 +176,10 @@ Runtime controls:
 - `/events compact|verbose|off`
 - `/reasoning on|off`
 - `/tasks [open|all|STATUS]`
+- `/decisions [all|STATUS]`
+- `/decision <text>` or `/decision archive <id>` or `/decision supersede <id> <text>`
+- `/memories [all|STATUS]`
+- `/memory <text>` or `/memory search <query>` or `/memory archive <id>` or `/memory supersede <id> <text>`
 - `/transcript comfortable|compact`
 - `/multiline on|off|toggle`
 - `/theme [NAME]`
@@ -286,12 +312,21 @@ regulated, or airgapped deployments unless the override source is reviewed and p
 ## Tool profiles
 
 The current built-in tool profile is offline-first. Local filesystem, git, patch, repo
-context, task, plan, verification, trace, and eval tools are available through policy and
-approval controls. Network-capable tools require explicit approval. `web.fetch` and
-`docs.fetch` can fetch bounded HTTP(S) responses when approved and network access exists;
-`web.search` and `mcp.call` remain adapter extension points.
+context, task, key decision, plan, verification, trace, and eval tools are available
+through policy and approval controls. Network-capable tools require explicit approval.
+`web.fetch` and `docs.fetch` can fetch bounded HTTP(S) responses when approved and
+network access exists; `web.search` and `mcp.call` remain adapter extension points.
 
 ## Context compaction
+
+Key decisions are durable commitments, not memories. Active key decisions are injected
+into prepared model context before compacted snapshots, while archived and superseded
+decisions remain historical state only.
+
+Memories are durable context, not instructions. Active memories can be global,
+repo-scoped, or session-scoped, are stored in SQLite, and are retrieved with the
+configured memory index. V1 supports `memory.index.kind = "sqlite_fts"`; the config
+shape is reserved for future index adapters such as vector stores.
 
 Context budgets are calculated as a percentage of the selected model window. Add exact
 model windows under `models.profiles.*.context_window_tokens` or the legacy

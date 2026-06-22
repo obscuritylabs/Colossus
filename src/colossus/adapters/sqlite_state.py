@@ -1,5 +1,6 @@
 """SQLite run state store."""
 
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -7,10 +8,13 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from colossus.domain.context import ContextSnapshot
+from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.events import RunEvent
+from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import Message
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 
 _RUN_EVENT_ADAPTER: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
@@ -157,6 +161,224 @@ class SQLiteStateStore:
         with closing(sqlite3.connect(self._path)) as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         return tuple(Task.model_validate_json(row[0]) for row in rows)
+
+    async def save_decision(self, decision: KeyDecision) -> None:
+        await self.ensure_session(decision.session_id)
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into decisions(id, session_id, status, priority, payload)
+                values (?, ?, ?, ?, ?)
+                on conflict(id) do update set
+                    session_id = excluded.session_id,
+                    status = excluded.status,
+                    priority = excluded.priority,
+                    payload = excluded.payload
+                """,
+                (
+                    decision.id,
+                    decision.session_id,
+                    decision.status,
+                    decision.priority,
+                    decision.model_dump_json(),
+                ),
+            )
+            conn.commit()
+
+    async def get_decision(self, decision_id: str) -> KeyDecision | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute(
+                "select payload from decisions where id = ?",
+                (decision_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return KeyDecision.model_validate_json(row[0])
+
+    async def list_decisions(
+        self,
+        session_id: str | None = None,
+        status: DecisionStatus | None = None,
+    ) -> tuple[KeyDecision, ...]:
+        query = "select payload from decisions"
+        clauses: list[str] = []
+        params: list[str] = []
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            query += f" where {' and '.join(clauses)}"
+        query += " order by priority, created_at, id"
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return tuple(KeyDecision.model_validate_json(row[0]) for row in rows)
+
+    async def save_memory(self, memory: MemoryItem) -> None:
+        if memory.session_id is not None:
+            await self.ensure_session(memory.session_id, title=memory.text[:80])
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into memories(
+                    id,
+                    scope,
+                    kind,
+                    status,
+                    source,
+                    repo_root,
+                    session_id,
+                    payload
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(id) do update set
+                    scope = excluded.scope,
+                    kind = excluded.kind,
+                    status = excluded.status,
+                    source = excluded.source,
+                    repo_root = excluded.repo_root,
+                    session_id = excluded.session_id,
+                    payload = excluded.payload
+                """,
+                (
+                    memory.id,
+                    memory.scope,
+                    memory.kind,
+                    memory.status,
+                    memory.source,
+                    memory.repo_root,
+                    memory.session_id,
+                    memory.model_dump_json(),
+                ),
+            )
+            conn.commit()
+
+    async def get_memory(self, memory_id: str) -> MemoryItem | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute(
+                "select payload from memories where id = ?",
+                (memory_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return MemoryItem.model_validate_json(row[0])
+
+    async def list_memories(
+        self,
+        scope: MemoryScope | None = None,
+        kind: MemoryKind | None = None,
+        status: MemoryStatus | None = None,
+        repo_root: str | None = None,
+        session_id: str | None = None,
+    ) -> tuple[MemoryItem, ...]:
+        query = "select payload from memories"
+        clauses: list[str] = []
+        params: list[str] = []
+        if scope is not None:
+            clauses.append("scope = ?")
+            params.append(scope)
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if repo_root is not None:
+            clauses.append("repo_root = ?")
+            params.append(repo_root)
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if clauses:
+            query += f" where {' and '.join(clauses)}"
+        query += " order by scope, kind, created_at, id"
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return tuple(MemoryItem.model_validate_json(row[0]) for row in rows)
+
+    async def upsert_memory_index(self, memory: MemoryItem) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute("delete from memories_fts where memory_id = ?", (memory.id,))
+            conn.execute(
+                """
+                insert into memories_fts(memory_id, scope, kind, text, rationale)
+                values (?, ?, ?, ?, ?)
+                """,
+                (memory.id, memory.scope, memory.kind, memory.text, memory.rationale),
+            )
+            conn.commit()
+
+    async def delete_memory_index(self, memory_id: str) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute("delete from memories_fts where memory_id = ?", (memory_id,))
+            conn.commit()
+
+    async def search_memory_index(self, query: str, *, limit: int = 20) -> tuple[str, ...]:
+        match_query = _memory_match_query(query)
+        if not match_query:
+            return ()
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(
+                """
+                select memory_id
+                from memories_fts
+                where memories_fts match ?
+                order by bm25(memories_fts), memory_id
+                limit ?
+                """,
+                (match_query, limit),
+            ).fetchall()
+        return tuple(row[0] for row in rows)
+
+    async def save_subagent_job(self, job: SubagentJob) -> None:
+        await self.ensure_session(job.session_id)
+        await self.ensure_session(job.child_session_id, title=f"subagent {job.id}")
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into subagent_jobs(id, session_id, status, payload)
+                values (?, ?, ?, ?)
+                on conflict(id) do update set
+                    session_id = excluded.session_id,
+                    status = excluded.status,
+                    payload = excluded.payload
+                """,
+                (job.id, job.session_id, job.status, job.model_dump_json()),
+            )
+            conn.commit()
+
+    async def get_subagent_job(self, job_id: str) -> SubagentJob | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute(
+                "select payload from subagent_jobs where id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SubagentJob.model_validate_json(row[0])
+
+    async def list_subagent_jobs(
+        self,
+        session_id: str | None = None,
+        status: SubagentStatus | None = None,
+    ) -> tuple[SubagentJob, ...]:
+        query = "select payload from subagent_jobs"
+        clauses: list[str] = []
+        params: list[str] = []
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            query += f" where {' and '.join(clauses)}"
+        query += " order by created_at, id"
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return tuple(SubagentJob.model_validate_json(row[0]) for row in rows)
 
     async def save_context_snapshot(self, snapshot: ContextSnapshot) -> None:
         await self.ensure_session(snapshot.session_id)
@@ -347,6 +569,71 @@ class SQLiteStateStore:
             conn.execute("create index if not exists idx_tasks_status on tasks(status)")
             conn.execute(
                 """
+                create table if not exists decisions (
+                    id text primary key,
+                    session_id text not null,
+                    status text not null,
+                    priority text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_decisions_session on decisions(session_id)"
+            )
+            conn.execute("create index if not exists idx_decisions_status on decisions(status)")
+            conn.execute(
+                """
+                create table if not exists memories (
+                    id text primary key,
+                    scope text not null,
+                    kind text not null,
+                    status text not null,
+                    source text not null,
+                    repo_root text,
+                    session_id text,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute("create index if not exists idx_memories_scope on memories(scope)")
+            conn.execute("create index if not exists idx_memories_kind on memories(kind)")
+            conn.execute("create index if not exists idx_memories_status on memories(status)")
+            conn.execute(
+                "create index if not exists idx_memories_repo on memories(repo_root)"
+            )
+            conn.execute(
+                "create index if not exists idx_memories_session on memories(session_id)"
+            )
+            conn.execute(
+                """
+                create virtual table if not exists memories_fts
+                using fts5(memory_id unindexed, scope, kind, text, rationale)
+                """
+            )
+            conn.execute(
+                """
+                create table if not exists subagent_jobs (
+                    id text primary key,
+                    session_id text not null,
+                    status text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_subagent_jobs_session "
+                "on subagent_jobs(session_id)"
+            )
+            conn.execute(
+                "create index if not exists idx_subagent_jobs_status "
+                "on subagent_jobs(status)"
+            )
+            conn.execute(
+                """
                 create table if not exists context_snapshots (
                     id text primary key,
                     session_id text not null,
@@ -380,3 +667,8 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     if column in {row[1] for row in rows}:
         return
     conn.execute(f"alter table {table} add column {column} {definition}")
+
+
+def _memory_match_query(query: str) -> str:
+    terms = re.findall(r"[A-Za-z0-9_]+", query.lower())[:12]
+    return " OR ".join(f'"{term}"' for term in terms)

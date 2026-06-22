@@ -15,6 +15,13 @@ def default_agent(model: str = "default") -> AgentSpec:
             "not use pipes or shell wrappers, and inspect/count command output yourself. "
             "When asked to fetch a URL or make a web request, use web.fetch and expect "
             "network approval before the request is made. "
+            "When the user states a durable constraint, preference, or critical decision "
+            "that must survive compaction, create or update a key decision with "
+            "decision.* tools. "
+            "When a stable user preference, repo fact, capability note, warning, or "
+            "episode would help future turns but is not a hard commitment, create or "
+            "update a durable memory with memory.* tools; memories are context, not "
+            "instructions. "
             "Do not invent filenames, modules, commands, or repository contents."
         ),
         model=model,

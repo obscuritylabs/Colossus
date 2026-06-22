@@ -1,5 +1,6 @@
 """Default service composition for the CLI surfaces."""
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from colossus.adapters.audit_jsonl import JsonlAuditSink
@@ -10,6 +11,9 @@ from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.adapters.workspace import Workspace
 from colossus.application.approvals import DenyByDefaultApprovalHandler
 from colossus.application.context import ContextService
+from colossus.application.decisions import DecisionService
+from colossus.application.defaults import default_agent
+from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator, RunEventObserver
 from colossus.application.planning import PlanService
@@ -17,10 +21,13 @@ from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.skills import SkillResolver
+from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig
 from colossus.domain.models import ResolvedModelProfile
+from colossus.domain.requests import AgentRunRequest, AgentRunResult
+from colossus.domain.subagents import SubagentJob
 from colossus.infrastructure.config import (
     ColossusConfig,
     ProviderOverrides,
@@ -49,17 +56,29 @@ def create_default_orchestrator(
     risk_assessment_service: RiskAssessmentService | None = None,
     risk_auto_approve: bool = False,
     auto_approve_required_tools: bool = False,
+    subagent_service: SubagentService | None = None,
+    memory_service: MemoryService | None = None,
+    model_router: ModelRouter | None = None,
+    include_agent_delegate: bool = True,
 ) -> AgentOrchestrator:
     data_dir.mkdir(parents=True, exist_ok=True)
     resolved_provider = provider or EchoModelProvider()
     resolved_state = state_store or create_state_store(data_dir)
     resolved_audit = audit_sink or create_audit_sink(data_dir)
+    decision_service = DecisionService(resolved_state, resolved_audit)
+    resolved_memory = memory_service or MemoryService(
+        resolved_state,
+        resolved_audit,
+        resolved_state,
+    )
     resolved_context = context_service or create_context_service(
         data_dir,
+        workspace_root=workspace_root,
         state_store=resolved_state,
         audit_sink=resolved_audit,
         context_config=context_config,
         model_context_windows=model_context_windows,
+        memory_service=resolved_memory,
     )
     workspace = Workspace(workspace_root or Path.cwd())
     specs, handlers = create_builtin_tools(
@@ -68,10 +87,38 @@ def create_default_orchestrator(
         context_provider=context_provider or resolved_provider,
         context_model=context_model,
         task_service=TaskService(resolved_state, resolved_audit),
+        decision_service=decision_service,
+        memory_service=resolved_memory,
+        subagent_service=subagent_service,
+        include_agent_delegate=include_agent_delegate,
         user_prompt_handler=user_prompt_handler,
     )
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)
+    if subagent_service is not None and model_router is not None:
+        if event_observer is not None:
+            subagent_service.set_event_observer(event_observer)
+        subagent_service.set_runner(
+            _subagent_runner(
+                data_dir=data_dir,
+                workspace_root=workspace_root,
+                state_store=resolved_state,
+                audit_sink=resolved_audit,
+                context_service=resolved_context,
+                context_config=context_config,
+                model_context_windows=model_context_windows,
+                context_model=context_model,
+                context_provider=context_provider or resolved_provider,
+                memory_service=resolved_memory,
+                approval_handler=approval_handler,
+                user_prompt_handler=user_prompt_handler,
+                risk_assessment_service=risk_assessment_service,
+                risk_auto_approve=risk_auto_approve,
+                auto_approve_required_tools=auto_approve_required_tools,
+                subagent_service=subagent_service,
+                model_router=model_router,
+            )
+        )
     return AgentOrchestrator(
         provider=resolved_provider,
         tool_registry=registry,
@@ -87,7 +134,78 @@ def create_default_orchestrator(
         risk_assessment_service=risk_assessment_service,
         risk_auto_approve=risk_auto_approve,
         auto_approve_required_tools=auto_approve_required_tools,
+        subagent_service=subagent_service,
+        decision_service=decision_service,
     )
+
+
+def create_subagent_service(
+    data_dir: Path,
+    *,
+    state_store: SQLiteStateStore | None = None,
+    audit_sink: JsonlAuditSink | None = None,
+    max_concurrent: int = 4,
+) -> SubagentService:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return SubagentService(
+        state_store or create_state_store(data_dir),
+        audit_sink or create_audit_sink(data_dir),
+        max_concurrent=max_concurrent,
+    )
+
+
+def _subagent_runner(
+    *,
+    data_dir: Path,
+    workspace_root: Path | None,
+    state_store: SQLiteStateStore,
+    audit_sink: JsonlAuditSink,
+    context_service: ContextService,
+    context_config: ContextConfig | None,
+    model_context_windows: dict[str, int] | None,
+    context_model: str,
+    context_provider: ModelProvider,
+    memory_service: MemoryService,
+    approval_handler: ApprovalHandler | None,
+    user_prompt_handler: UserPromptHandler | None,
+    risk_assessment_service: RiskAssessmentService | None,
+    risk_auto_approve: bool,
+    auto_approve_required_tools: bool,
+    subagent_service: SubagentService,
+    model_router: ModelRouter,
+) -> Callable[[SubagentJob], Awaitable[AgentRunResult]]:
+    async def run(job: SubagentJob) -> AgentRunResult:
+        route = model_router.resolve(job.role or "subagent_default")
+        orchestrator = create_default_orchestrator(
+            data_dir,
+            route.provider,
+            workspace_root=workspace_root,
+            state_store=state_store,
+            audit_sink=audit_sink,
+            context_service=context_service,
+            context_config=context_config,
+            model_context_windows=model_context_windows,
+            context_model=context_model,
+            context_provider=context_provider,
+            memory_service=memory_service,
+            approval_handler=approval_handler,
+            user_prompt_handler=user_prompt_handler,
+            risk_assessment_service=risk_assessment_service,
+            risk_auto_approve=risk_auto_approve,
+            auto_approve_required_tools=auto_approve_required_tools,
+            subagent_service=subagent_service,
+            model_router=model_router,
+            include_agent_delegate=False,
+        )
+        return await orchestrator.run(
+            AgentRunRequest(
+                prompt=job.task,
+                agent=default_agent(route.profile.model),
+                session_id=job.child_session_id,
+            )
+        )
+
+    return run
 
 
 def create_model_router(
@@ -137,16 +255,27 @@ def create_audit_sink(data_dir: Path) -> JsonlAuditSink:
 def create_context_service(
     data_dir: Path,
     *,
+    workspace_root: Path | None = None,
     state_store: SQLiteStateStore | None = None,
     audit_sink: JsonlAuditSink | None = None,
     context_config: ContextConfig | None = None,
     model_context_windows: dict[str, int] | None = None,
+    memory_service: MemoryService | None = None,
 ) -> ContextService:
+    resolved_state = state_store or create_state_store(data_dir)
+    resolved_audit = audit_sink or create_audit_sink(data_dir)
     return ContextService(
-        state_store or create_state_store(data_dir),
-        audit_sink or create_audit_sink(data_dir),
+        resolved_state,
+        resolved_audit,
         config=context_config,
         model_context_windows=model_context_windows,
+        memory_service=memory_service
+        or MemoryService(
+            resolved_state,
+            resolved_audit,
+            resolved_state,
+        ),
+        repo_root=str(workspace_root or Path.cwd()),
     )
 
 
@@ -156,6 +285,15 @@ def create_plan_service(data_dir: Path) -> PlanService:
 
 def create_task_service(data_dir: Path) -> TaskService:
     return TaskService(create_state_store(data_dir), create_audit_sink(data_dir))
+
+
+def create_decision_service(data_dir: Path) -> DecisionService:
+    return DecisionService(create_state_store(data_dir), create_audit_sink(data_dir))
+
+
+def create_memory_service(data_dir: Path) -> MemoryService:
+    state = create_state_store(data_dir)
+    return MemoryService(state, create_audit_sink(data_dir), state)
 
 
 def create_repl_preferences_service(data_dir: Path) -> ReplPreferencesService:

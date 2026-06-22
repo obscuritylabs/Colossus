@@ -6,6 +6,7 @@ from colossus.domain.events import (
     ReasoningSummaryEvent,
     RiskAssessmentEvent,
     RunEvent,
+    SubagentStatusEvent,
 )
 
 
@@ -61,3 +62,19 @@ def test_approval_auto_granted_event_round_trips_with_discriminator() -> None:
 
     assert isinstance(parsed, ApprovalAutoGrantedEvent)
     assert parsed.reason == "Low-risk command."
+
+
+def test_subagent_status_event_round_trips_with_discriminator() -> None:
+    adapter: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
+    event = SubagentStatusEvent(
+        job_id="agent-1",
+        status="queued",
+        role="subagent_default",
+        task="Check the tests.",
+        message="Subagent job queued.",
+    )
+
+    parsed = adapter.validate_json(adapter.dump_json(event))
+
+    assert isinstance(parsed, SubagentStatusEvent)
+    assert parsed.job_id == "agent-1"

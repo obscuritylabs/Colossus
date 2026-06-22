@@ -8,15 +8,21 @@ from rich.console import Console
 from colossus.adapters.audit_jsonl import JsonlAuditSink
 from colossus.adapters.echo_provider import EchoModelProvider
 from colossus.adapters.sqlite_state import SQLiteStateStore
+from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.planning import PlanService
+from colossus.application.subagents import SubagentService
 from colossus.domain.context import ContextStatus
+from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
+from colossus.domain.memories import MemoryItem
 from colossus.domain.models import ResolvedModelProfile
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
 from colossus.domain.requests import AgentRunRequest, AgentRunResult
+from colossus.domain.subagents import SubagentJob
 from colossus.domain.tasks import Task
 from colossus.domain.tools import ToolPermission, ToolSpec
 from colossus.domain.user_prompts import UserPromptChoice
@@ -31,6 +37,11 @@ from colossus.interfaces.repl import (
     _format_run_toolbar,
     _format_slash_suggestions,
     _format_submit_summary,
+    _handle_agents_command,
+    _handle_decision_command,
+    _handle_decisions_command,
+    _handle_memories_command,
+    _handle_memory_command,
     _handle_plan_command,
     _is_slash_command_draft,
     _match_user_prompt_answer,
@@ -40,13 +51,16 @@ from colossus.interfaces.repl import (
     _prompt_continuation,
     _prompt_for_plan_review,
     _prompt_message,
+    _render_decisions,
     _render_help,
+    _render_memories,
     _render_model,
     _render_plan,
     _render_plan_list,
     _render_repl_preferences,
     _render_repl_startup,
     _render_status,
+    _render_subagents,
     _render_tasks,
     _render_theme_preview,
     _render_themes,
@@ -178,6 +192,10 @@ def test_parse_context_commands() -> None:
     repl = parse_slash_command("/repl prefs")
     status = parse_slash_command("/status")
     tasks = parse_slash_command("/tasks all")
+    decision = parse_slash_command("/decision archive kd_1")
+    decisions = parse_slash_command("/decisions all")
+    memory = parse_slash_command("/memory search pytest")
+    memories = parse_slash_command("/memories all")
     plan = parse_slash_command("/plan approve")
     help_command = parse_slash_command("/help")
 
@@ -212,6 +230,18 @@ def test_parse_context_commands() -> None:
     assert tasks is not None
     assert tasks.command == "tasks"
     assert tasks.argument == "all"
+    assert decision is not None
+    assert decision.command == "decision"
+    assert decision.argument == "archive kd_1"
+    assert decisions is not None
+    assert decisions.command == "decisions"
+    assert decisions.argument == "all"
+    assert memory is not None
+    assert memory.command == "memory"
+    assert memory.argument == "search pytest"
+    assert memories is not None
+    assert memories.command == "memories"
+    assert memories.argument == "all"
     assert plan is not None
     assert plan.command == "plan"
     assert plan.argument == "approve"
@@ -552,6 +582,10 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "/theme [NAME]" in help_output
     assert "/repl prefs|save|reset" in help_output
     assert "/tasks [open|all|STATUS]" in help_output
+    assert "/decisions [all|STATUS]" in help_output
+    assert "/decision [archive|supersede|TEXT]" in help_output
+    assert "/memories [all|STATUS]" in help_output
+    assert "/memory [archive|search|supersede|TEXT]" in help_output
     assert "/plan [on|off|show|approve|execute|list|discard]" in help_output
     assert "Current" in help_output
     assert "primary:model-a" in help_output
@@ -594,6 +628,169 @@ def test_render_tasks_shows_session_task_rows() -> None:
     assert "completed" in output
     assert "[x]" in output
     assert "Persist tasks" in output
+
+
+def test_render_decisions_shows_key_decision_rows() -> None:
+    console = Console(record=True, width=140)
+    decisions = (
+        KeyDecision(
+            id="kd_1",
+            session_id="session-1",
+            source="agent",
+            priority="critical",
+            title="Durable commitments",
+            decision="Key decisions are durable commitments, not memories.",
+        ),
+    )
+
+    _render_decisions(console, decisions)
+
+    output = console.export_text()
+    assert "critical" in output
+    assert "kd_1" in output
+    assert "durable commitments" in output
+
+
+def test_render_memories_shows_memory_rows() -> None:
+    console = Console(record=True, width=140)
+    memories = (
+        MemoryItem(
+            id="mem_1",
+            scope="repo",
+            kind="preference",
+            source="user",
+            text="Run pytest before declaring completion.",
+            repo_root="/repo",
+        ),
+    )
+
+    _render_memories(console, memories)
+
+    output = console.export_text()
+    assert "repo" in output
+    assert "preference" in output
+    assert "mem_1" in output
+    assert "Run pytest" in output
+
+
+@pytest.mark.asyncio
+async def test_handle_decision_commands_manage_lifecycle(tmp_path) -> None:
+    console = Console(record=True, width=140)
+    service = DecisionService(
+        SQLiteStateStore(tmp_path / "state.sqlite3"),
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+    )
+
+    await _handle_decision_command(
+        console,
+        service,
+        "session-1",
+        "Key decisions are durable commitments, not memories.",
+    )
+    created = (await service.list_decisions(session_id="session-1"))[0]
+    await _handle_decision_command(
+        console,
+        service,
+        "session-1",
+        f"supersede {created.id} Active key decisions are injected before snapshots.",
+    )
+    replacement = (await service.list_decisions(session_id="session-1"))[0]
+    await _handle_decision_command(console, service, "session-1", f"archive {replacement.id}")
+    await _handle_decisions_command(console, service, "session-1", "all")
+
+    decisions = await service.list_decisions(session_id="session-1", status=None)
+    output = console.export_text()
+    assert {decision.status for decision in decisions} == {"superseded", "archived"}
+    assert "Created decision" in output
+    assert "Superseded with decision" in output
+    assert "Archived decision" in output
+    assert replacement.id in output
+
+
+@pytest.mark.asyncio
+async def test_handle_memory_commands_manage_lifecycle(tmp_path) -> None:
+    console = Console(record=True, width=140)
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = MemoryService(state, JsonlAuditSink(tmp_path / "audit.jsonl"), state)
+    repo_root = tmp_path / "repo"
+
+    await _handle_memory_command(
+        console,
+        service,
+        "session-1",
+        repo_root,
+        "Run pytest before declaring completion.",
+    )
+    created = (await service.list_memories(repo_root=str(repo_root)))[0]
+    await _handle_memory_command(console, service, "session-1", repo_root, "search pytest")
+    await _handle_memory_command(
+        console,
+        service,
+        "session-1",
+        repo_root,
+        f"supersede {created.id} Run pytest and ruff before declaring completion.",
+    )
+    replacement = (await service.list_memories(repo_root=str(repo_root)))[0]
+    await _handle_memory_command(
+        console,
+        service,
+        "session-1",
+        repo_root,
+        f"archive {replacement.id}",
+    )
+    await _handle_memories_command(console, service, "session-1", repo_root, "all")
+
+    memories = await service.list_memories(status=None)
+    output = console.export_text()
+    assert {memory.status for memory in memories} == {"superseded", "archived"}
+    assert "Saved memory" in output
+    assert "Superseded with memory" in output
+    assert "Archived memory" in output
+    assert replacement.id in output
+
+
+@pytest.mark.asyncio
+async def test_handle_agents_command_lists_session_jobs(tmp_path) -> None:
+    console = Console(record=True, width=140)
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = SubagentService(state, JsonlAuditSink(tmp_path / "audit.jsonl"))
+    await state.save_subagent_job(
+        SubagentJob(
+            id="agent-1",
+            session_id="session-1",
+            parent_run_id="run-1",
+            parent_call_id="call-1",
+            task="Review docs",
+            child_session_id="session-1:subagent:agent-1",
+        )
+    )
+
+    await _handle_agents_command(console, service, "session-1", "")
+
+    output = console.export_text()
+    assert "agent-1" in output
+    assert "Review docs" in output
+
+
+def test_render_subagents_shows_status_markers() -> None:
+    console = Console(record=True, width=140)
+    jobs = (
+        SubagentJob(
+            id="agent-1",
+            session_id="session-1",
+            parent_run_id="run-1",
+            parent_call_id="call-1",
+            task="Review docs",
+            status="running",
+            child_session_id="session-1:subagent:agent-1",
+        ),
+    )
+
+    _render_subagents(console, jobs)
+
+    output = console.export_text()
+    assert "agent-1" in output
+    assert "[~]" in output
 
 
 def test_match_user_prompt_answer_accepts_choice_number_or_id_or_freeform() -> None:

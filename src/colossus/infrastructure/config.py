@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,12 +38,32 @@ class ProviderConfig(BaseModel):
     model_context_windows: dict[str, int] = Field(default_factory=dict)
 
 
+class SubagentConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_concurrent: int = Field(default=4, ge=1)
+
+
+class MemoryIndexConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["sqlite_fts"] = "sqlite_fts"
+
+
+class MemoryConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    index: MemoryIndexConfig = Field(default_factory=MemoryIndexConfig)
+
+
 class ColossusConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
     models: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
+    subagents: SubagentConfig = Field(default_factory=SubagentConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     allow_user_skill_overrides: bool = False
 
 

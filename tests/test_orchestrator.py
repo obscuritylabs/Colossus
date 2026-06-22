@@ -5,6 +5,7 @@ import pytest
 from colossus.adapters.audit_jsonl import JsonlAuditSink
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.application.approvals import AllowAllApprovalHandler
+from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.policy import DefaultPolicyEngine
@@ -72,6 +73,28 @@ class TaskToolThenFinalProvider:
                 name="task.create",
                 arguments={"title": "Track work"},
             )
+
+
+class AgentDelegateThenFinalProvider:
+    name = "agent-delegate-then-final"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        has_tool_result = any(message.role == "tool" for message in request.messages)
+        if has_tool_result:
+            yield FinalOutputEvent(text="done")
+        else:
+            yield ToolCallRequestedEvent(
+                call_id="call-1",
+                name="agent.delegate",
+                arguments={"task": "collect data"},
+            )
+
+
+class FailingProvider:
+    name = "failing"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        raise AssertionError("provider should not be called")
 
 
 @pytest.mark.asyncio
@@ -160,6 +183,129 @@ async def test_orchestrator_injects_session_id_for_task_tools(tmp_path) -> None:
 
     assert result.final_output == "done"
     assert observed_arguments["session_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_captures_standalone_key_decision_before_provider(
+    tmp_path,
+) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    audit = JsonlAuditSink(tmp_path / "audit.jsonl")
+    decision_service = DecisionService(state, audit)
+    registry = InMemoryToolRegistry(())
+    orchestrator = AgentOrchestrator(
+        provider=FailingProvider(),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=audit,
+        run_id_factory=lambda: "run-1",
+        decision_service=decision_service,
+    )
+
+    result = await orchestrator.run(
+        AgentRunRequest(
+            prompt="Mvoing forward I want to make sure run tests and lint",
+            agent=default_agent(),
+            session_id="session-1",
+        )
+    )
+
+    decisions = await decision_service.list_decisions(session_id="session-1")
+    assert result.final_output == f"Noted as key decision {decisions[0].id}."
+    assert decisions[0].source == "user"
+    assert decisions[0].priority == "high"
+    assert decisions[0].decision == "Mvoing forward I want to make sure run tests and lint"
+    assert "decision.created" in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_does_not_duplicate_captured_key_decision(tmp_path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    audit = JsonlAuditSink(tmp_path / "audit.jsonl")
+    decision_service = DecisionService(state, audit)
+    await decision_service.create_decision(
+        session_id="session-1",
+        decision_id="kd_existing",
+        title="Existing",
+        decision="Moving forward always run tests.",
+        source="user",
+    )
+    registry = InMemoryToolRegistry(())
+    orchestrator = AgentOrchestrator(
+        provider=FailingProvider(),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=audit,
+        run_id_factory=lambda: "run-1",
+        decision_service=decision_service,
+    )
+
+    result = await orchestrator.run(
+        AgentRunRequest(
+            prompt="Moving forward always run tests.",
+            agent=default_agent(),
+            session_id="session-1",
+        )
+    )
+
+    assert result.final_output == "Noted as key decision kd_existing."
+    assert len(await decision_service.list_decisions(session_id="session-1")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_orchestrator_injects_subagent_context_after_validation(tmp_path) -> None:
+    observed_arguments: dict[str, object] = {}
+
+    async def agent_delegate(arguments: dict[str, object]) -> str:
+        observed_arguments.update(arguments)
+        return '{"agent": {"id": "agent-1", "status": "queued"}}'
+
+    spec = ToolSpec(
+        name="agent.delegate",
+        description="Queue subagent",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task": {"type": "string"},
+                "session_id": {"type": "string", "x-colossus-injected": True},
+                "parent_run_id": {"type": "string", "x-colossus-injected": True},
+                "parent_call_id": {"type": "string", "x-colossus-injected": True},
+            },
+            "required": ["task"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object"},
+    )
+    registry = InMemoryToolRegistry((spec,))
+    orchestrator = AgentOrchestrator(
+        provider=AgentDelegateThenFinalProvider(),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({"agent.delegate": agent_delegate}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+    )
+
+    result = await orchestrator.run(
+        AgentRunRequest(prompt="delegate work", agent=default_agent(), session_id="session-1")
+    )
+
+    assert result.final_output == "done"
+    assert observed_arguments == {
+        "task": "collect data",
+        "session_id": "session-1",
+        "parent_run_id": "run-1",
+        "parent_call_id": "call-1",
+    }
 
 
 @pytest.mark.asyncio

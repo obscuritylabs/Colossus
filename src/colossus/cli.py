@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import uuid4
 
 import typer
@@ -13,12 +13,17 @@ from rich.table import Table
 
 from colossus.adapters.bundles import ManifestBundleVerifier
 from colossus.application.context import ContextService
+from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.providers import ProviderDiagnostics
 from colossus.application.risk import RiskAssessmentService
+from colossus.application.subagents import SubagentService
+from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.errors import BundleVerificationError, ColossusError
+from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.models import ProviderKind
 from colossus.domain.plans import Plan
 from colossus.domain.providers import (
@@ -27,7 +32,8 @@ from colossus.domain.providers import (
     ProviderReadinessCheck,
     model_context_windows_from_provider_models,
 )
-from colossus.domain.requests import AgentRunRequest
+from colossus.domain.requests import AgentRunRequest, AgentRunResult
+from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task
 from colossus.infrastructure.config import (
     ColossusConfig,
@@ -42,12 +48,15 @@ from colossus.infrastructure.config import (
 from colossus.infrastructure.container import (
     create_audit_sink,
     create_context_service,
+    create_decision_service,
     create_default_orchestrator,
     create_default_skill_resolver,
+    create_memory_service,
     create_model_router,
     create_plan_service,
     create_repl_preferences_service,
     create_state_store,
+    create_subagent_service,
     create_task_service,
 )
 from colossus.infrastructure.logging import configure_logging
@@ -78,18 +87,24 @@ skills_app = typer.Typer(help="Inspect and manage skills.")
 tools_app = typer.Typer(help="Inspect tools.")
 provider_app = typer.Typer(help="Inspect provider readiness and model catalogs.")
 models_app = typer.Typer(help="Inspect configured model roles and profiles.")
+agents_app = typer.Typer(help="Inspect durable subagent jobs.")
 bundle_app = typer.Typer(help="Verify and install offline bundles.")
 plans_app = typer.Typer(help="Manage persisted plans.")
 tasks_app = typer.Typer(help="Inspect persisted session tasks.")
+decisions_app = typer.Typer(help="Inspect and manage key decisions.")
+memories_app = typer.Typer(help="Inspect and manage durable memories.")
 context_app = typer.Typer(help="Inspect and manage context compaction.")
 app.add_typer(config_app, name="config")
 app.add_typer(skills_app, name="skills")
 app.add_typer(tools_app, name="tools")
 app.add_typer(provider_app, name="provider")
 app.add_typer(models_app, name="models")
+app.add_typer(agents_app, name="agents")
 app.add_typer(bundle_app, name="bundle")
 app.add_typer(plans_app, name="plans")
 app.add_typer(tasks_app, name="tasks")
+app.add_typer(decisions_app, name="decisions")
+app.add_typer(memories_app, name="memories")
 app.add_typer(context_app, name="context")
 
 console = Console()
@@ -373,6 +388,14 @@ def run(
     context_route = router.resolve("context_summarizer")
     model_context_windows = _resolved_model_context_windows(config, overrides, router)
     resolved_approval_mode = _resolve_approval_mode(approval_mode, ask_approval=ask_approval)
+    state = create_state_store(data_dir())
+    audit = create_audit_sink(data_dir())
+    subagent_service = create_subagent_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        max_concurrent=config.subagents.max_concurrent,
+    )
     events_mode = _resolve_events_mode(events)
     if trace and events_mode == "off":
         events_mode = "compact"
@@ -386,6 +409,8 @@ def run(
     orchestrator = create_default_orchestrator(
         data_dir(),
         route.provider,
+        state_store=state,
+        audit_sink=audit,
         context_config=config.context,
         model_context_windows=model_context_windows,
         context_model=context_route.profile.model,
@@ -399,6 +424,8 @@ def run(
         risk_assessment_service=RiskAssessmentService(router),
         risk_auto_approve=resolved_approval_mode == "risk-auto",
         auto_approve_required_tools=resolved_approval_mode == "full-access",
+        subagent_service=subagent_service,
+        model_router=router,
     )
     plan_id = execute_plan
     if execute_plan is not None:
@@ -411,7 +438,9 @@ def run(
     trace_renderer.begin_run()
     try:
         result = asyncio.run(
-            orchestrator.run(
+            _run_agent_and_drain_subagents(
+                orchestrator,
+                subagent_service,
                 AgentRunRequest(
                     prompt=prompt,
                     agent=default_agent(route.profile.model),
@@ -429,6 +458,16 @@ def run(
     console.print(
         f"[dim]run_id={result.run_id} session_id={session_id} events={result.events_recorded}[/dim]"
     )
+
+
+async def _run_agent_and_drain_subagents(
+    orchestrator: AgentOrchestrator,
+    subagent_service: SubagentService,
+    request: AgentRunRequest,
+) -> AgentRunResult:
+    result = await orchestrator.run(request)
+    await subagent_service.drain()
+    return result
 
 
 @app.command()
@@ -469,12 +508,20 @@ def repl(
     resolved_approval_mode = _resolve_approval_mode(approval_mode)
     state = create_state_store(data_dir())
     audit = create_audit_sink(data_dir())
+    subagent_service = create_subagent_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        max_concurrent=config.subagents.max_concurrent,
+    )
     context_service = create_context_service(
         data_dir(),
+        workspace_root=Path.cwd(),
         state_store=state,
         audit_sink=audit,
         context_config=config.context,
         model_context_windows=model_context_windows,
+        memory_service=MemoryService(state, audit, state),
     )
     user_prompt_handler = RichUserPromptHandler(console)
 
@@ -499,6 +546,8 @@ def repl(
             risk_assessment_service=RiskAssessmentService(router),
             risk_auto_approve=resolved_approval_mode == "risk-auto",
             auto_approve_required_tools=resolved_approval_mode == "full-access",
+            subagent_service=subagent_service,
+            model_router=router,
         )
 
     history_path = data_dir() / "repl_history.txt"
@@ -517,8 +566,12 @@ def repl(
         history_path=history_path,
         preferences_service=create_repl_preferences_service(data_dir()),
         task_service=create_task_service(data_dir()),
+        decision_service=DecisionService(state, audit),
+        memory_service=MemoryService(state, audit, state),
         plan_service=create_plan_service(data_dir()),
+        subagent_service=subagent_service,
         theme_name=theme,
+        repo_root=Path.cwd(),
         theme_dirs=theme_dirs,
     )
 
@@ -865,6 +918,156 @@ def tasks_list(
     _print_tasks(tasks)
 
 
+@decisions_app.command("list")
+def decisions_list(
+    session: Annotated[str | None, typer.Option("--session")] = None,
+    status: Annotated[str | None, typer.Option("--status")] = "active",
+) -> None:
+    """List persisted key decisions."""
+    decisions = asyncio.run(
+        create_decision_service(data_dir()).list_decisions(
+            session_id=session,
+            status=_decision_status(status),
+        )
+    )
+    _print_decisions(decisions)
+
+
+@decisions_app.command("archive")
+def decisions_archive(decision_id: Annotated[str, typer.Argument(help="Decision id.")]) -> None:
+    """Archive a key decision."""
+    decision = asyncio.run(create_decision_service(data_dir()).archive_decision(decision_id))
+    console.print(f"Archived decision {decision.id}")
+
+
+@decisions_app.command("supersede")
+def decisions_supersede(
+    decision_id: Annotated[str, typer.Argument(help="Decision id.")],
+    text: Annotated[str, typer.Argument(help="Replacement decision text.")],
+) -> None:
+    """Supersede a key decision with a new active decision."""
+    decision = asyncio.run(
+        create_decision_service(data_dir()).supersede_decision(
+            decision_id,
+            title=text[:80],
+            decision=text,
+            source="user",
+            priority="normal",
+        )
+    )
+    console.print(f"Superseded with decision {decision.id}")
+
+
+@memories_app.command("list")
+def memories_list(
+    scope: Annotated[str | None, typer.Option("--scope")] = None,
+    kind: Annotated[str | None, typer.Option("--kind")] = None,
+    status: Annotated[str | None, typer.Option("--status")] = "active",
+    session: Annotated[str | None, typer.Option("--session")] = None,
+    repo: Annotated[str | None, typer.Option("--repo")] = None,
+) -> None:
+    """List durable memories."""
+    memories = asyncio.run(
+        create_memory_service(data_dir()).list_memories(
+            scope=_memory_scope(scope),
+            kind=_memory_kind(kind),
+            status=_memory_status(status),
+            repo_root=repo,
+            session_id=session,
+        )
+    )
+    _print_memories(memories)
+
+
+@memories_app.command("search")
+def memories_search(
+    query: Annotated[str, typer.Argument(help="Search query.")],
+    kind: Annotated[str | None, typer.Option("--kind")] = None,
+    status: Annotated[str | None, typer.Option("--status")] = "active",
+    session: Annotated[str | None, typer.Option("--session")] = None,
+    repo: Annotated[str | None, typer.Option("--repo")] = None,
+    limit: Annotated[int, typer.Option("--limit")] = 8,
+) -> None:
+    """Search durable memories."""
+    memories = asyncio.run(
+        create_memory_service(data_dir()).search_memories(
+            query,
+            repo_root=repo or str(Path.cwd()),
+            session_id=session,
+            kind=_memory_kind(kind),
+            status=_memory_status(status),
+            limit=limit,
+        )
+    )
+    _print_memories(memories)
+
+
+@memories_app.command("archive")
+def memories_archive(memory_id: Annotated[str, typer.Argument(help="Memory id.")]) -> None:
+    """Archive a durable memory."""
+    memory = asyncio.run(create_memory_service(data_dir()).archive_memory(memory_id))
+    console.print(f"Archived memory {memory.id}")
+
+
+@memories_app.command("supersede")
+def memories_supersede(
+    memory_id: Annotated[str, typer.Argument(help="Memory id.")],
+    text: Annotated[str, typer.Argument(help="Replacement memory text.")],
+) -> None:
+    """Supersede a durable memory with a new active memory."""
+    memory = asyncio.run(
+        create_memory_service(data_dir()).supersede_memory(
+            memory_id,
+            text=text,
+            source="user",
+        )
+    )
+    console.print(f"Superseded with memory {memory.id}")
+
+
+@agents_app.command("list")
+def agents_list(
+    session: Annotated[str | None, typer.Option("--session")] = None,
+    status: Annotated[str | None, typer.Option("--status")] = None,
+) -> None:
+    """List durable subagent jobs."""
+    config = load_config(config_path())
+    service = create_subagent_service(
+        data_dir(),
+        max_concurrent=config.subagents.max_concurrent,
+    )
+    jobs = asyncio.run(service.list_jobs(session_id=session, status=_subagent_status(status)))
+    _print_subagents(jobs)
+
+
+@agents_app.command("show")
+def agents_show(job_id: Annotated[str, typer.Argument(help="Subagent job id.")]) -> None:
+    """Show a durable subagent job."""
+    config = load_config(config_path())
+    service = create_subagent_service(
+        data_dir(),
+        max_concurrent=config.subagents.max_concurrent,
+    )
+    job = asyncio.run(service.get_job(job_id))
+    _print_subagents((job,))
+    if job.final_output:
+        console.print(Markdown(job.final_output))
+    if job.error:
+        console.print(f"[red]{job.error}[/red]")
+
+
+@agents_app.command("cancel")
+def agents_cancel(job_id: Annotated[str, typer.Argument(help="Subagent job id.")]) -> None:
+    """Cancel a queued or running subagent job."""
+    config = load_config(config_path())
+    service = create_subagent_service(
+        data_dir(),
+        max_concurrent=config.subagents.max_concurrent,
+    )
+    job = asyncio.run(service.cancel_job(job_id))
+    console.print(f"Cancelled subagent {job.id}: {job.status}")
+
+
 def _print_plan(plan: Plan) -> None:
     console.print(f"[bold]Plan:[/bold] {plan.id}")
     console.print(f"Session: {plan.session_id}")
@@ -891,6 +1094,107 @@ def _print_tasks(tasks: tuple[Task, ...]) -> None:
             task.description[:80],
         )
     console.print(table)
+
+
+def _print_decisions(decisions: tuple[KeyDecision, ...]) -> None:
+    if not decisions:
+        console.print("No key decisions.")
+        return
+    table = Table("Status", "Priority", "ID", "Session", "Source", "Decision")
+    for decision in decisions:
+        table.add_row(
+            decision.status,
+            decision.priority,
+            decision.id,
+            decision.session_id,
+            decision.source,
+            decision.decision[:100],
+        )
+    console.print(table)
+
+
+def _print_memories(memories: tuple[MemoryItem, ...]) -> None:
+    if not memories:
+        console.print("No memories.")
+        return
+    table = Table("Status", "Scope", "Kind", "ID", "Source", "Memory")
+    for memory in memories:
+        table.add_row(
+            memory.status,
+            memory.scope,
+            memory.kind,
+            memory.id,
+            memory.source,
+            memory.text[:100],
+        )
+    console.print(table)
+
+
+def _print_subagents(jobs: tuple[SubagentJob, ...]) -> None:
+    if not jobs:
+        console.print("No subagent jobs.")
+        return
+    table = Table("Status", "ID", "Role", "Task", "Child Run", "Updated")
+    for job in jobs:
+        table.add_row(
+            job.status,
+            job.id,
+            job.role,
+            job.task[:80],
+            job.child_run_id or "",
+            job.updated_at,
+        )
+    console.print(table)
+
+
+def _subagent_status(value: str | None) -> SubagentStatus | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"queued", "running", "completed", "failed", "cancelled", "interrupted"}:
+        return cast(SubagentStatus, normalized)
+    console.print("[red]Invalid subagent status.[/red]")
+    raise typer.Exit(code=2)
+
+
+def _decision_status(value: str | None) -> DecisionStatus | None:
+    if value is None or value.strip().lower() in {"", "all", "*"}:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"active", "archived", "superseded"}:
+        return cast(DecisionStatus, normalized)
+    console.print("[red]Invalid decision status.[/red]")
+    raise typer.Exit(code=2)
+
+
+def _memory_status(value: str | None) -> MemoryStatus | None:
+    if value is None or value.strip().lower() in {"", "all", "*"}:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"active", "archived", "superseded"}:
+        return cast(MemoryStatus, normalized)
+    console.print("[red]Invalid memory status.[/red]")
+    raise typer.Exit(code=2)
+
+
+def _memory_scope(value: str | None) -> MemoryScope | None:
+    if value is None or value.strip().lower() in {"", "all", "*"}:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"global", "repo", "session"}:
+        return cast(MemoryScope, normalized)
+    console.print("[red]Invalid memory scope.[/red]")
+    raise typer.Exit(code=2)
+
+
+def _memory_kind(value: str | None) -> MemoryKind | None:
+    if value is None or value.strip().lower() in {"", "all", "*"}:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"preference", "project_fact", "episode", "capability", "warning"}:
+        return cast(MemoryKind, normalized)
+    console.print("[red]Invalid memory kind.[/red]")
+    raise typer.Exit(code=2)
 
 
 def main() -> None:

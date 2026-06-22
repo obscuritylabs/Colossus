@@ -15,6 +15,9 @@ from colossus.adapters.subprocess_broker import (
 )
 from colossus.adapters.workspace import Workspace
 from colossus.application.context import ContextService
+from colossus.application.decisions import DecisionService
+from colossus.application.memories import MemoryService
+from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import ToolHandler
 from colossus.domain.errors import ToolExecutionError
@@ -36,6 +39,10 @@ def create_builtin_tools(
     context_provider: ModelProvider | None = None,
     context_model: str = "default",
     task_service: TaskService | None = None,
+    decision_service: DecisionService | None = None,
+    memory_service: MemoryService | None = None,
+    subagent_service: SubagentService | None = None,
+    include_agent_delegate: bool = True,
     user_prompt_handler: UserPromptHandler | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     broker = SubprocessBroker()
@@ -57,6 +64,10 @@ def create_builtin_tools(
         broker,
         lambda: tuple(catalog),
         task_service=task_service,
+        decision_service=decision_service,
+        memory_service=memory_service,
+        subagent_service=subagent_service,
+        include_agent_delegate=include_agent_delegate,
     )
     context_specs, context_handlers = create_context_tools(
         context_service,

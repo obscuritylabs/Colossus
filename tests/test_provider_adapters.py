@@ -211,6 +211,152 @@ async def test_local_openai_chat_provider_maps_payload_and_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_openai_chat_provider_extracts_array_content() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "hello "},
+                                {"type": "output_text", "text": "there"},
+                            ]
+                        }
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = [
+        event
+        async for event in provider.stream(
+            ModelRequest(
+                model="model-b",
+                instructions="System text.",
+                messages=(UserMessage(content="question"),),
+                tools=(),
+            )
+        )
+    ]
+
+    assert events == [
+        ModelDeltaEvent(text="hello there"),
+        FinalOutputEvent(text="hello there"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_openai_chat_provider_reports_empty_response_shape() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "", "reasoning": "hidden"},
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match=r"no assistant content or tool calls.*reasoning_type",
+    ):
+        _ = [
+            event
+            async for event in provider.stream(
+                ModelRequest(
+                    model="model-b",
+                    instructions="System text.",
+                    messages=(UserMessage(content="question"),),
+                    tools=(),
+                )
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_openai_like_providers_hide_injected_tool_arguments() -> None:
+    local_payload: dict[str, Any] = {}
+    responses_payload: dict[str, Any] = {}
+    tool = ToolSpec(
+        name="agent.delegate",
+        description="Queue agent.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task": {"type": "string"},
+                "role": {"type": "string", "x-colossus-provider-hidden": True},
+                "session_id": {"type": "string", "x-colossus-injected": True},
+            },
+            "required": ["task", "session_id"],
+            "additionalProperties": False,
+        },
+    )
+
+    def local_handler(request: httpx.Request) -> httpx.Response:
+        local_payload.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "done"}}]},
+            request=request,
+        )
+
+    def responses_handler(request: httpx.Request) -> httpx.Response:
+        responses_payload.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"output": [{"type": "message", "content": [{"type": "text", "text": "done"}]}]},
+            request=request,
+        )
+
+    local_provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(local_handler),
+    )
+    responses_provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(responses_handler),
+    )
+    request = ModelRequest(
+        model="model-b",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(tool,),
+    )
+
+    _ = [event async for event in local_provider.stream(request)]
+    _ = [event async for event in responses_provider.stream(request)]
+
+    local_parameters = local_payload["tools"][0]["function"]["parameters"]
+    responses_parameters = responses_payload["tools"][0]["parameters"]
+    assert local_parameters["properties"] == {"task": {"type": "string"}}
+    assert local_parameters["required"] == ["task"]
+    assert responses_parameters["properties"] == {"task": {"type": "string"}}
+    assert responses_parameters["required"] == ["task"]
+
+
+@pytest.mark.asyncio
 async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_calls() -> None:
     captured: dict[str, Any] = {}
 
@@ -243,6 +389,20 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
             }
         )
         + sse({"choices": [{"delta": {"content": "lo"}}]})
+        + sse(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "content": [
+                                {"type": "text", "text": " from "},
+                                {"type": "output_text", "text": "stream"},
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
         + sse(
             {
                 "choices": [
@@ -321,13 +481,145 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
         ),
         ModelDeltaEvent(text="hel"),
         ModelDeltaEvent(text="lo"),
+        ModelDeltaEvent(text=" from stream"),
         ToolCallRequestedEvent(
             call_id="call_1",
             name="filesystem.read",
             arguments={"path": "README.md"},
         ),
-        FinalOutputEvent(text="hello"),
+        FinalOutputEvent(text="hello from stream"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_local_openai_chat_provider_retries_empty_stream_without_streaming() -> None:
+    def sse(value: object) -> str:
+        return f"data: {json.dumps(value)}\n\n"
+
+    content = (
+        sse(
+            {
+                "choices": [
+                    {
+                        "delta": {"role": "assistant", "reasoning": "hidden"},
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        )
+        + sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+        + "data: [DONE]\n\n"
+    )
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if payload.get("stream") is not True:
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "fallback answer"}}]},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=content,
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = [
+        event
+        async for event in provider.stream(
+            ModelRequest(
+                model="model-b",
+                instructions="System text.",
+                messages=(UserMessage(content="question"),),
+                tools=(),
+            )
+        )
+    ]
+
+    assert [request.get("stream") for request in requests] == [True, None]
+    assert events == [
+        ModelDeltaEvent(text="fallback answer"),
+        FinalOutputEvent(text="fallback answer"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_openai_chat_provider_reports_empty_stream_and_fallback_shapes() -> None:
+    def sse(value: object) -> str:
+        return f"data: {json.dumps(value)}\n\n"
+
+    content = (
+        sse(
+            {
+                "choices": [
+                    {
+                        "delta": {"role": "assistant", "reasoning": "hidden"},
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        )
+        + sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+        + "data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload.get("stream") is not True:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "reasoning": "hidden",
+                            },
+                        }
+                    ]
+                },
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=content,
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match=r"response_shape=.*streaming_fallback=.*chunk_shapes=.*reasoning_type",
+    ):
+        _ = [
+            event
+            async for event in provider.stream(
+                ModelRequest(
+                    model="model-b",
+                    instructions="System text.",
+                    messages=(UserMessage(content="question"),),
+                    tools=(),
+                )
+            )
+        ]
 
 
 @pytest.mark.asyncio

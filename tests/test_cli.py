@@ -1,12 +1,19 @@
+import asyncio
+from pathlib import Path
+
 from click.exceptions import Exit as ClickExit
 from typer.testing import CliRunner
 
 import colossus.cli as cli_module
+from colossus.adapters.audit_jsonl import JsonlAuditSink
+from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.application.model_router import ModelRoute, ModelRouter
+from colossus.application.subagents import SubagentService
 from colossus.cli import app
 from colossus.domain.errors import ColossusError
 from colossus.domain.models import ModelProfile, ModelRoutingConfig, ResolvedModelProfile
 from colossus.domain.providers import ProviderModelInfo
+from colossus.domain.subagents import SubagentJob
 from colossus.infrastructure.config import ColossusConfig, ProviderConfig
 from colossus.infrastructure.paths import config_path
 
@@ -27,6 +34,22 @@ def test_cli_run_streams_without_duplicate_final_output(tmp_path, monkeypatch) -
     assert result.exit_code == 0
     assert result.stdout.count("[echo:default] hello") == 1
     assert "run_id=" in result.stdout
+
+
+def test_cli_run_drains_subagents_before_returning(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    drained = False
+
+    async def drain(self) -> None:
+        nonlocal drained
+        drained = True
+
+    monkeypatch.setattr(cli_module.SubagentService, "drain", drain)
+
+    result = CliRunner().invoke(app, ["run", "hello"])
+
+    assert result.exit_code == 0
+    assert drained is True
 
 
 def test_cli_run_rejects_unknown_events_mode(tmp_path, monkeypatch) -> None:
@@ -308,6 +331,28 @@ def test_cli_repl_rejects_unknown_theme(tmp_path, monkeypatch) -> None:
     assert "Invalid REPL theme" in result.stdout
 
 
+def test_cli_agents_list_renders_persisted_jobs(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    state = SQLiteStateStore(tmp_path / "colossus" / "state.sqlite3")
+    service = SubagentService(state, JsonlAuditSink(tmp_path / "colossus" / "audit.jsonl"))
+    job = SubagentJob(
+        id="agent-1",
+        session_id="session-1",
+        parent_run_id="run-1",
+        parent_call_id="call-1",
+        task="Check tests",
+        child_session_id="session-1:subagent:agent-1",
+    )
+    asyncio.run(state.save_subagent_job(job))
+
+    result = CliRunner().invoke(app, ["agents", "list", "--session", "session-1"])
+
+    assert result.exit_code == 0
+    assert "agent-1" in result.stdout
+    assert "Check tests" in result.stdout
+    assert service.max_concurrent == 4
+
+
 def test_cli_lists_bundled_skills() -> None:
     result = CliRunner().invoke(app, ["skills", "list"])
 
@@ -498,6 +543,29 @@ def test_cli_tasks_list_shows_persisted_tasks(tmp_path, monkeypatch) -> None:
     assert task.id in result.stdout
     assert "session-task" in result.stdout
     assert "Show task UX" in result.stdout
+
+
+def test_cli_memories_list_and_search_show_persisted_memories(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    service = cli_module.create_memory_service(cli_module.data_dir())
+    memory = cli_module.asyncio.run(
+        service.create_memory(
+            scope="repo",
+            kind="preference",
+            text="Run pytest and ruff before completion.",
+            source="user",
+            repo_root=str(Path.cwd()),
+        )
+    )
+
+    listed = CliRunner().invoke(app, ["memories", "list", "--scope", "repo"])
+    searched = CliRunner().invoke(app, ["memories", "search", "pytest ruff"])
+
+    assert listed.exit_code == 0
+    assert searched.exit_code == 0
+    assert memory.id in listed.stdout
+    assert memory.id in searched.stdout
+    assert "preference" in searched.stdout
 
 
 def test_cli_main_suppresses_expected_error_tracebacks(monkeypatch) -> None:

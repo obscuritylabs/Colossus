@@ -2,9 +2,13 @@ import pytest
 
 from colossus.adapters.audit_jsonl import JsonlAuditSink
 from colossus.adapters.sqlite_state import SQLiteStateStore
+from colossus.application.decisions import DecisionService
+from colossus.application.memories import MemoryService
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.tasks import TaskService
+from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
+from colossus.domain.memories import MemoryItem
 from colossus.domain.messages import AssistantMessage, UserMessage
 from colossus.domain.preferences import ReplPreferences
 from colossus.domain.tasks import Task
@@ -43,6 +47,47 @@ async def test_sqlite_state_persists_session_tasks(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sqlite_state_persists_key_decisions(tmp_path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    decision = KeyDecision(
+        id="kd_1",
+        session_id="session-1",
+        source="user",
+        priority="critical",
+        title="Durable commitments",
+        decision="Key decisions are durable commitments, not memories.",
+    )
+
+    await state.save_decision(decision)
+
+    reloaded = SQLiteStateStore(tmp_path / "state.sqlite3")
+    assert await reloaded.get_decision("kd_1") == decision
+    assert await reloaded.list_decisions(session_id="session-1") == (decision,)
+    assert await reloaded.list_decisions(session_id="session-1", status="archived") == ()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_state_persists_memories_and_fts_index(tmp_path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    memory = MemoryItem(
+        id="mem_1",
+        scope="repo",
+        kind="project_fact",
+        source="user",
+        text="Colossus stores durable memories in SQLite FTS.",
+        repo_root="/repo",
+    )
+
+    await state.save_memory(memory)
+    await state.upsert_memory_index(memory)
+
+    reloaded = SQLiteStateStore(tmp_path / "state.sqlite3")
+    assert await reloaded.get_memory("mem_1") == memory
+    assert await reloaded.list_memories(scope="repo", repo_root="/repo") == (memory,)
+    assert await reloaded.search_memory_index("durable memories", limit=5) == ("mem_1",)
+
+
+@pytest.mark.asyncio
 async def test_task_service_creates_updates_and_scopes_tasks(tmp_path) -> None:
     service = TaskService(
         SQLiteStateStore(tmp_path / "state.sqlite3"),
@@ -75,6 +120,113 @@ async def test_task_service_rejects_cross_session_update(tmp_path) -> None:
 
     with pytest.raises(ColossusError, match="does not belong to session"):
         await service.update_task(created.id, session_id="session-2", status="completed")
+
+
+@pytest.mark.asyncio
+async def test_decision_service_lifecycle_and_audit(tmp_path) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    service = DecisionService(
+        SQLiteStateStore(tmp_path / "state.sqlite3"),
+        JsonlAuditSink(audit_path),
+    )
+
+    created = await service.create_decision(
+        session_id="session-1",
+        title="Never forget",
+        decision="Preserve key decisions across compaction.",
+        source="agent",
+        priority="critical",
+    )
+    await service.create_decision(
+        session_id="session-2",
+        title="Other session",
+        decision="Do not show in session one.",
+        source="user",
+    )
+    archived = await service.archive_decision(created.id, session_id="session-1")
+    replacement = await service.supersede_decision(
+        archived.id,
+        session_id="session-1",
+        title="Replacement",
+        decision="Inject active key decisions before snapshots.",
+        source="user",
+        priority="high",
+    )
+
+    session_decisions = await service.list_decisions(session_id="session-1", status=None)
+    active = await service.list_decisions(session_id="session-1")
+
+    assert archived.status == "archived"
+    assert replacement.supersedes == created.id
+    assert [decision.id for decision in active] == [replacement.id]
+    assert {decision.status for decision in session_decisions} == {"superseded", "active"}
+    audit_text = audit_path.read_text(encoding="utf-8")
+    assert "decision.created" in audit_text
+    assert "decision.archived" in audit_text
+    assert "decision.superseded" in audit_text
+
+
+@pytest.mark.asyncio
+async def test_decision_service_rejects_cross_session_archive(tmp_path) -> None:
+    service = DecisionService(
+        SQLiteStateStore(tmp_path / "state.sqlite3"),
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+    )
+    created = await service.create_decision(
+        session_id="session-1",
+        title="Scoped",
+        decision="Stay scoped.",
+    )
+
+    with pytest.raises(ColossusError, match="does not belong to session"):
+        await service.archive_decision(created.id, session_id="session-2")
+
+
+@pytest.mark.asyncio
+async def test_memory_service_lifecycle_search_scope_and_audit(tmp_path) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = MemoryService(state, JsonlAuditSink(audit_path), state)
+
+    created = await service.create_memory(
+        scope="repo",
+        kind="preference",
+        text="Run pytest, ruff, and mypy before calling work complete.",
+        source="user",
+        repo_root="/repo",
+    )
+    await service.create_memory(
+        scope="repo",
+        kind="project_fact",
+        text="A different repository memory.",
+        source="agent",
+        repo_root="/other",
+    )
+    global_memory = await service.create_memory(
+        scope="global",
+        kind="capability",
+        text="Colossus can search durable memories with SQLite FTS.",
+        source="agent",
+    )
+
+    search = await service.search_memories("pytest ruff", repo_root="/repo")
+    missing = await service.search_memories("pytest ruff", repo_root="/other")
+    archived = await service.archive_memory(created.id)
+    replacement = await service.supersede_memory(
+        global_memory.id,
+        text="Colossus memory search uses SQLite FTS in V1.",
+        source="user",
+    )
+
+    assert [memory.id for memory in search] == [created.id]
+    assert missing == ()
+    assert archived.status == "archived"
+    assert replacement.supersedes == global_memory.id
+    assert await service.search_memories("pytest ruff", repo_root="/repo") == ()
+    audit_text = audit_path.read_text(encoding="utf-8")
+    assert "memory.created" in audit_text
+    assert "memory.archived" in audit_text
+    assert "memory.superseded" in audit_text
 
 
 @pytest.mark.asyncio

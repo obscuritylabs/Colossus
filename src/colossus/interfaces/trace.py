@@ -14,6 +14,7 @@ from colossus.domain.events import (
     ReasoningSummaryEvent,
     RiskAssessmentEvent,
     RunEvent,
+    SubagentStatusEvent,
     ToolCallCompletedEvent,
     ToolCallRequestedEvent,
 )
@@ -115,6 +116,15 @@ class RichRunEventRenderer:
                 f"role={event.model_role} profile={event.profile_name}[/dim]"
             )
             self.console.print(f"summary {summary}", markup=False)
+            return
+        if isinstance(event, SubagentStatusEvent):
+            task = _truncate(event.task, self.argument_preview_chars)
+            self.console.print(
+                f"{_label('subagent', self.theme.tool_call)} {event.status} "
+                f"[dim]job={event.job_id} role={event.role}[/dim]"
+            )
+            if self.events_mode == "verbose":
+                self.console.print(f"task {task}", markup=False)
             return
         if isinstance(event, ToolCallCompletedEvent):
             preview = _truncate(event.output.replace("\n", "\\n"), self.output_preview_chars)

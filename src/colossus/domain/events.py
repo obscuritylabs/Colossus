@@ -79,6 +79,17 @@ class HandoffEvent(BaseModel):
     reason: str | None = None
 
 
+class SubagentStatusEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["subagent.status"] = "subagent.status"
+    job_id: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled", "interrupted"]
+    role: str
+    task: str
+    message: str = ""
+
+
 class FinalOutputEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -103,6 +114,7 @@ RunEvent = Annotated[
     | RiskAssessmentEvent
     | ToolCallCompletedEvent
     | HandoffEvent
+    | SubagentStatusEvent
     | FinalOutputEvent
     | ErrorEvent,
     Field(discriminator="type"),

@@ -42,7 +42,7 @@ Security-sensitive defaults:
 - Keep environment allowlists narrow.
 - Keep output caps and timeouts bounded.
 - Require approval for mutation, elevated filesystem access, or network access.
-- Preserve command and decision audit records.
+- Preserve command, decision, and memory audit records.
 
 ## Built-in Tool Permission Matrix
 
@@ -53,13 +53,15 @@ Security-sensitive defaults:
 | `git.status/diff/show` | Read | Denied | No | Enabled |
 | `shell.run` | Write-capable | Denied | Yes | Enabled |
 | `task.*` | None | Denied | No | Enabled, session-persisted |
+| `decision.*` | None | Denied | Mutations | Enabled, session-persisted |
+| `memory.*` | None | Denied | No | Enabled, global/repo/session persisted |
 | `plan.create/show` | None | Denied | No | Enabled, runtime-local |
 | `plan.approve_request` | None | Denied | Yes | Enabled, runtime-local |
 | `test.run/lint.run/typecheck.run/build.run/eval.run` | Read | Denied | Yes | Enabled |
 | `patch.preview` | Read | Denied | No | Enabled |
 | `patch.apply/reverse` | Write | Denied | Yes | Enabled |
 | `repo.*` | Read | Denied | No | Enabled |
-| `agent.*` | None | Denied | No | Enabled, records requests only |
+| `agent.*` | None | Denied | No | Enabled, durable queued child-agent jobs |
 | `web.fetch` and `docs.fetch` | None | Allowed by spec | Yes | Bounded HTTP(S) fetch after approval |
 | `web.search` | None | Allowed by spec | Yes | Adapter extension point |
 | `mcp.servers/tools` | None | Denied | No | Returns unconfigured state |
@@ -85,6 +87,18 @@ expand filesystem roots, network implementations, tool schemas, or deterministic
 denies. Unknown tools, invalid arguments, policy `deny`, and risk-review `deny` still
 stop before execution.
 
+## Subagents
+
+Subagents are durable queued child-agent jobs. They reuse the normal orchestrator, tool
+registry, policy, approval, risk, state, and audit paths. They do not create a separate
+OS sandbox or broader permission domain. V1 child agents inherit the parent approval mode
+and tool boundaries, but nested `agent.delegate` is removed from child tool catalogs to
+avoid runaway delegation trees.
+
+Running subagent jobs that outlive a process are marked `interrupted` on startup rather
+than resumed from a half-open provider stream. Queued jobs remain runnable when a runtime
+with a configured subagent runner starts.
+
 ## Model-Assisted Risk Review
 
 `shell.run` is reviewed by the `risk_evaluator` model role when configured. Review happens
@@ -103,6 +117,17 @@ used to reduce what is sent to a provider, but they do not delete, rewrite, or r
 raw message history. `context.restore` is approval-required because it changes which
 snapshot is active for future model requests. Model-assisted compaction is best-effort;
 deterministic offline compaction remains the fallback.
+
+Key decisions are durable commitments, not memories. Active key decisions are stored as
+session state and injected before compacted snapshot content so summarization cannot
+erase them. Archived and superseded decisions remain in state for auditability but are
+not injected into future model context.
+
+Memories are durable context, not instructions. Active relevant memories are injected
+after key decisions and before compacted snapshot content. Global memories are only
+used when relevant to the current prompt/repository; archived and superseded memories
+remain persisted for history but are not injected. Memory records should not store
+secrets, raw credentials, private keys, or unbounded external/tool output.
 
 ## Reasoning Visibility
 
