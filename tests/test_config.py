@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
 from colossus.adapters.openai_responses import OpenAIResponsesProvider
 from colossus.domain.models import ModelProfile, ModelRoutingConfig
@@ -65,6 +68,14 @@ def test_config_supports_context_defaults_and_model_windows() -> None:
     assert config.context.auto_compaction is True
     assert config.context.default_context_window_tokens == 32_768
     assert config.provider.model_context_windows["local-model"] == 65_536
+
+
+def test_config_supports_memory_index_defaults_and_rejects_unknown_backends() -> None:
+    config = ColossusConfig()
+
+    assert config.memory.index.kind == "sqlite_fts"
+    with pytest.raises(ValidationError):
+        ColossusConfig.model_validate({"memory": {"index": {"kind": "chroma"}}})
 
 
 def test_legacy_provider_config_maps_to_default_model_roles() -> None:

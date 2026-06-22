@@ -9,10 +9,12 @@ from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.application.approvals import AllowAllApprovalHandler
 from colossus.application.context import ContextService
 from colossus.application.defaults import default_agent
+from colossus.application.memories import MemoryService
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig, ContextSnapshot
+from colossus.domain.decisions import KeyDecision
 from colossus.domain.events import FinalOutputEvent, ModelDeltaEvent, RunEvent
 from colossus.domain.messages import AssistantMessage, ToolResultMessage, UserMessage
 from colossus.domain.requests import AgentRunRequest, ModelRequest
@@ -38,6 +40,8 @@ def _context_service(
     tmp_path: Path,
     *,
     config: ContextConfig | None = None,
+    memory_service: MemoryService | None = None,
+    repo_root: str | None = None,
 ) -> tuple[ContextService, SQLiteStateStore]:
     state = SQLiteStateStore(tmp_path / "state.sqlite3")
     service = ContextService(
@@ -46,6 +50,8 @@ def _context_service(
         config=config,
         model_context_windows={"model-a": 1024},
         snapshot_id_factory=lambda: "snapshot-1",
+        memory_service=memory_service,
+        repo_root=repo_root,
     )
     return service, state
 
@@ -178,6 +184,150 @@ async def test_context_reuses_existing_snapshot_with_new_tail(tmp_path: Path) ->
     assert len(result.messages) == 1
     assert isinstance(result.messages[0], UserMessage)
     assert "new tail" in result.messages[0].content
+
+
+@pytest.mark.asyncio
+async def test_context_injects_active_key_decisions_before_snapshot(tmp_path: Path) -> None:
+    service, state = _context_service(tmp_path)
+    snapshot = ContextSnapshot(
+        id="snapshot-1",
+        session_id="session-1",
+        source_message_range=(1, 2),
+        summary="Existing compacted summary.",
+    )
+    await state.save_context_snapshot(snapshot)
+    await state.save_decision(
+        KeyDecision(
+            id="kd_1",
+            session_id="session-1",
+            source="agent",
+            priority="critical",
+            title="Durable commitments",
+            decision="Key decisions are durable commitments, not memories.",
+        )
+    )
+    await state.save_decision(
+        KeyDecision(
+            id="kd_2",
+            session_id="session-1",
+            source="agent",
+            status="archived",
+            priority="high",
+            title="Archived",
+            decision="Archived decisions should not steer future turns.",
+        )
+    )
+    messages = (
+        UserMessage(content="old 1"),
+        AssistantMessage(content="old 2"),
+        UserMessage(content="new tail"),
+    )
+
+    result = await service.prepare_messages(
+        session_id="session-1",
+        model="model-a",
+        instructions="",
+        messages=messages,
+    )
+
+    assert isinstance(result.messages[0], UserMessage)
+    content = result.messages[0].content
+    assert content.index("[Active key decisions]") < content.index("[Colossus context snapshot]")
+    assert "CRITICAL kd_1: Key decisions are durable commitments, not memories." in content
+    assert "kd_2" not in content
+    assert "new tail" in content
+
+
+@pytest.mark.asyncio
+async def test_context_injects_relevant_memories_after_decisions_before_snapshot(
+    tmp_path: Path,
+) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    memory_service = MemoryService(state, JsonlAuditSink(tmp_path / "audit.jsonl"), state)
+    service = ContextService(
+        state,
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+        model_context_windows={"model-a": 1024},
+        snapshot_id_factory=lambda: "snapshot-1",
+        memory_service=memory_service,
+        repo_root="/repo",
+    )
+    snapshot = ContextSnapshot(
+        id="snapshot-1",
+        session_id="session-1",
+        source_message_range=(1, 2),
+        summary="Existing compacted summary.",
+    )
+    await state.save_context_snapshot(snapshot)
+    await state.save_decision(
+        KeyDecision(
+            id="kd_1",
+            session_id="session-1",
+            source="agent",
+            priority="critical",
+            title="Commitment",
+            decision="Run final gates before completion.",
+        )
+    )
+    await memory_service.create_memory(
+        memory_id="mem_repo",
+        scope="repo",
+        kind="preference",
+        text="Run pytest, ruff, and mypy before declaring completion.",
+        source="user",
+        repo_root="/repo",
+    )
+    await memory_service.create_memory(
+        memory_id="mem_global",
+        scope="global",
+        kind="capability",
+        text="Global note about browser automation.",
+        source="agent",
+    )
+    messages = (
+        UserMessage(content="old 1"),
+        AssistantMessage(content="old 2"),
+        UserMessage(content="Should I run pytest and ruff now?"),
+    )
+
+    result = await service.prepare_messages(
+        session_id="session-1",
+        model="model-a",
+        instructions="",
+        messages=messages,
+    )
+
+    content = result.messages[0].content
+    assert content.index("[Active key decisions]") < content.index("[Relevant memories]")
+    assert content.index("[Relevant memories]") < content.index("[Colossus context snapshot]")
+    assert "REPO/PREFERENCE mem_repo" in content
+    assert "mem_global" not in content
+
+
+@pytest.mark.asyncio
+async def test_context_injects_active_key_decisions_without_compaction(tmp_path: Path) -> None:
+    service, state = _context_service(tmp_path)
+    await state.save_decision(
+        KeyDecision(
+            id="kd_1",
+            session_id="session-1",
+            source="user",
+            priority="high",
+            title="Remember",
+            decision="Always preserve active key decisions.",
+        )
+    )
+
+    result = await service.prepare_messages(
+        session_id="session-1",
+        model="model-a",
+        instructions="",
+        messages=(UserMessage(content="short prompt"),),
+    )
+
+    assert isinstance(result.messages[0], UserMessage)
+    assert "[Active key decisions]" in result.messages[0].content
+    assert result.messages[1].content == "short prompt"
 
 
 @pytest.mark.asyncio

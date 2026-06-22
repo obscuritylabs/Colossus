@@ -1,11 +1,14 @@
 """Provider-neutral agent orchestration loop."""
 
 import json
+import re
 from collections.abc import Callable
 from uuid import uuid4
 
 from colossus.application.context import ContextService
+from colossus.application.decisions import DecisionService
 from colossus.application.risk import RiskAssessmentService
+from colossus.application.subagents import SubagentService
 from colossus.application.tools import validate_tool_call
 from colossus.domain.errors import PolicyDeniedError, ToolExecutionError
 from colossus.domain.events import (
@@ -29,7 +32,22 @@ from colossus.ports.tools import ToolExecutor, ToolRegistry
 
 RunIdFactory = Callable[[], str]
 RunEventObserver = Callable[[RunEvent], None]
-SESSION_CONTEXT_TOOLS = frozenset({"task.create", "task.update", "task.list"})
+SESSION_CONTEXT_TOOLS = frozenset(
+    {
+        "task.create",
+        "task.update",
+        "task.list",
+        "decision.create",
+        "decision.update",
+        "decision.list",
+        "decision.archive",
+        "decision.supersede",
+        "agent.delegate",
+        "agent.result",
+        "agent.list",
+    }
+)
+RUN_CONTEXT_TOOLS = frozenset({"agent.delegate"})
 
 
 class AgentOrchestrator:
@@ -51,6 +69,8 @@ class AgentOrchestrator:
         risk_assessment_service: RiskAssessmentService | None = None,
         risk_auto_approve: bool = False,
         auto_approve_required_tools: bool = False,
+        subagent_service: SubagentService | None = None,
+        decision_service: DecisionService | None = None,
     ) -> None:
         self._provider = provider
         self._tool_registry = tool_registry
@@ -67,9 +87,15 @@ class AgentOrchestrator:
         self._risk_assessment_service = risk_assessment_service
         self._risk_auto_approve = risk_auto_approve
         self._auto_approve_required_tools = auto_approve_required_tools
+        self._subagent_service = subagent_service
+        self._decision_service = decision_service
+        if subagent_service is not None and event_observer is not None:
+            subagent_service.set_event_observer(event_observer)
 
     def set_event_observer(self, event_observer: RunEventObserver | None) -> None:
         self._event_observer = event_observer
+        if self._subagent_service is not None:
+            self._subagent_service.set_event_observer(event_observer)
 
     async def run(self, request: AgentRunRequest) -> AgentRunResult:
         run_id = self._run_id_factory()
@@ -81,6 +107,26 @@ class AgentOrchestrator:
         messages.append(user_message)
         if request.session_id is not None:
             await self._state_store.append_message(request.session_id, run_id, user_message)
+            captured = await self._capture_user_key_decision(request.prompt, request.session_id)
+            if captured is not None and _is_standalone_key_decision_prompt(request.prompt):
+                final_text = f"Noted as key decision {captured}."
+                assistant_message = AssistantMessage(content=final_text)
+                await self._state_store.append_message(
+                    request.session_id,
+                    run_id,
+                    assistant_message,
+                )
+                await self._audit_sink.record(
+                    "agent",
+                    "run.completed",
+                    {"run_id": run_id, "events": 0, "key_decision_id": captured},
+                )
+                return AgentRunResult(
+                    run_id=run_id,
+                    final_output=final_text,
+                    events_recorded=0,
+                    session_id=request.session_id,
+                )
         final_text = ""
         events_recorded = 0
 
@@ -183,7 +229,6 @@ class AgentOrchestrator:
         call: ToolCall,
         session_id: str | None = None,
     ) -> ToolCallCompletedEvent:
-        call = _with_session_context(call, session_id)
         spec = self._tool_registry.get_spec(call.name)
         if spec is None:
             return await self._record_tool_error(
@@ -203,6 +248,7 @@ class AgentOrchestrator:
                 message=str(exc),
                 audit_action="tool.invalid",
             )
+        call = _with_execution_context(call, session_id, run_id)
         decision = self._policy_engine.decide_tool_call(spec, call)
         await self._audit_sink.record(
             "agent",
@@ -370,10 +416,71 @@ class AgentOrchestrator:
         if self._event_observer is not None:
             self._event_observer(event)
 
+    async def _capture_user_key_decision(self, prompt: str, session_id: str) -> str | None:
+        if self._decision_service is None or not _looks_like_key_decision_prompt(prompt):
+            return None
+        text = prompt.strip()
+        active = await self._decision_service.list_decisions(session_id=session_id)
+        for decision in active:
+            if decision.decision == text:
+                return decision.id
+        decision = await self._decision_service.create_decision(
+            session_id=session_id,
+            title=_decision_title(text),
+            decision=text,
+            source="user",
+            priority="high",
+            rationale="Captured from a durable user preference before provider execution.",
+        )
+        return decision.id
 
-def _with_session_context(call: ToolCall, session_id: str | None) -> ToolCall:
-    if session_id is None or call.name not in SESSION_CONTEXT_TOOLS:
+
+def _with_execution_context(
+    call: ToolCall,
+    session_id: str | None,
+    run_id: str,
+) -> ToolCall:
+    arguments = dict(call.arguments)
+    changed = False
+    if (
+        session_id is not None
+        and call.name in SESSION_CONTEXT_TOOLS
+        and "session_id" not in arguments
+    ):
+        arguments["session_id"] = session_id
+        changed = True
+    if call.name in RUN_CONTEXT_TOOLS:
+        if "parent_run_id" not in arguments:
+            arguments["parent_run_id"] = run_id
+            changed = True
+        if "parent_call_id" not in arguments:
+            arguments["parent_call_id"] = call.call_id
+            changed = True
+    if not changed:
         return call
-    if "session_id" in call.arguments:
-        return call
-    return call.model_copy(update={"arguments": {**call.arguments, "session_id": session_id}})
+    return call.model_copy(update={"arguments": arguments})
+
+
+_KEY_DECISION_PROMPT_PATTERN = re.compile(
+    r"\b(moving forward|mvoing forward|going forward|from now on|remember this|"
+    r"please remember|make sure)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_key_decision_prompt(prompt: str) -> bool:
+    return bool(_KEY_DECISION_PROMPT_PATTERN.search(prompt.strip()))
+
+
+def _is_standalone_key_decision_prompt(prompt: str) -> bool:
+    text = prompt.strip()
+    if not _looks_like_key_decision_prompt(text):
+        return False
+    if "?" in text:
+        return False
+    return len(text) <= 220
+
+
+def _decision_title(prompt: str) -> str:
+    title = prompt.strip().replace("\n", " ")
+    return title[:80] or "Key decision"

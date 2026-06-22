@@ -80,7 +80,7 @@ policy denies.
 
 The package follows dependency-inward layering:
 
-- `domain`: typed values, events, specs, decisions, and errors.
+- `domain`: typed values, events, specs, decisions, memories, and errors.
 - `ports`: protocols for model providers, tools, state, skills, audit, and approvals.
 - `application`: orchestration, skill resolution, tool execution, and service assembly.
 - `adapters`: OpenAI-compatible providers, SQLite state, package/filesystem skills,
@@ -97,11 +97,12 @@ Colossus ships an offline-first local coding tool loop:
 
 - Workspace file list/read/search/write/replace.
 - Git status/diff/show and structured `shell.run`.
-- Model-callable task, plan, patch, repo context, subagent, trace, eval, and verification
-  tools.
+- Model-callable task, key decision, memory, plan, patch, repo context, subagent, trace,
+  eval, and verification tools.
 - Web/docs and MCP tool schemas that are visible but disabled by default until a
   network-enabled profile or adapter is explicitly configured.
-- Automatic context compaction with durable snapshots and per-model context windows.
+- Automatic context compaction with durable snapshots, active key-decision injection,
+  relevant memory injection, and per-model context windows.
 - Named model roles for primary agent turns, context summarization, subagents, and
   shell-command risk review.
 
@@ -109,6 +110,12 @@ Inspect the current catalog with:
 
 ```bash
 uv run colossus tools list
+```
+
+Durable queued subagent jobs can be inspected with:
+
+```bash
+uv run colossus agents list
 ```
 
 ## Development

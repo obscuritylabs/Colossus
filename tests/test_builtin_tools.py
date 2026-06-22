@@ -15,6 +15,8 @@ from colossus.adapters.subprocess_broker import (
 )
 from colossus.adapters.workspace import Workspace
 from colossus.application.context import ContextService
+from colossus.application.decisions import DecisionService
+from colossus.application.memories import MemoryService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig
@@ -65,6 +67,8 @@ def test_builtin_tool_catalog_has_handlers_and_roadmap_families(tmp_path: Path) 
 
     assert names == set(handlers)
     assert "task.create" in names
+    assert "decision.create" in names
+    assert "memory.create" in names
     assert "plan.approve_request" in names
     assert "test.run" in names
     assert "patch.apply" in names
@@ -377,6 +381,135 @@ async def test_task_tools_persist_session_state_when_service_is_available(tmp_pa
     assert len(tasks) == 1
     assert tasks[0].title == "Persist task"
     assert tasks[0].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_decision_tools_persist_session_state_when_service_is_available(
+    tmp_path: Path,
+) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    decision_service = DecisionService(state, JsonlAuditSink(tmp_path / "audit.jsonl"))
+    specs, handlers = create_builtin_tools(
+        Workspace(tmp_path),
+        decision_service=decision_service,
+    )
+    registry = InMemoryToolRegistry(specs)
+    executor = FunctionToolExecutor(handlers, registry)
+
+    created = await executor.execute(
+        ToolCall(
+            call_id="1",
+            name="decision.create",
+            arguments={
+                "id": "kd_1",
+                "session_id": "session-1",
+                "title": "Durable commitments",
+                "decision": "Key decisions are durable commitments, not memories.",
+                "priority": "critical",
+            },
+        )
+    )
+    listed = await executor.execute(
+        ToolCall(
+            call_id="2",
+            name="decision.list",
+            arguments={"session_id": "session-1"},
+        )
+    )
+    superseded = await executor.execute(
+        ToolCall(
+            call_id="3",
+            name="decision.supersede",
+            arguments={
+                "id": "kd_1",
+                "session_id": "session-1",
+                "title": "Injected commitments",
+                "decision": "Active key decisions are injected before snapshots.",
+                "priority": "high",
+            },
+        )
+    )
+    archived = await executor.execute(
+        ToolCall(
+            call_id="4",
+            name="decision.archive",
+            arguments={
+                "id": json.loads(superseded.output)["decision"]["id"],
+                "session_id": "session-1",
+            },
+        )
+    )
+
+    assert json.loads(created.output)["decision"]["priority"] == "critical"
+    assert json.loads(listed.output)["decisions"][0]["id"] == "kd_1"
+    assert json.loads(superseded.output)["decision"]["supersedes"] == "kd_1"
+    assert json.loads(archived.output)["decision"]["status"] == "archived"
+    all_decisions = await state.list_decisions(session_id="session-1", status=None)
+    assert {decision.status for decision in all_decisions} == {"superseded", "archived"}
+
+
+@pytest.mark.asyncio
+async def test_memory_tools_persist_search_and_notice_when_service_is_available(
+    tmp_path: Path,
+) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    memory_service = MemoryService(state, JsonlAuditSink(tmp_path / "audit.jsonl"), state)
+    specs, handlers = create_builtin_tools(
+        Workspace(tmp_path),
+        memory_service=memory_service,
+    )
+    registry = InMemoryToolRegistry(specs)
+    executor = FunctionToolExecutor(handlers, registry)
+
+    created = await executor.execute(
+        ToolCall(
+            call_id="1",
+            name="memory.create",
+            arguments={
+                "id": "mem_1",
+                "session_id": "session-1",
+                "scope": "repo",
+                "kind": "preference",
+                "text": "Always run pytest and ruff before declaring completion.",
+            },
+        )
+    )
+    searched = await executor.execute(
+        ToolCall(
+            call_id="2",
+            name="memory.search",
+            arguments={
+                "query": "pytest ruff",
+                "session_id": "session-1",
+            },
+        )
+    )
+    superseded = await executor.execute(
+        ToolCall(
+            call_id="3",
+            name="memory.supersede",
+            arguments={
+                "id": "mem_1",
+                "session_id": "session-1",
+                "text": "Run pytest, ruff, and mypy before declaring completion.",
+            },
+        )
+    )
+    archived = await executor.execute(
+        ToolCall(
+            call_id="4",
+            name="memory.archive",
+            arguments={"id": json.loads(superseded.output)["memory"]["id"]},
+        )
+    )
+
+    created_payload = json.loads(created.output)
+    assert created_payload["notice"] == "Saved memory mem_1 [repo/preference]"
+    assert json.loads(searched.output)["memories"][0]["id"] == "mem_1"
+    assert json.loads(superseded.output)["memory"]["supersedes"] == "mem_1"
+    assert json.loads(archived.output)["memory"]["status"] == "archived"
+    all_memories = await state.list_memories(status=None)
+    assert {memory.status for memory in all_memories} == {"superseded", "archived"}
 
 
 @pytest.mark.asyncio

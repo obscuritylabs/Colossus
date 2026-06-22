@@ -8,6 +8,7 @@ import httpx
 
 from colossus.adapters.model_catalog import extract_model_infos
 from colossus.adapters.tool_name_codec import ToolNameCodec
+from colossus.adapters.tool_schema import provider_input_schema
 from colossus.domain.events import (
     FinalOutputEvent,
     ModelDeltaEvent,
@@ -231,7 +232,7 @@ def _tool_to_responses_tool(
         "type": "function",
         "name": tool_name_codec.encode(tool.name),
         "description": tool.description,
-        "parameters": tool.input_schema,
+        "parameters": provider_input_schema(tool.input_schema),
         "strict": True,
     }
 

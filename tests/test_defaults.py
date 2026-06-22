@@ -7,3 +7,11 @@ def test_default_agent_explains_structured_shell_usage() -> None:
     assert "shell.run" in instructions
     assert "structured argv" in instructions
     assert "do not use pipes or shell wrappers" in instructions
+
+
+def test_default_agent_explains_key_decision_usage() -> None:
+    instructions = default_agent().instructions
+
+    assert "key decision" in instructions
+    assert "survive compaction" in instructions
+    assert "decision.* tools" in instructions

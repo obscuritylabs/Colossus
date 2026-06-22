@@ -22,6 +22,7 @@ from colossus.domain.events import (
     ReasoningSummaryEvent,
     RiskAssessmentEvent,
     RunEvent,
+    SubagentStatusEvent,
     ToolCallCompletedEvent,
     ToolCallRequestedEvent,
 )
@@ -232,6 +233,12 @@ class TranscriptRenderer:
             )
             self._render_status_block("risk assessment", body, self.theme.risk)
             return
+        if isinstance(event, SubagentStatusEvent):
+            body = f"{event.status} {event.job_id}\n{event.task}"
+            if event.message:
+                body = f"{body}\n{event.message}"
+            self._render_status_block("subagent", body, self.theme.tool)
+            return
         if isinstance(event, ErrorEvent):
             self._render_status_block("error", event.message, self.theme.error)
             return
@@ -283,6 +290,9 @@ class TranscriptRenderer:
             return
         if isinstance(event, RiskAssessmentEvent):
             self._set_activity(f"Reviewing risk for {event.tool}...")
+            return
+        if isinstance(event, SubagentStatusEvent):
+            self._set_activity(f"Subagent {event.status}: {event.job_id}")
             return
         if isinstance(event, ApprovalRequestedEvent):
             self._stop_activity()

@@ -6,7 +6,7 @@ import tomllib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
 from prompt_toolkit import PromptSession
@@ -26,19 +26,25 @@ from rich.table import Table
 from rich.text import Text
 
 from colossus.application.context import ContextService
+from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.planning import PlanService
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.skills import SkillResolver
+from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.domain.agents import AgentSpec
 from colossus.domain.context import ContextStatus
+from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
+from colossus.domain.memories import MemoryItem, MemoryStatus
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences, TranscriptStylePreference
 from colossus.domain.requests import AgentRunRequest
+from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolSpec
 from colossus.domain.user_prompts import UserPromptAnswer, UserPromptChoice
@@ -61,6 +67,11 @@ SlashCommand = Literal[
     "repl",
     "status",
     "tasks",
+    "decision",
+    "decisions",
+    "memory",
+    "memories",
+    "agents",
     "plan",
     "help",
     "audit",
@@ -106,6 +117,11 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/repl",
     "/status",
     "/tasks",
+    "/decision",
+    "/decisions",
+    "/memory",
+    "/memories",
+    "/agents",
     "/plan",
     "/help",
     "/audit",
@@ -130,6 +146,11 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/repl": "Show, save, or reset REPL preferences.",
     "/status": "Show full REPL, model, session, and context status.",
     "/tasks": "Show session task records.",
+    "/decision": "Create, archive, or supersede key decisions.",
+    "/decisions": "Show active key decisions.",
+    "/memory": "Create, archive, search, or supersede durable memories.",
+    "/memories": "Show active memories.",
+    "/agents": "Show durable subagent jobs.",
     "/plan": "Toggle or manage REPL Plan Mode.",
     "/help": "Show REPL commands.",
     "/audit": "Reserved audit view.",
@@ -483,7 +504,10 @@ async def run_repl(
     agent: AgentSpec | None = None,
     *,
     task_service: TaskService | None = None,
+    decision_service: DecisionService | None = None,
+    memory_service: MemoryService | None = None,
     plan_service: PlanService | None = None,
+    subagent_service: SubagentService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -492,6 +516,7 @@ async def run_repl(
     history_path: Path | None = None,
     theme_name: str | None = None,
     preferences_service: ReplPreferencesService | None = None,
+    repo_root: Path | None = None,
     theme_dirs: tuple[Path, ...] = (),
 ) -> None:
     user_themes = load_user_repl_themes(theme_dirs)
@@ -539,6 +564,8 @@ async def run_repl(
         theme=display_state.theme.transcript,
     )
     orchestrator.set_event_observer(trace_renderer.render)
+    if subagent_service is not None:
+        await subagent_service.start()
     _render_repl_startup(console, display_state)
     key_bindings = _composer_key_bindings()
     while True:
@@ -682,6 +709,48 @@ async def run_repl(
                     command.argument,
                 )
                 await _refresh_task_status(display_state, task_service)
+                continue
+            if command.command == "decision":
+                await _handle_decision_command(
+                    console,
+                    decision_service,
+                    display_state.session_id,
+                    command.argument,
+                )
+                continue
+            if command.command == "decisions":
+                await _handle_decisions_command(
+                    console,
+                    decision_service,
+                    display_state.session_id,
+                    command.argument,
+                )
+                continue
+            if command.command == "memory":
+                await _handle_memory_command(
+                    console,
+                    memory_service,
+                    display_state.session_id,
+                    repo_root or Path.cwd(),
+                    command.argument,
+                )
+                continue
+            if command.command == "memories":
+                await _handle_memories_command(
+                    console,
+                    memory_service,
+                    display_state.session_id,
+                    repo_root or Path.cwd(),
+                    command.argument,
+                )
+                continue
+            if command.command == "agents":
+                await _handle_agents_command(
+                    console,
+                    subagent_service,
+                    display_state.session_id,
+                    command.argument,
+                )
                 continue
             if command.command == "plan":
                 await _handle_plan_command(
@@ -829,7 +898,10 @@ def run_repl_sync(
     agent: AgentSpec | None = None,
     *,
     task_service: TaskService | None = None,
+    decision_service: DecisionService | None = None,
+    memory_service: MemoryService | None = None,
     plan_service: PlanService | None = None,
+    subagent_service: SubagentService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -838,6 +910,7 @@ def run_repl_sync(
     history_path: Path | None = None,
     theme_name: str | None = None,
     preferences_service: ReplPreferencesService | None = None,
+    repo_root: Path | None = None,
     theme_dirs: tuple[Path, ...] = (),
 ) -> None:
     asyncio.run(
@@ -848,7 +921,10 @@ def run_repl_sync(
             provider,
             agent,
             task_service=task_service,
+            decision_service=decision_service,
+            memory_service=memory_service,
             plan_service=plan_service,
+            subagent_service=subagent_service,
             model_router=model_router,
             active_model_role=active_model_role,
             orchestrator_factory=orchestrator_factory,
@@ -857,6 +933,7 @@ def run_repl_sync(
             history_path=history_path,
             theme_name=theme_name,
             preferences_service=preferences_service,
+            repo_root=repo_root,
             theme_dirs=theme_dirs,
         )
     )
@@ -1779,6 +1856,26 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Show session task records.",
     )
     table.add_row(
+        Text("/decisions [all|STATUS]"),
+        _help_current(state, "decisions"),
+        "Show key decisions.",
+    )
+    table.add_row(
+        Text("/decision [archive|supersede|TEXT]"),
+        _help_current(state, "decision"),
+        "Create or update key decisions.",
+    )
+    table.add_row(
+        Text("/memories [all|STATUS]"),
+        _help_current(state, "memories"),
+        "Show durable memories.",
+    )
+    table.add_row(
+        Text("/memory [archive|search|supersede|TEXT]"),
+        _help_current(state, "memory"),
+        "Create or update durable memories.",
+    )
+    table.add_row(
         Text("/plan [on|off|show|approve|execute|list|discard]"),
         _help_current(state, "plan"),
         "Toggle or manage REPL Plan Mode.",
@@ -2022,6 +2119,182 @@ async def _handle_tasks_command(
     _render_tasks(console, filtered, argument)
 
 
+async def _handle_decision_command(
+    console: Console,
+    decision_service: DecisionService | None,
+    session_id: str,
+    argument: str,
+) -> None:
+    if decision_service is None:
+        console.print("Decision service is not configured.")
+        return
+    text = argument.strip()
+    if not text:
+        await _handle_decisions_command(console, decision_service, session_id, "")
+        return
+    parts = text.split(maxsplit=2)
+    try:
+        if len(parts) == 2 and parts[0] == "archive":
+            decision = await decision_service.archive_decision(parts[1], session_id=session_id)
+            console.print(f"Archived decision {decision.id}.")
+            return
+        if len(parts) == 3 and parts[0] == "supersede":
+            decision = await decision_service.supersede_decision(
+                parts[1],
+                session_id=session_id,
+                title=parts[2][:80],
+                decision=parts[2],
+                source="user",
+                priority="normal",
+            )
+            console.print(f"Superseded with decision {decision.id}.")
+            return
+        decision = await decision_service.create_decision(
+            session_id=session_id,
+            title=text[:80],
+            decision=text,
+            source="user",
+            priority="normal",
+        )
+    except ColossusError as exc:
+        console.print(f"Decision command failed: {exc}")
+        return
+    console.print(f"Created decision {decision.id}.")
+
+
+async def _handle_decisions_command(
+    console: Console,
+    decision_service: DecisionService | None,
+    session_id: str,
+    argument: str,
+) -> None:
+    if decision_service is None:
+        console.print("Decision service is not configured.")
+        return
+    status = _decision_status_filter(argument)
+    try:
+        decisions = await decision_service.list_decisions(session_id=session_id, status=status)
+    except ColossusError as exc:
+        console.print(f"Decision list failed: {exc}")
+        return
+    _render_decisions(console, decisions, argument)
+
+
+async def _handle_memory_command(
+    console: Console,
+    memory_service: MemoryService | None,
+    session_id: str,
+    repo_root: Path,
+    argument: str,
+) -> None:
+    if memory_service is None:
+        console.print("Memory service is not configured.")
+        return
+    text = argument.strip()
+    if not text:
+        await _handle_memories_command(console, memory_service, session_id, repo_root, "")
+        return
+    parts = text.split(maxsplit=2)
+    try:
+        if len(parts) == 2 and parts[0] == "archive":
+            memory = await memory_service.archive_memory(parts[1])
+            console.print(f"Archived memory {memory.id}.")
+            return
+        if len(parts) == 2 and parts[0] == "search":
+            memories = await memory_service.search_memories(
+                parts[1],
+                repo_root=str(repo_root),
+                session_id=session_id,
+            )
+            _render_memories(console, memories, parts[1])
+            return
+        if len(parts) == 3 and parts[0] == "supersede":
+            memory = await memory_service.supersede_memory(
+                parts[1],
+                text=parts[2],
+                source="user",
+            )
+            console.print(f"Superseded with memory {memory.id}.")
+            return
+        memory = await memory_service.create_memory(
+            scope="repo",
+            kind="preference",
+            text=text,
+            source="user",
+            repo_root=str(repo_root),
+            session_id=session_id,
+        )
+    except ColossusError as exc:
+        console.print(f"Memory command failed: {exc}")
+        return
+    console.print(f"Saved memory {memory.id} [{memory.scope}/{memory.kind}].")
+
+
+async def _handle_memories_command(
+    console: Console,
+    memory_service: MemoryService | None,
+    session_id: str,
+    repo_root: Path,
+    argument: str,
+) -> None:
+    if memory_service is None:
+        console.print("Memory service is not configured.")
+        return
+    status = _memory_status_filter(argument)
+    try:
+        memories = await memory_service.search_memories(
+            "",
+            repo_root=str(repo_root),
+            session_id=session_id,
+            status=status,
+            limit=50,
+        )
+    except ColossusError as exc:
+        console.print(f"Memory list failed: {exc}")
+        return
+    _render_memories(console, memories, argument)
+
+
+async def _handle_agents_command(
+    console: Console,
+    subagent_service: SubagentService | None,
+    session_id: str,
+    argument: str,
+) -> None:
+    if subagent_service is None:
+        console.print("Subagent service is not configured.")
+        return
+    parts = argument.split()
+    try:
+        if len(parts) == 2 and parts[0] == "show":
+            job = await subagent_service.get_job(parts[1])
+            _render_subagents(console, (job,))
+            if job.final_output:
+                console.print(Markdown(job.final_output))
+            if job.error:
+                console.print(f"[red]{job.error}[/red]")
+            return
+        if len(parts) == 2 and parts[0] == "cancel":
+            job = await subagent_service.cancel_job(parts[1])
+            console.print(f"Cancelled subagent {job.id}: {job.status}")
+            return
+        status = _agent_status_filter(argument)
+        jobs = await subagent_service.list_jobs(session_id=session_id, status=status)
+    except ColossusError as exc:
+        console.print(f"Subagent command failed: {exc}")
+        return
+    _render_subagents(console, jobs, argument)
+
+
+def _agent_status_filter(argument: str) -> SubagentStatus | None:
+    normalized = argument.strip().lower()
+    if normalized in {"", "all", "*"}:
+        return None
+    if normalized in {"queued", "running", "completed", "failed", "cancelled", "interrupted"}:
+        return cast(SubagentStatus, normalized)
+    return None
+
+
 def _filter_tasks(tasks: tuple[Task, ...], argument: str) -> tuple[Task, ...]:
     normalized = argument.strip().lower()
     if normalized in {"", "open", "active"}:
@@ -2035,6 +2308,28 @@ def _filter_tasks(tasks: tuple[Task, ...], argument: str) -> tuple[Task, ...]:
     if normalized in _task_statuses():
         return tuple(task for task in tasks if task.status == normalized)
     return tasks
+
+
+def _decision_status_filter(argument: str) -> Literal["active", "archived", "superseded"] | None:
+    normalized = argument.strip().lower()
+    if normalized in {"", "active", "open"}:
+        return "active"
+    if normalized in {"all", "*"}:
+        return None
+    if normalized in {"archived", "superseded"}:
+        return cast(Literal["active", "archived", "superseded"], normalized)
+    return "active"
+
+
+def _memory_status_filter(argument: str) -> MemoryStatus | None:
+    normalized = argument.strip().lower()
+    if normalized in {"", "active", "open"}:
+        return "active"
+    if normalized in {"all", "*"}:
+        return None
+    if normalized in {"archived", "superseded"}:
+        return cast(MemoryStatus, normalized)
+    return "active"
 
 
 def _render_tasks(console: Console, tasks: tuple[Task, ...], argument: str = "") -> None:
@@ -2052,6 +2347,83 @@ def _render_tasks(console: Console, tasks: tuple[Task, ...], argument: str = "")
             _short_text(task.description, 72),
         )
     console.print(table)
+
+
+def _render_decisions(
+    console: Console,
+    decisions: tuple[KeyDecision, ...],
+    argument: str = "",
+) -> None:
+    if not decisions:
+        scope = argument.strip() or "active"
+        console.print(f"No {scope} key decisions.")
+        return
+    table = Table("Status", "Priority", "ID", "Source", "Decision")
+    for decision in decisions:
+        table.add_row(
+            decision.status,
+            decision.priority,
+            decision.id,
+            decision.source,
+            _short_text(decision.decision, 88),
+        )
+    console.print(table)
+
+
+def _render_memories(
+    console: Console,
+    memories: tuple[MemoryItem, ...],
+    argument: str = "",
+) -> None:
+    if not memories:
+        scope = argument.strip() or "active"
+        console.print(f"No {scope} memories.")
+        return
+    table = Table("Status", "Scope", "Kind", "ID", "Source", "Memory")
+    for memory in memories:
+        table.add_row(
+            memory.status,
+            memory.scope,
+            memory.kind,
+            memory.id,
+            memory.source,
+            _short_text(memory.text, 88),
+        )
+    console.print(table)
+
+
+def _render_subagents(
+    console: Console,
+    jobs: tuple[SubagentJob, ...],
+    argument: str = "",
+) -> None:
+    if not jobs:
+        scope = argument.strip() or "current-session"
+        console.print(f"No {scope} subagent jobs.")
+        return
+    table = Table("State", "Status", "ID", "Role", "Task", "Child Run")
+    for job in jobs:
+        table.add_row(
+            Text(_subagent_marker(job.status)),
+            job.status,
+            job.id,
+            job.role,
+            _short_text(job.task, 72),
+            job.child_run_id or "",
+        )
+    console.print(table)
+
+
+def _subagent_marker(status: str) -> str:
+    if status == "completed":
+        return "[x]"
+    if status in {"failed", "interrupted"}:
+        return "[!]"
+    if status == "running":
+        return "[~]"
+    if status == "cancelled":
+        return "[-]"
+    return "[ ]"
 
 
 def _task_marker(status: TaskStatus) -> str:

@@ -16,10 +16,31 @@ from colossus.adapters.subprocess_broker import (
     SubprocessBroker,
     SubprocessCommand,
 )
+from colossus.adapters.tool_schema import (
+    injected_argument_schema,
+    provider_hidden_argument_schema,
+)
 from colossus.adapters.workspace import Workspace
+from colossus.application.decisions import DecisionService
+from colossus.application.memories import MemoryService
+from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import ToolHandler
+from colossus.domain.decisions import (
+    DecisionPriority,
+    DecisionSource,
+    DecisionStatus,
+    KeyDecision,
+)
 from colossus.domain.errors import ColossusError, ToolExecutionError
+from colossus.domain.memories import (
+    MemoryItem,
+    MemoryKind,
+    MemoryScope,
+    MemorySource,
+    MemoryStatus,
+)
+from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolPermission, ToolSpec
 
@@ -53,6 +74,10 @@ def create_roadmap_tools(
     catalog_provider: ToolCatalogProvider | None = None,
     http_transport: HttpTransport | None = None,
     task_service: TaskService | None = None,
+    decision_service: DecisionService | None = None,
+    memory_service: MemoryService | None = None,
+    subagent_service: SubagentService | None = None,
+    include_agent_delegate: bool = True,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     handlers = RoadmapToolHandlers(
         workspace,
@@ -60,11 +85,29 @@ def create_roadmap_tools(
         catalog_provider or (lambda: ()),
         http_transport=http_transport,
         task_service=task_service,
+        decision_service=decision_service,
+        memory_service=memory_service,
+        subagent_service=subagent_service,
+    )
+    agent_specs = ((_agent_delegate_spec(),) if include_agent_delegate else ()) + (
+        _agent_result_spec(),
+        _agent_list_spec(),
     )
     specs = (
         _task_create_spec(),
         _task_update_spec(),
         _task_list_spec(),
+        _decision_create_spec(),
+        _decision_update_spec(),
+        _decision_list_spec(),
+        _decision_archive_spec(),
+        _decision_supersede_spec(),
+        _memory_create_spec(),
+        _memory_update_spec(),
+        _memory_list_spec(),
+        _memory_search_spec(),
+        _memory_archive_spec(),
+        _memory_supersede_spec(),
         _plan_create_spec(),
         _plan_show_spec(),
         _plan_approve_request_spec(),
@@ -79,9 +122,7 @@ def create_roadmap_tools(
         _repo_symbol_search_spec(),
         _repo_references_spec(),
         _repo_file_summary_spec(),
-        _agent_delegate_spec(),
-        _agent_result_spec(),
-        _agent_list_spec(),
+        *agent_specs,
         _web_fetch_spec(),
         _web_search_spec(),
         _docs_fetch_spec(),
@@ -93,10 +134,21 @@ def create_roadmap_tools(
         _trace_export_spec(),
         _eval_run_spec(),
     )
-    return specs, {
+    handlers_by_name: HandlerMap = {
         "task.create": handlers.task_create,
         "task.update": handlers.task_update,
         "task.list": handlers.task_list,
+        "decision.create": handlers.decision_create,
+        "decision.update": handlers.decision_update,
+        "decision.list": handlers.decision_list,
+        "decision.archive": handlers.decision_archive,
+        "decision.supersede": handlers.decision_supersede,
+        "memory.create": handlers.memory_create,
+        "memory.update": handlers.memory_update,
+        "memory.list": handlers.memory_list,
+        "memory.search": handlers.memory_search,
+        "memory.archive": handlers.memory_archive,
+        "memory.supersede": handlers.memory_supersede,
         "plan.create": handlers.plan_create,
         "plan.show": handlers.plan_show,
         "plan.approve_request": handlers.plan_approve_request,
@@ -111,7 +163,6 @@ def create_roadmap_tools(
         "repo.symbol_search": handlers.repo_symbol_search,
         "repo.references": handlers.repo_references,
         "repo.file_summary": handlers.repo_file_summary,
-        "agent.delegate": handlers.agent_delegate,
         "agent.result": handlers.agent_result,
         "agent.list": handlers.agent_list,
         "web.fetch": handlers.web_fetch,
@@ -125,6 +176,9 @@ def create_roadmap_tools(
         "trace.export": handlers.trace_export,
         "eval.run": handlers.eval_run,
     }
+    if include_agent_delegate:
+        handlers_by_name["agent.delegate"] = handlers.agent_delegate
+    return specs, handlers_by_name
 
 
 class RoadmapToolHandlers:
@@ -135,13 +189,21 @@ class RoadmapToolHandlers:
         catalog_provider: ToolCatalogProvider,
         http_transport: HttpTransport | None = None,
         task_service: TaskService | None = None,
+        decision_service: DecisionService | None = None,
+        memory_service: MemoryService | None = None,
+        subagent_service: SubagentService | None = None,
     ) -> None:
         self._workspace = workspace
         self._broker = broker
         self._catalog_provider = catalog_provider
         self._http_transport = http_transport
         self._task_service = task_service
+        self._decision_service = decision_service
+        self._memory_service = memory_service
+        self._subagent_service = subagent_service
         self._tasks: list[JsonObject] = []
+        self._decisions: list[JsonObject] = []
+        self._memories: list[JsonObject] = []
         self._plans: list[JsonObject] = []
         self._agents: list[JsonObject] = []
 
@@ -217,6 +279,385 @@ class RoadmapToolHandlers:
         if status:
             records = [record for record in records if record.get("status") == status]
         return _json({"tasks": records})
+
+    async def decision_create(self, arguments: JsonObject) -> str:
+        source = _validated_decision_source(_string_arg(arguments, "source", "agent"))
+        priority = _validated_decision_priority(_string_arg(arguments, "priority", "normal"))
+        if self._decision_service is not None:
+            try:
+                decision = await self._decision_service.create_decision(
+                    session_id=_required_string_arg(arguments, "session_id"),
+                    decision_id=_optional_non_empty_string(arguments, "id"),
+                    title=_required_string_arg(arguments, "title"),
+                    decision=_required_string_arg(arguments, "decision"),
+                    source=source,
+                    priority=priority,
+                    rationale=_string_arg(arguments, "rationale", ""),
+                    goal_id=_optional_non_empty_string(arguments, "goal_id"),
+                    plan_id=_optional_non_empty_string(arguments, "plan_id"),
+                    supersedes=_optional_non_empty_string(arguments, "supersedes"),
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"decision": _decision_payload(decision)})
+        now = _now()
+        record: JsonObject = {
+            "id": _string_arg(arguments, "id", f"kd_{uuid.uuid4().hex[:12]}"),
+            "session_id": _required_string_arg(arguments, "session_id"),
+            "goal_id": _optional_non_empty_string(arguments, "goal_id"),
+            "plan_id": _optional_non_empty_string(arguments, "plan_id"),
+            "source": source,
+            "status": "active",
+            "priority": priority,
+            "title": _required_string_arg(arguments, "title"),
+            "decision": _required_string_arg(arguments, "decision"),
+            "rationale": _string_arg(arguments, "rationale", ""),
+            "supersedes": _optional_non_empty_string(arguments, "supersedes"),
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._decisions.append(record)
+        return _json({"decision": record})
+
+    async def decision_update(self, arguments: JsonObject) -> str:
+        decision_id = _required_string_arg(arguments, "id")
+        if self._decision_service is not None:
+            raw_priority = _optional_string(arguments, "priority")
+            raw_status = _optional_string(arguments, "status")
+            try:
+                decision = await self._decision_service.update_decision(
+                    decision_id,
+                    session_id=_optional_non_empty_string(arguments, "session_id"),
+                    title=_optional_string(arguments, "title"),
+                    decision=_optional_string(arguments, "decision"),
+                    priority=(
+                        _validated_decision_priority(raw_priority)
+                        if raw_priority is not None
+                        else None
+                    ),
+                    rationale=_optional_string(arguments, "rationale"),
+                    status=(
+                        _validated_decision_status(raw_status) if raw_status is not None else None
+                    ),
+                    goal_id=_optional_string(arguments, "goal_id"),
+                    plan_id=_optional_string(arguments, "plan_id"),
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"decision": _decision_payload(decision)})
+        record = _find_record(self._decisions, decision_id, "decision")
+        for field in ("title", "decision", "rationale", "goal_id", "plan_id"):
+            value = arguments.get(field)
+            if isinstance(value, str):
+                record[field] = value
+        if isinstance(arguments.get("priority"), str):
+            record["priority"] = _validated_decision_priority(cast(str, arguments["priority"]))
+        if isinstance(arguments.get("status"), str):
+            record["status"] = _validated_decision_status(cast(str, arguments["status"]))
+        record["updated_at"] = _now()
+        return _json({"decision": record})
+
+    async def decision_list(self, arguments: JsonObject) -> str:
+        raw_status = _optional_string(arguments, "status")
+        status = _validated_decision_status(raw_status) if raw_status else "active"
+        if self._decision_service is not None:
+            try:
+                decisions = await self._decision_service.list_decisions(
+                    session_id=_required_string_arg(arguments, "session_id"),
+                    status=status,
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"decisions": [_decision_payload(decision) for decision in decisions]})
+        records = [
+            record
+            for record in self._decisions
+            if record.get("session_id") == _required_string_arg(arguments, "session_id")
+        ]
+        if status:
+            records = [record for record in records if record.get("status") == status]
+        return _json({"decisions": records})
+
+    async def decision_archive(self, arguments: JsonObject) -> str:
+        decision_id = _required_string_arg(arguments, "id")
+        if self._decision_service is not None:
+            try:
+                decision = await self._decision_service.archive_decision(
+                    decision_id,
+                    session_id=_optional_non_empty_string(arguments, "session_id"),
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"decision": _decision_payload(decision)})
+        record = _find_record(self._decisions, decision_id, "decision")
+        record["status"] = "archived"
+        record["updated_at"] = _now()
+        return _json({"decision": record})
+
+    async def decision_supersede(self, arguments: JsonObject) -> str:
+        decision_id = _required_string_arg(arguments, "id")
+        source = _validated_decision_source(_string_arg(arguments, "source", "agent"))
+        priority = _validated_decision_priority(_string_arg(arguments, "priority", "normal"))
+        if self._decision_service is not None:
+            try:
+                decision = await self._decision_service.supersede_decision(
+                    decision_id,
+                    session_id=_optional_non_empty_string(arguments, "session_id"),
+                    title=_required_string_arg(arguments, "title"),
+                    decision=_required_string_arg(arguments, "decision"),
+                    source=source,
+                    priority=priority,
+                    rationale=_string_arg(arguments, "rationale", ""),
+                    goal_id=_optional_non_empty_string(arguments, "goal_id"),
+                    plan_id=_optional_non_empty_string(arguments, "plan_id"),
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"decision": _decision_payload(decision)})
+        old = _find_record(self._decisions, decision_id, "decision")
+        old["status"] = "superseded"
+        old["updated_at"] = _now()
+        now = _now()
+        replacement: JsonObject = {
+            "id": f"kd_{uuid.uuid4().hex[:12]}",
+            "session_id": old["session_id"],
+            "goal_id": _optional_non_empty_string(arguments, "goal_id") or old.get("goal_id"),
+            "plan_id": _optional_non_empty_string(arguments, "plan_id") or old.get("plan_id"),
+            "source": source,
+            "status": "active",
+            "priority": priority,
+            "title": _required_string_arg(arguments, "title"),
+            "decision": _required_string_arg(arguments, "decision"),
+            "rationale": _string_arg(arguments, "rationale", ""),
+            "supersedes": decision_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._decisions.append(replacement)
+        return _json({"decision": replacement})
+
+    async def memory_create(self, arguments: JsonObject) -> str:
+        source = _validated_memory_source(_string_arg(arguments, "source", "agent"))
+        scope = _validated_memory_scope(_string_arg(arguments, "scope", "repo"))
+        kind = _validated_memory_kind(_string_arg(arguments, "kind", "episode"))
+        repo_root = _memory_repo_root(self._workspace, arguments, scope)
+        session_id = _optional_non_empty_string(arguments, "session_id")
+        if self._memory_service is not None:
+            try:
+                memory = await self._memory_service.create_memory(
+                    memory_id=_optional_non_empty_string(arguments, "id"),
+                    scope=scope,
+                    kind=kind,
+                    text=_required_string_arg(arguments, "text"),
+                    source=source,
+                    confidence=_float_arg(arguments, "confidence", 1.0),
+                    rationale=_string_arg(arguments, "rationale", ""),
+                    repo_root=repo_root,
+                    session_id=session_id,
+                    supersedes=_optional_non_empty_string(arguments, "supersedes"),
+                    stale_after=_optional_non_empty_string(arguments, "stale_after"),
+                    expires_at=_optional_non_empty_string(arguments, "expires_at"),
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"memory": _memory_payload(memory), "notice": _memory_notice(memory)})
+        now = _now()
+        record: JsonObject = {
+            "id": _string_arg(arguments, "id", f"mem_{uuid.uuid4().hex[:12]}"),
+            "scope": scope,
+            "kind": kind,
+            "status": "active",
+            "source": source,
+            "confidence": _float_arg(arguments, "confidence", 1.0),
+            "text": _required_string_arg(arguments, "text"),
+            "rationale": _string_arg(arguments, "rationale", ""),
+            "repo_root": repo_root,
+            "session_id": session_id,
+            "supersedes": _optional_non_empty_string(arguments, "supersedes"),
+            "stale_after": _optional_non_empty_string(arguments, "stale_after"),
+            "expires_at": _optional_non_empty_string(arguments, "expires_at"),
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._memories.append(record)
+        return _json({"memory": record, "notice": _memory_record_notice(record)})
+
+    async def memory_update(self, arguments: JsonObject) -> str:
+        memory_id = _required_string_arg(arguments, "id")
+        raw_scope = _optional_string(arguments, "scope")
+        raw_kind = _optional_string(arguments, "kind")
+        raw_status = _optional_string(arguments, "status")
+        scope = _validated_memory_scope(raw_scope) if raw_scope is not None else None
+        if self._memory_service is not None:
+            try:
+                memory = await self._memory_service.update_memory(
+                    memory_id,
+                    scope=scope,
+                    kind=_validated_memory_kind(raw_kind) if raw_kind is not None else None,
+                    text=_optional_string(arguments, "text"),
+                    status=(
+                        _validated_memory_status(raw_status) if raw_status is not None else None
+                    ),
+                    confidence=_optional_float(arguments, "confidence"),
+                    rationale=_optional_string(arguments, "rationale"),
+                    repo_root=_memory_repo_root(self._workspace, arguments, scope),
+                    session_id=_optional_string(arguments, "session_id"),
+                    stale_after=_optional_string(arguments, "stale_after"),
+                    expires_at=_optional_string(arguments, "expires_at"),
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"memory": _memory_payload(memory), "notice": _memory_notice(memory)})
+        record = _find_record(self._memories, memory_id, "memory")
+        for field in ("text", "rationale", "repo_root", "session_id", "stale_after", "expires_at"):
+            value = arguments.get(field)
+            if isinstance(value, str):
+                record[field] = value
+        if raw_scope is not None:
+            record["scope"] = _validated_memory_scope(raw_scope)
+        if raw_kind is not None:
+            record["kind"] = _validated_memory_kind(raw_kind)
+        if raw_status is not None:
+            record["status"] = _validated_memory_status(raw_status)
+        confidence = _optional_float(arguments, "confidence")
+        if confidence is not None:
+            record["confidence"] = confidence
+        record["updated_at"] = _now()
+        return _json({"memory": record, "notice": _memory_record_notice(record)})
+
+    async def memory_list(self, arguments: JsonObject) -> str:
+        raw_scope = _optional_string(arguments, "scope")
+        raw_kind = _optional_string(arguments, "kind")
+        raw_status = _optional_string(arguments, "status")
+        scope = _validated_memory_scope(raw_scope) if raw_scope else None
+        kind = _validated_memory_kind(raw_kind) if raw_kind else None
+        status = _validated_memory_status(raw_status) if raw_status else "active"
+        repo_root = _memory_repo_root(self._workspace, arguments, scope)
+        session_id = _optional_non_empty_string(arguments, "session_id")
+        if self._memory_service is not None:
+            if scope is None:
+                memories = await self._memory_service.search_memories(
+                    "",
+                    repo_root=repo_root or str(self._workspace.root),
+                    session_id=session_id,
+                    kind=kind,
+                    status=status,
+                    limit=_int_arg(arguments, "limit", 50),
+                )
+            else:
+                memories = await self._memory_service.list_memories(
+                    scope=scope,
+                    kind=kind,
+                    status=status,
+                    repo_root=repo_root,
+                    session_id=session_id,
+                )
+            return _json({"memories": [_memory_payload(memory) for memory in memories]})
+        records = _filter_memory_records(
+            self._memories,
+            scope=scope,
+            kind=kind,
+            status=status,
+            repo_root=repo_root or str(self._workspace.root),
+            session_id=session_id,
+        )
+        return _json({"memories": records[: _int_arg(arguments, "limit", 50)]})
+
+    async def memory_search(self, arguments: JsonObject) -> str:
+        raw_kind = _optional_string(arguments, "kind")
+        raw_status = _optional_string(arguments, "status")
+        kind = _validated_memory_kind(raw_kind) if raw_kind else None
+        status = _validated_memory_status(raw_status) if raw_status else "active"
+        repo_root = _optional_non_empty_string(arguments, "repo_root") or str(self._workspace.root)
+        session_id = _optional_non_empty_string(arguments, "session_id")
+        query = _required_string_arg(arguments, "query")
+        if self._memory_service is not None:
+            memories = await self._memory_service.search_memories(
+                query,
+                repo_root=repo_root,
+                session_id=session_id,
+                kind=kind,
+                status=status,
+                limit=_int_arg(arguments, "limit", 8),
+            )
+            return _json({"memories": [_memory_payload(memory) for memory in memories]})
+        query_lower = query.lower()
+        records = [
+            record
+            for record in _filter_memory_records(
+                self._memories,
+                scope=None,
+                kind=kind,
+                status=status,
+                repo_root=repo_root,
+                session_id=session_id,
+            )
+            if query_lower in str(record.get("text", "")).lower()
+        ]
+        return _json({"memories": records[: _int_arg(arguments, "limit", 8)]})
+
+    async def memory_archive(self, arguments: JsonObject) -> str:
+        memory_id = _required_string_arg(arguments, "id")
+        if self._memory_service is not None:
+            try:
+                memory = await self._memory_service.archive_memory(memory_id)
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"memory": _memory_payload(memory)})
+        record = _find_record(self._memories, memory_id, "memory")
+        record["status"] = "archived"
+        record["updated_at"] = _now()
+        return _json({"memory": record})
+
+    async def memory_supersede(self, arguments: JsonObject) -> str:
+        memory_id = _required_string_arg(arguments, "id")
+        raw_scope = _optional_string(arguments, "scope")
+        raw_kind = _optional_string(arguments, "kind")
+        scope = _validated_memory_scope(raw_scope) if raw_scope else None
+        source = _validated_memory_source(_string_arg(arguments, "source", "agent"))
+        if self._memory_service is not None:
+            try:
+                memory = await self._memory_service.supersede_memory(
+                    memory_id,
+                    text=_required_string_arg(arguments, "text"),
+                    source=source,
+                    scope=scope,
+                    kind=_validated_memory_kind(raw_kind) if raw_kind else None,
+                    confidence=_optional_float(arguments, "confidence"),
+                    rationale=_string_arg(arguments, "rationale", ""),
+                    repo_root=_memory_repo_root(self._workspace, arguments, scope),
+                    session_id=_optional_string(arguments, "session_id"),
+                    stale_after=_optional_string(arguments, "stale_after"),
+                    expires_at=_optional_string(arguments, "expires_at"),
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"memory": _memory_payload(memory), "notice": _memory_notice(memory)})
+        old = _find_record(self._memories, memory_id, "memory")
+        old["status"] = "superseded"
+        old["updated_at"] = _now()
+        now = _now()
+        replacement: JsonObject = {
+            "id": f"mem_{uuid.uuid4().hex[:12]}",
+            "scope": scope or old["scope"],
+            "kind": _validated_memory_kind(raw_kind) if raw_kind else old["kind"],
+            "status": "active",
+            "source": source,
+            "confidence": _optional_float(arguments, "confidence") or old["confidence"],
+            "text": _required_string_arg(arguments, "text"),
+            "rationale": _string_arg(arguments, "rationale", ""),
+            "repo_root": (
+                _memory_repo_root(self._workspace, arguments, scope) or old.get("repo_root")
+            ),
+            "session_id": _optional_string(arguments, "session_id") or old.get("session_id"),
+            "supersedes": memory_id,
+            "stale_after": _optional_string(arguments, "stale_after") or old.get("stale_after"),
+            "expires_at": _optional_string(arguments, "expires_at") or old.get("expires_at"),
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._memories.append(replacement)
+        return _json({"memory": replacement, "notice": _memory_record_notice(replacement)})
 
     async def plan_create(self, arguments: JsonObject) -> str:
         prompt = _required_string_arg(arguments, "prompt")
@@ -383,6 +824,19 @@ class RoadmapToolHandlers:
         )
 
     async def agent_delegate(self, arguments: JsonObject) -> str:
+        if self._subagent_service is not None:
+            try:
+                job = await self._subagent_service.create_job(
+                    session_id=_required_string_arg(arguments, "session_id"),
+                    parent_run_id=_required_string_arg(arguments, "parent_run_id"),
+                    parent_call_id=_required_string_arg(arguments, "parent_call_id"),
+                    job_id=_optional_non_empty_string(arguments, "id"),
+                    role=_string_arg(arguments, "role", "subagent_default"),
+                    task=_required_string_arg(arguments, "task"),
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"agent": _subagent_payload(job)})
         agent: JsonObject = {
             "id": _string_arg(arguments, "id", f"agent-{uuid.uuid4().hex[:12]}"),
             "role": _string_arg(arguments, "role", "default"),
@@ -400,14 +854,35 @@ class RoadmapToolHandlers:
         return _json({"agent": agent})
 
     async def agent_result(self, arguments: JsonObject) -> str:
+        if self._subagent_service is not None:
+            try:
+                job = await self._subagent_service.get_job(
+                    _required_string_arg(arguments, "id")
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"agent": _subagent_payload(job)})
         agent = _find_record(self._agents, _required_string_arg(arguments, "id"), "agent")
         return _json({"agent": agent})
 
     async def agent_list(self, arguments: JsonObject) -> str:
-        status = _string_arg(arguments, "status", "")
+        if self._subagent_service is not None:
+            raw_status = _optional_string(arguments, "status")
+            status = _validated_subagent_status(raw_status) if raw_status else None
+            try:
+                jobs = await self._subagent_service.list_jobs(
+                    session_id=_optional_non_empty_string(arguments, "session_id"),
+                    status=status,
+                )
+            except ColossusError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+            return _json({"agents": [_subagent_payload(job) for job in jobs]})
+        legacy_status = _string_arg(arguments, "status", "")
         records = self._agents
-        if status:
-            records = [record for record in records if record.get("status") == status]
+        if legacy_status:
+            records = [
+                record for record in records if record.get("status") == legacy_status
+            ]
         return _json({"agents": records})
 
     async def web_fetch(self, arguments: JsonObject) -> str:
@@ -709,6 +1184,20 @@ def _int_arg(arguments: JsonObject, name: str, default: int) -> int:
     return value if isinstance(value, int) else default
 
 
+def _float_arg(arguments: JsonObject, name: str, default: float) -> float:
+    value = arguments.get(name, default)
+    if isinstance(value, int | float):
+        return float(value)
+    return default
+
+
+def _optional_float(arguments: JsonObject, name: str) -> float | None:
+    value = arguments.get(name)
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
 def _string_list_arg(arguments: JsonObject, name: str) -> list[str]:
     value = arguments.get(name, [])
     if value is None:
@@ -740,6 +1229,141 @@ def _validated_task_status(value: str) -> TaskStatus:
 
 def _task_payload(task: Task) -> JsonObject:
     return task.model_dump(mode="json")
+
+
+def _decision_sources() -> set[str]:
+    return {"user", "agent"}
+
+
+def _validated_decision_source(value: str) -> DecisionSource:
+    if value not in _decision_sources():
+        raise ToolExecutionError("Decision source is not supported.")
+    return cast(DecisionSource, value)
+
+
+def _decision_statuses() -> set[str]:
+    return {"active", "archived", "superseded"}
+
+
+def _validated_decision_status(value: str) -> DecisionStatus:
+    if value not in _decision_statuses():
+        raise ToolExecutionError("Decision status is not supported.")
+    return cast(DecisionStatus, value)
+
+
+def _decision_priorities() -> set[str]:
+    return {"critical", "high", "normal"}
+
+
+def _validated_decision_priority(value: str) -> DecisionPriority:
+    if value not in _decision_priorities():
+        raise ToolExecutionError("Decision priority is not supported.")
+    return cast(DecisionPriority, value)
+
+
+def _decision_payload(decision: KeyDecision) -> JsonObject:
+    return decision.model_dump(mode="json")
+
+
+def _memory_scopes() -> set[str]:
+    return {"global", "repo", "session"}
+
+
+def _validated_memory_scope(value: str) -> MemoryScope:
+    if value not in _memory_scopes():
+        raise ToolExecutionError("Memory scope is not supported.")
+    return cast(MemoryScope, value)
+
+
+def _memory_kinds() -> set[str]:
+    return {"preference", "project_fact", "episode", "capability", "warning"}
+
+
+def _validated_memory_kind(value: str) -> MemoryKind:
+    if value not in _memory_kinds():
+        raise ToolExecutionError("Memory kind is not supported.")
+    return cast(MemoryKind, value)
+
+
+def _memory_statuses() -> set[str]:
+    return {"active", "archived", "superseded"}
+
+
+def _validated_memory_status(value: str) -> MemoryStatus:
+    if value not in _memory_statuses():
+        raise ToolExecutionError("Memory status is not supported.")
+    return cast(MemoryStatus, value)
+
+
+def _validated_memory_source(value: str) -> MemorySource:
+    if value not in _decision_sources():
+        raise ToolExecutionError("Memory source is not supported.")
+    return cast(MemorySource, value)
+
+
+def _memory_repo_root(
+    workspace: Workspace,
+    arguments: JsonObject,
+    scope: MemoryScope | None,
+) -> str | None:
+    value = _optional_non_empty_string(arguments, "repo_root")
+    if value is not None:
+        return value
+    if scope == "repo":
+        return str(workspace.root)
+    return None
+
+
+def _memory_payload(memory: MemoryItem) -> JsonObject:
+    return memory.model_dump(mode="json")
+
+
+def _memory_notice(memory: MemoryItem) -> str:
+    return f"Saved memory {memory.id} [{memory.scope}/{memory.kind}]"
+
+
+def _memory_record_notice(record: JsonObject) -> str:
+    return f"Saved memory {record['id']} [{record['scope']}/{record['kind']}]"
+
+
+def _filter_memory_records(
+    records: list[JsonObject],
+    *,
+    scope: MemoryScope | None,
+    kind: MemoryKind | None,
+    status: MemoryStatus | None,
+    repo_root: str | None,
+    session_id: str | None,
+) -> list[JsonObject]:
+    filtered: list[JsonObject] = []
+    for record in records:
+        if scope is not None and record.get("scope") != scope:
+            continue
+        if kind is not None and record.get("kind") != kind:
+            continue
+        if status is not None and record.get("status") != status:
+            continue
+        record_scope = record.get("scope")
+        if record_scope == "repo" and record.get("repo_root") != repo_root:
+            continue
+        if record_scope == "session" and record.get("session_id") != session_id:
+            continue
+        filtered.append(record)
+    return filtered
+
+
+def _subagent_statuses() -> set[str]:
+    return {"queued", "running", "completed", "failed", "cancelled", "interrupted"}
+
+
+def _validated_subagent_status(value: str) -> SubagentStatus:
+    if value not in _subagent_statuses():
+        raise ToolExecutionError("Subagent status is not supported.")
+    return cast(SubagentStatus, value)
+
+
+def _subagent_payload(job: SubagentJob) -> JsonObject:
+    return job.model_dump(mode="json")
 
 
 def _object_schema(properties: JsonObject, required: list[str] | None = None) -> JsonObject:
@@ -854,6 +1478,256 @@ def _task_list_spec() -> ToolSpec:
         ),
         output_schema=_object_schema({"tasks": {"type": "array"}}),
         permissions=ToolPermission(working_root_required=False, risk="low"),
+    )
+
+
+def _decision_permission() -> ToolPermission:
+    return ToolPermission(
+        filesystem="none",
+        approval_required=False,
+        mutation=True,
+        working_root_required=False,
+        risk="medium",
+    )
+
+
+def _decision_create_spec() -> ToolSpec:
+    return ToolSpec(
+        name="decision.create",
+        description="Create an active durable key decision for this session.",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string"},
+                "session_id": injected_argument_schema({"type": "string"}),
+                "goal_id": {"type": "string"},
+                "plan_id": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(_decision_sources())},
+                "priority": {"type": "string", "enum": sorted(_decision_priorities())},
+                "title": {"type": "string", "minLength": 1},
+                "decision": {"type": "string", "minLength": 1},
+                "rationale": {"type": "string"},
+                "supersedes": {"type": "string"},
+            },
+            ["title", "decision"],
+        ),
+        output_schema=_object_schema({"decision": {"type": "object"}}),
+        permissions=_decision_permission(),
+    )
+
+
+def _decision_update_spec() -> ToolSpec:
+    return ToolSpec(
+        name="decision.update",
+        description="Update an existing durable key decision.",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1},
+                "session_id": injected_argument_schema({"type": "string"}),
+                "goal_id": {"type": "string"},
+                "plan_id": {"type": "string"},
+                "status": {"type": "string", "enum": sorted(_decision_statuses())},
+                "priority": {"type": "string", "enum": sorted(_decision_priorities())},
+                "title": {"type": "string"},
+                "decision": {"type": "string"},
+                "rationale": {"type": "string"},
+            },
+            ["id"],
+        ),
+        output_schema=_object_schema({"decision": {"type": "object"}}),
+        permissions=_decision_permission(),
+    )
+
+
+def _decision_list_spec() -> ToolSpec:
+    return ToolSpec(
+        name="decision.list",
+        description="List durable key decisions for this session.",
+        input_schema=_object_schema(
+            {
+                "session_id": injected_argument_schema({"type": "string"}),
+                "status": {"type": "string", "enum": sorted(_decision_statuses())},
+            }
+        ),
+        output_schema=_object_schema({"decisions": {"type": "array"}}),
+        permissions=ToolPermission(working_root_required=False, risk="low"),
+    )
+
+
+def _decision_archive_spec() -> ToolSpec:
+    return ToolSpec(
+        name="decision.archive",
+        description="Archive an active durable key decision.",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1},
+                "session_id": injected_argument_schema({"type": "string"}),
+            },
+            ["id"],
+        ),
+        output_schema=_object_schema({"decision": {"type": "object"}}),
+        permissions=_decision_permission(),
+    )
+
+
+def _decision_supersede_spec() -> ToolSpec:
+    return ToolSpec(
+        name="decision.supersede",
+        description="Supersede a durable key decision with a new active decision.",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1},
+                "session_id": injected_argument_schema({"type": "string"}),
+                "goal_id": {"type": "string"},
+                "plan_id": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(_decision_sources())},
+                "priority": {"type": "string", "enum": sorted(_decision_priorities())},
+                "title": {"type": "string", "minLength": 1},
+                "decision": {"type": "string", "minLength": 1},
+                "rationale": {"type": "string"},
+            },
+            ["id", "title", "decision"],
+        ),
+        output_schema=_object_schema({"decision": {"type": "object"}}),
+        permissions=_decision_permission(),
+    )
+
+
+def _memory_permission() -> ToolPermission:
+    return ToolPermission(
+        filesystem="none",
+        approval_required=False,
+        mutation=False,
+        working_root_required=False,
+        risk="medium",
+    )
+
+
+def _memory_common_properties() -> JsonObject:
+    return {
+        "scope": {"type": "string", "enum": sorted(_memory_scopes())},
+        "kind": {"type": "string", "enum": sorted(_memory_kinds())},
+        "source": {"type": "string", "enum": sorted(_decision_sources())},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "text": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string"},
+        "repo_root": provider_hidden_argument_schema({"type": "string"}),
+        "session_id": injected_argument_schema({"type": "string"}),
+        "supersedes": {"type": "string"},
+        "stale_after": {"type": "string"},
+        "expires_at": {"type": "string"},
+    }
+
+
+def _memory_create_spec() -> ToolSpec:
+    return ToolSpec(
+        name="memory.create",
+        description="Create an active durable memory as relevant context, not a commitment.",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string"},
+                **_memory_common_properties(),
+            },
+            ["text"],
+        ),
+        output_schema=_object_schema(
+            {"memory": {"type": "object"}, "notice": {"type": "string"}}
+        ),
+        permissions=_memory_permission(),
+    )
+
+
+def _memory_update_spec() -> ToolSpec:
+    return ToolSpec(
+        name="memory.update",
+        description="Update an existing durable memory.",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1},
+                "status": {"type": "string", "enum": sorted(_memory_statuses())},
+                **_memory_common_properties(),
+            },
+            ["id"],
+        ),
+        output_schema=_object_schema(
+            {"memory": {"type": "object"}, "notice": {"type": "string"}}
+        ),
+        permissions=_memory_permission(),
+    )
+
+
+def _memory_list_spec() -> ToolSpec:
+    return ToolSpec(
+        name="memory.list",
+        description="List durable memories relevant to the current session or repository.",
+        input_schema=_object_schema(
+            {
+                "scope": {"type": "string", "enum": sorted(_memory_scopes())},
+                "kind": {"type": "string", "enum": sorted(_memory_kinds())},
+                "status": {"type": "string", "enum": sorted(_memory_statuses())},
+                "repo_root": provider_hidden_argument_schema({"type": "string"}),
+                "session_id": injected_argument_schema({"type": "string"}),
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            }
+        ),
+        output_schema=_object_schema({"memories": {"type": "array"}}),
+        permissions=ToolPermission(working_root_required=False, risk="low"),
+    )
+
+
+def _memory_search_spec() -> ToolSpec:
+    return ToolSpec(
+        name="memory.search",
+        description="Search durable memories using the configured memory index.",
+        input_schema=_object_schema(
+            {
+                "query": {"type": "string", "minLength": 1},
+                "kind": {"type": "string", "enum": sorted(_memory_kinds())},
+                "status": {"type": "string", "enum": sorted(_memory_statuses())},
+                "repo_root": provider_hidden_argument_schema({"type": "string"}),
+                "session_id": injected_argument_schema({"type": "string"}),
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            ["query"],
+        ),
+        output_schema=_object_schema({"memories": {"type": "array"}}),
+        permissions=ToolPermission(working_root_required=False, risk="low"),
+    )
+
+
+def _memory_archive_spec() -> ToolSpec:
+    return ToolSpec(
+        name="memory.archive",
+        description="Archive a durable memory so it is no longer injected.",
+        input_schema=_object_schema({"id": {"type": "string", "minLength": 1}}, ["id"]),
+        output_schema=_object_schema({"memory": {"type": "object"}}),
+        permissions=_memory_permission(),
+    )
+
+
+def _memory_supersede_spec() -> ToolSpec:
+    return ToolSpec(
+        name="memory.supersede",
+        description="Supersede a durable memory with a new active memory.",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1},
+                "scope": {"type": "string", "enum": sorted(_memory_scopes())},
+                "kind": {"type": "string", "enum": sorted(_memory_kinds())},
+                "source": {"type": "string", "enum": sorted(_decision_sources())},
+                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "text": {"type": "string", "minLength": 1},
+                "rationale": {"type": "string"},
+                "repo_root": provider_hidden_argument_schema({"type": "string"}),
+                "session_id": injected_argument_schema({"type": "string"}),
+                "stale_after": {"type": "string"},
+                "expires_at": {"type": "string"},
+            },
+            ["id", "text"],
+        ),
+        output_schema=_object_schema(
+            {"memory": {"type": "object"}, "notice": {"type": "string"}}
+        ),
+        permissions=_memory_permission(),
     )
 
 
@@ -1094,13 +1968,16 @@ def _repo_file_summary_spec() -> ToolSpec:
 def _agent_delegate_spec() -> ToolSpec:
     return ToolSpec(
         name="agent.delegate",
-        description="Record a bounded local subagent delegation request.",
+        description="Queue a durable local subagent job.",
         input_schema=_object_schema(
             {
                 "id": {"type": "string"},
-                "role": {"type": "string"},
+                "role": provider_hidden_argument_schema({"type": "string"}),
                 "task": {"type": "string", "minLength": 1},
                 "mutation_allowed": {"type": "boolean", "default": False},
+                "session_id": injected_argument_schema({"type": "string"}),
+                "parent_run_id": injected_argument_schema({"type": "string"}),
+                "parent_call_id": injected_argument_schema({"type": "string"}),
             },
             ["task"],
         ),
@@ -1112,8 +1989,14 @@ def _agent_delegate_spec() -> ToolSpec:
 def _agent_result_spec() -> ToolSpec:
     return ToolSpec(
         name="agent.result",
-        description="Return a recorded local subagent result.",
-        input_schema=_object_schema({"id": {"type": "string", "minLength": 1}}, ["id"]),
+        description="Return a durable local subagent job result.",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1},
+                "session_id": injected_argument_schema({"type": "string"}),
+            },
+            ["id"],
+        ),
         output_schema=_object_schema({"agent": {"type": "object"}}),
         permissions=ToolPermission(working_root_required=False, risk="low"),
     )
@@ -1122,8 +2005,13 @@ def _agent_result_spec() -> ToolSpec:
 def _agent_list_spec() -> ToolSpec:
     return ToolSpec(
         name="agent.list",
-        description="List recorded local subagent delegations.",
-        input_schema=_object_schema({"status": {"type": "string"}}),
+        description="List durable local subagent jobs.",
+        input_schema=_object_schema(
+            {
+                "status": {"type": "string"},
+                "session_id": injected_argument_schema({"type": "string"}),
+            }
+        ),
         output_schema=_object_schema({"agents": {"type": "array"}}),
         permissions=ToolPermission(working_root_required=False, risk="low"),
     )
