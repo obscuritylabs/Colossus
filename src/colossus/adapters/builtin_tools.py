@@ -154,24 +154,44 @@ class BuiltinToolHandlers:
 
     async def filesystem_read(self, arguments: JsonObject) -> str:
         path = self._workspace.resolve(_required_string_arg(arguments, "path"))
+        relative_path = self._workspace.relative(path)
         max_bytes = _int_arg(arguments, "max_bytes", 32_768)
         start_line = max(1, _int_arg(arguments, "start_line", 1))
         max_lines = arguments.get("max_lines")
-        data = path.read_bytes()[:max_bytes]
+        try:
+            file_size = path.stat().st_size
+            with path.open("rb") as handle:
+                data = handle.read(max_bytes)
+        except FileNotFoundError as exc:
+            raise ToolExecutionError(f"filesystem.read file not found: {relative_path}") from exc
+        except IsADirectoryError as exc:
+            raise ToolExecutionError(
+                f"filesystem.read path is not a file: {relative_path}"
+            ) from exc
+        except OSError as exc:
+            reason = exc.strerror or exc.__class__.__name__
+            raise ToolExecutionError(
+                f"filesystem.read failed for {relative_path}: {reason}"
+            ) from exc
         if b"\x00" in data:
             raise ToolExecutionError("Binary-looking files are not supported by filesystem.read.")
-        text = data.decode("utf-8")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ToolExecutionError(
+                "Only UTF-8 text files are supported by filesystem.read."
+            ) from exc
         lines = text.splitlines()
         selected = lines[start_line - 1 :]
         if isinstance(max_lines, int):
             selected = selected[:max_lines]
         return _json(
             {
-                "path": self._workspace.relative(path),
+                "path": relative_path,
                 "start_line": start_line,
                 "line_count": len(selected),
                 "content": "\n".join(selected),
-                "truncated": len(data) == max_bytes and path.stat().st_size > max_bytes,
+                "truncated": file_size > max_bytes,
             }
         )
 
