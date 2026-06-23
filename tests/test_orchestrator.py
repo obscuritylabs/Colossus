@@ -3,7 +3,9 @@ from collections.abc import AsyncIterator
 import pytest
 
 from colossus.adapters.audit_jsonl import JsonlAuditSink
+from colossus.adapters.builtin_tools import create_builtin_tools
 from colossus.adapters.sqlite_state import SQLiteStateStore
+from colossus.adapters.workspace import Workspace
 from colossus.application.approvals import AllowAllApprovalHandler
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
@@ -57,6 +59,23 @@ class InvalidToolThenFinalProvider:
                 call_id="call-1",
                 name="echo",
                 arguments={"text": 123},
+            )
+
+
+class MissingFileReadThenFinalProvider:
+    name = "missing-file-read-then-final"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        tool_results = [message for message in request.messages if message.role == "tool"]
+        if tool_results:
+            assert "execution_error" in tool_results[-1].content
+            assert "file not found" in tool_results[-1].content
+            yield FinalOutputEvent(text="recovered")
+        else:
+            yield ToolCallRequestedEvent(
+                call_id="call-1",
+                name="filesystem.read",
+                arguments={"path": "missing.txt"},
             )
 
 
@@ -349,3 +368,29 @@ async def test_orchestrator_returns_invalid_tool_args_to_model(tmp_path) -> None
         "tool.call.completed",
         "final.output",
     ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_returns_filesystem_read_errors_to_model(tmp_path) -> None:
+    specs, handlers = create_builtin_tools(Workspace(tmp_path))
+    registry = InMemoryToolRegistry(specs)
+    observed: list[RunEvent] = []
+    orchestrator = AgentOrchestrator(
+        provider=MissingFileReadThenFinalProvider(),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor(handlers, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        event_observer=observed.append,
+    )
+
+    result = await orchestrator.run(AgentRunRequest(prompt="read missing", agent=default_agent()))
+
+    assert result.final_output == "recovered"
+    completed = next(event for event in observed if isinstance(event, ToolCallCompletedEvent))
+    assert completed.exit_code == 1
+    assert "execution_error" in completed.output
+    assert "file not found" in completed.output

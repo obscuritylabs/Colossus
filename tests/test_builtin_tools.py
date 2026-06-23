@@ -239,6 +239,16 @@ async def test_filesystem_read_rejects_binary_looking_file(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_filesystem_read_missing_file_returns_tool_error(tmp_path: Path) -> None:
+    executor = _executor(tmp_path)
+
+    with pytest.raises(ToolExecutionError, match="file not found"):
+        await executor.execute(
+            ToolCall(call_id="1", name="filesystem.read", arguments={"path": "missing.txt"})
+        )
+
+
+@pytest.mark.asyncio
 async def test_filesystem_tools_reject_paths_outside_workspace(tmp_path: Path) -> None:
     executor = _executor(tmp_path)
 
