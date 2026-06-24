@@ -224,7 +224,7 @@ class LocalOpenAIChatProvider:
             tool_call_events = _tool_call_events(tool_calls, tool_name_codec)
             for event in tool_call_events:
                 yield event
-            if output_text:
+            if output_text and not tool_call_events:
                 yield FinalOutputEvent(text="".join(output_text))
             if not output_text and not tool_call_events:
                 raise _StreamingFallbackRequired(
@@ -315,12 +315,14 @@ async def _events_from_chat_completion(
         return
     for event in _reasoning_summary_events(message):
         yield event
+    requested_tools = False
     for tool_call in message.get("tool_calls", []) or []:
         if not isinstance(tool_call, dict):
             continue
         function = tool_call.get("function")
         if not isinstance(function, dict):
             continue
+        requested_tools = True
         yield ToolCallRequestedEvent(
             call_id=str(tool_call.get("id", "")),
             name=tool_name_codec.decode(str(function.get("name", ""))),
@@ -329,7 +331,8 @@ async def _events_from_chat_completion(
     content = _extract_content_text(message.get("content"))
     if content:
         yield ModelDeltaEvent(text=content)
-        yield FinalOutputEvent(text=content)
+        if not requested_tools:
+            yield FinalOutputEvent(text=content)
 
 
 async def _stream_json_items(response: httpx.Response) -> AsyncIterator[dict[str, object]]:

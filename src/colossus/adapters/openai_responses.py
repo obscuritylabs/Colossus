@@ -147,6 +147,7 @@ class OpenAIResponsesProvider:
             data = response.json()
 
         output_text: list[str] = []
+        requested_tools = False
         for item in data.get("output", []):
             item_type = item.get("type")
             if item_type == "message":
@@ -155,18 +156,20 @@ class OpenAIResponsesProvider:
                     output_text.append(text)
                     yield ModelDeltaEvent(text=text)
             elif item_type == "function_call":
+                requested_tools = True
                 yield ToolCallRequestedEvent(
                     call_id=str(item["call_id"]),
                     name=tool_name_codec.decode(str(item["name"])),
                     arguments=json.loads(str(item.get("arguments") or "{}")),
                 )
             elif item_type == "custom_tool_call":
+                requested_tools = True
                 yield ToolCallRequestedEvent(
                     call_id=str(item["call_id"]),
                     name=tool_name_codec.decode(str(item["name"])),
                     arguments={"input": str(item.get("input", ""))},
                 )
-        if output_text:
+        if output_text and not requested_tools:
             yield FinalOutputEvent(text="".join(output_text))
 
     async def _get_models_response(self) -> httpx.Response:

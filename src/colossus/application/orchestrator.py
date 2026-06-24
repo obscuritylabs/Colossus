@@ -150,6 +150,7 @@ class AgentOrchestrator:
             )
             pending_tool_calls: list[ToolCall] = []
             collected_text: list[str] = []
+            turn_final_text = ""
 
             async for event in self._provider.stream(model_request):
                 events_recorded += 1
@@ -166,9 +167,9 @@ class AgentOrchestrator:
                         )
                     )
                 elif isinstance(event, FinalOutputEvent):
-                    final_text = event.text
+                    turn_final_text = event.text
 
-            if not pending_tool_calls and not _has_visible_text(collected_text, final_text):
+            if not pending_tool_calls and not _has_visible_text(collected_text, turn_final_text):
                 await self._audit_sink.record(
                     "agent",
                     "provider.empty_response",
@@ -194,8 +195,7 @@ class AgentOrchestrator:
                     )
 
             if not pending_tool_calls:
-                if not final_text:
-                    final_text = "".join(collected_text)
+                final_text = turn_final_text or "".join(collected_text)
                 await self._audit_sink.record(
                     "agent",
                     "run.completed",

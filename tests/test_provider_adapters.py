@@ -154,7 +154,6 @@ async def test_openai_responses_provider_maps_payload_and_events() -> None:
             arguments={"input": "README.md"},
         ),
         ModelDeltaEvent(text="there"),
-        FinalOutputEvent(text="hi there"),
     ]
 
 
@@ -227,7 +226,6 @@ async def test_local_openai_chat_provider_maps_payload_and_events() -> None:
             arguments={"path": "README.md"},
         ),
         ModelDeltaEvent(text="done"),
-        FinalOutputEvent(text="done"),
     ]
 
 
@@ -508,7 +506,6 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
             name="filesystem.read",
             arguments={"path": "README.md"},
         ),
-        FinalOutputEvent(text="hello from stream"),
     ]
 
 
