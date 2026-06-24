@@ -65,31 +65,42 @@ class ProviderDiagnostics:
             tools=(probe_tool,),
         )
         try:
+            unexpected_tool: str | None = None
+            unexpected_arguments = False
+            matched = False
             async for event in self._provider.stream(request):
                 if not isinstance(event, ToolCallRequestedEvent):
                     continue
                 if event.name != "colossus_tool_probe":
-                    return ProviderReadinessCheck(
-                        name="model_tool_calls",
-                        status="fail",
-                        detail=f"Model requested unexpected tool {event.name!r}.",
-                    )
+                    unexpected_tool = event.name
+                    continue
                 if event.arguments.get("token") == "probe-ok":
-                    return ProviderReadinessCheck(
-                        name="model_tool_calls",
-                        status="pass",
-                        detail=f"Model {model} emitted a structured tool call.",
-                    )
-                return ProviderReadinessCheck(
-                    name="model_tool_calls",
-                    status="fail",
-                    detail="Model emitted a tool call with unexpected arguments.",
-                )
+                    matched = True
+                    continue
+                unexpected_arguments = True
         except Exception as exc:
             return ProviderReadinessCheck(
                 name="model_tool_calls",
                 status="fail",
                 detail=f"Tool-call probe failed for {model}: {exc}",
+            )
+        if unexpected_tool is not None:
+            return ProviderReadinessCheck(
+                name="model_tool_calls",
+                status="fail",
+                detail=f"Model requested unexpected tool {unexpected_tool!r}.",
+            )
+        if matched:
+            return ProviderReadinessCheck(
+                name="model_tool_calls",
+                status="pass",
+                detail=f"Model {model} emitted a structured tool call.",
+            )
+        if unexpected_arguments:
+            return ProviderReadinessCheck(
+                name="model_tool_calls",
+                status="fail",
+                detail="Model emitted a tool call with unexpected arguments.",
             )
         return ProviderReadinessCheck(
             name="model_tool_calls",

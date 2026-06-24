@@ -9,7 +9,7 @@ from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
 from colossus.adapters.openai_responses import OpenAIResponsesProvider
 from colossus.application.providers import ProviderDiagnostics
 from colossus.cli import app
-from colossus.domain.events import RunEvent, ToolCallRequestedEvent
+from colossus.domain.events import FinalOutputEvent, RunEvent, ToolCallRequestedEvent
 from colossus.domain.providers import (
     ProviderCapability,
     ProviderModelInfo,
@@ -53,6 +53,20 @@ class ToolCallingProbeProvider:
             name="colossus_tool_probe",
             arguments={"token": "probe-ok"},
         )
+
+
+class ToolCallingProbeThenFinalProvider(ToolCallingProbeProvider):
+    def __init__(self) -> None:
+        self.consumed_after_probe = False
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        yield ToolCallRequestedEvent(
+            call_id="probe-call",
+            name="colossus_tool_probe",
+            arguments={"token": "probe-ok"},
+        )
+        self.consumed_after_probe = True
+        yield FinalOutputEvent(text="done")
 
 
 def test_provider_doctor_reports_echo_ready(tmp_path, monkeypatch) -> None:
@@ -124,6 +138,16 @@ async def test_provider_diagnostics_tool_call_probe_passes() -> None:
     assert check.name == "model_tool_calls"
     assert check.status == "pass"
     assert "probe-model" in check.detail
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_tool_call_probe_drains_stream() -> None:
+    provider = ToolCallingProbeThenFinalProvider()
+
+    check = await ProviderDiagnostics(provider).probe_tool_calls("probe-model")
+
+    assert check.status == "pass"
+    assert provider.consumed_after_probe is True
 
 
 @pytest.mark.asyncio
