@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -16,6 +17,26 @@ from colossus.domain.events import (
 from colossus.domain.messages import AssistantMessage, ToolResultMessage, UserMessage
 from colossus.domain.requests import ModelRequest
 from colossus.domain.tools import ToolCall, ToolSpec
+
+
+class _TrackingAsyncStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self.chunks = chunks
+        self.consumed: list[bytes] = []
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self.chunks:
+            self.consumed.append(chunk)
+            yield chunk
+
+
+class _ReadErrorStream(httpx.AsyncByteStream):
+    def __init__(self, request: httpx.Request) -> None:
+        self._request = request
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        raise httpx.ReadError("server disconnected", request=self._request)
+        yield b""
 
 
 def _tool() -> ToolSpec:
@@ -488,6 +509,93 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
             arguments={"path": "README.md"},
         ),
         FinalOutputEvent(text="hello from stream"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_openai_chat_provider_drains_stream_after_done() -> None:
+    chunks = (
+        b'data: {"choices":[{"delta":{"content":"done"}}]}\n\n',
+        b"data: [DONE]\n\n",
+        b": trailing server cleanup\n\n",
+    )
+    stream = _TrackingAsyncStream(chunks)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=stream,
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = [
+        event
+        async for event in provider.stream(
+            ModelRequest(
+                model="model-b",
+                instructions="System text.",
+                messages=(UserMessage(content="question"),),
+                tools=(),
+            )
+        )
+    ]
+
+    assert events == [
+        ModelDeltaEvent(text="done"),
+        FinalOutputEvent(text="done"),
+    ]
+    assert stream.consumed == list(chunks)
+
+
+@pytest.mark.asyncio
+async def test_local_openai_chat_provider_retries_stream_read_error_before_events() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if payload.get("stream") is not True:
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "fallback answer"}}]},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ReadErrorStream(request),
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = [
+        event
+        async for event in provider.stream(
+            ModelRequest(
+                model="model-b",
+                instructions="System text.",
+                messages=(UserMessage(content="question"),),
+                tools=(),
+            )
+        )
+    ]
+
+    assert [request.get("stream") for request in requests] == [True, None]
+    assert events == [
+        ModelDeltaEvent(text="fallback answer"),
+        FinalOutputEvent(text="fallback answer"),
     ]
 
 

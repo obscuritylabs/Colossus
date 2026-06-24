@@ -200,12 +200,26 @@ class LocalOpenAIChatProvider:
             output_text: list[str] = []
             tool_calls: dict[int, _StreamToolCall] = {}
             chunk_shapes: list[dict[str, object]] = []
-            async for item in _stream_json_items(response):
-                chunk_shapes.append(_stream_chunk_shape(item))
-                if len(chunk_shapes) > 5:
-                    chunk_shapes.pop(0)
-                async for event in _events_from_stream_chunk(item, tool_calls, output_text):
-                    yield event
+            events_yielded = False
+            try:
+                async for item in _stream_json_items(response):
+                    chunk_shapes.append(_stream_chunk_shape(item))
+                    if len(chunk_shapes) > 5:
+                        chunk_shapes.pop(0)
+                    async for event in _events_from_stream_chunk(item, tool_calls, output_text):
+                        events_yielded = True
+                        yield event
+            except httpx.HTTPError as exc:
+                detail = _stream_error_detail(exc)
+                if not events_yielded:
+                    raise _StreamingFallbackRequired(
+                        "Provider stream failed before yielding events. "
+                        f"{detail}"
+                    ) from exc
+                raise ProviderError(
+                    "Provider stream failed after a partial response. "
+                    f"{detail}"
+                ) from exc
 
             tool_call_events = _tool_call_events(tool_calls, tool_name_codec)
             for event in tool_call_events:
@@ -320,13 +334,17 @@ async def _events_from_chat_completion(
 
 async def _stream_json_items(response: httpx.Response) -> AsyncIterator[dict[str, object]]:
     data_lines: list[str] = []
+    done = False
     async for line in response.aiter_lines():
+        if done:
+            continue
         if not line:
             if data_lines:
                 payload = "\n".join(data_lines)
                 data_lines.clear()
                 if payload == "[DONE]":
-                    return
+                    done = True
+                    continue
                 parsed = json.loads(payload)
                 if isinstance(parsed, dict):
                     yield parsed
@@ -552,3 +570,10 @@ def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
         f"{exc.response.status_code} from "
         f"{exc.request.url}{suffix}"
     )
+
+
+def _stream_error_detail(exc: httpx.HTTPError) -> str:
+    request = getattr(exc, "request", None)
+    location = f" from {request.url}" if request is not None else ""
+    suffix = f": {exc}" if str(exc) else ""
+    return f"{type(exc).__name__}{location}{suffix}"

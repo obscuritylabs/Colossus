@@ -12,8 +12,10 @@ from colossus.application.defaults import default_agent
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
+from colossus.domain.errors import ProviderError
 from colossus.domain.events import (
     FinalOutputEvent,
+    ReasoningSummaryEvent,
     RunEvent,
     ToolCallCompletedEvent,
     ToolCallRequestedEvent,
@@ -116,6 +118,21 @@ class FailingProvider:
         raise AssertionError("provider should not be called")
 
 
+class EmptyProvider:
+    name = "empty"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        if False:
+            yield FinalOutputEvent(text="")
+
+
+class ReasoningOnlyProvider:
+    name = "reasoning-only"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        yield ReasoningSummaryEvent(summary="Thinking but no answer.")
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_executes_tool_and_continues(tmp_path) -> None:
     async def echo(arguments: dict[str, object]) -> str:
@@ -160,6 +177,43 @@ async def test_orchestrator_executes_tool_and_continues(tmp_path) -> None:
         "tool.call.completed",
         "final.output",
     ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_empty_provider_response(tmp_path) -> None:
+    orchestrator = AgentOrchestrator(
+        provider=EmptyProvider(),
+        tool_registry=InMemoryToolRegistry(()),
+        tool_executor=FunctionToolExecutor({}, InMemoryToolRegistry(())),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+    )
+
+    with pytest.raises(ProviderError, match="no assistant text or tool calls"):
+        await orchestrator.run(AgentRunRequest(prompt="hello", agent=default_agent()))
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_reasoning_only_provider_response(tmp_path) -> None:
+    observed: list[RunEvent] = []
+    orchestrator = AgentOrchestrator(
+        provider=ReasoningOnlyProvider(),
+        tool_registry=InMemoryToolRegistry(()),
+        tool_executor=FunctionToolExecutor({}, InMemoryToolRegistry(())),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        event_observer=observed.append,
+    )
+
+    with pytest.raises(ProviderError, match="choices\\[\\]\\.delta\\.content"):
+        await orchestrator.run(AgentRunRequest(prompt="hello", agent=default_agent()))
+    assert [event.type for event in observed] == ["reasoning.summary"]
 
 
 @pytest.mark.asyncio

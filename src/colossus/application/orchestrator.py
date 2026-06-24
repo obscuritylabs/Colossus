@@ -10,7 +10,7 @@ from colossus.application.decisions import DecisionService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.subagents import SubagentService
 from colossus.application.tools import validate_tool_call
-from colossus.domain.errors import PolicyDeniedError, ToolExecutionError
+from colossus.domain.errors import PolicyDeniedError, ProviderError, ToolExecutionError
 from colossus.domain.events import (
     ApprovalAutoGrantedEvent,
     ApprovalRequestedEvent,
@@ -167,6 +167,18 @@ class AgentOrchestrator:
                     )
                 elif isinstance(event, FinalOutputEvent):
                     final_text = event.text
+
+            if not pending_tool_calls and not _has_visible_text(collected_text, final_text):
+                await self._audit_sink.record(
+                    "agent",
+                    "provider.empty_response",
+                    {"run_id": run_id, "events": events_recorded},
+                )
+                raise ProviderError(
+                    "Provider returned no assistant text or tool calls. "
+                    "For OpenAI-compatible endpoints, verify that streaming chat chunks "
+                    "include choices[].delta.content or choices[].delta.tool_calls."
+                )
 
             if collected_text or pending_tool_calls:
                 assistant_message = AssistantMessage(
@@ -479,6 +491,10 @@ def _is_standalone_key_decision_prompt(prompt: str) -> bool:
     if "?" in text:
         return False
     return len(text) <= 220
+
+
+def _has_visible_text(chunks: list[str], final_text: str) -> bool:
+    return bool(final_text.strip() or "".join(chunks).strip())
 
 
 def _decision_title(prompt: str) -> str:
