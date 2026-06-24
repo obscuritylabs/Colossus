@@ -15,6 +15,7 @@ from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistr
 from colossus.domain.errors import ProviderError
 from colossus.domain.events import (
     FinalOutputEvent,
+    ModelDeltaEvent,
     ReasoningSummaryEvent,
     RunEvent,
     ToolCallCompletedEvent,
@@ -133,6 +134,22 @@ class ReasoningOnlyProvider:
         yield ReasoningSummaryEvent(summary="Thinking but no answer.")
 
 
+class TextToolThenEmptyProvider:
+    name = "text-tool-then-empty"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        has_tool_result = any(message.role == "tool" for message in request.messages)
+        if has_tool_result:
+            return
+        yield ModelDeltaEvent(text="Reading the file.")
+        yield FinalOutputEvent(text="Reading the file.")
+        yield ToolCallRequestedEvent(
+            call_id="call-1",
+            name="echo",
+            arguments={"text": "from tool"},
+        )
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_executes_tool_and_continues(tmp_path) -> None:
     async def echo(arguments: dict[str, object]) -> str:
@@ -214,6 +231,37 @@ async def test_orchestrator_rejects_reasoning_only_provider_response(tmp_path) -
     with pytest.raises(ProviderError, match="choices\\[\\]\\.delta\\.content"):
         await orchestrator.run(AgentRunRequest(prompt="hello", agent=default_agent()))
     assert [event.type for event in observed] == ["reasoning.summary"]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_empty_response_after_tool_turn(tmp_path) -> None:
+    async def echo(arguments: dict[str, object]) -> str:
+        return str(arguments["text"])
+
+    spec = ToolSpec(
+        name="echo",
+        description="Echo",
+        input_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    )
+    registry = InMemoryToolRegistry((spec,))
+    orchestrator = AgentOrchestrator(
+        provider=TextToolThenEmptyProvider(),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({"echo": echo}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+    )
+
+    with pytest.raises(ProviderError, match="no assistant text or tool calls"):
+        await orchestrator.run(AgentRunRequest(prompt="read", agent=default_agent()))
 
 
 @pytest.mark.asyncio
