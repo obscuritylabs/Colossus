@@ -1,9 +1,11 @@
 """Local OpenAI-compatible chat-completions adapter."""
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -27,6 +29,8 @@ from colossus.domain.providers import (
 )
 from colossus.domain.requests import ModelRequest
 from colossus.domain.tools import ToolSpec
+
+logger = logging.getLogger(__name__)
 
 
 class LocalOpenAIChatProvider:
@@ -137,6 +141,7 @@ class LocalOpenAIChatProvider:
                     yield event
                 return
             except _StreamingFallbackRequired as exc:
+                _debug_http("provider.chat.streaming_fallback", {"reason": str(exc)})
                 try:
                     async for event in self._non_stream_chat_completion(
                         client,
@@ -170,20 +175,34 @@ class LocalOpenAIChatProvider:
         tool_name_codec: ToolNameCodec,
     ) -> AsyncIterator[RunEvent]:
         streamed_payload = {**payload, "stream": True}
+        endpoint = f"{self._base_url}/chat/completions"
+        _debug_http(
+            "provider.chat.stream.request",
+            {"url": _safe_url(endpoint), **_chat_request_debug_shape(streamed_payload)},
+        )
         async with client.stream(
             "POST",
-            f"{self._base_url}/chat/completions",
+            endpoint,
             headers={"Authorization": f"Bearer {self._api_key}"},
             json=streamed_payload,
         ) as response:
+            _debug_http("provider.chat.stream.response", _http_response_debug_shape(response))
             try:
                 response.raise_for_status()
-            except httpx.HTTPStatusError:
-                raise _StreamingFallbackRequired from None
+            except httpx.HTTPStatusError as exc:
+                _debug_http(
+                    "provider.chat.stream.status_error",
+                    _http_response_debug_shape(exc.response),
+                )
+                raise _StreamingFallbackRequired(_http_status_detail(exc)) from None
             content_type = response.headers.get("content-type", "")
             if "text/event-stream" not in content_type:
                 body = await response.aread()
                 data = json.loads(body.decode())
+                _debug_http(
+                    "provider.chat.stream.non_sse_response_shape",
+                    {"response_shape": _chat_completion_shape(data)},
+                )
                 events = [
                     event
                     async for event in _events_from_chat_completion(data, tool_name_codec)
@@ -200,9 +219,11 @@ class LocalOpenAIChatProvider:
             output_text: list[str] = []
             tool_calls: dict[int, _StreamToolCall] = {}
             chunk_shapes: list[dict[str, object]] = []
+            chunk_count = 0
             events_yielded = False
             try:
                 async for item in _stream_json_items(response):
+                    chunk_count += 1
                     chunk_shapes.append(_stream_chunk_shape(item))
                     if len(chunk_shapes) > 5:
                         chunk_shapes.pop(0)
@@ -211,6 +232,7 @@ class LocalOpenAIChatProvider:
                         yield event
             except httpx.HTTPError as exc:
                 detail = _stream_error_detail(exc)
+                _debug_http("provider.chat.stream.http_error", {"detail": detail})
                 if not events_yielded:
                     raise _StreamingFallbackRequired(
                         "Provider stream failed before yielding events. "
@@ -222,11 +244,23 @@ class LocalOpenAIChatProvider:
                 ) from exc
 
             tool_call_events = _tool_call_events(tool_calls, tool_name_codec)
+            _debug_http(
+                "provider.chat.stream.complete",
+                {
+                    "chunk_count": chunk_count,
+                    "text_chars": sum(len(chunk) for chunk in output_text),
+                    "tool_call_count": len(tool_call_events),
+                },
+            )
             for event in tool_call_events:
                 yield event
             if output_text and not tool_call_events:
                 yield FinalOutputEvent(text="".join(output_text))
             if not output_text and not tool_call_events:
+                _debug_http(
+                    "provider.chat.stream.empty",
+                    {"chunk_count": chunk_count, "chunk_shapes": chunk_shapes},
+                )
                 raise _StreamingFallbackRequired(
                     "Provider stream returned no assistant content or tool calls. "
                     f"chunk_shapes={json.dumps(chunk_shapes)}"
@@ -238,23 +272,42 @@ class LocalOpenAIChatProvider:
         payload: dict[str, object],
         tool_name_codec: ToolNameCodec,
     ) -> AsyncIterator[RunEvent]:
+        endpoint = f"{self._base_url}/chat/completions"
+        _debug_http(
+            "provider.chat.non_stream.request",
+            {"url": _safe_url(endpoint), **_chat_request_debug_shape(payload)},
+        )
         response = await client.post(
-            f"{self._base_url}/chat/completions",
+            endpoint,
             headers={"Authorization": f"Bearer {self._api_key}"},
             json=payload,
         )
+        _debug_http("provider.chat.non_stream.response", _http_response_debug_shape(response))
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            _debug_http(
+                "provider.chat.non_stream.status_error",
+                _http_response_debug_shape(exc.response),
+            )
             raise ProviderError(_http_error_detail(exc)) from exc
         data = response.json()
+        response_shape = _chat_completion_shape(data)
+        _debug_http(
+            "provider.chat.non_stream.response_shape",
+            {"response_shape": response_shape},
+        )
         events = [event async for event in _events_from_chat_completion(data, tool_name_codec)]
         for event in events:
             yield event
         if not _has_assistant_output(events):
+            _debug_http(
+                "provider.chat.non_stream.empty",
+                {"response_shape": response_shape},
+            )
             raise ProviderError(
                 "Provider returned no assistant content or tool calls. "
-                f"response_shape={json.dumps(_chat_completion_shape(data))}"
+                f"response_shape={json.dumps(response_shape)}"
             )
 
 
@@ -555,6 +608,111 @@ def _typed_item_shape(item: object) -> dict[str, object]:
     return shaped
 
 
+def _debug_http(event: str, details: dict[str, object]) -> None:
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    logger.debug("%s %s", event, json.dumps(details, sort_keys=True))
+
+
+def _chat_request_debug_shape(payload: dict[str, object]) -> dict[str, object]:
+    shape: dict[str, object] = {
+        "model": payload.get("model") if isinstance(payload.get("model"), str) else None,
+        "stream": payload.get("stream") is True,
+    }
+    messages = payload.get("messages")
+    if isinstance(messages, list):
+        role_counts: dict[str, int] = {}
+        roles: list[str] = []
+        for message in messages:
+            role = _message_role(message)
+            roles.append(role)
+            role_counts[role] = role_counts.get(role, 0) + 1
+        shape["message_count"] = len(messages)
+        shape["message_roles"] = roles
+        shape["message_role_counts"] = role_counts
+        if messages:
+            shape["last_message"] = _chat_message_debug_shape(messages[-1])
+    else:
+        shape["messages_type"] = type(messages).__name__
+
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        shape["tool_count"] = len(tools)
+        shape["tool_names"] = _chat_tool_names(tools)
+    else:
+        shape["tools_type"] = type(tools).__name__
+    return shape
+
+
+def _message_role(message: object) -> str:
+    if not isinstance(message, dict):
+        return type(message).__name__
+    role = message.get("role")
+    return role if isinstance(role, str) else "<missing>"
+
+
+def _chat_message_debug_shape(message: object) -> dict[str, object]:
+    if not isinstance(message, dict):
+        return {"type": type(message).__name__}
+    shape: dict[str, object] = {"keys": sorted(message.keys()), "role": _message_role(message)}
+    content = message.get("content")
+    shape["content_type"] = type(content).__name__
+    if isinstance(content, str):
+        shape["content_chars"] = len(content)
+    elif isinstance(content, list):
+        shape["content_items"] = len(content)
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        shape["tool_call_count"] = len(tool_calls)
+    tool_call_id = message.get("tool_call_id")
+    if isinstance(tool_call_id, str):
+        shape["tool_call_id_present"] = bool(tool_call_id)
+    return shape
+
+
+def _chat_tool_names(tools: list[object]) -> list[str]:
+    names: list[str] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if isinstance(name, str):
+            names.append(name)
+    return names
+
+
+def _http_response_debug_shape(response: httpx.Response) -> dict[str, object]:
+    content_length = response.headers.get("content-length")
+    return {
+        "status_code": response.status_code,
+        "content_type": response.headers.get("content-type", ""),
+        "content_length": content_length if content_length is not None else "",
+        "url": _safe_url(str(response.request.url)),
+    }
+
+
+def _safe_url(value: object) -> str:
+    text = str(value)
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return text.split("?", 1)[0]
+    host = parts.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = host
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
 @dataclass
 class _StreamToolCall:
     call_id: str = ""
@@ -571,12 +729,18 @@ def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
     suffix = f": {response_text[:500]}" if response_text else ""
     return (
         f"{exc.response.status_code} from "
-        f"{exc.request.url}{suffix}"
+        f"{_safe_url(str(exc.request.url))}{suffix}"
     )
+
+
+def _http_status_detail(exc: httpx.HTTPStatusError) -> str:
+    content_type = exc.response.headers.get("content-type", "")
+    suffix = f" content_type={content_type}" if content_type else ""
+    return f"HTTP {exc.response.status_code} from {_safe_url(str(exc.request.url))}{suffix}"
 
 
 def _stream_error_detail(exc: httpx.HTTPError) -> str:
     request = getattr(exc, "request", None)
-    location = f" from {request.url}" if request is not None else ""
+    location = f" from {_safe_url(str(request.url))}" if request is not None else ""
     suffix = f": {exc}" if str(exc) else ""
     return f"{type(exc).__name__}{location}{suffix}"
