@@ -26,6 +26,18 @@ event blocks are hidden. One-shot runs can use the same event renderer:
 uv run colossus run --stream --events compact "hello"
 ```
 
+Sessions are local SQLite records. Start fresh by default, resume the latest session
+explicitly, or pick a prior session from inside the REPL:
+
+```bash
+uv run colossus run --resume "continue where we left off"
+uv run colossus repl --resume
+uv run colossus sessions list
+uv run colossus sessions show SESSION_ID
+```
+
+Inside the REPL, use `/resume` to choose from recent sessions without copying an id.
+
 REPL display choices can be previewed and persisted:
 
 ```bash
@@ -103,6 +115,7 @@ Colossus ships an offline-first local coding tool loop:
   network-enabled profile or adapter is explicitly configured.
 - Automatic context compaction with durable snapshots, active key-decision injection,
   relevant memory injection, and per-model context windows.
+- Session discovery and explicit resume for prior local conversations.
 - Named model roles for primary agent turns, context summarization, subagents, and
   shell-command risk review.
 

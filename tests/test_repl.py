@@ -13,15 +13,18 @@ from colossus.application.defaults import default_agent
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.planning import PlanService
+from colossus.application.sessions import SessionService
 from colossus.application.subagents import SubagentService
 from colossus.domain.context import ContextStatus
 from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
 from colossus.domain.memories import MemoryItem
+from colossus.domain.messages import UserMessage
 from colossus.domain.models import ResolvedModelProfile
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
 from colossus.domain.requests import AgentRunRequest, AgentRunResult
+from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob
 from colossus.domain.tasks import Task
 from colossus.domain.tools import ToolPermission, ToolSpec
@@ -43,6 +46,9 @@ from colossus.interfaces.repl import (
     _handle_memories_command,
     _handle_memory_command,
     _handle_plan_command,
+    _handle_resume_command,
+    _handle_session_command,
+    _handle_sessions_command,
     _is_slash_command_draft,
     _match_user_prompt_answer,
     _multiline_mode,
@@ -59,6 +65,7 @@ from colossus.interfaces.repl import (
     _render_plan_list,
     _render_repl_preferences,
     _render_repl_startup,
+    _render_resumed_session,
     _render_status,
     _render_subagents,
     _render_tasks,
@@ -151,6 +158,7 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     slash_matches = list(completer.get_completions(Document("/"), event))
     plan_matches = list(completer.get_completions(Document("/p"), event))
     plan_narrow_matches = list(completer.get_completions(Document("/pl"), event))
+    resume_matches = list(completer.get_completions(Document("/res"), event))
     event_matches = list(completer.get_completions(Document("/e"), event))
     argument_matches = list(completer.get_completions(Document("/events "), event))
     plain_matches = list(completer.get_completions(Document("hello"), event))
@@ -158,6 +166,7 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     assert {completion.text for completion in slash_matches} >= {"/events", "/exit"}
     assert [completion.text for completion in plan_matches] == ["/plan"]
     assert [completion.text for completion in plan_narrow_matches] == ["/plan"]
+    assert [completion.text for completion in resume_matches] == ["/resume"]
     assert [completion.text for completion in event_matches] == ["/events", "/exit"]
     assert argument_matches == []
     assert plain_matches == []
@@ -167,6 +176,7 @@ def test_slash_suggestions_show_in_toolbar_for_command_drafts() -> None:
     assert _format_slash_suggestions("/").startswith("commands: /model")
     assert _format_slash_suggestions("/p") == "commands: /plan"
     assert _format_slash_suggestions("/pl") == "commands: /plan"
+    assert _format_slash_suggestions("/res") == "commands: /resume"
     assert _format_slash_suggestions("/e") == "commands: /events /exit"
     assert _format_slash_suggestions("/events ") == ""
     assert _format_slash_suggestions("hello") == ""
@@ -191,6 +201,9 @@ def test_parse_context_commands() -> None:
     theme = parse_slash_command("/theme carrot")
     repl = parse_slash_command("/repl prefs")
     status = parse_slash_command("/status")
+    resume = parse_slash_command("/resume 5")
+    session = parse_slash_command("/session resume session-1")
+    sessions = parse_slash_command("/sessions")
     tasks = parse_slash_command("/tasks all")
     decision = parse_slash_command("/decision archive kd_1")
     decisions = parse_slash_command("/decisions all")
@@ -227,6 +240,14 @@ def test_parse_context_commands() -> None:
     assert repl.argument == "prefs"
     assert status is not None
     assert status.command == "status"
+    assert resume is not None
+    assert resume.command == "resume"
+    assert resume.argument == "5"
+    assert session is not None
+    assert session.command == "session"
+    assert session.argument == "resume session-1"
+    assert sessions is not None
+    assert sessions.command == "sessions"
     assert tasks is not None
     assert tasks.command == "tasks"
     assert tasks.argument == "all"
@@ -400,6 +421,26 @@ def test_repl_startup_clears_terminal_and_renders_banner() -> None:
     assert "composer=single" in output
     assert "theme=hacker" in output
     assert "events=off" in output
+
+
+def test_render_resumed_session_shows_compact_summary() -> None:
+    console = Console(record=True, width=140)
+    summary = SessionSummary(
+        id="session-123456",
+        title="Hello",
+        created_at="2026-01-01",
+        updated_at="2026-01-02",
+        message_count=4,
+        last_run_id="run-1",
+        last_user_preview="continue this",
+    )
+
+    _render_resumed_session(console, summary)
+
+    output = console.export_text()
+    assert "Resumed session session-123456" in output
+    assert "messages=4" in output
+    assert "last_user=continue this" in output
 
 
 def test_right_prompt_and_continuation_reflect_mode_and_theme() -> None:
@@ -770,6 +811,67 @@ async def test_handle_agents_command_lists_session_jobs(tmp_path) -> None:
     output = console.export_text()
     assert "agent-1" in output
     assert "Review docs" in output
+
+
+@pytest.mark.asyncio
+async def test_handle_session_commands_list_resume_and_start_new_session(tmp_path) -> None:
+    console = Console(record=True, width=140)
+    state_store = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = SessionService(state_store, session_id_factory=lambda: "session-fresh")
+    state = ReplDisplayState(
+        session_id="session-current",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+        last_run_id="run-old",
+        last_status="done",
+    )
+    await state_store.append_message("session-new", "run-new", UserMessage(content="resume me"))
+
+    await _handle_sessions_command(console, service, "")
+    await _handle_session_command(console, service, state, "latest", None, None)
+    assert state.session_id == "session-new"
+    assert state.last_run_id is None
+    assert state.last_status == "idle"
+
+    await _handle_session_command(console, service, state, "new", None, None)
+    assert state.session_id == "session-fresh"
+
+    output = console.export_text()
+    assert "session-new" in output
+    assert "resume me" in output
+    assert "Started new session session-fresh" in output
+
+
+@pytest.mark.asyncio
+async def test_handle_resume_command_prompts_for_session_choice(tmp_path) -> None:
+    console = Console(record=True, width=140)
+    state_store = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = SessionService(state_store)
+    state = ReplDisplayState(
+        session_id="session-current",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+    )
+    await state_store.append_message("session-choice", "run-1", UserMessage(content="pick me"))
+
+    await _handle_resume_command(
+        console,
+        service,
+        state,
+        "",
+        None,
+        None,
+        QueuedUserPromptHandler(console, ["1"]),
+    )
+
+    output = console.export_text()
+    assert state.session_id == "session-choice"
+    assert "Choose a session to resume." in output
+    assert "session-choice" in output
+    assert "pick me" in output
+    assert "Resumed session session-choice" in output
 
 
 def test_render_subagents_shows_status_markers() -> None:

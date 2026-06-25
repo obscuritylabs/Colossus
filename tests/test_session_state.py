@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from colossus.adapters.audit_jsonl import JsonlAuditSink
@@ -24,6 +26,64 @@ async def test_sqlite_state_persists_session_messages(tmp_path) -> None:
     messages = await state.list_messages("session-1")
     assert [message.role for message in messages] == ["user", "assistant"]
     assert messages[0].content == "hello"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_state_lists_session_summaries_by_recent_activity(tmp_path) -> None:
+    path = tmp_path / "state.sqlite3"
+    state = SQLiteStateStore(path)
+
+    await state.append_message("session-old", "run-old", UserMessage(content="older question"))
+    await state.append_message("session-old", "run-old", AssistantMessage(content="older answer"))
+    await state.append_message(
+        "session-new",
+        "run-new",
+        UserMessage(content="newer question with enough detail to preview"),
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "update sessions set updated_at = ? where id = ?",
+            ("2026-01-01", "session-old"),
+        )
+        conn.execute(
+            "update sessions set updated_at = ? where id = ?",
+            ("2026-01-02", "session-new"),
+        )
+
+    sessions = await state.list_sessions(limit=10)
+    latest = await state.get_session("session-new")
+
+    assert [session.id for session in sessions[:2]] == ["session-new", "session-old"]
+    assert latest is not None
+    assert latest.message_count == 1
+    assert latest.last_run_id == "run-new"
+    assert latest.last_user_preview == "newer question with enough detail to preview"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_state_migrates_sessions_without_updated_at(tmp_path) -> None:
+    path = tmp_path / "state.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            create table sessions (
+                id text primary key,
+                title text,
+                active_context_snapshot_id text,
+                created_at datetime default current_timestamp
+            )
+            """
+        )
+        conn.execute(
+            "insert into sessions(id, title, created_at) values (?, ?, ?)",
+            ("legacy-session", "Legacy", "2026-01-01"),
+        )
+
+    state = SQLiteStateStore(path)
+    session = await state.get_session("legacy-session")
+
+    assert session is not None
+    assert session.updated_at == "2026-01-01"
 
 
 @pytest.mark.asyncio

@@ -175,6 +175,10 @@ Runtime controls:
 - `/stream on|off`
 - `/events compact|verbose|off`
 - `/reasoning on|off`
+- `/resume [LIMIT]`
+- `/sessions [LIMIT]`
+- `/session show [ID]`
+- `/session resume <id>`, `/session latest`, or `/session new`
 - `/tasks [open|all|STATUS]`
 - `/decisions [all|STATUS]`
 - `/decision <text>` or `/decision archive <id>` or `/decision supersede <id> <text>`

@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from pathlib import Path
 
 from click.exceptions import Exit as ClickExit
@@ -11,6 +12,7 @@ from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.subagents import SubagentService
 from colossus.cli import app
 from colossus.domain.errors import ColossusError
+from colossus.domain.messages import UserMessage
 from colossus.domain.models import ModelProfile, ModelRoutingConfig, ResolvedModelProfile
 from colossus.domain.providers import ProviderModelInfo
 from colossus.domain.subagents import SubagentJob
@@ -331,6 +333,30 @@ def test_cli_repl_rejects_unknown_theme(tmp_path, monkeypatch) -> None:
     assert "Invalid REPL theme" in result.stdout
 
 
+def test_cli_repl_accepts_resume_flag_without_prompt_loop(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    asyncio.run(
+        SQLiteStateStore(tmp_path / "colossus" / "state.sqlite3").append_message(
+            "session-1",
+            "run-1",
+            UserMessage(content="hello"),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run_repl_sync(*args, **kwargs):
+        del args
+        captured["resume_latest"] = kwargs.get("resume_latest")
+        captured["initial_session_id"] = kwargs.get("initial_session_id")
+
+    monkeypatch.setattr(cli_module, "run_repl_sync", fake_run_repl_sync)
+
+    result = CliRunner().invoke(app, ["repl", "--resume"])
+
+    assert result.exit_code == 0
+    assert captured == {"resume_latest": True, "initial_session_id": None}
+
+
 def test_cli_agents_list_renders_persisted_jobs(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     state = SQLiteStateStore(tmp_path / "colossus" / "state.sqlite3")
@@ -437,6 +463,68 @@ def test_cli_context_commands(tmp_path, monkeypatch) -> None:
     assert snapshot_id in snapshots.stdout
     assert restore.exit_code == 0
     assert f"Restored snapshot {snapshot_id}" in restore.stdout
+
+
+def test_cli_sessions_list_show_and_resume(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    runner = CliRunner()
+
+    old_run = runner.invoke(app, ["run", "--session", "session-old", "older prompt"])
+    new_run = runner.invoke(app, ["run", "--session", "session-new", "newer prompt"])
+    state_path = tmp_path / "colossus" / "state.sqlite3"
+    with sqlite3.connect(state_path) as conn:
+        conn.execute(
+            "update sessions set updated_at = ? where id = ?",
+            ("2026-01-01", "session-old"),
+        )
+        conn.execute(
+            "update sessions set updated_at = ? where id = ?",
+            ("2026-01-02", "session-new"),
+        )
+
+    listed = runner.invoke(app, ["sessions", "list"])
+    shown = runner.invoke(app, ["sessions", "show", "session-new"])
+    resumed = runner.invoke(app, ["run", "--resume", "continued prompt"])
+    messages = asyncio.run(SQLiteStateStore(state_path).list_messages("session-new"))
+
+    assert old_run.exit_code == 0
+    assert new_run.exit_code == 0
+    assert listed.exit_code == 0
+    assert "session-new" in listed.stdout
+    assert "newer prompt" in listed.stdout
+    assert shown.exit_code == 0
+    assert "last_run_id" in shown.stdout
+    assert "newer prompt" in shown.stdout
+    assert resumed.exit_code == 0
+    assert "session_id=session-new" in resumed.stdout
+    assert [message.role for message in messages] == ["user", "assistant", "user", "assistant"]
+    assert messages[-2].content == "continued prompt"
+
+
+def test_cli_run_rejects_resume_with_explicit_session(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    result = CliRunner().invoke(app, ["run", "--resume", "--session", "session-1", "hello"])
+
+    assert result.exit_code == 2
+    assert "Use either --resume or --session" in result.stdout
+
+
+def test_cli_run_session_reuses_exact_session_history(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    runner = CliRunner()
+
+    first = runner.invoke(app, ["run", "--session", "session-exact", "first"])
+    second = runner.invoke(app, ["run", "--session", "session-exact", "second"])
+    messages = asyncio.run(
+        SQLiteStateStore(tmp_path / "colossus" / "state.sqlite3").list_messages("session-exact")
+    )
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert [message.role for message in messages] == ["user", "assistant", "user", "assistant"]
+    assert messages[0].content == "first"
+    assert messages[2].content == "second"
 
 
 def test_cli_context_window_override_updates_context_budget(tmp_path, monkeypatch) -> None:

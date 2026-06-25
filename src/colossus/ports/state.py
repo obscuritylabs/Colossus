@@ -9,6 +9,7 @@ from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, Memory
 from colossus.domain.messages import Message
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 
@@ -24,6 +25,14 @@ class StateStore(Protocol):
 
     async def ensure_session(self, session_id: str, title: str | None = None) -> None:
         """Create a session if it does not already exist."""
+        ...
+
+    async def get_session(self, session_id: str) -> SessionSummary | None:
+        """Load a session summary by id."""
+        ...
+
+    async def list_sessions(self, limit: int = 20) -> tuple[SessionSummary, ...]:
+        """List session summaries ordered by most recent activity."""
         ...
 
     async def append_message(self, session_id: str, run_id: str, message: Message) -> None:
