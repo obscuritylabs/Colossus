@@ -17,6 +17,19 @@ class Session(BaseModel):
     id: str
     title: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class SessionSummary(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    title: str | None = None
+    created_at: str
+    updated_at: str
+    message_count: int = 0
+    last_run_id: str | None = None
+    last_user_preview: str | None = None
 
 
 class MessageRecord(BaseModel):

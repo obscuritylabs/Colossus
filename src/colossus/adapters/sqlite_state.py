@@ -11,14 +11,39 @@ from colossus.domain.context import ContextSnapshot
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.events import RunEvent
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
-from colossus.domain.messages import Message
+from colossus.domain.messages import Message, UserMessage
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 
 _RUN_EVENT_ADAPTER: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
 _MESSAGE_ADAPTER: TypeAdapter[Message] = TypeAdapter(Message)
+_SQL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+_SESSION_SUMMARY_SELECT = """
+    select
+        s.id,
+        s.title,
+        s.created_at,
+        coalesce(s.updated_at, s.created_at) as updated_at,
+        (select count(*) from messages m where m.session_id = s.id) as message_count,
+        (
+            select m.run_id
+            from messages m
+            where m.session_id = s.id
+            order by m.sequence desc
+            limit 1
+        ) as last_run_id,
+        (
+            select m.payload
+            from messages m
+            where m.session_id = s.id and m.role = 'user'
+            order by m.sequence desc
+            limit 1
+        ) as last_user_payload
+    from sessions s
+"""
 
 
 class SQLiteStateStore:
@@ -46,13 +71,45 @@ class SQLiteStateStore:
     async def ensure_session(self, session_id: str, title: str | None = None) -> None:
         with closing(sqlite3.connect(self._path)) as conn:
             conn.execute(
-                """
-                insert into sessions(id, title) values (?, ?)
+                f"""
+                insert into sessions(id, title, updated_at) values (?, ?, {_SQL_NOW})
                 on conflict(id) do nothing
                 """,
                 (session_id, title),
             )
+            if title is not None:
+                conn.execute(
+                    """
+                    update sessions
+                    set title = coalesce(title, ?)
+                    where id = ?
+                    """,
+                    (title, session_id),
+                )
             conn.commit()
+
+    async def get_session(self, session_id: str) -> SessionSummary | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute(
+                _SESSION_SUMMARY_SELECT + " where s.id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _session_summary_from_row(row)
+
+    async def list_sessions(self, limit: int = 20) -> tuple[SessionSummary, ...]:
+        safe_limit = min(max(limit, 1), 100)
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(
+                _SESSION_SUMMARY_SELECT
+                + """
+                order by coalesce(s.updated_at, s.created_at) desc, s.id desc
+                limit ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return tuple(_session_summary_from_row(row) for row in rows)
 
     async def append_message(self, session_id: str, run_id: str, message: Message) -> None:
         await self.ensure_session(session_id)
@@ -73,6 +130,10 @@ class SQLiteStateStore:
                     message.role,
                     _MESSAGE_ADAPTER.dump_json(message).decode(),
                 ),
+            )
+            conn.execute(
+                f"update sessions set updated_at = {_SQL_NOW} where id = ?",
+                (session_id,),
             )
             conn.commit()
 
@@ -522,11 +583,19 @@ class SQLiteStateStore:
                     id text primary key,
                     title text,
                     active_context_snapshot_id text,
+                    updated_at datetime default current_timestamp,
                     created_at datetime default current_timestamp
                 )
                 """
             )
             _ensure_column(conn, "sessions", "active_context_snapshot_id", "text")
+            _ensure_column(conn, "sessions", "updated_at", "datetime")
+            conn.execute(
+                """
+                update sessions
+                set updated_at = coalesce(updated_at, created_at, current_timestamp)
+                """
+            )
             conn.execute(
                 """
                 create table if not exists messages (
@@ -667,6 +736,36 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     if column in {row[1] for row in rows}:
         return
     conn.execute(f"alter table {table} add column {column} {definition}")
+
+
+def _session_summary_from_row(row: sqlite3.Row | tuple[object, ...]) -> SessionSummary:
+    last_user_payload = row[6]
+    preview = _last_user_preview(last_user_payload) if isinstance(last_user_payload, str) else None
+    raw_message_count = row[4]
+    message_count = raw_message_count if isinstance(raw_message_count, int) else 0
+    return SessionSummary(
+        id=str(row[0]),
+        title=str(row[1]) if row[1] is not None else None,
+        created_at=str(row[2]),
+        updated_at=str(row[3]),
+        message_count=message_count,
+        last_run_id=str(row[5]) if row[5] is not None else None,
+        last_user_preview=preview,
+    )
+
+
+def _last_user_preview(payload: str) -> str | None:
+    message = _MESSAGE_ADAPTER.validate_json(payload)
+    if not isinstance(message, UserMessage):
+        return None
+    return _short_preview(message.content)
+
+
+def _short_preview(value: str, limit: int = 120) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
 
 
 def _memory_match_query(query: str) -> str:

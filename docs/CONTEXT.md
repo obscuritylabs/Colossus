@@ -49,6 +49,11 @@ official OpenAI model catalogs do not currently include context windows.
 ## Commands
 
 ```bash
+uv run colossus sessions list
+uv run colossus sessions show SESSION_ID
+uv run colossus run --resume "continue the latest session"
+uv run colossus repl --session SESSION_ID
+uv run colossus repl --resume
 uv run colossus context show --session SESSION_ID
 uv run colossus context compact --session SESSION_ID
 uv run colossus context snapshots --session SESSION_ID
@@ -57,12 +62,23 @@ uv run colossus context restore SNAPSHOT_ID
 
 The REPL supports:
 
+- `/resume`
+- `/sessions`
+- `/session show`
+- `/session resume SESSION_ID`
+- `/session latest`
+- `/session new`
 - `/compact`
 - `/context`
 - `/context snapshots`
 - `/context restore SNAPSHOT_ID`
 
 The TUI includes a context panel in the side column.
+
+`--resume` and `/session latest` continue the most recently updated persisted session.
+`/resume` lists recent sessions and prompts for a numbered choice. Resume loads full
+prior message context for future model turns and prints only a compact session summary;
+it does not replay the entire transcript by default.
 
 `context show`, `/context`, `/status`, and the REPL toolbar report the effective prompt
 estimate after the active snapshot is applied. When a snapshot is active, they also show

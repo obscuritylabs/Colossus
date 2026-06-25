@@ -24,6 +24,7 @@ from colossus.application.subagents import SubagentService
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.errors import BundleVerificationError, ColossusError
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
+from colossus.domain.messages import AssistantMessage, Message, ToolResultMessage, UserMessage
 from colossus.domain.models import ProviderKind
 from colossus.domain.plans import Plan
 from colossus.domain.providers import (
@@ -33,6 +34,7 @@ from colossus.domain.providers import (
     model_context_windows_from_provider_models,
 )
 from colossus.domain.requests import AgentRunRequest, AgentRunResult
+from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task
 from colossus.infrastructure.config import (
@@ -55,6 +57,7 @@ from colossus.infrastructure.container import (
     create_model_router,
     create_plan_service,
     create_repl_preferences_service,
+    create_session_service,
     create_state_store,
     create_subagent_service,
     create_task_service,
@@ -94,6 +97,7 @@ tasks_app = typer.Typer(help="Inspect persisted session tasks.")
 decisions_app = typer.Typer(help="Inspect and manage key decisions.")
 memories_app = typer.Typer(help="Inspect and manage durable memories.")
 context_app = typer.Typer(help="Inspect and manage context compaction.")
+sessions_app = typer.Typer(help="Discover and resume persisted sessions.")
 app.add_typer(config_app, name="config")
 app.add_typer(skills_app, name="skills")
 app.add_typer(tools_app, name="tools")
@@ -106,6 +110,7 @@ app.add_typer(tasks_app, name="tasks")
 app.add_typer(decisions_app, name="decisions")
 app.add_typer(memories_app, name="memories")
 app.add_typer(context_app, name="context")
+app.add_typer(sessions_app, name="sessions")
 
 console = Console()
 
@@ -329,8 +334,12 @@ def run(
     ] = None,
     session: Annotated[
         str | None,
-        typer.Option("--session", help="Persist messages under this session id."),
+        typer.Option("--session", help="Use or resume this exact session id."),
     ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume", help="Resume the most recently updated session."),
+    ] = False,
     trace: Annotated[
         bool,
         typer.Option("--trace", help="Show observable agent events such as tool calls."),
@@ -373,7 +382,21 @@ def run(
     if plan and execute_plan is not None:
         console.print("[red]Use either --plan or --execute-plan, not both.[/red]")
         raise typer.Exit(code=2)
-    session_id = session or str(uuid4())
+    if resume and session is not None:
+        console.print("[red]Use either --resume or --session, not both.[/red]")
+        raise typer.Exit(code=2)
+    if resume and (plan or execute_plan is not None):
+        console.print("[red]--resume is only supported for direct agent runs.[/red]")
+        raise typer.Exit(code=2)
+    state = create_state_store(data_dir())
+    if resume:
+        try:
+            session_id = asyncio.run(create_session_service(data_dir()).latest_session()).id
+        except ColossusError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+    else:
+        session_id = session or str(uuid4())
     if plan:
         if prompt is None:
             console.print("[red]A prompt is required when creating a plan.[/red]")
@@ -388,7 +411,6 @@ def run(
     context_route = router.resolve("context_summarizer")
     model_context_windows = _resolved_model_context_windows(config, overrides, router)
     resolved_approval_mode = _resolve_approval_mode(approval_mode, ask_approval=ask_approval)
-    state = create_state_store(data_dir())
     audit = create_audit_sink(data_dir())
     subagent_service = create_subagent_service(
         data_dir(),
@@ -490,8 +512,19 @@ def repl(
             help="REPL theme: default, mono, high-contrast, carrot, hacker, or a user theme.",
         ),
     ] = None,
+    session: Annotated[
+        str | None,
+        typer.Option("--session", help="Use or resume this exact session id."),
+    ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume", help="Resume the most recently updated session."),
+    ] = False,
 ) -> None:
     """Start the interactive REPL."""
+    if resume and session is not None:
+        console.print("[red]Use either --resume or --session, not both.[/red]")
+        raise typer.Exit(code=2)
     theme_dirs = (config_path().parent / "themes",)
     available_theme_names = (*repl_theme_names(), *load_user_repl_themes(theme_dirs))
     if theme is not None and theme not in available_theme_names:
@@ -568,9 +601,12 @@ def repl(
         task_service=create_task_service(data_dir()),
         decision_service=DecisionService(state, audit),
         memory_service=MemoryService(state, audit, state),
+        session_service=create_session_service(data_dir()),
         plan_service=create_plan_service(data_dir()),
         subagent_service=subagent_service,
         theme_name=theme,
+        initial_session_id=session,
+        resume_latest=resume,
         repo_root=Path.cwd(),
         theme_dirs=theme_dirs,
     )
@@ -875,6 +911,30 @@ def bundle_verify(path: Annotated[Path, typer.Argument(exists=True, file_okay=Fa
     console.print("Bundle verified.")
 
 
+@sessions_app.command("list")
+def sessions_list(limit: Annotated[int, typer.Option("--limit")] = 20) -> None:
+    """List persisted sessions by recent activity."""
+    sessions = asyncio.run(create_session_service(data_dir()).list_sessions(limit))
+    _print_sessions(sessions)
+
+
+@sessions_app.command("show")
+def sessions_show(
+    session_id: Annotated[str, typer.Argument(help="Session id.")],
+    limit: Annotated[int, typer.Option("--limit")] = 10,
+) -> None:
+    """Show a persisted session and recent messages."""
+    service = create_session_service(data_dir())
+    try:
+        session = asyncio.run(service.require_session(session_id))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    messages = asyncio.run(service.recent_messages(session_id, limit=limit))
+    _print_session_detail(session)
+    _print_session_messages(messages)
+
+
 @plans_app.command("list")
 def plans_list(session: Annotated[str | None, typer.Option("--session")] = None) -> None:
     """List persisted plans."""
@@ -1081,6 +1141,61 @@ def _print_plan(plan: Plan) -> None:
     for step in plan.steps:
         table.add_row(str(step.index), step.title, str(step.requires_mutation), step.detail)
     console.print(table)
+
+
+def _print_sessions(sessions: tuple[SessionSummary, ...]) -> None:
+    if not sessions:
+        console.print("No sessions.")
+        return
+    table = Table("Updated", "Messages", "ID", "Title", "Last User")
+    for session in sessions:
+        table.add_row(
+            session.updated_at,
+            str(session.message_count),
+            session.id,
+            session.title or "",
+            session.last_user_preview or "",
+        )
+    console.print(table)
+
+
+def _print_session_detail(session: SessionSummary) -> None:
+    table = Table("Field", "Value")
+    table.add_row("id", session.id)
+    table.add_row("title", session.title or "")
+    table.add_row("created_at", session.created_at)
+    table.add_row("updated_at", session.updated_at)
+    table.add_row("message_count", str(session.message_count))
+    table.add_row("last_run_id", session.last_run_id or "")
+    table.add_row("last_user_preview", session.last_user_preview or "")
+    console.print(table)
+
+
+def _print_session_messages(messages: tuple[Message, ...]) -> None:
+    if not messages:
+        console.print("No messages.")
+        return
+    table = Table("Role", "Preview")
+    for message in messages:
+        table.add_row(_message_role(message), _message_preview(message))
+    console.print(table)
+
+
+def _message_role(message: Message) -> str:
+    if isinstance(message, ToolResultMessage):
+        return f"tool:{message.name}"
+    return message.role
+
+
+def _message_preview(message: Message, limit: int = 120) -> str:
+    if isinstance(message, UserMessage | AssistantMessage | ToolResultMessage):
+        value = message.content
+    else:
+        value = ""
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
 
 
 def _print_tasks(tasks: tuple[Task, ...]) -> None:

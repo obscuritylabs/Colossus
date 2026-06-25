@@ -33,6 +33,7 @@ from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.planning import PlanService
 from colossus.application.preferences import ReplPreferencesService
+from colossus.application.sessions import SessionService
 from colossus.application.skills import SkillResolver
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
@@ -44,6 +45,7 @@ from colossus.domain.memories import MemoryItem, MemoryStatus
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences, TranscriptStylePreference
 from colossus.domain.requests import AgentRunRequest
+from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolSpec
@@ -66,6 +68,9 @@ SlashCommand = Literal[
     "theme",
     "repl",
     "status",
+    "resume",
+    "session",
+    "sessions",
     "tasks",
     "decision",
     "decisions",
@@ -116,6 +121,9 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/theme",
     "/repl",
     "/status",
+    "/resume",
+    "/session",
+    "/sessions",
     "/tasks",
     "/decision",
     "/decisions",
@@ -145,6 +153,9 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/theme": "Show, preview, switch, save, or reset REPL theme.",
     "/repl": "Show, save, or reset REPL preferences.",
     "/status": "Show full REPL, model, session, and context status.",
+    "/resume": "Choose a persisted session to resume.",
+    "/session": "Show, resume, or create a session.",
+    "/sessions": "List persisted sessions.",
     "/tasks": "Show session task records.",
     "/decision": "Create, archive, or supersede key decisions.",
     "/decisions": "Show active key decisions.",
@@ -506,6 +517,7 @@ async def run_repl(
     task_service: TaskService | None = None,
     decision_service: DecisionService | None = None,
     memory_service: MemoryService | None = None,
+    session_service: SessionService | None = None,
     plan_service: PlanService | None = None,
     subagent_service: SubagentService | None = None,
     model_router: ModelRouter | None = None,
@@ -516,6 +528,8 @@ async def run_repl(
     history_path: Path | None = None,
     theme_name: str | None = None,
     preferences_service: ReplPreferencesService | None = None,
+    initial_session_id: str | None = None,
+    resume_latest: bool = False,
     repo_root: Path | None = None,
     theme_dirs: tuple[Path, ...] = (),
 ) -> None:
@@ -542,8 +556,20 @@ async def run_repl(
         erase_when_done=True,
     )
     agent = agent or default_agent()
+    resumed_session: SessionSummary | None = None
+    if resume_latest:
+        if session_service is None:
+            raise ColossusError("Session service is not configured.")
+        resumed_session = await session_service.latest_session()
+        active_session_id = resumed_session.id
+    else:
+        active_session_id = initial_session_id or (
+            session_service.new_session_id() if session_service is not None else str(uuid4())
+        )
+        if initial_session_id is not None and session_service is not None:
+            resumed_session = await session_service.get_session(initial_session_id)
     display_state = ReplDisplayState(
-        session_id=str(uuid4()),
+        session_id=active_session_id,
         active_model_role=active_model_role,
         model=agent.model,
         approval_mode=approval_mode,
@@ -567,6 +593,8 @@ async def run_repl(
     if subagent_service is not None:
         await subagent_service.start()
     _render_repl_startup(console, display_state)
+    if resumed_session is not None:
+        _render_resumed_session(console, resumed_session)
     key_bindings = _composer_key_bindings()
     while True:
         try:
@@ -700,6 +728,29 @@ async def run_repl(
                 await _refresh_context_status(display_state, context_service)
                 await _refresh_task_status(display_state, task_service)
                 _render_status(console, display_state)
+                continue
+            if command.command == "resume":
+                await _handle_resume_command(
+                    console,
+                    session_service,
+                    display_state,
+                    command.argument,
+                    context_service,
+                    task_service,
+                )
+                continue
+            if command.command == "sessions":
+                await _handle_sessions_command(console, session_service, command.argument)
+                continue
+            if command.command == "session":
+                await _handle_session_command(
+                    console,
+                    session_service,
+                    display_state,
+                    command.argument,
+                    context_service,
+                    task_service,
+                )
                 continue
             if command.command == "tasks":
                 await _handle_tasks_command(
@@ -860,6 +911,123 @@ async def run_repl(
             trace_renderer.render_empty_response()
 
 
+async def _handle_resume_command(
+    console: Console,
+    session_service: SessionService | None,
+    state: ReplDisplayState,
+    argument: str,
+    context_service: ContextService | None,
+    task_service: TaskService | None,
+    prompt_handler: RichUserPromptHandler | None = None,
+) -> None:
+    if session_service is None:
+        console.print("Session service is not configured.")
+        return
+    try:
+        limit = int(argument.strip()) if argument.strip() else 10
+    except ValueError:
+        console.print("Use /resume [LIMIT].")
+        return
+    sessions = await session_service.list_sessions(limit=limit)
+    if not sessions:
+        console.print("No sessions.")
+        return
+    _render_sessions(console, sessions)
+    handler = prompt_handler or RichUserPromptHandler(console)
+    answer = await handler.ask(
+        question="Choose a session to resume.",
+        choices=tuple(_resume_choice(session) for session in sessions),
+        allow_freeform=False,
+    )
+    if answer.choice_id is None:
+        console.print("No session selected.")
+        return
+    try:
+        session = await session_service.require_session(answer.choice_id)
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+    await _activate_repl_session(state, session.id, context_service, task_service)
+    _render_resumed_session(console, session)
+
+
+async def _handle_sessions_command(
+    console: Console,
+    session_service: SessionService | None,
+    argument: str,
+) -> None:
+    if session_service is None:
+        console.print("Session service is not configured.")
+        return
+    try:
+        limit = int(argument.strip()) if argument.strip() else 10
+    except ValueError:
+        console.print("Use /sessions [LIMIT].")
+        return
+    _render_sessions(console, await session_service.list_sessions(limit=limit))
+
+
+async def _handle_session_command(
+    console: Console,
+    session_service: SessionService | None,
+    state: ReplDisplayState,
+    argument: str,
+    context_service: ContextService | None,
+    task_service: TaskService | None,
+) -> None:
+    if session_service is None:
+        console.print("Session service is not configured.")
+        return
+    parts = argument.split(maxsplit=2)
+    action = parts[0] if parts else "show"
+    try:
+        if action in {"", "show"}:
+            target_session_id = parts[1] if len(parts) > 1 else state.session_id
+            session = await session_service.get_session(target_session_id)
+            if session is None:
+                console.print(f"Session {target_session_id} has no persisted messages yet.")
+                return
+            _render_session_summary(console, session)
+            return
+        if action == "resume":
+            if len(parts) < 2:
+                console.print("Use /session resume SESSION_ID.")
+                return
+            session = await session_service.require_session(parts[1])
+            await _activate_repl_session(state, session.id, context_service, task_service)
+            _render_resumed_session(console, session)
+            return
+        if action == "latest":
+            session = await session_service.latest_session()
+            await _activate_repl_session(state, session.id, context_service, task_service)
+            _render_resumed_session(console, session)
+            return
+        if action == "new":
+            new_session_id = session_service.new_session_id()
+            await _activate_repl_session(state, new_session_id, context_service, task_service)
+            console.print(f"Started new session {new_session_id}.")
+            return
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
+    console.print("Use /session show [ID], /session resume ID, /session latest, or /session new.")
+
+
+async def _activate_repl_session(
+    state: ReplDisplayState,
+    session_id: str,
+    context_service: ContextService | None,
+    task_service: TaskService | None,
+) -> None:
+    state.session_id = session_id
+    state.active_plan_id = None
+    state.active_plan_status = None
+    state.last_run_id = None
+    state.last_status = "idle"
+    await _refresh_context_status(state, context_service)
+    await _refresh_task_status(state, task_service)
+
+
 async def _handle_context_command(
     console: Console,
     context_service: ContextService,
@@ -900,6 +1068,7 @@ def run_repl_sync(
     task_service: TaskService | None = None,
     decision_service: DecisionService | None = None,
     memory_service: MemoryService | None = None,
+    session_service: SessionService | None = None,
     plan_service: PlanService | None = None,
     subagent_service: SubagentService | None = None,
     model_router: ModelRouter | None = None,
@@ -910,6 +1079,8 @@ def run_repl_sync(
     history_path: Path | None = None,
     theme_name: str | None = None,
     preferences_service: ReplPreferencesService | None = None,
+    initial_session_id: str | None = None,
+    resume_latest: bool = False,
     repo_root: Path | None = None,
     theme_dirs: tuple[Path, ...] = (),
 ) -> None:
@@ -923,6 +1094,7 @@ def run_repl_sync(
             task_service=task_service,
             decision_service=decision_service,
             memory_service=memory_service,
+            session_service=session_service,
             plan_service=plan_service,
             subagent_service=subagent_service,
             model_router=model_router,
@@ -933,6 +1105,8 @@ def run_repl_sync(
             history_path=history_path,
             theme_name=theme_name,
             preferences_service=preferences_service,
+            initial_session_id=initial_session_id,
+            resume_latest=resume_latest,
             repo_root=repo_root,
             theme_dirs=theme_dirs,
         )
@@ -1773,6 +1947,56 @@ def _plan_label(state: ReplDisplayState) -> str:
     return f"plan={status}:{_short_id(state.active_plan_id)}"
 
 
+def _resume_choice(session: SessionSummary) -> UserPromptChoice:
+    title = session.title or session.last_user_preview or "untitled session"
+    preview = session.last_user_preview or "no user messages yet"
+    return UserPromptChoice(
+        id=session.id,
+        label=f"{_short_id(session.id)} {title}",
+        description=(
+            f"messages={session.message_count} updated={session.updated_at} "
+            f"last_user={preview}"
+        ),
+    )
+
+
+def _render_resumed_session(console: Console, session: SessionSummary) -> None:
+    preview = f" last_user={session.last_user_preview}" if session.last_user_preview else ""
+    console.print(
+        f"Resumed session {session.id} "
+        f"messages={session.message_count} updated={session.updated_at}{preview}",
+        markup=False,
+    )
+
+
+def _render_sessions(console: Console, sessions: tuple[SessionSummary, ...]) -> None:
+    if not sessions:
+        console.print("No sessions.")
+        return
+    table = Table("Updated", "Messages", "ID", "Title", "Last User")
+    for session in sessions:
+        table.add_row(
+            session.updated_at,
+            str(session.message_count),
+            session.id,
+            session.title or "",
+            session.last_user_preview or "",
+        )
+    console.print(table)
+
+
+def _render_session_summary(console: Console, session: SessionSummary) -> None:
+    table = Table("Field", "Value")
+    table.add_row("id", session.id)
+    table.add_row("title", session.title or "")
+    table.add_row("created_at", session.created_at)
+    table.add_row("updated_at", session.updated_at)
+    table.add_row("message_count", str(session.message_count))
+    table.add_row("last_run_id", session.last_run_id or "")
+    table.add_row("last_user_preview", session.last_user_preview or "")
+    console.print(table)
+
+
 def _render_status(console: Console, state: ReplDisplayState) -> None:
     table = Table("Field", "Value")
     rows = {
@@ -1851,6 +2075,17 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Show full REPL, model, session, and context status.",
     )
     table.add_row(
+        "/resume [LIMIT]",
+        _help_current(state, "session"),
+        "Choose a persisted session to resume.",
+    )
+    table.add_row("/sessions [LIMIT]", "", "List persisted sessions.")
+    table.add_row(
+        "/session show|resume|latest|new",
+        _help_current(state, "session"),
+        "Inspect or switch the active session.",
+    )
+    table.add_row(
         Text("/tasks [open|all|STATUS]"),
         _help_current(state, "tasks"),
         "Show session task records.",
@@ -1915,6 +2150,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return state.theme.name
     if field == "status":
         return f"{state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
+    if field == "session":
+        return _short_id(state.session_id)
     if field == "tasks":
         return state.task_summary
     if field == "plan":

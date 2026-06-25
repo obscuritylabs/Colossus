@@ -20,6 +20,7 @@ from colossus.application.planning import PlanService
 from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.risk import RiskAssessmentService
+from colossus.application.sessions import SessionService
 from colossus.application.skills import SkillResolver
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
@@ -294,6 +295,10 @@ def create_decision_service(data_dir: Path) -> DecisionService:
 def create_memory_service(data_dir: Path) -> MemoryService:
     state = create_state_store(data_dir)
     return MemoryService(state, create_audit_sink(data_dir), state)
+
+
+def create_session_service(data_dir: Path) -> SessionService:
+    return SessionService(create_state_store(data_dir))
 
 
 def create_repl_preferences_service(data_dir: Path) -> ReplPreferencesService:
