@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -158,6 +159,73 @@ async def test_openai_responses_provider_maps_payload_and_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_responses_provider_verbose_debug_logs_are_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "secret provider answer"}
+                        ],
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    provider = OpenAIResponsesProvider(
+        api_key="secret-responses-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="colossus.adapters.openai_responses"):
+        events = [
+            event
+            async for event in provider.stream(
+                ModelRequest(
+                    model="model-a",
+                    instructions="secret system prompt",
+                    messages=(
+                        UserMessage(content="secret user prompt"),
+                        ToolResultMessage(
+                            call_id="call_0",
+                            name="filesystem.read",
+                            content="secret file contents",
+                        ),
+                    ),
+                    tools=(_dotted_tool(),),
+                )
+            )
+        ]
+
+    assert events == [
+        ModelDeltaEvent(text="secret provider answer"),
+        FinalOutputEvent(text="secret provider answer"),
+    ]
+    adapter_logs = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "colossus.adapters.openai_responses"
+    )
+    assert "provider.responses.request" in adapter_logs
+    assert "provider.responses.response" in adapter_logs
+    assert "provider.responses.response_shape" in adapter_logs
+    assert '"input_count"' in adapter_logs
+    assert '"output_count"' in adapter_logs
+    assert "secret-responses-key" not in adapter_logs
+    assert "secret system prompt" not in adapter_logs
+    assert "secret user prompt" not in adapter_logs
+    assert "secret file contents" not in adapter_logs
+    assert "secret provider answer" not in adapter_logs
+
+
+@pytest.mark.asyncio
 async def test_local_openai_chat_provider_maps_payload_and_events() -> None:
     captured: dict[str, Any] = {}
 
@@ -227,6 +295,63 @@ async def test_local_openai_chat_provider_maps_payload_and_events() -> None:
         ),
         ModelDeltaEvent(text="done"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_local_openai_chat_provider_verbose_debug_logs_are_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "secret provider answer"}}]},
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="secret-local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="colossus.adapters.local_openai_chat"):
+        events = [
+            event
+            async for event in provider.stream(
+                ModelRequest(
+                    model="model-b",
+                    instructions="secret system prompt",
+                    messages=(
+                        UserMessage(content="secret user prompt"),
+                        ToolResultMessage(
+                            call_id="call_0",
+                            name="filesystem.read",
+                            content="secret file contents",
+                        ),
+                    ),
+                    tools=(_dotted_tool(),),
+                )
+            )
+        ]
+
+    assert events == [
+        ModelDeltaEvent(text="secret provider answer"),
+        FinalOutputEvent(text="secret provider answer"),
+    ]
+    adapter_logs = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "colossus.adapters.local_openai_chat"
+    )
+    assert "provider.chat.stream.request" in adapter_logs
+    assert "provider.chat.stream.response" in adapter_logs
+    assert '"message_count"' in adapter_logs
+    assert '"content_chars"' in adapter_logs
+    assert "secret-local-key" not in adapter_logs
+    assert "secret system prompt" not in adapter_logs
+    assert "secret user prompt" not in adapter_logs
+    assert "secret file contents" not in adapter_logs
+    assert "secret provider answer" not in adapter_logs
 
 
 @pytest.mark.asyncio
@@ -809,6 +934,51 @@ async def test_local_openai_chat_provider_wraps_http_errors() -> None:
     )
 
     with pytest.raises(ProviderError, match=r"404.*model not found"):
+        _ = [event async for event in provider.stream(request)]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_wraps_http_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden", request=request)
+
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    request = ModelRequest(
+        model="missing-model",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(),
+    )
+
+    with pytest.raises(ProviderError, match=r"403.*forbidden"):
+        _ = [event async for event in provider.stream(request)]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_reports_empty_response_shape() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"output": []}, request=request)
+
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    request = ModelRequest(
+        model="model-a",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(),
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match=r"no assistant content or tool calls.*output_count",
+    ):
         _ = [event async for event in provider.stream(request)]
 
 
