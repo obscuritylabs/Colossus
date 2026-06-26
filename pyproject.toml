@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "colossus"
-version = "0.1.0"
+version = "0.2.0"
 description = "A secure, layered CLI agentic harness with OpenAI-compatible online and offline providers."
 readme = "README.md"
 requires-python = ">=3.12"

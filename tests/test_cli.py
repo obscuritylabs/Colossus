@@ -2,7 +2,7 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
-from click.exceptions import Exit as ClickExit
+import typer
 from typer.testing import CliRunner
 
 import colossus.cli as cli_module
@@ -796,7 +796,7 @@ def test_cli_main_suppresses_expected_error_tracebacks(monkeypatch) -> None:
 
     try:
         cli_module.main()
-    except ClickExit as exc:
+    except typer.Exit as exc:
         assert exc.exit_code == 1
         assert exc.__cause__ is None
     else:  # pragma: no cover
