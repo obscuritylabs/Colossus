@@ -101,6 +101,7 @@ class TranscriptRenderer:
     enabled: bool = True
     events_mode: EventDisplayMode = "compact"
     stream_model_output: bool = True
+    render_streamed_markdown: bool = True
     show_reasoning: bool = True
     transcript_style: TranscriptStylePreference = "comfortable"
     theme: TranscriptRenderTheme = field(default_factory=TranscriptRenderTheme)
@@ -113,6 +114,7 @@ class TranscriptRenderer:
     _last_model_delta_ended_newline: bool = True
     _assistant_started: bool = False
     _activity_context: str = ""
+    _model_delta_buffer: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.activity_indicator is None:
@@ -149,9 +151,11 @@ class TranscriptRenderer:
         self._last_model_delta_ended_newline = True
         self._assistant_started = False
         self._activity_context = activity_context or ""
+        self._model_delta_buffer.clear()
         self._set_activity("Thinking...")
 
     def end_run(self) -> None:
+        self._render_buffered_model_output()
         self._stop_activity()
         if self._rendered_model_output and not self._last_model_delta_ended_newline:
             self.console.print()
@@ -184,6 +188,7 @@ class TranscriptRenderer:
             self.console.print(Markdown(text))
         self._rendered_model_output = True
         self._last_model_delta_ended_newline = text.endswith("\n")
+        self._model_delta_buffer.clear()
 
     def render_empty_response(self) -> None:
         self._stop_activity()
@@ -196,7 +201,10 @@ class TranscriptRenderer:
     def render(self, event: RunEvent) -> None:
         if isinstance(event, ModelDeltaEvent):
             if self.stream_model_output:
-                self._render_model_delta(event.text)
+                if self.render_streamed_markdown:
+                    self._buffer_model_delta(event.text)
+                else:
+                    self._render_model_delta(event.text)
             return
         self._update_activity(event)
         if not self.enabled or self.events_mode == "off":
@@ -206,10 +214,15 @@ class TranscriptRenderer:
                 self._render_reasoning(event)
             return
         if isinstance(event, FinalOutputEvent):
-            if not self._rendered_model_output and self.stream_model_output:
-                self.render_final_answer(event.text)
-                return
-            if self._rendered_model_output and not self._last_model_delta_ended_newline:
+            rendered_final = False
+            if not self._rendered_model_output:
+                self._render_buffered_model_output(event.text)
+                rendered_final = self._rendered_model_output
+            if (
+                self._rendered_model_output
+                and not self._last_model_delta_ended_newline
+                and not rendered_final
+            ):
                 self.console.print()
                 self._last_model_delta_ended_newline = True
             if self.events_mode == "verbose":
@@ -261,6 +274,22 @@ class TranscriptRenderer:
                 f"{event.from_agent} -> {event.to_agent}{reason}",
                 self.theme.tool,
             )
+
+    def _buffer_model_delta(self, text: str) -> None:
+        if not text:
+            return
+        text = _visible_transcript_text(text)
+        if not self._model_delta_buffer:
+            text = text.lstrip()
+            if not _has_visible_cells(text):
+                return
+        self._model_delta_buffer.append(text)
+
+    def _render_buffered_model_output(self, final_text: str = "") -> None:
+        text = final_text or "".join(self._model_delta_buffer)
+        if not text:
+            return
+        self.render_final_answer(text)
 
     def _render_model_delta(self, text: str) -> None:
         if not text:

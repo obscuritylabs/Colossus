@@ -153,7 +153,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/skill": "Toggle or manage Skill Mode.",
     "/skills": "List available skills.",
     "/trace": "Compatibility toggle for compact events.",
-    "/stream": "Toggle live assistant token streaming.",
+    "/stream": "Control assistant output rendering.",
     "/events": "Control tool/risk/activity event detail.",
     "/reasoning": "Toggle provider-supplied reasoning summaries.",
     "/transcript": "Switch transcript spacing and blocks.",
@@ -514,6 +514,7 @@ class ReplDisplayState:
     model: str
     approval_mode: str
     stream_model_output: bool = True
+    raw_stream_model_output: bool = False
     interaction_mode: ReplInteractionMode = "chat"
     skill_mode_enabled: bool = True
     sticky_skills: tuple[str, ...] = field(default_factory=tuple)
@@ -645,6 +646,7 @@ async def run_repl(
         console,
         events_mode=display_state.events_mode,
         stream_model_output=display_state.stream_model_output,
+        render_streamed_markdown=not display_state.raw_stream_model_output,
         show_reasoning=display_state.show_reasoning,
         transcript_style=display_state.transcript_style,
         theme=display_state.theme.transcript,
@@ -733,12 +735,12 @@ async def run_repl(
                 console.print(f"Events are {trace_renderer.events_mode}.")
                 continue
             if command.command == "stream":
-                trace_renderer.stream_model_output = _toggle_on_off(
-                    command.argument,
-                    trace_renderer.stream_model_output,
-                )
-                display_state.stream_model_output = trace_renderer.stream_model_output
-                console.print(f"Stream is {'on' if trace_renderer.stream_model_output else 'off'}.")
+                stream_enabled, raw_stream = _stream_output_mode(command.argument, display_state)
+                display_state.stream_model_output = stream_enabled
+                display_state.raw_stream_model_output = raw_stream
+                trace_renderer.stream_model_output = stream_enabled
+                trace_renderer.render_streamed_markdown = not raw_stream
+                console.print(f"Assistant output is {_stream_mode_label(display_state)}.")
                 continue
             if command.command == "events":
                 trace_renderer.events_mode = _events_mode(command.argument)
@@ -1223,7 +1225,7 @@ def _render_repl_startup(console: Console, state: ReplDisplayState) -> None:
         f"[dim]session_id={state.session_id} "
         f"mode={state.interaction_mode} "
         f"composer={'multi' if state.multiline else 'single'} "
-        f"theme={state.theme.name} stream={_on_off(state.stream_model_output)} "
+        f"theme={state.theme.name} stream={_stream_mode_label(state)} "
         f"events={state.events_mode} "
         f"transcript={state.transcript_style} "
         f"reasoning={_on_off(state.show_reasoning)}[/dim]"
@@ -1241,6 +1243,27 @@ def _trace_enabled(argument: str, current: bool) -> bool:
 
 def _toggle_on_off(argument: str, current: bool) -> bool:
     return _trace_enabled(argument, current)
+
+
+def _stream_output_mode(argument: str, state: ReplDisplayState) -> tuple[bool, bool]:
+    normalized = argument.strip().lower()
+    if normalized in {"on", "markdown", "buffer", "buffered", "final"}:
+        return True, False
+    if normalized in {"raw", "live"}:
+        return True, True
+    if normalized in {"off", "false", "0", "no"}:
+        return False, False
+    if state.stream_model_output:
+        return False, False
+    return True, False
+
+
+def _stream_mode_label(state: ReplDisplayState) -> str:
+    if not state.stream_model_output:
+        return "off"
+    if state.raw_stream_model_output:
+        return "raw"
+    return "markdown"
 
 
 def _multiline_mode(argument: str, current: bool) -> bool:
@@ -1460,6 +1483,7 @@ def _apply_preferences(
     state.theme = _theme_by_name(preferences.theme, themes)
     state.multiline = preferences.multiline
     state.stream_model_output = preferences.stream_model_output
+    state.raw_stream_model_output = False
     state.events_mode = preferences.events_mode
     state.show_reasoning = preferences.show_reasoning
     state.transcript_style = preferences.transcript_style
@@ -1468,6 +1492,7 @@ def _apply_preferences(
 def _sync_renderer(renderer: TranscriptRenderer, state: ReplDisplayState) -> None:
     renderer.events_mode = state.events_mode
     renderer.stream_model_output = state.stream_model_output
+    renderer.render_streamed_markdown = not state.raw_stream_model_output
     renderer.show_reasoning = state.show_reasoning
     renderer.transcript_style = state.transcript_style
     renderer.theme = state.theme.transcript
@@ -2197,7 +2222,7 @@ def _format_repl_toolbar(
     return (
         f"mode={mode} model={state.active_model_role}:{_short_text(state.model, 28)} "
         f"theme={state.theme.name} "
-        f"approval={state.approval_mode} stream={_on_off(state.stream_model_output)} "
+        f"approval={state.approval_mode} stream={_stream_mode_label(state)} "
         f"events={state.events_mode} transcript={state.transcript_style} "
         f"reasoning={_on_off(state.show_reasoning)} "
         f"session={_short_id(state.session_id)} pos={cursor_line}:{cursor_column} "
@@ -2426,7 +2451,7 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
         "theme": state.theme.name,
         "activity_spinner": state.theme.transcript.activity_spinner,
         "composer_mode": "multiline" if state.multiline else "single-line",
-        "stream": _on_off(state.stream_model_output),
+        "stream": _stream_mode_label(state),
         "events": state.events_mode,
         "transcript": state.transcript_style,
         "reasoning": _on_off(state.show_reasoning),
@@ -2488,9 +2513,9 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
     )
     table.add_row("/tools", "", "List currently registered tools.")
     table.add_row(
-        "/stream on|off",
+        "/stream on|raw|off",
         _help_current(state, "stream"),
-        "Toggle live assistant token streaming.",
+        "Control assistant output rendering.",
     )
     table.add_row(
         "/events compact|verbose|off",
@@ -2596,7 +2621,7 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
     if field == "model":
         return f"{state.active_model_role}:{_short_text(state.model, 24)}"
     if field == "stream":
-        return _on_off(state.stream_model_output)
+        return _stream_mode_label(state)
     if field == "events":
         return state.events_mode
     if field == "reasoning":

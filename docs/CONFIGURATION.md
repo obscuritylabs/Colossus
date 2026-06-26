@@ -285,7 +285,7 @@ Composer behavior:
 
 Runtime controls:
 
-- `/stream on|off`
+- `/stream on|raw|off`
 - `/events compact|verbose|off`
 - `/reasoning on|off`
 - `/resume [LIMIT]`

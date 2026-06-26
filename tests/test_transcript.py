@@ -25,9 +25,30 @@ def test_transcript_renderer_renders_user_block_with_spacing() -> None:
     assert "read the codebase" in output
 
 
-def test_transcript_renderer_streams_assistant_without_duplicate_final_output() -> None:
+def test_transcript_renderer_buffers_assistant_and_renders_final_markdown() -> None:
     console = Console(record=True, width=100)
     renderer = TranscriptRenderer(console)
+
+    renderer.begin_run()
+    renderer.render(ModelDeltaEvent(text="# Research"))
+    renderer.render(ModelDeltaEvent(text=" Report"))
+    assert not renderer.rendered_model_output
+    assert "Research Report" not in console.export_text()
+
+    renderer.render(FinalOutputEvent(text="# Research Report\n\n- Finding one"))
+    renderer.end_run()
+
+    output = console.export_text()
+    assert "agent" in output
+    assert "Research Report" in output
+    assert "Finding one" in output
+    assert "# Research Report" not in output
+    assert "done" not in output
+
+
+def test_transcript_renderer_raw_streams_assistant_without_duplicate_final_output() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console, render_streamed_markdown=False)
 
     renderer.begin_run()
     renderer.render(ModelDeltaEvent(text="hel"))
@@ -318,7 +339,7 @@ def test_transcript_renderer_compact_skips_sticky_approval_requested_block() -> 
     assert "approval requested" not in console.export_text()
 
 
-def test_transcript_renderer_streaming_delta_stops_activity_before_output() -> None:
+def test_transcript_renderer_buffered_delta_keeps_activity_until_final_output() -> None:
     console = Console(record=True, width=100)
     renderer = TranscriptRenderer(console, events_mode="off")
 
@@ -333,6 +354,35 @@ def test_transcript_renderer_streaming_delta_stops_activity_before_output() -> N
     )
     assert renderer.activity_label == "Using filesystem.read... | mode=single model=primary:demo"
     renderer.render(ModelDeltaEvent(text=""))
+    assert renderer.activity_label == "Using filesystem.read... | mode=single model=primary:demo"
+    renderer.render(ModelDeltaEvent(text="hello"))
+    assert renderer.activity_label == "Using filesystem.read... | mode=single model=primary:demo"
+    assert "hello" not in console.export_text()
+    renderer.end_run()
+
+    output = console.export_text()
+    assert "hello" in output
+    assert "filesystem.read" not in output
+    assert renderer.activity_label is None
+
+
+def test_transcript_renderer_raw_streaming_delta_stops_activity_before_output() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(
+        console,
+        events_mode="off",
+        render_streamed_markdown=False,
+    )
+
+    renderer.begin_run(activity_context="mode=single model=primary:demo")
+    assert renderer.activity_label == "Thinking... | mode=single model=primary:demo"
+    renderer.render(
+        ToolCallRequestedEvent(
+            call_id="call-123456",
+            name="filesystem.read",
+            arguments={"path": "README.md"},
+        )
+    )
     assert renderer.activity_label == "Using filesystem.read... | mode=single model=primary:demo"
     renderer.render(ModelDeltaEvent(text="hello"))
     assert renderer.activity_label is None

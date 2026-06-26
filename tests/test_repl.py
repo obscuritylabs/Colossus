@@ -82,6 +82,8 @@ from colossus.interfaces.repl import (
     _right_prompt,
     _save_repl_plan,
     _show_submit_summary,
+    _stream_mode_label,
+    _stream_output_mode,
     _theme_by_name,
     _toggle_on_off,
     _trace_enabled,
@@ -378,6 +380,28 @@ def test_multiline_mode_parser() -> None:
     assert _multiline_mode("", current=True) is False
 
 
+def test_stream_output_mode_parser() -> None:
+    state = ReplDisplayState(
+        session_id="session-123456",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+    )
+
+    assert _stream_output_mode("on", state) == (True, False)
+    assert _stream_output_mode("markdown", state) == (True, False)
+    assert _stream_output_mode("buffered", state) == (True, False)
+    assert _stream_output_mode("raw", state) == (True, True)
+    assert _stream_output_mode("live", state) == (True, True)
+    assert _stream_output_mode("off", state) == (False, False)
+    assert _stream_mode_label(state) == "markdown"
+
+    state.raw_stream_model_output = True
+    assert _stream_mode_label(state) == "raw"
+    state.stream_model_output = False
+    assert _stream_mode_label(state) == "off"
+
+
 def test_theme_lookup_and_names() -> None:
     assert repl_theme_names() == ("default", "mono", "high-contrast", "carrot", "hacker")
     assert _theme_by_name("default").name == "default"
@@ -580,7 +604,7 @@ def test_toolbar_shows_operational_state_and_prompt_metrics() -> None:
     assert "model=primary:very-long-local-model-nam..." in toolbar
     assert "theme=default" in toolbar
     assert "approval=risk-auto" in toolbar
-    assert "stream=on" in toolbar
+    assert "stream=markdown" in toolbar
     assert "events=compact" in toolbar
     assert "transcript=comfortable" in toolbar
     assert "reasoning=on" in toolbar
