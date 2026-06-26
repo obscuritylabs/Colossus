@@ -2,7 +2,7 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
-from click.exceptions import Exit as ClickExit
+import typer
 from typer.testing import CliRunner
 
 import colossus.cli as cli_module
@@ -23,6 +23,7 @@ from colossus.infrastructure.config import (
     ResearchConfig,
     SearchConfig,
 )
+from colossus.infrastructure.http_client import HttpClientConfig
 from colossus.infrastructure.paths import config_path
 
 
@@ -192,6 +193,36 @@ def test_cli_run_accepts_global_ca_bundle_option(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "[echo:default] hello" in result.stdout
+
+
+def test_cli_run_passes_global_http_settings_to_orchestrator(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    captured: dict[str, object] = {}
+    create_default_orchestrator = cli_module.create_default_orchestrator
+
+    def capture_orchestrator(*args, **kwargs):
+        captured["http_client_config"] = kwargs.get("http_client_config")
+        return create_default_orchestrator(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "create_default_orchestrator", capture_orchestrator)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--http-proxy",
+            "http://proxy.example.test:8080",
+            "--http-no-trust-env",
+            "run",
+            "hello",
+        ],
+    )
+
+    http_client_config = captured["http_client_config"]
+    assert result.exit_code == 0
+    assert isinstance(http_client_config, HttpClientConfig)
+    assert http_client_config.proxy_url == "http://proxy.example.test:8080"
+    assert http_client_config.trust_env is False
 
 
 def test_cli_run_accepts_provider_model_and_endpoint_options(tmp_path, monkeypatch) -> None:
@@ -765,7 +796,7 @@ def test_cli_main_suppresses_expected_error_tracebacks(monkeypatch) -> None:
 
     try:
         cli_module.main()
-    except ClickExit as exc:
+    except typer.Exit as exc:
         assert exc.exit_code == 1
         assert exc.__cause__ is None
     else:  # pragma: no cover

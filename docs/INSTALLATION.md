@@ -36,7 +36,6 @@ The package exposes the `colossus` console script:
 ```bash
 colossus run "hello"
 colossus repl
-colossus tui
 colossus config init
 colossus skills list
 colossus tools list

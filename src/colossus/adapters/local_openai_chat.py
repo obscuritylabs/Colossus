@@ -29,6 +29,7 @@ from colossus.domain.providers import (
 )
 from colossus.domain.requests import ModelRequest
 from colossus.domain.tools import ToolSpec
+from colossus.infrastructure.http_client import HttpClientConfig
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +45,15 @@ class LocalOpenAIChatProvider:
         timeout_seconds: float = 120.0,
         ca_bundle: Path | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        http_client_config: HttpClientConfig | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
-        self._ca_bundle = ca_bundle
+        self._http_client_config = (
+            http_client_config or HttpClientConfig()
+        ).with_ca_bundle(ca_bundle)
+        self._ca_bundle = self._http_client_config.ca_bundle
         self._transport = transport
 
     @property
@@ -58,6 +63,10 @@ class LocalOpenAIChatProvider:
     @property
     def ca_bundle(self) -> Path | None:
         return self._ca_bundle
+
+    @property
+    def http_client_config(self) -> HttpClientConfig:
+        return self._http_client_config
 
     def capabilities(self) -> tuple[ProviderCapability, ...]:
         return (
@@ -132,9 +141,10 @@ class LocalOpenAIChatProvider:
             "tools": [_tool_to_chat_tool(tool, tool_name_codec) for tool in request.tools],
         }
         async with httpx.AsyncClient(
-            timeout=self._timeout_seconds,
-            verify=str(self._ca_bundle) if self._ca_bundle else True,
-            transport=self._transport,
+            **self._http_client_config.async_client_kwargs(
+                timeout=self._timeout_seconds,
+                transport=self._transport,
+            )
         ) as client:
             try:
                 async for event in self._stream_chat_completion(client, payload, tool_name_codec):
@@ -159,9 +169,10 @@ class LocalOpenAIChatProvider:
 
     async def _get_models_response(self) -> httpx.Response:
         async with httpx.AsyncClient(
-            timeout=self._timeout_seconds,
-            verify=str(self._ca_bundle) if self._ca_bundle else True,
-            transport=self._transport,
+            **self._http_client_config.async_client_kwargs(
+                timeout=self._timeout_seconds,
+                transport=self._transport,
+            )
         ) as client:
             return await client.get(
                 f"{self._base_url}/models",

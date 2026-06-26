@@ -14,13 +14,12 @@ state and audit records through ports, and emits a typed run result. Providers n
 OpenAI Responses and local OpenAI-compatible servers into the same event model.
 Streaming providers emit `ModelDeltaEvent`, `ToolCallRequestedEvent`, and optional
 safe `ReasoningSummaryEvent` values through the same observer path used by the CLI,
-REPL, and TUI.
+and REPL.
 
 User surfaces must be thin:
 
 - CLI commands compose services and render results.
 - REPL parses slash commands and sends turns to application services.
-- TUI subscribes to application/run state and renders it.
 
 No user surface owns model calls, tool execution, policy decisions, or persistence.
 
@@ -37,8 +36,8 @@ config is normalized into the `primary` role for compatibility.
 Built-in tool specifications and handlers are composed in adapters, then exposed through
 the application `ToolRegistry` and `ToolExecutor` ports. The orchestrator validates tool
 arguments before policy and approval handling, then records policy and completion audit
-events. CLI, REPL, and TUI code may list or render tools, but must not implement model,
-tool, policy, or state behavior.
+events. CLI and REPL code may list or render tools, but must not implement model, tool,
+policy, or state behavior.
 
 Shell tool calls can optionally pass through `RiskAssessmentService` after deterministic
 policy and before approval. The risk model receives redacted structured metadata with

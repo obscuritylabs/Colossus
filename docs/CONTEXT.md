@@ -73,8 +73,6 @@ The REPL supports:
 - `/context snapshots`
 - `/context restore SNAPSHOT_ID`
 
-The TUI includes a context panel in the side column.
-
 `--resume` and `/session latest` continue the most recently updated persisted session.
 `/resume` lists recent sessions and prompts for a numbered choice. Resume loads full
 prior message context for future model turns and prints only a compact session summary;

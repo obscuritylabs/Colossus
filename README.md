@@ -13,7 +13,6 @@ airgapped environments can exercise the harness before any model endpoint is con
 uv sync --extra dev
 uv run colossus run "hello"
 uv run colossus repl
-uv run colossus tui
 uv run pytest
 ```
 
@@ -112,7 +111,7 @@ The package follows dependency-inward layering:
 - `application`: orchestration, skill resolution, tool execution, and service assembly.
 - `adapters`: OpenAI-compatible providers, SQLite state, package/filesystem skills,
   subprocess broker, and audit log implementations.
-- `interfaces`: Typer CLI, prompt-toolkit REPL, and Textual TUI.
+- `interfaces`: Typer CLI and prompt-toolkit REPL.
 - `infrastructure`: config, package resources, logging, and bundle verification.
 
 Bundled first-party skills live under `src/colossus/bundled_skills/` and are shipped

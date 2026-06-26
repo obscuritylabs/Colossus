@@ -15,6 +15,7 @@ import httpx
 from colossus.adapters.workspace import Workspace
 from colossus.domain.errors import ToolExecutionError
 from colossus.domain.research import ResearchSourceDraft
+from colossus.infrastructure.http_client import HttpClientConfig
 
 EXCLUDED_REPO_DIRS = frozenset(
     {
@@ -89,10 +90,12 @@ class DuckDuckGoSearchProvider:
         endpoint: str = "https://duckduckgo.com/html/",
         user_agent: str = "colossus-agent/0.1",
         transport: httpx.AsyncBaseTransport | None = None,
+        http_client_config: HttpClientConfig | None = None,
     ) -> None:
         self._endpoint = endpoint
         self._user_agent = user_agent
         self._transport = transport
+        self._http_client_config = http_client_config or HttpClientConfig()
 
     @property
     def configured(self) -> bool:
@@ -101,9 +104,11 @@ class DuckDuckGoSearchProvider:
     async def collect(self, query: str, *, max_results: int) -> tuple[ResearchSourceDraft, ...]:
         url = f"{self._endpoint}?q={quote_plus(query)}"
         async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=20.0,
-            transport=self._transport,
+            **self._http_client_config.async_client_kwargs(
+                follow_redirects=True,
+                timeout=20.0,
+                transport=self._transport,
+            )
         ) as client:
             response = await client.get(url, headers={"User-Agent": self._user_agent})
             response.raise_for_status()
@@ -134,6 +139,7 @@ class SearxngSearchProvider:
         auth_header: str = "Authorization",
         auth_scheme: str = "bearer",
         transport: httpx.AsyncBaseTransport | None = None,
+        http_client_config: HttpClientConfig | None = None,
     ) -> None:
         self._endpoint = _normalize_searxng_endpoint(endpoint)
         self._user_agent = user_agent
@@ -141,6 +147,7 @@ class SearxngSearchProvider:
         self._auth_header = auth_header
         self._auth_scheme = auth_scheme
         self._transport = transport
+        self._http_client_config = http_client_config or HttpClientConfig()
 
     @property
     def configured(self) -> bool:
@@ -151,9 +158,11 @@ class SearxngSearchProvider:
         if self._api_key:
             headers[self._auth_header] = _auth_header_value(self._api_key, self._auth_scheme)
         async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=20.0,
-            transport=self._transport,
+            **self._http_client_config.async_client_kwargs(
+                follow_redirects=True,
+                timeout=20.0,
+                transport=self._transport,
+            )
         ) as client:
             response = await client.get(
                 self._endpoint,

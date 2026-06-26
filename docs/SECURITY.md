@@ -141,6 +141,10 @@ or denied source lanes are recorded as limitations rather than bypassed. Search 
 secrets are read from environment variables and must not be sent as tool arguments,
 source metadata, or audit payload fields.
 
+Global HTTP PKI and proxy settings configure transport for Colossus-owned `httpx`
+clients only. They do not grant network approval, expand tool schemas, or affect HTTP
+requests made inside external subprocesses or MCP server processes.
+
 ## Reasoning Visibility
 
 Colossus may render provider-supplied reasoning summaries when an endpoint exposes a

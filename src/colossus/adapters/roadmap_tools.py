@@ -43,6 +43,7 @@ from colossus.domain.memories import (
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolPermission, ToolSpec
+from colossus.infrastructure.http_client import HttpClientConfig
 from colossus.ports.research import McpGateway, SearchProvider
 
 JsonObject = dict[str, Any]
@@ -83,6 +84,7 @@ def create_roadmap_tools(
     include_mcp_call: bool = False,
     search_provider: SearchProvider | None = None,
     mcp_gateway: McpGateway | None = None,
+    http_client_config: HttpClientConfig | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     handlers = RoadmapToolHandlers(
         workspace,
@@ -95,6 +97,7 @@ def create_roadmap_tools(
         subagent_service=subagent_service,
         search_provider=search_provider,
         mcp_gateway=mcp_gateway,
+        http_client_config=http_client_config,
     )
     agent_specs = ((_agent_delegate_spec(),) if include_agent_delegate else ()) + (
         _agent_result_spec(),
@@ -209,6 +212,7 @@ class RoadmapToolHandlers:
         subagent_service: SubagentService | None = None,
         search_provider: SearchProvider | None = None,
         mcp_gateway: McpGateway | None = None,
+        http_client_config: HttpClientConfig | None = None,
     ) -> None:
         self._workspace = workspace
         self._broker = broker
@@ -220,6 +224,7 @@ class RoadmapToolHandlers:
         self._subagent_service = subagent_service
         self._search_provider = search_provider
         self._mcp_gateway = mcp_gateway
+        self._http_client_config = http_client_config or HttpClientConfig()
         self._tasks: list[JsonObject] = []
         self._decisions: list[JsonObject] = []
         self._memories: list[JsonObject] = []
@@ -1060,9 +1065,11 @@ class RoadmapToolHandlers:
         headers = {"User-Agent": "colossus-agent/0.1"}
         try:
             async with httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=20.0,
-                transport=self._http_transport,
+                **self._http_client_config.async_client_kwargs(
+                    follow_redirects=True,
+                    timeout=20.0,
+                    transport=self._http_transport,
+                )
             ) as client, client.stream("GET", url, headers=headers) as response:
                 async for chunk in response.aiter_bytes():
                     if not chunk:

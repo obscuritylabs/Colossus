@@ -23,6 +23,7 @@ from colossus.application.tools import ToolHandler
 from colossus.domain.errors import ToolExecutionError
 from colossus.domain.tools import ToolPermission, ToolSpec
 from colossus.domain.user_prompts import UserPromptChoice
+from colossus.infrastructure.http_client import HttpClientConfig
 from colossus.ports.model_provider import ModelProvider
 from colossus.ports.research import McpGateway, SearchProvider
 from colossus.ports.user_prompt import UserPromptHandler
@@ -47,6 +48,7 @@ def create_builtin_tools(
     user_prompt_handler: UserPromptHandler | None = None,
     search_provider: SearchProvider | None = None,
     mcp_gateway: McpGateway | None = None,
+    http_client_config: HttpClientConfig | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     broker = SubprocessBroker()
     handlers = BuiltinToolHandlers(workspace, broker, user_prompt_handler=user_prompt_handler)
@@ -73,6 +75,7 @@ def create_builtin_tools(
         include_agent_delegate=include_agent_delegate,
         search_provider=search_provider,
         mcp_gateway=mcp_gateway,
+        http_client_config=http_client_config,
     )
     context_specs, context_handlers = create_context_tools(
         context_service,
