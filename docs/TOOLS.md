@@ -29,7 +29,7 @@ uv run colossus tools list
 | Subagents | `agent.delegate`, `agent.result`, `agent.list` | No by default | Yes | Durable queued child-agent jobs with bounded local concurrency. |
 | Web/docs | `web.fetch`, `docs.fetch` | Yes | Yes | Approval-gated HTTP(S) fetches. `web.search` is exposed only when a search adapter such as SearXNG is configured. |
 | MCP/discovery | `mcp.servers`, `mcp.tools`, `tool.search` | No | Yes | MCP listing returns unconfigured state; `tool.search` searches the local catalog. `mcp.call` is not exposed unless an MCP adapter is installed. |
-| Research mode | `colossus research`, `/research` | Network/MCP lanes | Partial | Persists cited briefs, sources, claims, and research status events. |
+| Research mode | `colossus research`, `/research` | Network/MCP lanes | Partial | Persists cited reports, sources, claims, and research status events. |
 | Trace/eval | `trace.show`, `trace.export`, `eval.run` | Export/eval only | Yes | Trace export writes a bounded snapshot; eval wraps local pytest. |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Restore only | Yes | Durable snapshots reduce model input without deleting raw history. |
 | Smoke test | `echo` | No | Yes | Deterministic smoke-test tool. |
@@ -74,7 +74,7 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
   Web search and MCP calls remain adapter extension points.
 - Deep Research Mode asks for approval before configured web search or MCP collection.
   If a source lane is disabled or denied, the run continues with available evidence and
-  records the limitation in the brief.
+  records the limitation in the report.
 - Task records are durable per session and are visible with `/tasks` in the REPL or
   `colossus tasks list`. Key decisions are visible with `/decisions` in the REPL or
   `colossus decisions list`. Memories are visible with `/memories` in the REPL or

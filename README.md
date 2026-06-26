@@ -39,7 +39,7 @@ uv run colossus sessions show SESSION_ID
 Inside the REPL, use `/resume` to choose from recent sessions without copying an id.
 
 Deep Research Mode collects bounded repo evidence, optional approval-gated web search,
-and optional configured MCP sources into a persisted cited brief:
+and optional configured MCP sources into a persisted cited report:
 
 ```bash
 uv run colossus research "How should this harness handle long-running investigations?"

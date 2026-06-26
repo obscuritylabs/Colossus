@@ -440,7 +440,7 @@ def test_cli_tools_list_shows_web_search_when_searxng_is_configured(
     assert "web.search" in result.stdout
 
 
-def test_cli_research_persists_cited_brief(tmp_path, monkeypatch) -> None:
+def test_cli_research_persists_cited_report(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
 
     result = CliRunner().invoke(
@@ -460,7 +460,7 @@ def test_cli_research_persists_cited_brief(tmp_path, monkeypatch) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Research Brief" in result.stdout
+    assert "Research Report" in result.stdout
     assert "[R1]" in result.stdout
     assert "research_id=research-" in result.stdout
     assert "session_id=session-research" in result.stdout

@@ -544,7 +544,7 @@ def research(
         typer.Option("--approval-mode", help=f"Approval mode: {APPROVAL_MODE_HELP}."),
     ] = "ask",
 ) -> None:
-    """Run deep research and persist a cited brief."""
+    """Run deep research and persist a cited report."""
     if resume and session is not None:
         console.print("[red]Use either --resume or --session, not both.[/red]")
         raise typer.Exit(code=2)

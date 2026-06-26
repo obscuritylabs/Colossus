@@ -149,7 +149,7 @@ class ResearchService:
             await self._emit(
                 run,
                 phase="synthesis",
-                message="Synthesizing cited research brief.",
+                message="Synthesizing cited research report.",
                 sources_collected=len(sources),
             )
             report = await self._synthesize_report(run, sources, claims, tuple(warnings))
@@ -166,7 +166,7 @@ class ResearchService:
             await self._emit(
                 completed,
                 phase="completed",
-                message="Research brief complete.",
+                message="Research report complete.",
                 sources_collected=len(sources),
             )
             await self._audit_sink.record(
@@ -358,13 +358,17 @@ class ResearchService:
         text = await self._model_text(
             "research_synthesizer",
             (
-                "Write a concise cited research brief. Only cite labels present in the "
-                "provided source table. Use [R1] style citations."
+                "Write an extensive cited research report, not a short brief. Only cite "
+                "labels present in the provided source table. Use [R1] style citations."
             ),
             prompt,
         )
         labels = {source.label for source in sources}
-        if text and not text.startswith("[echo:") and _citations_valid(text, labels):
+        if (
+            text
+            and not text.startswith("[echo:")
+            and _report_is_detailed_enough(text, labels, run.depth)
+        ):
             return text
         return _deterministic_report(run, sources, claims, warnings)
 
@@ -503,7 +507,7 @@ def _synthesis_prompt(
     warnings: tuple[str, ...],
 ) -> str:
     source_lines = [
-        f"[{source.label}] {source.kind} {source.title} {source.uri}\n{source.content[:1200]}"
+        f"[{source.label}] {source.kind} {source.title} {source.uri}\n{source.content[:1400]}"
         for source in sources
     ]
     claim_lines = [
@@ -513,6 +517,13 @@ def _synthesis_prompt(
     warning_text = "\n".join(f"- {warning}" for warning in warnings) or "- none"
     return (
         f"Question: {run.question}\n\n"
+        "Write a substantial Markdown research report for a technical decision maker. "
+        "Do not collapse the result into a short summary. Include these sections, using "
+        "clear headings: Executive Summary, Methodology, Detailed Findings, Analysis, "
+        "Caveats And Limitations, Source Table, and Unresolved Questions. Every factual "
+        "finding must cite collected source labels such as [R1]. Explain how evidence "
+        "supports the answer, where evidence is thin, and what follow-up would reduce "
+        "uncertainty.\n\n"
         f"Sources:\n{chr(10).join(source_lines)}\n\n"
         f"Candidate claims:\n{chr(10).join(claim_lines)}\n\n"
         f"Collection warnings:\n{warning_text}"
@@ -526,33 +537,89 @@ def _deterministic_report(
     warnings: tuple[str, ...],
 ) -> str:
     lines = [
-        "# Research Brief",
+        "# Research Report",
         "",
         f"Question: {run.question}",
         "",
-        "## Answer",
+        "## Executive Summary",
     ]
     if claims:
-        first = claims[0]
-        labels = " ".join(f"[{label}]" for label in first.source_labels)
-        lines.append(f"The collected evidence most directly supports: {first.text} {labels}")
-    else:
-        lines.append("No source-backed answer could be produced from the available evidence.")
-    lines.extend(["", "## Key Findings"])
-    if claims:
-        for claim in claims[:8]:
+        summary_claims = claims[: min(3, len(claims))]
+        lines.append(
+            "The collected evidence supports the following source-backed answer:"
+        )
+        for claim in summary_claims:
             labels = " ".join(f"[{label}]" for label in claim.source_labels)
             lines.append(f"- {claim.text} {labels}")
     else:
+        lines.append(
+            "No source-backed answer could be produced from the available evidence."
+        )
+    lines.extend(
+        [
+            "",
+            "## Methodology",
+            f"- Depth: `{run.depth}`.",
+            f"- Source lanes requested: {', '.join(run.source_kinds)}.",
+            f"- Sources collected: {len(sources)}.",
+            "- Claims were extracted from persisted source records and then assembled into "
+            "a cited report.",
+            "",
+            "## Detailed Findings",
+        ]
+    )
+    if claims:
+        for index, claim in enumerate(claims, start=1):
+            labels = " ".join(f"[{label}]" for label in claim.source_labels)
+            source = _source_for_claim(claim, sources)
+            heading = source.title if source is not None else f"Finding {index}"
+            lines.extend(
+                [
+                    "",
+                    f"### Finding {index}: {heading}",
+                    "",
+                    f"{claim.text} {labels}",
+                    "",
+                    _finding_context(source, claim),
+                ]
+            )
+    else:
         lines.append("- No claims were extracted.")
-    lines.extend(["", "## Caveats"])
+    lines.extend(["", "## Analysis"])
+    if claims:
+        kinds = ", ".join(sorted({source.kind for source in sources})) or "none"
+        lines.extend(
+            [
+                f"The evidence base spans {len(sources)} collected source record(s) across "
+                f"{kinds} source type(s). The strongest support comes from claims that are "
+                "directly tied to persisted source labels, which keeps the final answer "
+                "auditable instead of relying on unsupported synthesis.",
+                "",
+                "The report should be treated as a source-grounded working document: it "
+                "identifies what the collected evidence supports, calls out source-lane "
+                "limitations, and keeps follow-up questions explicit rather than hiding "
+                "them behind a confident summary.",
+            ]
+        )
+    else:
+        lines.append(
+            "The collection phase did not produce evidence, so no substantive analysis can "
+            "be made without additional sources."
+        )
+    lines.extend(["", "## Caveats And Limitations"])
     if warnings:
         for warning in warnings:
             lines.append(f"- {warning}.")
     else:
         lines.append("- Source collection completed without recorded adapter warnings.")
     lines.extend(
-        ["", "## Sources", "", "| Label | Type | Title | URI |", "| --- | --- | --- | --- |"]
+        [
+            "",
+            "## Source Table",
+            "",
+            "| Label | Type | Title | URI |",
+            "| --- | --- | --- | --- |",
+        ]
     )
     for source in sources:
         lines.append(
@@ -561,6 +628,21 @@ def _deterministic_report(
         )
     if not sources:
         lines.append("| - | - | No sources collected | - |")
+    lines.extend(
+        [
+            "",
+            "## Source Notes",
+            "",
+            "| Label | Contribution |",
+            "| --- | --- |",
+        ]
+    )
+    for source in sources:
+        lines.append(
+            f"| [{source.label}] | {_escape_table(_source_contribution(source))} |"
+        )
+    if not sources:
+        lines.append("| - | No source notes available. |")
     lines.extend(["", "## Unresolved Questions"])
     if "web" in run.source_kinds and any("web search" in warning for warning in warnings):
         lines.append(
@@ -573,9 +655,54 @@ def _deterministic_report(
     return "\n".join(lines).strip()
 
 
+def _report_is_detailed_enough(
+    report: str,
+    labels: set[str],
+    depth: ResearchDepth,
+) -> bool:
+    if not _citations_valid(report, labels):
+        return False
+    heading_count = len(re.findall(r"^##\s+", report, flags=re.MULTILINE))
+    minimum_headings = 4 if depth == "quick" else 5
+    minimum_chars = {"quick": 600, "standard": 1000, "deep": 1400}[depth]
+    return heading_count >= minimum_headings and len(report.strip()) >= minimum_chars
+
+
 def _citations_valid(report: str, labels: set[str]) -> bool:
     citations = {match.strip("[]") for match in re.findall(r"\[R\d+\]", report)}
     return bool(citations) and citations.issubset(labels)
+
+
+def _source_for_claim(
+    claim: ResearchClaim,
+    sources: tuple[ResearchSource, ...],
+) -> ResearchSource | None:
+    labels = set(claim.source_labels)
+    for source in sources:
+        if source.label in labels:
+            return source
+    return None
+
+
+def _finding_context(source: ResearchSource | None, claim: ResearchClaim) -> str:
+    if source is None:
+        return "This finding is source-backed, but the source record could not be resolved."
+    contribution = _source_contribution(source)
+    labels = " ".join(f"[{label}]" for label in claim.source_labels)
+    return (
+        f"Evidence context: {contribution} The finding is tied to the persisted "
+        f"{source.kind} source record {labels}."
+    )
+
+
+def _source_contribution(source: ResearchSource) -> str:
+    content = " ".join(source.content.split())
+    if not content:
+        return f"{source.title} was collected as {source.kind} evidence."
+    return _truncate(
+        f"{source.title} contributed this evidence signal: {content}",
+        420,
+    )
 
 
 def _escape_table(value: str) -> str:
