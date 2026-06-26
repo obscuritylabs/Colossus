@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from colossus.adapters.echo_provider import EchoModelProvider
 from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
@@ -18,6 +18,7 @@ from colossus.domain.models import (
     ProviderKind,
 )
 from colossus.domain.research import ResearchDepth, ResearchSourceKind
+from colossus.infrastructure.http_client import HttpClientConfig
 from colossus.ports.model_provider import ModelProvider
 
 DEFAULT_MODEL_ROLES: tuple[ModelRole, ...] = (
@@ -58,6 +59,27 @@ class MemoryConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     index: MemoryIndexConfig = Field(default_factory=MemoryIndexConfig)
+
+
+class HttpConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ca_bundle: Path | None = None
+    client_cert: Path | None = None
+    client_key: Path | None = None
+    client_key_password_env: str | None = None
+    proxy_url: str | None = None
+    proxy_url_env: str | None = None
+    trust_env: bool = True
+
+    @model_validator(mode="after")
+    def _validate_client_cert_pair(self) -> "HttpConfig":
+        _validate_client_cert_config(
+            client_cert=self.client_cert,
+            client_key=self.client_key,
+            client_key_password_env=self.client_key_password_env,
+        )
+        return self
 
 
 class SearchConfig(BaseModel):
@@ -114,6 +136,7 @@ class ColossusConfig(BaseModel):
     context: ContextConfig = Field(default_factory=ContextConfig)
     subagents: SubagentConfig = Field(default_factory=SubagentConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    http: HttpConfig = Field(default_factory=HttpConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
     allow_user_skill_overrides: bool = False
 
@@ -128,6 +151,18 @@ class ProviderOverrides(BaseModel):
     api_key: str | None = None
     api_key_env: str | None = None
     ca_bundle: Path | None = None
+
+
+class HttpOverrides(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ca_bundle: Path | None = None
+    client_cert: Path | None = None
+    client_key: Path | None = None
+    client_key_password_env: str | None = None
+    proxy_url: str | None = None
+    proxy_url_env: str | None = None
+    trust_env: bool | None = None
 
 
 def default_config() -> ColossusConfig:
@@ -145,11 +180,44 @@ def write_default_config(path: Path) -> None:
     path.write_text(default_config().model_dump_json(indent=2), encoding="utf-8")
 
 
+def http_client_config_from_config(
+    config: ColossusConfig,
+    overrides: HttpOverrides | None = None,
+) -> HttpClientConfig:
+    overrides = overrides or HttpOverrides()
+    http = config.http
+    client_key_password_env = (
+        overrides.client_key_password_env or http.client_key_password_env
+    )
+    proxy_url_env = overrides.proxy_url_env or http.proxy_url_env
+    ca_bundle = overrides.ca_bundle or http.ca_bundle
+    client_cert = overrides.client_cert or http.client_cert
+    client_key = overrides.client_key or http.client_key
+    _validate_client_cert_config(
+        client_cert=client_cert,
+        client_key=client_key,
+        client_key_password_env=client_key_password_env,
+    )
+    return HttpClientConfig(
+        ca_bundle=ca_bundle,
+        client_cert=client_cert,
+        client_key=client_key,
+        client_key_password=_env_value(client_key_password_env),
+        proxy_url=(
+            overrides.proxy_url
+            or _env_value(proxy_url_env)
+            or http.proxy_url
+        ),
+        trust_env=http.trust_env if overrides.trust_env is None else overrides.trust_env,
+    )
+
+
 def provider_from_config(
     config: ColossusConfig,
     overrides: ProviderOverrides | None = None,
     *,
     require_credentials: bool = True,
+    http_client_config: HttpClientConfig | None = None,
 ) -> ModelProvider:
     overrides = overrides or ProviderOverrides()
     provider = config.provider
@@ -158,6 +226,7 @@ def provider_from_config(
     api_key_env = overrides.api_key_env or provider.api_key_env or "OPENAI_API_KEY"
     api_key = overrides.api_key or os.environ.get(api_key_env, "")
     ca_bundle = overrides.ca_bundle or provider.ca_bundle
+    resolved_http = http_client_config or http_client_config_from_config(config)
 
     if kind == "echo":
         return EchoModelProvider()
@@ -170,12 +239,14 @@ def provider_from_config(
             api_key=api_key,
             base_url=base_url or "https://api.openai.com/v1",
             ca_bundle=ca_bundle,
+            http_client_config=resolved_http,
         )
     if kind == "local_openai_chat":
         return LocalOpenAIChatProvider(
             base_url=base_url or "http://localhost:8000/v1",
             api_key=api_key or "local",
             ca_bundle=ca_bundle,
+            http_client_config=resolved_http,
         )
     raise ValueError(f"Unsupported provider: {kind}")
 
@@ -216,10 +287,12 @@ def provider_from_profile(
     *,
     api_key: str | None = None,
     require_credentials: bool = True,
+    http_client_config: HttpClientConfig | None = None,
 ) -> ModelProvider:
     api_key_env = profile.api_key_env or "OPENAI_API_KEY"
     resolved_api_key = api_key or os.environ.get(api_key_env, "")
     ca_bundle = Path(profile.ca_bundle).expanduser() if profile.ca_bundle else None
+    resolved_http = http_client_config or HttpClientConfig()
 
     if profile.provider == "echo":
         return EchoModelProvider()
@@ -232,12 +305,14 @@ def provider_from_profile(
             api_key=resolved_api_key,
             base_url=profile.base_url or "https://api.openai.com/v1",
             ca_bundle=ca_bundle,
+            http_client_config=resolved_http,
         )
     if profile.provider == "local_openai_chat":
         return LocalOpenAIChatProvider(
             base_url=profile.base_url or "http://localhost:8000/v1",
             api_key=resolved_api_key or "local",
             ca_bundle=ca_bundle,
+            http_client_config=resolved_http,
         )
     raise ValueError(f"Unsupported provider: {profile.provider}")
 
@@ -292,3 +367,22 @@ def _profile_with_overrides(profile: ModelProfile, overrides: ProviderOverrides)
             "ca_bundle": str(overrides.ca_bundle) if overrides.ca_bundle else profile.ca_bundle,
         }
     )
+
+
+def _validate_client_cert_config(
+    *,
+    client_cert: Path | None,
+    client_key: Path | None,
+    client_key_password_env: str | None,
+) -> None:
+    if client_key is not None and client_cert is None:
+        raise ValueError("client_key requires client_cert.")
+    if client_key_password_env is not None and client_key is None:
+        raise ValueError("client_key_password_env requires client_key.")
+
+
+def _env_value(name: str | None) -> str | None:
+    if name is None:
+        return None
+    value = os.environ.get(name)
+    return value or None

@@ -55,6 +55,15 @@ The current config is strict: unknown fields are rejected.
       "kind": "sqlite_fts"
     }
   },
+  "http": {
+    "ca_bundle": null,
+    "client_cert": null,
+    "client_key": null,
+    "client_key_password_env": null,
+    "proxy_url": null,
+    "proxy_url_env": null,
+    "trust_env": true
+  },
   "research": {
     "default_depth": "standard",
     "max_sources": 20,
@@ -274,8 +283,7 @@ the current `tasks=open/total` summary for the session, and last run status.
 The prompt bottom bar is owned by the active input composer, so it naturally disappears
 after submit. While a run is active, Colossus keeps compact orientation data visible in a
 bounded transient activity indicator using the theme-specific spinner and current phase,
-such as `Thinking...`, `Using filesystem.read...`, or `Responding...`. A truly persistent
-bottom status region belongs in the Textual `colossus tui` surface rather than the REPL.
+such as `Thinking...`, `Using filesystem.read...`, or `Responding...`.
 
 Composer behavior:
 
@@ -414,12 +422,46 @@ shared shells and logs.
 
 ## TLS trust
 
-Use `ca_bundle` or `--ca-bundle` when an HTTPS provider endpoint is signed by an
-enterprise or private CA:
+Use global `http.ca_bundle` or `--http-ca-bundle` when Colossus-owned HTTPS clients
+need an enterprise or private CA. This applies to model providers, provider diagnostics,
+`web.fetch`, `docs.fetch`, and configured web search providers.
+
+The older provider-level `provider.ca_bundle` and `--ca-bundle` settings are still
+supported for model providers and override `http.ca_bundle` for provider calls.
 
 ```bash
 uv run colossus --ca-bundle ./certs/company-ca.pem --provider local-openai-chat run "hello"
 ```
+
+For mTLS or PKI-protected HTTP sites, configure a client certificate and optional key:
+
+```json
+{
+  "http": {
+    "ca_bundle": "./certs/company-ca.pem",
+    "client_cert": "./certs/client.pem",
+    "client_key": "./certs/client.key",
+    "client_key_password_env": "COLOSSUS_HTTP_CLIENT_KEY_PASSWORD"
+  }
+}
+```
+
+## HTTP proxy
+
+Use `http.proxy_url` or `--http-proxy` to send Colossus-owned HTTP clients through a
+proxy. Prefer `http.proxy_url_env` or `--http-proxy-env` when the proxy URL contains
+credentials:
+
+```json
+{
+  "http": {
+    "proxy_url_env": "COLOSSUS_HTTP_PROXY"
+  }
+}
+```
+
+Set `http.trust_env` to `false` or pass `--http-no-trust-env` to ignore standard proxy
+and certificate environment variables for Colossus-owned `httpx` clients.
 
 ## Skill overrides
 

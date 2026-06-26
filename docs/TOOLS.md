@@ -71,7 +71,8 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
   lines; `["ps", "-A", "|", "wc", "-l"]` passes `|` literally and is not a pipeline.
 - Web fetch tools require explicit approval and depend on network availability. In
   airgapped environments they should not be approved or will fail at the network layer.
-  Web search and MCP calls remain adapter extension points.
+  Configured global HTTP PKI and proxy settings are used for Colossus-owned web fetch
+  and web search clients. Web search and MCP calls remain adapter extension points.
 - Deep Research Mode asks for approval before configured web search or MCP collection.
   If a source lane is disabled or denied, the run continues with available evidence and
   records the limitation in the report.

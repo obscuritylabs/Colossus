@@ -47,8 +47,10 @@ from colossus.infrastructure.config import (
     ProviderOverrides,
     SearchConfig,
     effective_model_routing,
+    http_client_config_from_config,
     provider_from_profile,
 )
+from colossus.infrastructure.http_client import HttpClientConfig
 from colossus.ports.approval import ApprovalHandler
 from colossus.ports.model_provider import ModelProvider
 from colossus.ports.research import McpGateway, SearchProvider
@@ -79,6 +81,7 @@ def create_default_orchestrator(
     search_provider: SearchProvider | None = None,
     mcp_gateway: McpGateway | None = None,
     skill_resolver: SkillResolver | None = None,
+    http_client_config: HttpClientConfig | None = None,
 ) -> AgentOrchestrator:
     data_dir.mkdir(parents=True, exist_ok=True)
     resolved_provider = provider or EchoModelProvider()
@@ -113,6 +116,7 @@ def create_default_orchestrator(
         user_prompt_handler=user_prompt_handler,
         search_provider=search_provider,
         mcp_gateway=mcp_gateway,
+        http_client_config=http_client_config,
     )
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)
@@ -140,6 +144,7 @@ def create_default_orchestrator(
                 subagent_service=subagent_service,
                 model_router=model_router,
                 skill_resolver=resolved_skill_resolver,
+                http_client_config=http_client_config,
             )
         )
     return AgentOrchestrator(
@@ -178,11 +183,15 @@ def create_subagent_service(
     )
 
 
-def create_search_provider(config: SearchConfig) -> SearchProvider:
+def create_search_provider(
+    config: SearchConfig,
+    http_client_config: HttpClientConfig | None = None,
+) -> SearchProvider:
     if config.kind == "duckduckgo":
         return DuckDuckGoSearchProvider(
             endpoint=config.endpoint,
             user_agent=config.user_agent,
+            http_client_config=http_client_config,
         )
     if config.kind == "searxng":
         return SearxngSearchProvider(
@@ -191,6 +200,7 @@ def create_search_provider(config: SearchConfig) -> SearchProvider:
             api_key=os.environ.get(config.api_key_env, "") if config.api_key_env else None,
             auth_header=config.auth_header,
             auth_scheme=config.auth_scheme,
+            http_client_config=http_client_config,
         )
     return DisabledSearchProvider()
 
@@ -232,6 +242,7 @@ def create_research_service(
     approval_handler: ApprovalHandler | None = None,
     auto_approve_network: bool = False,
     event_observer: RunEventObserver | None = None,
+    http_client_config: HttpClientConfig | None = None,
 ) -> ResearchService:
     resolved_state = state_store or create_state_store(data_dir)
     resolved_audit = audit_sink or create_audit_sink(data_dir)
@@ -241,7 +252,7 @@ def create_research_service(
         resolved_audit,
         repo_provider=WorkspaceRepoResearchProvider(workspace),
         model_router=model_router,
-        search_provider=create_search_provider(config.research.search),
+        search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
         approval_handler=approval_handler,
         auto_approve_network=auto_approve_network,
@@ -269,6 +280,7 @@ def _subagent_runner(
     subagent_service: SubagentService,
     model_router: ModelRouter,
     skill_resolver: SkillResolver,
+    http_client_config: HttpClientConfig | None,
 ) -> Callable[[SubagentJob], Awaitable[AgentRunResult]]:
     async def run(job: SubagentJob) -> AgentRunResult:
         route = model_router.resolve(job.role or "subagent_default")
@@ -293,6 +305,7 @@ def _subagent_runner(
             model_router=model_router,
             include_agent_delegate=False,
             skill_resolver=skill_resolver,
+            http_client_config=http_client_config,
         )
         return await orchestrator.run(
             AgentRunRequest(
@@ -310,8 +323,10 @@ def create_model_router(
     overrides: ProviderOverrides | None = None,
     *,
     require_credentials: bool = True,
+    http_client_config: HttpClientConfig | None = None,
 ) -> ModelRouter:
     overrides = overrides or ProviderOverrides()
+    resolved_http = http_client_config or http_client_config_from_config(config)
     routing = effective_model_routing(config, overrides)
     primary_profile_name = routing.roles["primary"]
     routes: dict[str, ModelRoute] = {}
@@ -321,6 +336,7 @@ def create_model_router(
             profile,
             api_key=overrides.api_key if profile_name == primary_profile_name else None,
             require_credentials=require_credentials,
+            http_client_config=resolved_http,
         )
         resolved = ResolvedModelProfile(
             role=role,

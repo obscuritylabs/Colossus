@@ -8,9 +8,12 @@ from colossus.adapters.openai_responses import OpenAIResponsesProvider
 from colossus.domain.models import ModelProfile, ModelRoutingConfig
 from colossus.infrastructure.config import (
     ColossusConfig,
+    HttpConfig,
+    HttpOverrides,
     ProviderConfig,
     ProviderOverrides,
     effective_model_routing,
+    http_client_config_from_config,
     provider_from_config,
 )
 
@@ -42,6 +45,101 @@ def test_cli_ca_bundle_override_wins_for_openai_provider(tmp_path: Path, monkeyp
 
     assert isinstance(provider, OpenAIResponsesProvider)
     assert provider.ca_bundle == override_ca
+
+
+def test_global_http_ca_bundle_applies_to_provider_when_provider_ca_is_unset(
+    tmp_path: Path,
+) -> None:
+    ca_bundle = tmp_path / "global-ca.pem"
+    ca_bundle.write_text("test-ca", encoding="utf-8")
+    config = ColossusConfig(
+        provider=ProviderConfig(kind="local_openai_chat"),
+        http=HttpConfig(ca_bundle=ca_bundle),
+    )
+
+    provider = provider_from_config(config)
+
+    assert isinstance(provider, LocalOpenAIChatProvider)
+    assert provider.ca_bundle == ca_bundle
+
+
+def test_provider_ca_bundle_overrides_global_http_ca_bundle(tmp_path: Path) -> None:
+    global_ca = tmp_path / "global-ca.pem"
+    provider_ca = tmp_path / "provider-ca.pem"
+    global_ca.write_text("global", encoding="utf-8")
+    provider_ca.write_text("provider", encoding="utf-8")
+    config = ColossusConfig(
+        provider=ProviderConfig(kind="local_openai_chat", ca_bundle=provider_ca),
+        http=HttpConfig(ca_bundle=global_ca),
+    )
+
+    provider = provider_from_config(config)
+
+    assert isinstance(provider, LocalOpenAIChatProvider)
+    assert provider.ca_bundle == provider_ca
+
+
+def test_http_client_config_resolves_proxy_and_client_cert_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ca_bundle = tmp_path / "ca.pem"
+    client_cert = tmp_path / "client.pem"
+    client_key = tmp_path / "client.key"
+    ca_bundle.write_text("ca", encoding="utf-8")
+    client_cert.write_text("cert", encoding="utf-8")
+    client_key.write_text("key", encoding="utf-8")
+    monkeypatch.setenv("COLOSSUS_PROXY", "http://proxy.example.test:8080")
+    monkeypatch.setenv("COLOSSUS_KEY_PASSWORD", "secret")
+    config = ColossusConfig(
+        http=HttpConfig(
+            ca_bundle=ca_bundle,
+            client_cert=client_cert,
+            client_key=client_key,
+            client_key_password_env="COLOSSUS_KEY_PASSWORD",
+            proxy_url_env="COLOSSUS_PROXY",
+            trust_env=False,
+        )
+    )
+
+    http_config = http_client_config_from_config(config)
+
+    assert http_config.ca_bundle == ca_bundle
+    assert http_config.cert == (str(client_cert), str(client_key), "secret")
+    assert http_config.proxy_url == "http://proxy.example.test:8080"
+    assert http_config.trust_env is False
+    assert http_config.async_client_kwargs(timeout=1.0)["proxy"] == (
+        "http://proxy.example.test:8080"
+    )
+
+
+def test_http_client_config_overrides_merge_with_config(tmp_path: Path) -> None:
+    client_cert = tmp_path / "client.pem"
+    client_key = tmp_path / "client.key"
+    client_cert.write_text("cert", encoding="utf-8")
+    client_key.write_text("key", encoding="utf-8")
+    config = ColossusConfig(
+        http=HttpConfig(client_cert=client_cert, client_key=client_key)
+    )
+
+    http_config = http_client_config_from_config(
+        config,
+        HttpOverrides(proxy_url="http://proxy.example.test:8080", trust_env=False),
+    )
+
+    assert http_config.cert == (str(client_cert), str(client_key))
+    assert http_config.proxy_url == "http://proxy.example.test:8080"
+    assert http_config.trust_env is False
+
+
+def test_http_config_rejects_partial_client_key_settings(tmp_path: Path) -> None:
+    client_key = tmp_path / "client.key"
+    client_key.write_text("key", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="client_key requires client_cert"):
+        ColossusConfig(http=HttpConfig(client_key=client_key))
+    with pytest.raises(ValueError, match="client_key_password_env requires client_key"):
+        ColossusConfig(http=HttpConfig(client_key_password_env="COLOSSUS_KEY_PASSWORD"))
 
 
 def test_provider_override_sets_openai_base_url_and_api_key(tmp_path: Path) -> None:

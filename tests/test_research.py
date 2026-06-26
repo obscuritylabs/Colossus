@@ -317,6 +317,7 @@ def test_search_provider_factory_resolves_searxng_key_from_env(monkeypatch) -> N
         "api_key": "secret-token",
         "auth_header": "X-Searxng-Key",
         "auth_scheme": "raw",
+        "http_client_config": None,
     }
 
 

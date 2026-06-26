@@ -40,9 +40,11 @@ from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task
 from colossus.infrastructure.config import (
     ColossusConfig,
+    HttpOverrides,
     ProviderOverrides,
     as_pretty_json,
     effective_model_routing,
+    http_client_config_from_config,
     load_config,
     model_context_windows_from_routing,
     provider_from_config,
@@ -66,6 +68,7 @@ from colossus.infrastructure.container import (
     create_subagent_service,
     create_task_service,
 )
+from colossus.infrastructure.http_client import HttpClientConfig
 from colossus.infrastructure.logging import configure_logging
 from colossus.infrastructure.paths import config_path, data_dir
 from colossus.interfaces.approval import RichApprovalHandler
@@ -76,7 +79,6 @@ from colossus.interfaces.repl import (
     run_repl_sync,
 )
 from colossus.interfaces.trace import EventDisplayMode, RichRunEventRenderer
-from colossus.interfaces.tui import run_tui
 from colossus.ports.model_provider import ModelProvider
 
 ApprovalMode = Literal["deny", "ask", "risk-auto", "full-access"]
@@ -129,6 +131,13 @@ class CliState:
     api_key: str | None = None
     api_key_env: str | None = None
     ca_bundle: Path | None = None
+    http_ca_bundle: Path | None = None
+    http_client_cert: Path | None = None
+    http_client_key: Path | None = None
+    http_client_key_password_env: str | None = None
+    http_proxy: str | None = None
+    http_proxy_env: str | None = None
+    http_trust_env: bool | None = None
 
 
 @app.callback()
@@ -180,6 +189,67 @@ def callback(
             resolve_path=True,
         ),
     ] = None,
+    http_ca_bundle: Annotated[
+        Path | None,
+        typer.Option(
+            "--http-ca-bundle",
+            help="Path to a custom CA certificate bundle for Colossus-owned HTTP clients.",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ] = None,
+    http_client_cert: Annotated[
+        Path | None,
+        typer.Option(
+            "--http-client-cert",
+            help="Path to a client certificate for mTLS/PKI-protected HTTP endpoints.",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ] = None,
+    http_client_key: Annotated[
+        Path | None,
+        typer.Option(
+            "--http-client-key",
+            help="Path to the private key for --http-client-cert.",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ] = None,
+    http_client_key_password_env: Annotated[
+        str | None,
+        typer.Option(
+            "--http-client-key-password-env",
+            help="Environment variable containing the HTTP client key password.",
+        ),
+    ] = None,
+    http_proxy: Annotated[
+        str | None,
+        typer.Option("--http-proxy", help="Proxy URL for Colossus-owned HTTP clients."),
+    ] = None,
+    http_proxy_env: Annotated[
+        str | None,
+        typer.Option(
+            "--http-proxy-env",
+            help="Environment variable containing the HTTP proxy URL.",
+        ),
+    ] = None,
+    http_no_trust_env: Annotated[
+        bool,
+        typer.Option(
+            "--http-no-trust-env",
+            help="Ignore standard HTTP proxy and certificate environment variables.",
+        ),
+    ] = False,
 ) -> None:
     configure_logging(verbose)
     ctx.obj = CliState(
@@ -191,6 +261,13 @@ def callback(
         api_key=api_key,
         api_key_env=api_key_env,
         ca_bundle=ca_bundle,
+        http_ca_bundle=http_ca_bundle,
+        http_client_cert=http_client_cert,
+        http_client_key=http_client_key,
+        http_client_key_password_env=http_client_key_password_env,
+        http_proxy=http_proxy,
+        http_proxy_env=http_proxy_env,
+        http_trust_env=False if http_no_trust_env else None,
     )
 
 
@@ -214,13 +291,36 @@ def _provider_overrides(ctx: typer.Context) -> ProviderOverrides:
     )
 
 
+def _http_overrides(ctx: typer.Context) -> HttpOverrides:
+    state = _cli_state(ctx)
+    return HttpOverrides(
+        ca_bundle=state.http_ca_bundle,
+        client_cert=state.http_client_cert,
+        client_key=state.http_client_key,
+        client_key_password_env=state.http_client_key_password_env,
+        proxy_url=state.http_proxy,
+        proxy_url_env=state.http_proxy_env,
+        trust_env=state.http_trust_env,
+    )
+
+
+def _http_client_config(ctx: typer.Context, config: ColossusConfig) -> HttpClientConfig:
+    return http_client_config_from_config(config, _http_overrides(ctx))
+
+
 def _context_runtime(
     ctx: typer.Context,
     model: str | None,
 ) -> tuple[ContextService, str, ModelProvider, str]:
     config = load_config(config_path())
     overrides = _provider_overrides(ctx)
-    router = create_model_router(config, overrides, require_credentials=False)
+    http_client_config = _http_client_config(ctx, config)
+    router = create_model_router(
+        config,
+        overrides,
+        require_credentials=False,
+        http_client_config=http_client_config,
+    )
     primary_route = router.resolve("primary")
     context_route = router.resolve("context_summarizer")
     selected_model = model or primary_route.profile.model
@@ -437,7 +537,12 @@ def run(
         return
     config = load_config(config_path())
     overrides = _provider_overrides(ctx)
-    router = create_model_router(config, overrides)
+    http_client_config = _http_client_config(ctx, config)
+    router = create_model_router(
+        config,
+        overrides,
+        http_client_config=http_client_config,
+    )
     route = router.resolve(model_role)
     context_route = router.resolve("context_summarizer")
     model_context_windows = _resolved_model_context_windows(config, overrides, router)
@@ -479,8 +584,9 @@ def run(
         auto_approve_required_tools=resolved_approval_mode == "full-access",
         subagent_service=subagent_service,
         model_router=router,
-        search_provider=create_search_provider(config.research.search),
+        search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
+        http_client_config=http_client_config,
     )
     plan_id = execute_plan
     if execute_plan is not None:
@@ -570,7 +676,12 @@ def research(
     else:
         session_id = session or str(uuid4())
     overrides = _provider_overrides(ctx)
-    router = create_model_router(config, overrides)
+    http_client_config = _http_client_config(ctx, config)
+    router = create_model_router(
+        config,
+        overrides,
+        http_client_config=http_client_config,
+    )
     resolved_approval_mode = _resolve_approval_mode(approval_mode)
     events_mode = _resolve_events_mode(events)
     trace_renderer = RichRunEventRenderer(
@@ -593,6 +704,7 @@ def research(
         ),
         auto_approve_network=resolved_approval_mode == "full-access",
         event_observer=trace_renderer.render,
+        http_client_config=http_client_config,
     )
     trace_renderer.begin_run()
     try:
@@ -666,7 +778,12 @@ def repl(
         raise typer.Exit(code=2)
     config = load_config(config_path())
     overrides = _provider_overrides(ctx)
-    router = create_model_router(config, overrides)
+    http_client_config = _http_client_config(ctx, config)
+    router = create_model_router(
+        config,
+        overrides,
+        http_client_config=http_client_config,
+    )
     primary_route = router.resolve("primary")
     context_route = router.resolve("context_summarizer")
     model_context_windows = _resolved_model_context_windows(config, overrides, router)
@@ -713,8 +830,9 @@ def repl(
             auto_approve_required_tools=resolved_approval_mode == "full-access",
             subagent_service=subagent_service,
             model_router=router,
-            search_provider=create_search_provider(config.research.search),
+            search_provider=create_search_provider(config.research.search, http_client_config),
             mcp_gateway=create_mcp_gateway(config.research.mcp),
+            http_client_config=http_client_config,
         )
 
     history_path = data_dir() / "repl_history.txt"
@@ -751,6 +869,7 @@ def repl(
                 else None
             ),
             auto_approve_network=resolved_approval_mode == "full-access",
+            http_client_config=http_client_config,
         ),
         theme_name=theme,
         initial_session_id=session,
@@ -758,12 +877,6 @@ def repl(
         repo_root=Path.cwd(),
         theme_dirs=theme_dirs,
     )
-
-
-@app.command()
-def tui() -> None:
-    """Start the Textual TUI."""
-    run_tui()
 
 
 @config_app.command("init")
@@ -799,13 +912,15 @@ def skills_list() -> None:
 
 
 @tools_app.command("list")
-def tools_list() -> None:
+def tools_list(ctx: typer.Context) -> None:
     """List built-in tools."""
     config = load_config(config_path())
+    http_client_config = _http_client_config(ctx, config)
     orchestrator = create_default_orchestrator(
         data_dir(),
-        search_provider=create_search_provider(config.research.search),
+        search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
+        http_client_config=http_client_config,
     )
     specs = orchestrator.tool_specs()
     table = Table()
@@ -925,6 +1040,7 @@ def provider_doctor(
         config,
         overrides,
         require_credentials=False,
+        http_client_config=_http_client_config(ctx, config),
     )
     diagnostics = ProviderDiagnostics(provider)
     readiness = asyncio.run(diagnostics.check_readiness())
@@ -944,7 +1060,11 @@ def provider_doctor(
 def provider_models(ctx: typer.Context) -> None:
     """List models advertised by the selected provider."""
     config = load_config(config_path())
-    provider = provider_from_config(config, _provider_overrides(ctx))
+    provider = provider_from_config(
+        config,
+        _provider_overrides(ctx),
+        http_client_config=_http_client_config(ctx, config),
+    )
     models = asyncio.run(ProviderDiagnostics(provider).list_models())
     table = Table("Model", "Owner", "Created", "Context", "Max Output")
     for model in models:
@@ -968,7 +1088,12 @@ def models_list(
 ) -> None:
     """List configured model roles and profiles."""
     config = load_config(config_path())
-    router = create_model_router(config, _provider_overrides(ctx), require_credentials=False)
+    router = create_model_router(
+        config,
+        _provider_overrides(ctx),
+        require_credentials=False,
+        http_client_config=_http_client_config(ctx, config),
+    )
     readiness = asyncio.run(_model_role_readiness(router)) if check else {}
     table = Table()
     table.add_column("Role", no_wrap=True)
@@ -1004,7 +1129,12 @@ def models_doctor(
 ) -> None:
     """Check readiness for a configured model role."""
     config = load_config(config_path())
-    router = create_model_router(config, _provider_overrides(ctx), require_credentials=False)
+    router = create_model_router(
+        config,
+        _provider_overrides(ctx),
+        require_credentials=False,
+        http_client_config=_http_client_config(ctx, config),
+    )
     route = router.resolve(role)
     diagnostics = ProviderDiagnostics(route.provider)
     readiness = asyncio.run(diagnostics.check_readiness())
