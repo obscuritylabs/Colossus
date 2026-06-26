@@ -6,8 +6,12 @@ from colossus.adapters.research_sources import SearxngSearchProvider
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.application.approvals import AllowAllApprovalHandler
 from colossus.application.defaults import research_agent
+from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.research import ResearchService
 from colossus.domain.errors import ToolExecutionError
+from colossus.domain.events import FinalOutputEvent
+from colossus.domain.models import ResolvedModelProfile
+from colossus.domain.requests import ModelRequest
 from colossus.domain.research import ResearchSourceDraft
 from colossus.infrastructure import container as container_module
 from colossus.infrastructure.config import SearchConfig
@@ -43,6 +47,53 @@ class FakeSearchProvider:
                 query=query,
             ),
         )
+
+
+class ShortReportProvider:
+    name = "short-report"
+
+    def capabilities(self) -> tuple[object, ...]:
+        return ()
+
+    async def check_readiness(self) -> object:
+        raise NotImplementedError
+
+    async def list_models(self) -> tuple[object, ...]:
+        return ()
+
+    async def stream(self, request: ModelRequest):
+        if "search queries" in request.instructions:
+            yield FinalOutputEvent(text="research report detail")
+            return
+        if "Extract one concise claim" in request.instructions:
+            yield FinalOutputEvent(text="Research mode should produce a substantial report.")
+            return
+        yield FinalOutputEvent(text="Too short [R1]")
+
+
+def _short_report_router() -> ModelRouter:
+    profile = ResolvedModelProfile(
+        role="research_synthesizer",
+        profile_name="short",
+        provider="echo",
+        model="short-model",
+    )
+    provider = ShortReportProvider()
+    return ModelRouter(
+        {
+            role: ModelRoute(
+                role=role,
+                profile_name="short",
+                provider=provider,  # type: ignore[arg-type]
+                profile=profile.model_copy(update={"role": role}),
+            )
+            for role in (
+                "research_planner",
+                "research_worker",
+                "research_synthesizer",
+            )
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -194,7 +245,7 @@ def test_search_provider_factory_resolves_searxng_key_from_env(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_research_service_persists_cited_brief_sources_and_claims(tmp_path) -> None:
+async def test_research_service_persists_cited_report_sources_and_claims(tmp_path) -> None:
     state = SQLiteStateStore(tmp_path / "state.sqlite3")
     service = ResearchService(
         state,
@@ -212,6 +263,9 @@ async def test_research_service_persists_cited_brief_sources_and_claims(tmp_path
 
     assert run.status == "completed"
     assert "[R1]" in run.report
+    assert "# Research Report" in run.report
+    assert "## Detailed Findings" in run.report
+    assert "## Source Notes" in run.report
     assert "web search is not configured" in run.warnings
     assert "MCP research collection is not configured" in run.warnings
     assert await state.get_research_run("research-1") == run
@@ -246,6 +300,33 @@ async def test_research_service_uses_approved_web_sources(tmp_path) -> None:
     assert sources[0].kind == "web"
     assert sources[0].uri == "https://example.com/research"
     assert "not approved" not in " ".join(run.warnings)
+
+
+@pytest.mark.asyncio
+async def test_research_service_rejects_tiny_synthesized_reports(tmp_path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = ResearchService(
+        state,
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+        repo_provider=FakeRepoProvider(),
+        model_router=_short_report_router(),
+        run_id_factory=lambda: "research-3",
+    )
+
+    run = await service.run(
+        question="How detailed should research mode be?",
+        session_id="session-1",
+        source_kinds=("repo",),
+        max_sources=3,
+    )
+
+    assert "Too short [R1]" not in run.report
+    assert "# Research Report" in run.report
+    assert "## Executive Summary" in run.report
+    assert "## Methodology" in run.report
+    assert "## Detailed Findings" in run.report
+    assert "## Analysis" in run.report
+    assert "## Source Notes" in run.report
 
 
 def test_research_agent_exposes_only_read_only_research_tools() -> None:

@@ -145,7 +145,7 @@ class FakeResearchService:
             session_id=session_id,
             question=question,
             status="completed",
-            report="# Research Brief\n\nFinding [R1]",
+            report="# Research Report\n\nFinding [R1]",
         )
 
     async def latest_run(self, session_id: str) -> ResearchRun | None:
@@ -154,7 +154,7 @@ class FakeResearchService:
             session_id=session_id,
             question="latest",
             status="completed",
-            report="# Research Brief\n\nLatest [R1]",
+            report="# Research Report\n\nLatest [R1]",
         )
 
     async def get_run(self, run_id: str) -> ResearchRun:
@@ -163,7 +163,7 @@ class FakeResearchService:
             session_id="session-research",
             question="shown",
             status="completed",
-            report="# Research Brief\n\nShown [R1]",
+            report="# Research Report\n\nShown [R1]",
         )
 
 
@@ -1254,7 +1254,7 @@ async def test_research_command_toggles_and_runs_query() -> None:
     assert state.active_research_id == "research-1"
     assert state.active_research_status == "completed"
     assert service.question == "What is stable?"
-    assert trace.final_answer == "# Research Brief\n\nFinding [R1]"
+    assert trace.final_answer == "# Research Report\n\nFinding [R1]"
 
 
 @pytest.mark.asyncio
