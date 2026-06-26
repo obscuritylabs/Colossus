@@ -80,6 +80,12 @@ The TUI includes a context panel in the side column.
 prior message context for future model turns and prints only a compact session summary;
 it does not replay the entire transcript by default.
 
+Deep Research Mode participates in the same session history. A research run receives a
+bounded prior-message context block, and its final cited report is appended as an
+assistant message for later non-research turns. Raw research source records remain in the
+research tables and are available through `/research sources`; they are not automatically
+pasted into every later chat prompt.
+
 `context show`, `/context`, `/status`, and the REPL toolbar report the effective prompt
 estimate after the active snapshot is applied. When a snapshot is active, they also show
 the raw append-only history estimate separately. Raw history can remain above the

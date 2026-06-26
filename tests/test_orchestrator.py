@@ -1,9 +1,11 @@
+import json
 from collections.abc import AsyncIterator
 
 import pytest
 
 from colossus.adapters.audit_jsonl import JsonlAuditSink
 from colossus.adapters.builtin_tools import create_builtin_tools
+from colossus.adapters.skills_filesystem import FilesystemSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.adapters.workspace import Workspace
 from colossus.application.approvals import AllowAllApprovalHandler
@@ -11,8 +13,9 @@ from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.policy import DefaultPolicyEngine
+from colossus.application.skills import SkillComposer, SkillResolver
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
-from colossus.domain.errors import ProviderError
+from colossus.domain.errors import ColossusError, ProviderError
 from colossus.domain.events import (
     FinalOutputEvent,
     ModelDeltaEvent,
@@ -134,6 +137,17 @@ class ReasoningOnlyProvider:
         yield ReasoningSummaryEvent(summary="Thinking but no answer.")
 
 
+class CapturingFinalProvider:
+    name = "capturing-final"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        self.requests.append(request)
+        yield FinalOutputEvent(text="done")
+
+
 class TextToolThenEmptyProvider:
     name = "text-tool-then-empty"
 
@@ -232,6 +246,79 @@ async def test_orchestrator_filters_provider_tools_by_agent_spec(tmp_path) -> No
     await orchestrator.run(AgentRunRequest(prompt="use a tool", agent=agent))
 
     assert {tool.name for tool in provider.requests[0].tools} == {"echo"}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_composes_skill_context_and_audits_metadata(tmp_path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(
+        skill_root / "alpha",
+        name="alpha",
+        instructions="Secret skill body should reach the model only.",
+    )
+    registry = InMemoryToolRegistry(())
+    provider = CapturingFinalProvider()
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        skill_composer=SkillComposer(
+            SkillResolver((FilesystemSkillRepository(skill_root),))
+        ),
+    )
+    agent = default_agent().model_copy(update={"skills": ("alpha",)})
+
+    await orchestrator.run(
+        AgentRunRequest(
+            prompt="@skill:alpha help",
+            agent=agent,
+            active_skills=("alpha",),
+        )
+    )
+
+    instructions = provider.requests[0].instructions
+    assert "[Available skills]" in instructions
+    assert "[Active skills]" in instructions
+    assert "Secret skill body should reach the model only." in instructions
+    audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert "skills.selected" in audit_text
+    assert "alpha" in audit_text
+    assert "Secret skill body should reach the model only." not in audit_text
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_validates_active_skill_required_tools_before_provider(
+    tmp_path,
+) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(skill_root / "alpha", name="alpha", required_tools=["echo"])
+    registry = InMemoryToolRegistry(())
+    provider = CapturingFinalProvider()
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        skill_composer=SkillComposer(
+            SkillResolver((FilesystemSkillRepository(skill_root),))
+        ),
+    )
+    agent = default_agent().model_copy(update={"skills": ("alpha",)})
+
+    with pytest.raises(ColossusError, match="requires unavailable tools"):
+        await orchestrator.run(
+            AgentRunRequest(prompt="help", agent=agent, active_skills=("alpha",))
+        )
+    assert provider.requests == []
 
 
 @pytest.mark.asyncio
@@ -534,3 +621,28 @@ async def test_orchestrator_returns_filesystem_read_errors_to_model(tmp_path) ->
     assert completed.exit_code == 1
     assert "execution_error" in completed.output
     assert "file not found" in completed.output
+
+
+def _write_skill(
+    path,
+    *,
+    name: str,
+    instructions: str = "instructions",
+    required_tools: list[str] | None = None,
+) -> None:
+    path.mkdir(parents=True)
+    (path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "name": name,
+                "version": "1.0.0",
+                "description": f"{name} skill",
+                "triggers": [name],
+                "required_tools": required_tools or [],
+                "permissions": [],
+                "offline_compatible": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (path / "SKILL.md").write_text(instructions, encoding="utf-8")

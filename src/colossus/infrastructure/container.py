@@ -33,7 +33,7 @@ from colossus.application.preferences import ReplPreferencesService
 from colossus.application.research import ResearchService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.sessions import SessionService
-from colossus.application.skills import SkillResolver
+from colossus.application.skills import SkillComposer, SkillResolver
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
@@ -78,6 +78,7 @@ def create_default_orchestrator(
     include_agent_delegate: bool = True,
     search_provider: SearchProvider | None = None,
     mcp_gateway: McpGateway | None = None,
+    skill_resolver: SkillResolver | None = None,
 ) -> AgentOrchestrator:
     data_dir.mkdir(parents=True, exist_ok=True)
     resolved_provider = provider or EchoModelProvider()
@@ -115,6 +116,7 @@ def create_default_orchestrator(
     )
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)
+    resolved_skill_resolver = skill_resolver or create_default_skill_resolver()
     if subagent_service is not None and model_router is not None:
         if event_observer is not None:
             subagent_service.set_event_observer(event_observer)
@@ -137,6 +139,7 @@ def create_default_orchestrator(
                 auto_approve_required_tools=auto_approve_required_tools,
                 subagent_service=subagent_service,
                 model_router=model_router,
+                skill_resolver=resolved_skill_resolver,
             )
         )
     return AgentOrchestrator(
@@ -156,6 +159,7 @@ def create_default_orchestrator(
         auto_approve_required_tools=auto_approve_required_tools,
         subagent_service=subagent_service,
         decision_service=decision_service,
+        skill_composer=SkillComposer(resolved_skill_resolver),
     )
 
 
@@ -264,6 +268,7 @@ def _subagent_runner(
     auto_approve_required_tools: bool,
     subagent_service: SubagentService,
     model_router: ModelRouter,
+    skill_resolver: SkillResolver,
 ) -> Callable[[SubagentJob], Awaitable[AgentRunResult]]:
     async def run(job: SubagentJob) -> AgentRunResult:
         route = model_router.resolve(job.role or "subagent_default")
@@ -287,6 +292,7 @@ def _subagent_runner(
             subagent_service=subagent_service,
             model_router=model_router,
             include_agent_delegate=False,
+            skill_resolver=skill_resolver,
         )
         return await orchestrator.run(
             AgentRunRequest(

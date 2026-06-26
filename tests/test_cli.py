@@ -15,6 +15,7 @@ from colossus.domain.errors import ColossusError
 from colossus.domain.messages import UserMessage
 from colossus.domain.models import ModelProfile, ModelRoutingConfig, ResolvedModelProfile
 from colossus.domain.providers import ProviderModelInfo
+from colossus.domain.requests import AgentRunRequest, AgentRunResult
 from colossus.domain.subagents import SubagentJob
 from colossus.infrastructure.config import (
     ColossusConfig,
@@ -57,6 +58,38 @@ def test_cli_run_drains_subagents_before_returning(tmp_path, monkeypatch) -> Non
 
     assert result.exit_code == 0
     assert drained is True
+
+
+def test_cli_run_accepts_repeatable_skill_option(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    captured: dict[str, AgentRunRequest] = {}
+
+    async def fake_run_and_drain(orchestrator, subagent_service, request):
+        del orchestrator, subagent_service
+        captured["request"] = request
+        return AgentRunResult(
+            run_id="run-1",
+            final_output="done",
+            events_recorded=0,
+            session_id=request.session_id,
+        )
+
+    monkeypatch.setattr(cli_module, "_run_agent_and_drain_subagents", fake_run_and_drain)
+
+    result = CliRunner().invoke(app, ["run", "--skill", "coding", "hello"])
+
+    assert result.exit_code == 0
+    assert captured["request"].active_skills == ("coding",)
+    assert captured["request"].skill_mode_enabled is True
+
+
+def test_cli_run_rejects_unknown_skill(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    result = CliRunner().invoke(app, ["run", "--skill", "missing", "hello"])
+
+    assert result.exit_code == 1
+    assert "Unknown skill" in result.stdout
 
 
 def test_cli_run_rejects_unknown_events_mode(tmp_path, monkeypatch) -> None:

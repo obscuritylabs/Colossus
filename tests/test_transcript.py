@@ -83,6 +83,18 @@ def test_transcript_renderer_ignores_whitespace_only_final_answer() -> None:
     assert "agent" not in output
 
 
+def test_transcript_renderer_renders_final_answer_markdown() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console)
+
+    renderer.render_final_answer("# Research Report\n\n- Finding one")
+
+    output = console.export_text()
+    assert "Research Report" in output
+    assert "Finding one" in output
+    assert "# Research Report" not in output
+
+
 def test_transcript_renderer_can_render_empty_response_notice() -> None:
     console = Console(record=True, width=100)
     renderer = TranscriptRenderer(console)

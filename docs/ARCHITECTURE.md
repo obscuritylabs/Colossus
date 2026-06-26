@@ -52,13 +52,22 @@ tail messages, but raw messages and run events remain persisted in SQLite. Provi
 not own compaction behavior; OpenAI-compatible online and local endpoints receive the
 same normalized compacted message list.
 
+## Skill Composition
+
+The application `SkillComposer` resolves agent-allowed skills, parses prompt mentions
+such as `@skill:coding`, validates required tools against the active catalog, and
+composes skill context into provider instructions. Interfaces may provide sticky skill
+names or tab completion, but they do not inject `SKILL.md` content themselves.
+
 ## Deep Research
 
 `ResearchService` is an application service that coordinates research phases without
 putting orchestration logic in CLI or REPL code. It plans bounded queries, collects
 evidence through repo/search/MCP source ports, asks for approval before networked lanes,
 persists `ResearchRun`, `ResearchSource`, and `ResearchClaim` records through the state
-port, and emits typed `ResearchStatusEvent` values for renderers.
+port, and emits typed `ResearchStatusEvent` values for renderers. It also reads a bounded
+prior-session context block for planning and synthesis, then appends the completed cited
+report as a normal assistant session message so later chat turns can continue from it.
 
 Search and MCP are adapter concerns. The default config keeps web search disabled and
 MCP unconfigured; when enabled, their tool specs become visible through the normal tool

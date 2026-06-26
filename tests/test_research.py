@@ -10,6 +10,7 @@ from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.research import ResearchService
 from colossus.domain.errors import ToolExecutionError
 from colossus.domain.events import FinalOutputEvent
+from colossus.domain.messages import AssistantMessage, UserMessage
 from colossus.domain.models import ResolvedModelProfile
 from colossus.domain.requests import ModelRequest
 from colossus.domain.research import ResearchSourceDraft
@@ -71,6 +72,33 @@ class ShortReportProvider:
         yield FinalOutputEvent(text="Too short [R1]")
 
 
+class CapturingResearchProvider:
+    name = "capturing-research"
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def capabilities(self) -> tuple[object, ...]:
+        return ()
+
+    async def check_readiness(self) -> object:
+        raise NotImplementedError
+
+    async def list_models(self) -> tuple[object, ...]:
+        return ()
+
+    async def stream(self, request: ModelRequest):
+        prompt = request.messages[0].content
+        self.prompts.append(prompt)
+        if "search queries" in request.instructions:
+            yield FinalOutputEvent(text="session aware search query")
+            return
+        if "Extract one concise claim" in request.instructions:
+            yield FinalOutputEvent(text="The collected source supports the session-aware answer.")
+            return
+        yield FinalOutputEvent(text=_long_captured_report())
+
+
 def _short_report_router() -> ModelRouter:
     profile = ResolvedModelProfile(
         role="research_synthesizer",
@@ -93,6 +121,54 @@ def _short_report_router() -> ModelRouter:
                 "research_synthesizer",
             )
         }
+    )
+
+
+def _capturing_router(provider: CapturingResearchProvider) -> ModelRouter:
+    profile = ResolvedModelProfile(
+        role="research_synthesizer",
+        profile_name="capturing",
+        provider="echo",
+        model="capturing-model",
+    )
+    return ModelRouter(
+        {
+            role: ModelRoute(
+                role=role,
+                profile_name="capturing",
+                provider=provider,  # type: ignore[arg-type]
+                profile=profile.model_copy(update={"role": role}),
+            )
+            for role in (
+                "research_planner",
+                "research_worker",
+                "research_synthesizer",
+            )
+        }
+    )
+
+
+def _long_captured_report() -> str:
+    body = (
+        "The report uses the collected evidence while keeping the earlier session "
+        "context as interpretive background. The source-backed finding remains tied "
+        "to the persisted source label [R1]. "
+    )
+    return "\n\n".join(
+        [
+            "# Captured Research Report",
+            "## Executive Summary\n" + body * 3,
+            "## Methodology\n" + body * 2,
+            "## Detailed Findings\n" + body * 3,
+            "## Analysis\n" + body * 3,
+            "## Caveats And Limitations\n" + body * 2,
+            (
+                "## Source Table\n| Label | Type | Title | URI |\n"
+                "| --- | --- | --- | --- |\n"
+                "| [R1] | repo | docs/example.md | docs/example.md |"
+            ),
+            "## Unresolved Questions\n" + body * 2,
+        ]
     )
 
 
@@ -272,9 +348,58 @@ async def test_research_service_persists_cited_report_sources_and_claims(tmp_pat
     sources = await state.list_research_sources("research-1")
     claims = await state.list_research_claims("research-1")
     events = await state.list_events("research-1")
+    messages = await state.list_messages("session-1")
     assert sources[0].label == "R1"
     assert claims[0].source_labels == ("R1",)
     assert any(event.type == "research.status" for event in events)
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert messages[0].content == "How should deep research work?"
+    assert "# Research Report" in messages[1].content
+
+
+@pytest.mark.asyncio
+async def test_research_service_uses_prior_session_context_and_appends_report(tmp_path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    await state.append_message(
+        "session-1",
+        "prior-run",
+        UserMessage(content="Earlier we decided web.search should use self-hosted SearXNG."),
+    )
+    await state.append_message(
+        "session-1",
+        "prior-run",
+        AssistantMessage(content="SearXNG keeps search provider details out of tool input."),
+    )
+    provider = CapturingResearchProvider()
+    service = ResearchService(
+        state,
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+        repo_provider=FakeRepoProvider(),
+        model_router=_capturing_router(provider),
+        run_id_factory=lambda: "research-context",
+    )
+
+    run = await service.run(
+        question="What should we document next?",
+        session_id="session-1",
+        source_kinds=("repo",),
+        max_sources=3,
+    )
+
+    planner_prompt = provider.prompts[0]
+    synthesis_prompt = provider.prompts[-1]
+    messages = await state.list_messages("session-1")
+    assert "self-hosted SearXNG" in planner_prompt
+    assert "keeps search provider details out of tool input" in synthesis_prompt
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert messages[-2].content == "What should we document next?"
+    assert messages[-1].content == run.report
+    assert "# Captured Research Report" in messages[-1].content
 
 
 @pytest.mark.asyncio

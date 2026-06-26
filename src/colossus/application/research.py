@@ -7,7 +7,7 @@ from uuid import uuid4
 from colossus.application.model_router import ModelRouter
 from colossus.domain.errors import ColossusError
 from colossus.domain.events import FinalOutputEvent, ModelDeltaEvent, ResearchStatusEvent, RunEvent
-from colossus.domain.messages import UserMessage
+from colossus.domain.messages import AssistantMessage, Message, UserMessage
 from colossus.domain.policy import PolicyDecision
 from colossus.domain.requests import ModelRequest
 from colossus.domain.research import (
@@ -59,6 +59,9 @@ RESEARCH_READ_ONLY_TOOLS = frozenset(
         "tool.search",
     }
 )
+SESSION_CONTEXT_MESSAGE_LIMIT = 12
+SESSION_CONTEXT_MESSAGE_CHARS = 900
+SESSION_CONTEXT_MAX_CHARS = 6_000
 
 
 class ResearchService:
@@ -103,14 +106,22 @@ class ResearchService:
             raise ColossusError("Research question is required.")
         if max_sources < 1:
             raise ColossusError("max_sources must be at least 1.")
+        question_text = question.strip()
+        prior_messages = await self._state_store.list_messages(session_id)
+        session_context = _session_context(prior_messages)
         run = ResearchRun(
             id=self._run_id_factory(),
             session_id=session_id,
-            question=question.strip(),
+            question=question_text,
             depth=depth,
             source_kinds=source_kinds,
         )
         await self._state_store.save_research_run(run)
+        await self._state_store.append_message(
+            session_id,
+            run.id,
+            UserMessage(content=question_text),
+        )
         await self._audit_sink.record(
             "agent",
             "research.started",
@@ -124,7 +135,11 @@ class ResearchService:
         warnings: list[str] = []
         try:
             await self._emit(run, phase="planning", message="Planning research queries.")
-            queries = await self._plan_queries(run.question, depth)
+            queries = await self._plan_queries(
+                run.question,
+                depth,
+                session_context=session_context,
+            )
             await self._emit(
                 run,
                 phase="collecting",
@@ -152,7 +167,13 @@ class ResearchService:
                 message="Synthesizing cited research report.",
                 sources_collected=len(sources),
             )
-            report = await self._synthesize_report(run, sources, claims, tuple(warnings))
+            report = await self._synthesize_report(
+                run,
+                sources,
+                claims,
+                tuple(warnings),
+                session_context=session_context,
+            )
             completed = run.model_copy(
                 update={
                     "status": "completed",
@@ -163,6 +184,11 @@ class ResearchService:
                 }
             )
             await self._state_store.save_research_run(completed)
+            await self._state_store.append_message(
+                session_id,
+                completed.id,
+                AssistantMessage(content=report),
+            )
             await self._emit(
                 completed,
                 phase="completed",
@@ -219,13 +245,22 @@ class ResearchService:
     async def list_claims(self, run_id: str) -> tuple[ResearchClaim, ...]:
         return await self._state_store.list_research_claims(run_id)
 
-    async def _plan_queries(self, question: str, depth: ResearchDepth) -> tuple[str, ...]:
+    async def _plan_queries(
+        self,
+        question: str,
+        depth: ResearchDepth,
+        *,
+        session_context: str = "",
+    ) -> tuple[str, ...]:
         if depth == "quick":
             return (question,)
         planned = await self._model_text(
             "research_planner",
-            "Return 2-6 short search queries as plain lines. No numbering.",
-            question,
+            (
+                "Return 2-6 short search queries as plain lines. No numbering. "
+                "Use prior session context only to resolve references in the question."
+            ),
+            _planning_prompt(question, session_context),
         )
         queries = tuple(
             dict.fromkeys(
@@ -353,8 +388,16 @@ class ResearchService:
         sources: tuple[ResearchSource, ...],
         claims: tuple[ResearchClaim, ...],
         warnings: tuple[str, ...],
+        *,
+        session_context: str = "",
     ) -> str:
-        prompt = _synthesis_prompt(run, sources, claims, warnings)
+        prompt = _synthesis_prompt(
+            run,
+            sources,
+            claims,
+            warnings,
+            session_context=session_context,
+        )
         text = await self._model_text(
             "research_synthesizer",
             (
@@ -453,6 +496,30 @@ def research_agent_tools() -> tuple[str, ...]:
     return tuple(sorted(RESEARCH_READ_ONLY_TOOLS))
 
 
+def _session_context(messages: tuple[Message, ...]) -> str:
+    lines: list[str] = []
+    for message in messages[-SESSION_CONTEXT_MESSAGE_LIMIT:]:
+        content = message.content.strip()
+        if not content:
+            continue
+        role_label: str = message.role
+        if message.role == "tool":
+            role_label = f"tool:{getattr(message, 'name', 'tool')}"
+        lines.append(f"{role_label}: {_truncate(content, SESSION_CONTEXT_MESSAGE_CHARS)}")
+    return _truncate("\n".join(lines), SESSION_CONTEXT_MAX_CHARS)
+
+
+def _planning_prompt(question: str, session_context: str) -> str:
+    if not session_context:
+        return question
+    return (
+        "Prior session context:\n"
+        f"{session_context}\n\n"
+        "Research question:\n"
+        f"{question}"
+    )
+
+
 def _deterministic_queries(question: str, limit: int) -> tuple[str, ...]:
     tokens = re.findall(r"[A-Za-z0-9_./-]+", question)
     compact = " ".join(tokens[:8]) or question
@@ -505,6 +572,8 @@ def _synthesis_prompt(
     sources: tuple[ResearchSource, ...],
     claims: tuple[ResearchClaim, ...],
     warnings: tuple[str, ...],
+    *,
+    session_context: str = "",
 ) -> str:
     source_lines = [
         f"[{source.label}] {source.kind} {source.title} {source.uri}\n{source.content[:1400]}"
@@ -515,8 +584,17 @@ def _synthesis_prompt(
         for claim in claims
     ]
     warning_text = "\n".join(f"- {warning}" for warning in warnings) or "- none"
+    context_text = (
+        "Prior session context:\n"
+        f"{session_context}\n\n"
+        "Use this context to interpret the question, but cite only collected sources "
+        "for factual findings.\n\n"
+        if session_context
+        else ""
+    )
     return (
         f"Question: {run.question}\n\n"
+        f"{context_text}"
         "Write a substantial Markdown research report for a technical decision maker. "
         "Do not collapse the result into a short summary. Include these sections, using "
         "clear headings: Executive Summary, Methodology, Detailed Findings, Analysis, "
