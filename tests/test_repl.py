@@ -24,6 +24,7 @@ from colossus.domain.models import ResolvedModelProfile
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
 from colossus.domain.requests import AgentRunRequest, AgentRunResult
+from colossus.domain.research import ResearchRun
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob
 from colossus.domain.tasks import Task
@@ -46,6 +47,7 @@ from colossus.interfaces.repl import (
     _handle_memories_command,
     _handle_memory_command,
     _handle_plan_command,
+    _handle_research_command,
     _handle_resume_command,
     _handle_session_command,
     _handle_sessions_command,
@@ -108,6 +110,9 @@ class FakeTraceRenderer:
         del activity_context
         self.began = True
 
+    def render_user_prompt(self, prompt: str) -> None:
+        del prompt
+
     def end_run(self) -> None:
         self.ended = True
 
@@ -126,6 +131,39 @@ class FakePlanOrchestrator:
             final_output="executed",
             events_recorded=0,
             session_id=request.session_id,
+        )
+
+
+class FakeResearchService:
+    def __init__(self) -> None:
+        self.question = ""
+
+    async def run(self, *, question: str, session_id: str) -> ResearchRun:
+        self.question = question
+        return ResearchRun(
+            id="research-1",
+            session_id=session_id,
+            question=question,
+            status="completed",
+            report="# Research Brief\n\nFinding [R1]",
+        )
+
+    async def latest_run(self, session_id: str) -> ResearchRun | None:
+        return ResearchRun(
+            id="research-1",
+            session_id=session_id,
+            question="latest",
+            status="completed",
+            report="# Research Brief\n\nLatest [R1]",
+        )
+
+    async def get_run(self, run_id: str) -> ResearchRun:
+        return ResearchRun(
+            id=run_id,
+            session_id="session-research",
+            question="shown",
+            status="completed",
+            report="# Research Brief\n\nShown [R1]",
         )
 
 
@@ -166,7 +204,7 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     assert {completion.text for completion in slash_matches} >= {"/events", "/exit"}
     assert [completion.text for completion in plan_matches] == ["/plan"]
     assert [completion.text for completion in plan_narrow_matches] == ["/plan"]
-    assert [completion.text for completion in resume_matches] == ["/resume"]
+    assert [completion.text for completion in resume_matches] == ["/resume", "/research"]
     assert [completion.text for completion in event_matches] == ["/events", "/exit"]
     assert argument_matches == []
     assert plain_matches == []
@@ -176,7 +214,7 @@ def test_slash_suggestions_show_in_toolbar_for_command_drafts() -> None:
     assert _format_slash_suggestions("/").startswith("commands: /model")
     assert _format_slash_suggestions("/p") == "commands: /plan"
     assert _format_slash_suggestions("/pl") == "commands: /plan"
-    assert _format_slash_suggestions("/res") == "commands: /resume"
+    assert _format_slash_suggestions("/res") == "commands: /resume /research"
     assert _format_slash_suggestions("/e") == "commands: /events /exit"
     assert _format_slash_suggestions("/events ") == ""
     assert _format_slash_suggestions("hello") == ""
@@ -210,6 +248,7 @@ def test_parse_context_commands() -> None:
     memory = parse_slash_command("/memory search pytest")
     memories = parse_slash_command("/memories all")
     plan = parse_slash_command("/plan approve")
+    research = parse_slash_command("/research show")
     help_command = parse_slash_command("/help")
 
     assert compact is not None
@@ -266,6 +305,9 @@ def test_parse_context_commands() -> None:
     assert plan is not None
     assert plan.command == "plan"
     assert plan.argument == "approve"
+    assert research is not None
+    assert research.command == "research"
+    assert research.argument == "show"
     assert help_command is not None
     assert help_command.command == "help"
 
@@ -1179,6 +1221,40 @@ async def test_plan_execute_runs_approved_active_plan(tmp_path) -> None:
     assert trace.ended is True
     assert trace.final_answer == "executed"
     assert f"Executed plan {plan.id}." in console.export_text()
+
+
+@pytest.mark.asyncio
+async def test_research_command_toggles_and_runs_query() -> None:
+    state = ReplDisplayState(
+        session_id="session-research",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+    )
+    console = Console(record=True, width=140)
+    service = FakeResearchService()
+    trace = FakeTraceRenderer()
+
+    await _handle_research_command(
+        console,
+        service,  # type: ignore[arg-type]
+        state,
+        "on",
+        trace,  # type: ignore[arg-type]
+    )
+    await _handle_research_command(
+        console,
+        service,  # type: ignore[arg-type]
+        state,
+        "What is stable?",
+        trace,  # type: ignore[arg-type]
+    )
+
+    assert state.interaction_mode == "research"
+    assert state.active_research_id == "research-1"
+    assert state.active_research_status == "completed"
+    assert service.question == "What is stable?"
+    assert trace.final_answer == "# Research Brief\n\nFinding [R1]"
 
 
 @pytest.mark.asyncio

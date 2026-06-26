@@ -90,6 +90,17 @@ class SubagentStatusEvent(BaseModel):
     message: str = ""
 
 
+class ResearchStatusEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["research.status"] = "research.status"
+    research_id: str
+    status: Literal["running", "completed", "failed"]
+    phase: str
+    message: str = ""
+    sources_collected: int = 0
+
+
 class FinalOutputEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -115,6 +126,7 @@ RunEvent = Annotated[
     | ToolCallCompletedEvent
     | HandoffEvent
     | SubagentStatusEvent
+    | ResearchStatusEvent
     | FinalOutputEvent
     | ErrorEvent,
     Field(discriminator="type"),

@@ -197,6 +197,44 @@ async def test_orchestrator_executes_tool_and_continues(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_filters_provider_tools_by_agent_spec(tmp_path) -> None:
+    async def echo(arguments: dict[str, object]) -> str:
+        return str(arguments["text"])
+
+    echo_spec = ToolSpec(
+        name="echo",
+        description="Echo",
+        input_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    )
+    write_spec = ToolSpec(
+        name="filesystem.write",
+        description="Write",
+        input_schema={"type": "object", "additionalProperties": False},
+    )
+    registry = InMemoryToolRegistry((echo_spec, write_spec))
+    provider = ToolThenFinalProvider()
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({"echo": echo}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+    )
+    agent = default_agent().model_copy(update={"tools": ("echo",)})
+
+    await orchestrator.run(AgentRunRequest(prompt="use a tool", agent=agent))
+
+    assert {tool.name for tool in provider.requests[0].tools} == {"echo"}
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_rejects_empty_provider_response(tmp_path) -> None:
     orchestrator = AgentOrchestrator(
         provider=EmptyProvider(),

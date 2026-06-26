@@ -17,6 +17,7 @@ from colossus.domain.models import (
     ModelRoutingConfig,
     ProviderKind,
 )
+from colossus.domain.research import ResearchDepth, ResearchSourceKind
 from colossus.ports.model_provider import ModelProvider
 
 DEFAULT_MODEL_ROLES: tuple[ModelRole, ...] = (
@@ -24,6 +25,9 @@ DEFAULT_MODEL_ROLES: tuple[ModelRole, ...] = (
     "risk_evaluator",
     "context_summarizer",
     "subagent_default",
+    "research_planner",
+    "research_worker",
+    "research_synthesizer",
 )
 
 
@@ -56,6 +60,52 @@ class MemoryConfig(BaseModel):
     index: MemoryIndexConfig = Field(default_factory=MemoryIndexConfig)
 
 
+class SearchConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["disabled", "duckduckgo", "searxng"] = "disabled"
+    endpoint: str = "https://duckduckgo.com/html/"
+    api_key_env: str | None = None
+    auth_header: str = "Authorization"
+    auth_scheme: Literal["bearer", "raw"] = "bearer"
+    user_agent: str = "colossus-agent/0.1"
+
+
+class McpResearchToolConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tool: str
+    arguments: dict[str, object] = Field(default_factory=dict)
+    title: str = ""
+
+
+class McpServerConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    command: str
+    args: tuple[str, ...] = Field(default_factory=tuple)
+    env: dict[str, str] = Field(default_factory=dict)
+    allowed_tools: tuple[str, ...] = Field(default_factory=tuple)
+    research_tools: tuple[McpResearchToolConfig, ...] = Field(default_factory=tuple)
+
+
+class McpConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+
+
+class ResearchConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    default_depth: ResearchDepth = "standard"
+    max_sources: int = Field(default=20, ge=1, le=100)
+    max_workers: int = Field(default=4, ge=1, le=16)
+    sources: tuple[ResearchSourceKind, ...] = ("repo", "web", "mcp")
+    search: SearchConfig = Field(default_factory=SearchConfig)
+    mcp: McpConfig = Field(default_factory=McpConfig)
+
+
 class ColossusConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -64,6 +114,7 @@ class ColossusConfig(BaseModel):
     context: ContextConfig = Field(default_factory=ContextConfig)
     subagents: SubagentConfig = Field(default_factory=SubagentConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    research: ResearchConfig = Field(default_factory=ResearchConfig)
     allow_user_skill_overrides: bool = False
 
 

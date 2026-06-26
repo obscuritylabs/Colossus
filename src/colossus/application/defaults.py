@@ -3,6 +3,23 @@
 from colossus.domain.agents import AgentSpec
 
 
+def research_agent(model: str = "default") -> AgentSpec:
+    from colossus.application.research import research_agent_tools
+
+    return AgentSpec(
+        name="colossus-research",
+        instructions=(
+            "You are Colossus in deep research mode. Use only read-only sources, "
+            "collect evidence before conclusions, and cite source labels exactly as "
+            "provided. Do not mutate files, run shell commands, apply patches, or claim "
+            "external facts without source support."
+        ),
+        model=model,
+        tools=research_agent_tools(),
+        skills=("coding", "security-review", "offline-dev"),
+    )
+
+
 def default_agent(model: str = "default") -> AgentSpec:
     return AgentSpec(
         name="colossus",
@@ -25,6 +42,6 @@ def default_agent(model: str = "default") -> AgentSpec:
             "Do not invent filenames, modules, commands, or repository contents."
         ),
         model=model,
-        tools=("echo",),
+        tools=(),
         skills=("coding", "security-review", "offline-dev"),
     )

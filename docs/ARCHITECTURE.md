@@ -52,6 +52,22 @@ tail messages, but raw messages and run events remain persisted in SQLite. Provi
 not own compaction behavior; OpenAI-compatible online and local endpoints receive the
 same normalized compacted message list.
 
+## Deep Research
+
+`ResearchService` is an application service that coordinates research phases without
+putting orchestration logic in CLI or REPL code. It plans bounded queries, collects
+evidence through repo/search/MCP source ports, asks for approval before networked lanes,
+persists `ResearchRun`, `ResearchSource`, and `ResearchClaim` records through the state
+port, and emits typed `ResearchStatusEvent` values for renderers.
+
+Search and MCP are adapter concerns. The default config keeps web search disabled and
+MCP unconfigured; when enabled, their tool specs become visible through the normal tool
+catalog and still pass policy, approval, and audit paths for model-callable use. Search
+credentials stay in provider configuration and environment variables rather than in the
+provider-neutral `web.search` tool input.
+Research planner, worker, and synthesizer model roles default to `primary` unless
+configured separately.
+
 ## Event Rendering
 
 Terminal activity rendering consumes typed run events. The CLI uses `interfaces.trace`

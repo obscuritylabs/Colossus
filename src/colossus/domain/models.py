@@ -5,7 +5,15 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 ProviderKind = Literal["echo", "openai_responses", "local_openai_chat"]
-ModelRole = Literal["primary", "risk_evaluator", "context_summarizer", "subagent_default"]
+ModelRole = Literal[
+    "primary",
+    "risk_evaluator",
+    "context_summarizer",
+    "subagent_default",
+    "research_planner",
+    "research_worker",
+    "research_synthesizer",
+]
 
 
 class ModelProfile(BaseModel):

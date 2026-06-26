@@ -63,9 +63,10 @@ Security-sensitive defaults:
 | `repo.*` | Read | Denied | No | Enabled |
 | `agent.*` | None | Denied | No | Enabled, durable queued child-agent jobs |
 | `web.fetch` and `docs.fetch` | None | Allowed by spec | Yes | Bounded HTTP(S) fetch after approval |
-| `web.search` | None | Allowed by spec | Yes | Adapter extension point |
+| `web.search` | None | Allowed by spec | Yes | Exposed only when a search adapter such as SearXNG is configured |
 | `mcp.servers/tools` | None | Denied | No | Returns unconfigured state |
-| `mcp.call` | None | Allowed by spec | Yes | Handler denies by default |
+| `mcp.call` | None | Allowed by spec | Yes | Adapter extension point, not exposed by default |
+| Deep research | Read | Allowed by configured lanes | Network/MCP lanes | Persists cited reports and source records |
 | `trace.show` | Read | Denied | No | Enabled |
 | `trace.export` | Write | Denied | Yes | Enabled |
 | `context.show/compact/snapshots` | None | Denied | No | Enabled |
@@ -128,6 +129,12 @@ after key decisions and before compacted snapshot content. Global memories are o
 used when relevant to the current prompt/repository; archived and superseded memories
 remain persisted for history but are not injected. Memory records should not store
 secrets, raw credentials, private keys, or unbounded external/tool output.
+
+Deep Research Mode persists source records and cited reports. Repository collection is
+read-only. Configured web search and MCP source collection require approval, and disabled
+or denied source lanes are recorded as limitations rather than bypassed. Search provider
+secrets are read from environment variables and must not be sent as tool arguments,
+source metadata, or audit payload fields.
 
 ## Reasoning Visibility
 

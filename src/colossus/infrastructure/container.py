@@ -1,11 +1,22 @@
 """Default service composition for the CLI surfaces."""
 
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from colossus.adapters.audit_jsonl import JsonlAuditSink
 from colossus.adapters.builtin_tools import create_builtin_tools
 from colossus.adapters.echo_provider import EchoModelProvider
+from colossus.adapters.research_sources import (
+    DisabledMcpGateway,
+    DisabledSearchProvider,
+    DuckDuckGoSearchProvider,
+    McpResearchToolRuntime,
+    McpSdkGateway,
+    McpServerRuntime,
+    SearxngSearchProvider,
+    WorkspaceRepoResearchProvider,
+)
 from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.adapters.workspace import Workspace
@@ -19,6 +30,7 @@ from colossus.application.orchestrator import AgentOrchestrator, RunEventObserve
 from colossus.application.planning import PlanService
 from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.preferences import ReplPreferencesService
+from colossus.application.research import ResearchService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.sessions import SessionService
 from colossus.application.skills import SkillResolver
@@ -31,12 +43,15 @@ from colossus.domain.requests import AgentRunRequest, AgentRunResult
 from colossus.domain.subagents import SubagentJob
 from colossus.infrastructure.config import (
     ColossusConfig,
+    McpConfig,
     ProviderOverrides,
+    SearchConfig,
     effective_model_routing,
     provider_from_profile,
 )
 from colossus.ports.approval import ApprovalHandler
 from colossus.ports.model_provider import ModelProvider
+from colossus.ports.research import McpGateway, SearchProvider
 from colossus.ports.user_prompt import UserPromptHandler
 
 
@@ -61,6 +76,8 @@ def create_default_orchestrator(
     memory_service: MemoryService | None = None,
     model_router: ModelRouter | None = None,
     include_agent_delegate: bool = True,
+    search_provider: SearchProvider | None = None,
+    mcp_gateway: McpGateway | None = None,
 ) -> AgentOrchestrator:
     data_dir.mkdir(parents=True, exist_ok=True)
     resolved_provider = provider or EchoModelProvider()
@@ -93,6 +110,8 @@ def create_default_orchestrator(
         subagent_service=subagent_service,
         include_agent_delegate=include_agent_delegate,
         user_prompt_handler=user_prompt_handler,
+        search_provider=search_provider,
+        mcp_gateway=mcp_gateway,
     )
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)
@@ -152,6 +171,77 @@ def create_subagent_service(
         state_store or create_state_store(data_dir),
         audit_sink or create_audit_sink(data_dir),
         max_concurrent=max_concurrent,
+    )
+
+
+def create_search_provider(config: SearchConfig) -> SearchProvider:
+    if config.kind == "duckduckgo":
+        return DuckDuckGoSearchProvider(
+            endpoint=config.endpoint,
+            user_agent=config.user_agent,
+        )
+    if config.kind == "searxng":
+        return SearxngSearchProvider(
+            endpoint=config.endpoint,
+            user_agent=config.user_agent,
+            api_key=os.environ.get(config.api_key_env, "") if config.api_key_env else None,
+            auth_header=config.auth_header,
+            auth_scheme=config.auth_scheme,
+        )
+    return DisabledSearchProvider()
+
+
+def create_mcp_gateway(config: McpConfig) -> McpGateway:
+    if not config.servers:
+        return DisabledMcpGateway()
+    servers = []
+    for name, server in config.servers.items():
+        servers.append(
+            McpServerRuntime(
+                name=name,
+                command=server.command,
+                args=server.args,
+                env=server.env,
+                allowed_tools=server.allowed_tools,
+                research_tools=tuple(
+                    McpResearchToolRuntime(
+                        server=name,
+                        tool=tool.tool,
+                        arguments=tool.arguments,
+                        title=tool.title,
+                    )
+                    for tool in server.research_tools
+                ),
+            )
+        )
+    return McpSdkGateway(tuple(servers))
+
+
+def create_research_service(
+    data_dir: Path,
+    *,
+    config: ColossusConfig,
+    model_router: ModelRouter | None = None,
+    workspace_root: Path | None = None,
+    state_store: SQLiteStateStore | None = None,
+    audit_sink: JsonlAuditSink | None = None,
+    approval_handler: ApprovalHandler | None = None,
+    auto_approve_network: bool = False,
+    event_observer: RunEventObserver | None = None,
+) -> ResearchService:
+    resolved_state = state_store or create_state_store(data_dir)
+    resolved_audit = audit_sink or create_audit_sink(data_dir)
+    workspace = Workspace(workspace_root or Path.cwd())
+    return ResearchService(
+        resolved_state,
+        resolved_audit,
+        repo_provider=WorkspaceRepoResearchProvider(workspace),
+        model_router=model_router,
+        search_provider=create_search_provider(config.research.search),
+        mcp_gateway=create_mcp_gateway(config.research.mcp),
+        approval_handler=approval_handler,
+        auto_approve_network=auto_approve_network,
+        event_observer=event_observer,
     )
 
 
