@@ -39,7 +39,9 @@ uv run colossus sessions show SESSION_ID
 Inside the REPL, use `/resume` to choose from recent sessions without copying an id.
 
 Deep Research Mode collects bounded repo evidence, optional approval-gated web search,
-and optional configured MCP sources into a persisted cited report:
+and optional configured MCP sources into a persisted cited report. Research runs use a
+bounded summary of prior session messages to resolve follow-up questions, then append the
+final report back to the session so normal chat can continue from it:
 
 ```bash
 uv run colossus research "How should this harness handle long-running investigations?"
@@ -115,6 +117,9 @@ The package follows dependency-inward layering:
 
 Bundled first-party skills live under `src/colossus/bundled_skills/` and are shipped
 as package data.
+
+Skill Mode is enabled for normal agent turns. Use `@skill:coding` in a prompt, repeat
+`--skill coding` for one-shot CLI runs, or manage sticky REPL skills with `/skill`.
 
 ## Built-in Tools
 

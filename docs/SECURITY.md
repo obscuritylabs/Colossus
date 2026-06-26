@@ -31,6 +31,11 @@ lockfiles, SBOM, manifests, signatures, and skills.
 Changes to subprocess execution, approval policy, audit records, bundle handling, or
 skill loading should include security-focused tests.
 
+Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
+are validated against the agent allowlist and active tool catalog before provider calls;
+`required_tools` never auto-approves a tool. Skill audit records include names, versions,
+and sources only, not full `SKILL.md` bodies.
+
 ## Tool Execution
 
 Tools are expected to declare their execution permissions up front. Policy can allow,

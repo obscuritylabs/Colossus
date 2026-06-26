@@ -8,6 +8,7 @@ from uuid import uuid4
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.risk import RiskAssessmentService
+from colossus.application.skills import SkillComposer
 from colossus.application.subagents import SubagentService
 from colossus.application.tools import validate_tool_call
 from colossus.domain.errors import PolicyDeniedError, ProviderError, ToolExecutionError
@@ -71,6 +72,7 @@ class AgentOrchestrator:
         auto_approve_required_tools: bool = False,
         subagent_service: SubagentService | None = None,
         decision_service: DecisionService | None = None,
+        skill_composer: SkillComposer | None = None,
     ) -> None:
         self._provider = provider
         self._tool_registry = tool_registry
@@ -89,6 +91,7 @@ class AgentOrchestrator:
         self._auto_approve_required_tools = auto_approve_required_tools
         self._subagent_service = subagent_service
         self._decision_service = decision_service
+        self._skill_composer = skill_composer
         if subagent_service is not None and event_observer is not None:
             subagent_service.set_event_observer(event_observer)
 
@@ -99,10 +102,34 @@ class AgentOrchestrator:
 
     async def run(self, request: AgentRunRequest) -> AgentRunResult:
         run_id = self._run_id_factory()
+        tool_specs = self._tool_specs_for_agent(request.agent.tools)
+        instructions = request.agent.instructions
+        skill_context = None
+        if self._skill_composer is not None:
+            skill_context = self._skill_composer.compose(
+                instructions=request.agent.instructions,
+                agent=request.agent,
+                prompt=request.prompt,
+                active_skills=request.active_skills,
+                skill_mode_enabled=request.skill_mode_enabled,
+                tools=tool_specs,
+            )
+            instructions = skill_context.instructions
         messages: list[Message] = []
         if request.session_id is not None:
             await self._state_store.ensure_session(request.session_id, title=request.prompt[:80])
             messages.extend(await self._state_store.list_messages(request.session_id))
+        if skill_context is not None:
+            await self._audit_sink.record(
+                "agent",
+                "skills.selected",
+                {
+                    "run_id": run_id,
+                    "skill_mode_enabled": request.skill_mode_enabled,
+                    "available_skill_count": len(skill_context.available_skills),
+                    "active_skills": skill_context.active_metadata,
+                },
+            )
         user_message = UserMessage(content=request.prompt)
         messages.append(user_message)
         if request.session_id is not None:
@@ -136,7 +163,7 @@ class AgentOrchestrator:
                 context_result = await self._context_service.prepare_messages(
                     session_id=request.session_id,
                     model=request.agent.model,
-                    instructions=request.agent.instructions,
+                    instructions=instructions,
                     messages=prepared_messages,
                     provider=self._context_provider or self._provider,
                     summary_model=self._context_model,
@@ -144,9 +171,9 @@ class AgentOrchestrator:
                 prepared_messages = context_result.messages
             model_request = ModelRequest(
                 model=request.agent.model,
-                instructions=request.agent.instructions,
+                instructions=instructions,
                 messages=prepared_messages,
-                tools=self._tool_specs_for_agent(request.agent.tools),
+                tools=tool_specs,
             )
             pending_tool_calls: list[ToolCall] = []
             collected_text: list[str] = []

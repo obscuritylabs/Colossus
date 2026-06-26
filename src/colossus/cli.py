@@ -404,6 +404,10 @@ def run(
             help=f"Approval mode: {APPROVAL_MODE_HELP}.",
         ),
     ] = None,
+    skill: Annotated[
+        list[str] | None,
+        typer.Option("--skill", help="Activate a skill for this one-shot run."),
+    ] = None,
 ) -> None:
     """Run one agent turn."""
     if plan and execute_plan is not None:
@@ -497,9 +501,13 @@ def run(
                     agent=default_agent(route.profile.model),
                     session_id=session_id,
                     plan_id=plan_id,
+                    active_skills=tuple(skill or ()),
                 )
             )
         )
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
     finally:
         trace_renderer.end_run()
     if execute_plan is not None:

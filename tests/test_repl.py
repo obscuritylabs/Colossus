@@ -7,6 +7,7 @@ from rich.console import Console
 
 from colossus.adapters.audit_jsonl import JsonlAuditSink
 from colossus.adapters.echo_provider import EchoModelProvider
+from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
@@ -14,6 +15,7 @@ from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.planning import PlanService
 from colossus.application.sessions import SessionService
+from colossus.application.skills import SkillResolver
 from colossus.application.subagents import SubagentService
 from colossus.domain.context import ContextStatus
 from colossus.domain.decisions import KeyDecision
@@ -36,6 +38,7 @@ from colossus.interfaces.repl import (
     ReplInteractionMode,
     RichUserPromptHandler,
     SlashCommandCompleter,
+    _composer_key_bindings,
     _events_mode,
     _format_repl_toolbar,
     _format_run_toolbar,
@@ -51,6 +54,8 @@ from colossus.interfaces.repl import (
     _handle_resume_command,
     _handle_session_command,
     _handle_sessions_command,
+    _handle_skill_command,
+    _is_skill_mention_draft,
     _is_slash_command_draft,
     _match_user_prompt_answer,
     _multiline_mode,
@@ -210,6 +215,44 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     assert plain_matches == []
 
 
+def test_skill_completer_suggests_canonical_skill_mentions() -> None:
+    completer = SlashCommandCompleter(SkillResolver((PackageSkillRepository(),)))
+    event = CompleteEvent(text_inserted=True)
+
+    at = list(completer.get_completions(Document("@"), event))
+    namespace_prefix = list(completer.get_completions(Document("@s"), event))
+    namespace_prefix_long = list(completer.get_completions(Document("@sk"), event))
+    bare = list(completer.get_completions(Document("@skill"), event))
+    canonical_empty = list(completer.get_completions(Document("@skill:"), event))
+    canonical = list(completer.get_completions(Document("@skill:cod"), event))
+    shorthand = list(completer.get_completions(Document("please @off"), event))
+
+    all_skill_mentions = {
+        "@skill:coding ",
+        "@skill:security-review ",
+        "@skill:offline-dev ",
+    }
+    assert {completion.text for completion in at} >= {"@skill:coding "}
+    assert {completion.text for completion in namespace_prefix} >= all_skill_mentions
+    assert {completion.text for completion in namespace_prefix_long} >= all_skill_mentions
+    assert {completion.text for completion in bare} >= {"@skill:coding "}
+    assert {completion.text for completion in canonical_empty} >= {"@skill:coding "}
+    assert [completion.text for completion in canonical] == ["@skill:coding "]
+    assert [completion.text for completion in shorthand] == ["@skill:offline-dev "]
+    assert canonical[0].display_meta_text
+
+
+def test_skill_completion_key_bindings_open_menu_while_typing() -> None:
+    keys = {binding.keys for binding in _composer_key_bindings().bindings}
+
+    assert ("@",) in keys
+    assert ("a",) in keys
+    assert (":",) in keys
+    assert ("-",) in keys
+    assert _is_skill_mention_draft("@")
+    assert _is_skill_mention_draft("@skill")
+
+
 def test_slash_suggestions_show_in_toolbar_for_command_drafts() -> None:
     assert _format_slash_suggestions("/").startswith("commands: /model")
     assert _format_slash_suggestions("/p") == "commands: /plan"
@@ -249,6 +292,7 @@ def test_parse_context_commands() -> None:
     memories = parse_slash_command("/memories all")
     plan = parse_slash_command("/plan approve")
     research = parse_slash_command("/research show")
+    skill = parse_slash_command("/skill use coding")
     help_command = parse_slash_command("/help")
 
     assert compact is not None
@@ -308,6 +352,9 @@ def test_parse_context_commands() -> None:
     assert research is not None
     assert research.command == "research"
     assert research.argument == "show"
+    assert skill is not None
+    assert skill.command == "skill"
+    assert skill.argument == "use coding"
     assert help_command is not None
     assert help_command.command == "help"
 
@@ -652,6 +699,8 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "composer_mode" in status_output
     assert "multiline" in status_output
     assert "mode" in status_output
+    assert "skill_mode" in status_output
+    assert "sticky_skills" in status_output
     assert "plan" in status_output
     assert "active_plan" in status_output
     assert "plan-123456" in status_output
@@ -670,6 +719,7 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "/memories [all|STATUS]" in help_output
     assert "/memory [archive|search|supersede|TEXT]" in help_output
     assert "/plan [on|off|show|approve|execute|list|discard]" in help_output
+    assert "/skill [on|off|show|use|drop|clear]" in help_output
     assert "Current" in help_output
     assert "primary:model-a" in help_output
     assert "off" in help_output
@@ -1008,6 +1058,33 @@ def test_plan_agent_adds_plan_only_instructions() -> None:
     assert "do not make code changes" in planned.instructions
     assert "task.create" in planned.instructions
     assert "clear trackable work" in planned.instructions
+
+
+def test_handle_skill_command_manages_runtime_skill_mode() -> None:
+    console = Console(record=True, width=140)
+    resolver = SkillResolver((PackageSkillRepository(),))
+    state = ReplDisplayState(
+        session_id="session-1",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+    )
+    agent = default_agent("model-a")
+
+    _handle_skill_command(console, resolver, state, agent, "use coding")
+    _handle_skill_command(console, resolver, state, agent, "show")
+    _handle_skill_command(console, resolver, state, agent, "show coding")
+    _handle_skill_command(console, resolver, state, agent, "off")
+    _handle_skill_command(console, resolver, state, agent, "drop coding")
+    _handle_skill_command(console, resolver, state, agent, "clear")
+
+    output = console.export_text()
+    assert state.skill_mode_enabled is False
+    assert state.sticky_skills == ()
+    assert "Sticky skill added: coding" in output
+    assert "available_count" in output
+    assert "General software implementation workflow" in output
+    assert "Skill Mode is off." in output
 
 
 def test_render_plan_prefers_markdown_content() -> None:

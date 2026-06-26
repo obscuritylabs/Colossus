@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from rich import box
 from rich.cells import cell_len, set_cell_size
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.status import Status
 from rich.text import Text
@@ -177,10 +178,10 @@ class TranscriptRenderer:
         if self.transcript_style == "comfortable":
             self.console.print()
             self.console.print(Text("agent", style=self.theme.meta))
-            self.console.print(Text(text, style=self.theme.assistant))
+            self.console.print(Markdown(text))
             self.console.print()
         else:
-            self.console.print(Text(text, style=self.theme.assistant))
+            self.console.print(Markdown(text))
         self._rendered_model_output = True
         self._last_model_delta_ended_newline = text.endswith("\n")
 

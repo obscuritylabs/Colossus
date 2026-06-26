@@ -35,7 +35,7 @@ from colossus.application.planning import PlanService
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.research import ResearchService
 from colossus.application.sessions import SessionService
-from colossus.application.skills import SkillResolver
+from colossus.application.skills import SkillResolver, extract_skill_mentions
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.domain.agents import AgentSpec
@@ -48,6 +48,7 @@ from colossus.domain.preferences import ReplPreferences, TranscriptStylePreferen
 from colossus.domain.requests import AgentRunRequest
 from colossus.domain.research import ResearchRun, ResearchSource
 from colossus.domain.sessions import SessionSummary
+from colossus.domain.skills import Skill
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolSpec
@@ -60,6 +61,7 @@ SlashCommand = Literal[
     "model",
     "agent",
     "tools",
+    "skill",
     "skills",
     "trace",
     "stream",
@@ -114,6 +116,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/model",
     "/agent",
     "/tools",
+    "/skill",
     "/skills",
     "/trace",
     "/stream",
@@ -147,6 +150,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/model": "Show or switch the active model role.",
     "/agent": "Show the active agent spec.",
     "/tools": "List currently registered tools.",
+    "/skill": "Toggle or manage Skill Mode.",
     "/skills": "List available skills.",
     "/trace": "Compatibility toggle for compact events.",
     "/stream": "Toggle live assistant token streaming.",
@@ -178,6 +182,9 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
 
 
 class SlashCommandCompleter(Completer):
+    def __init__(self, skills: SkillResolver | None = None) -> None:
+        self._skills = skills
+
     def get_completions(
         self,
         document: Document,
@@ -185,16 +192,30 @@ class SlashCommandCompleter(Completer):
     ) -> Iterable[Completion]:
         del complete_event
         text = document.text_before_cursor
-        if not _is_slash_command_draft(text):
+        if _is_slash_command_draft(text):
+            prefix = text.lower()
+            for command in SLASH_COMMANDS:
+                if command.lower().startswith(prefix):
+                    yield Completion(
+                        command,
+                        start_position=-len(text),
+                        display=command,
+                        display_meta=SLASH_COMMAND_DESCRIPTIONS.get(command, ""),
+                    )
             return
-        prefix = text.lower()
-        for command in SLASH_COMMANDS:
-            if command.lower().startswith(prefix):
+        token = _current_completion_token(text)
+        if self._skills is None or token is None or not _is_skill_mention_draft(token):
+            return
+        prefix = _skill_completion_prefix(token)
+        for skill in self._skills.list_skills():
+            name = skill.manifest.name
+            if name.lower().startswith(prefix):
+                completion = f"@skill:{name} "
                 yield Completion(
-                    command,
-                    start_position=-len(text),
-                    display=command,
-                    display_meta=SLASH_COMMAND_DESCRIPTIONS.get(command, ""),
+                    completion,
+                    start_position=-len(token),
+                    display=f"@skill:{name}",
+                    display_meta=skill.manifest.description,
                 )
 
 
@@ -206,6 +227,32 @@ def parse_slash_command(value: str) -> ParsedReplCommand | None:
     if command not in {item[1:] for item in SLASH_COMMANDS}:
         return None
     return ParsedReplCommand(command=command, argument=argument.strip())  # type: ignore[arg-type]
+
+
+def _current_completion_token(text: str) -> str | None:
+    if not text or text[-1].isspace():
+        return None
+    start = max(text.rfind(" "), text.rfind("\t"), text.rfind("\n")) + 1
+    return text[start:]
+
+
+def _is_skill_mention_draft(token: str) -> bool:
+    return token == "@" or token.startswith("@skill:") or (
+        token.startswith("@") and ":" not in token and len(token) > 1
+    )
+
+
+def _skill_completion_prefix(token: str) -> str:
+    if token in {"@", "@skill", "@skill:"}:
+        return ""
+    if token.startswith("@skill:"):
+        return token.removeprefix("@skill:").lower()
+    if token.startswith("@"):
+        shorthand = token.removeprefix("@").lower()
+        if "skill".startswith(shorthand):
+            return ""
+        return shorthand
+    return token.lower()
 
 
 @dataclass(frozen=True)
@@ -468,6 +515,9 @@ class ReplDisplayState:
     approval_mode: str
     stream_model_output: bool = True
     interaction_mode: ReplInteractionMode = "chat"
+    skill_mode_enabled: bool = True
+    sticky_skills: tuple[str, ...] = field(default_factory=tuple)
+    last_active_skills: tuple[str, ...] = field(default_factory=tuple)
     active_plan_id: str | None = None
     active_plan_status: str | None = None
     active_research_id: str | None = None
@@ -559,7 +609,7 @@ async def run_repl(
         )
         startup_theme = REPL_THEMES["default"]
     session: PromptSession[str] = PromptSession(
-        completer=SlashCommandCompleter(),
+        completer=SlashCommandCompleter(skills),
         complete_while_typing=True,
         reserve_space_for_menu=8,
         history=FileHistory(str(history_path)) if history_path is not None else None,
@@ -634,6 +684,9 @@ async def run_repl(
         if command is not None:
             if command.command == "exit":
                 return
+            if command.command == "skill":
+                _handle_skill_command(console, skills, display_state, agent, command.argument)
+                continue
             if command.command == "skills":
                 for skill in skills.list_skills():
                     console.print(f"{skill.manifest.name} {skill.manifest.version}")
@@ -882,6 +935,8 @@ async def run_repl(
                         prompt=line,
                         agent=_plan_agent(agent),
                         session_id=display_state.session_id,
+                        skill_mode_enabled=display_state.skill_mode_enabled,
+                        active_skills=_sticky_skills_for_request(display_state),
                     )
                 )
                 plan = await _save_repl_plan(
@@ -893,6 +948,11 @@ async def run_repl(
                 trace_renderer.end_run()
                 display_state.last_run_id = result.run_id
                 display_state.last_status = "done"
+                display_state.last_active_skills = _active_skill_names_for_prompt(
+                    display_state,
+                    skills,
+                    line,
+                )
                 if not trace_renderer.rendered_model_output:
                     trace_renderer.render_final_answer(result.final_output)
                 await _prompt_for_plan_review(
@@ -925,6 +985,8 @@ async def run_repl(
                     prompt=line,
                     agent=agent,
                     session_id=display_state.session_id,
+                    skill_mode_enabled=display_state.skill_mode_enabled,
+                    active_skills=_sticky_skills_for_request(display_state),
                 )
             )
         except ColossusError as exc:
@@ -937,6 +999,11 @@ async def run_repl(
         trace_renderer.end_run()
         display_state.last_run_id = result.run_id
         display_state.last_status = "done"
+        display_state.last_active_skills = _active_skill_names_for_prompt(
+            display_state,
+            skills,
+            line,
+        )
         await _refresh_context_status(display_state, context_service)
         await _refresh_task_status(display_state, task_service)
         if not trace_renderer.rendered_model_output:
@@ -1465,6 +1532,65 @@ async def _handle_repl_command(
     console.print("Use /repl prefs, /repl save, or /repl reset.")
 
 
+def _handle_skill_command(
+    console: Console,
+    skills: SkillResolver,
+    state: ReplDisplayState,
+    agent: AgentSpec,
+    argument: str,
+) -> None:
+    action, _, rest = argument.strip().partition(" ")
+    normalized = action.lower()
+    if normalized in {"", "show"}:
+        target = rest.strip()
+        if target:
+            skill = _available_repl_skill(skills, agent, target)
+            if skill is None:
+                console.print(f"Skill is not available: {target}")
+                return
+            _render_skill_detail(console, skill)
+            return
+        _render_skill_status(console, skills, state, agent)
+        return
+    if normalized == "on":
+        state.skill_mode_enabled = True
+        console.print("Skill Mode is on.")
+        return
+    if normalized == "off":
+        state.skill_mode_enabled = False
+        console.print("Skill Mode is off.")
+        return
+    if normalized == "use":
+        name = rest.strip()
+        if not name:
+            console.print("Use /skill use NAME.")
+            return
+        skill = _available_repl_skill(skills, agent, name)
+        if skill is None:
+            console.print(f"Skill is not available: {name}")
+            return
+        state.sticky_skills = _dedupe_skill_names((*state.sticky_skills, skill.manifest.name))
+        console.print(f"Sticky skill added: {skill.manifest.name}")
+        return
+    if normalized == "drop":
+        name = rest.strip()
+        if not name:
+            console.print("Use /skill drop NAME.")
+            return
+        before = state.sticky_skills
+        state.sticky_skills = tuple(skill for skill in state.sticky_skills if skill != name)
+        if before == state.sticky_skills:
+            console.print(f"Sticky skill was not active: {name}")
+        else:
+            console.print(f"Sticky skill dropped: {name}")
+        return
+    if normalized == "clear":
+        state.sticky_skills = ()
+        console.print("Sticky skills cleared.")
+        return
+    console.print("Use /skill [on|off|show|use NAME|drop NAME|clear].")
+
+
 async def _handle_plan_command(
     console: Console,
     plan_service: PlanService | None,
@@ -1787,6 +1913,8 @@ async def _execute_active_plan(
                 agent=agent,
                 session_id=state.session_id,
                 plan_id=plan.id,
+                skill_mode_enabled=state.skill_mode_enabled,
+                active_skills=_sticky_skills_for_request(state),
             )
         )
     except ColossusError as exc:
@@ -1797,6 +1925,7 @@ async def _execute_active_plan(
     trace_renderer.end_run()
     state.last_run_id = result.run_id
     state.last_status = "done"
+    state.last_active_skills = _active_skill_names_for_prompt(state, None, prompt)
     executed = await plan_service.mark_executed(plan.id, result.run_id)
     state.active_plan_status = executed.status
     state.interaction_mode = "chat"
@@ -1915,8 +2044,18 @@ def _composer_key_bindings() -> KeyBindings:
         if not before_cursor and _is_slash_command_draft(after_cursor):
             event.current_buffer.start_completion(select_first=False)
 
+    @bindings.add("@")
+    def _skill_at(event) -> None:  # type: ignore[no-untyped-def]
+        event.current_buffer.insert_text("@")
+        if _current_buffer_is_skill_mention_draft():
+            event.current_buffer.start_completion(select_first=False)
+
     for key in "abcdefghijklmnopqrstuvwxyz":
         _bind_slash_completion_key(bindings, key)
+        _bind_skill_completion_key(bindings, key)
+
+    for key in "0123456789:-.":
+        _bind_skill_completion_key(bindings, key)
 
     @bindings.add("escape", "enter")
     def _accept(event) -> None:  # type: ignore[no-untyped-def]
@@ -1932,11 +2071,26 @@ def _bind_slash_completion_key(bindings: KeyBindings, key: str) -> None:
         event.current_buffer.start_completion(select_first=False)
 
 
+def _bind_skill_completion_key(bindings: KeyBindings, key: str) -> None:
+    @bindings.add(key, filter=Condition(_current_buffer_is_skill_mention_draft))
+    def _skill_mention_key(event) -> None:  # type: ignore[no-untyped-def]
+        event.current_buffer.insert_text(event.data)
+        event.current_buffer.start_completion(select_first=False)
+
+
 def _current_buffer_is_slash_command_draft() -> bool:
     app = get_app_or_none()
     if app is None:
         return False
     return _is_slash_command_draft(app.current_buffer.document.text_before_cursor)
+
+
+def _current_buffer_is_skill_mention_draft() -> bool:
+    app = get_app_or_none()
+    if app is None:
+        return False
+    token = _current_completion_token(app.current_buffer.document.text_before_cursor)
+    return token is not None and _is_skill_mention_draft(token)
 
 
 def _is_slash_command_draft(text: str) -> bool:
@@ -2048,7 +2202,7 @@ def _format_repl_toolbar(
         f"reasoning={_on_off(state.show_reasoning)} "
         f"session={_short_id(state.session_id)} pos={cursor_line}:{cursor_column} "
         f"chars={len(draft_text)} lines={lines} {_context_label(state)} "
-        f"{state.task_summary} {_plan_label(state)} {_research_label(state)} "
+        f"{state.task_summary} {_plan_label(state)} {_research_label(state)} {_skill_label(state)} "
         f"last={state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
     )
 
@@ -2057,7 +2211,8 @@ def _format_run_toolbar(state: ReplDisplayState, prompt: str) -> str:
     return (
         f"model={state.active_model_role}:{_short_text(state.model, 24)} "
         f"{_context_label(state)} session={_short_id(state.session_id)} "
-        f"{state.task_summary} {_plan_label(state)} {_research_label(state)} chars={len(prompt)} "
+        f"{state.task_summary} {_plan_label(state)} {_research_label(state)} {_skill_label(state)} "
+        f"chars={len(prompt)} "
         f"lines={_line_count(prompt)}"
     )
 
@@ -2067,7 +2222,7 @@ def _format_submit_summary(state: ReplDisplayState, prompt: str) -> str:
         f"submit chars={len(prompt)} lines={_line_count(prompt)} "
         f"model={state.active_model_role}:{_short_text(state.model, 40)} "
         f"session={_short_id(state.session_id)} {_context_label(state)} "
-        f"{state.task_summary} {_plan_label(state)} {_research_label(state)}"
+        f"{state.task_summary} {_plan_label(state)} {_research_label(state)} {_skill_label(state)}"
     )
 
 
@@ -2105,6 +2260,62 @@ def _research_label(state: ReplDisplayState) -> str:
         return "research=-"
     status = state.active_research_status or "unknown"
     return f"research={status}:{_short_id(state.active_research_id)}"
+
+
+def _skill_label(state: ReplDisplayState) -> str:
+    mode = "on" if state.skill_mode_enabled else "off"
+    sticky = _format_skill_names(state.sticky_skills)
+    return f"skills={mode}:{sticky}"
+
+
+def _format_skill_names(names: tuple[str, ...]) -> str:
+    return ",".join(names) if names else "-"
+
+
+def _sticky_skills_for_request(state: ReplDisplayState) -> tuple[str, ...]:
+    return state.sticky_skills if state.skill_mode_enabled else ()
+
+
+def _active_skill_names_for_prompt(
+    state: ReplDisplayState,
+    skills: SkillResolver | None,
+    prompt: str,
+) -> tuple[str, ...]:
+    if not state.skill_mode_enabled:
+        return ()
+    mentioned: tuple[str, ...] = ()
+    if skills is not None:
+        available_names = tuple(skill.manifest.name for skill in skills.list_skills())
+        mentioned = extract_skill_mentions(prompt, available_names=available_names)
+    return _dedupe_skill_names((*state.sticky_skills, *mentioned))
+
+
+def _available_repl_skill(
+    skills: SkillResolver,
+    agent: AgentSpec,
+    name: str,
+) -> Skill | None:
+    for skill in _available_repl_skills(skills, agent):
+        if skill.manifest.name == name:
+            return skill
+    return None
+
+
+def _available_repl_skills(skills: SkillResolver, agent: AgentSpec) -> tuple[Skill, ...]:
+    by_name = {skill.manifest.name: skill for skill in skills.list_skills()}
+    if not agent.skills:
+        return tuple(by_name.values())
+    return tuple(by_name[name] for name in _dedupe_skill_names(agent.skills) if name in by_name)
+
+
+def _dedupe_skill_names(names: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            deduped.append(name)
+    return tuple(deduped)
 
 
 def _resume_choice(session: SessionSummary) -> UserPromptChoice:
@@ -2205,6 +2416,9 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
         "model": state.model,
         "approval_mode": state.approval_mode,
         "mode": state.interaction_mode,
+        "skill_mode": _on_off(state.skill_mode_enabled),
+        "sticky_skills": _format_skill_names(state.sticky_skills),
+        "last_active_skills": _format_skill_names(state.last_active_skills),
         "active_plan": state.active_plan_id or "",
         "active_plan_status": state.active_plan_status or "",
         "active_research": state.active_research_id or "",
@@ -2229,6 +2443,39 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
         table.add_row("context.error", state.context_error)
     else:
         table.add_row("context", "not configured")
+    console.print(table)
+
+
+def _render_skill_status(
+    console: Console,
+    skills: SkillResolver,
+    state: ReplDisplayState,
+    agent: AgentSpec,
+) -> None:
+    available = _available_repl_skills(skills, agent)
+    table = Table("Field", "Value")
+    table.add_row("mode", _on_off(state.skill_mode_enabled))
+    table.add_row("sticky", _format_skill_names(state.sticky_skills))
+    table.add_row("last_active", _format_skill_names(state.last_active_skills))
+    table.add_row("available_count", str(len(available)))
+    table.add_row(
+        "available",
+        _format_skill_names(tuple(skill.manifest.name for skill in available)),
+    )
+    console.print(table)
+
+
+def _render_skill_detail(console: Console, skill: Skill) -> None:
+    table = Table("Field", "Value")
+    manifest = skill.manifest
+    table.add_row("name", manifest.name)
+    table.add_row("version", manifest.version)
+    table.add_row("description", manifest.description)
+    table.add_row("required_tools", ", ".join(manifest.required_tools) or "-")
+    table.add_row("permissions", ", ".join(manifest.permissions) or "-")
+    table.add_row("offline", str(manifest.offline_compatible))
+    table.add_row("source", skill.source)
+    table.add_row("preview", _short_text(skill.instructions.strip(), 260))
     console.print(table)
 
 
@@ -2323,6 +2570,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Run or inspect Deep Research Mode.",
     )
     table.add_row(
+        Text("/skill [on|off|show|use|drop|clear]"),
+        _help_current(state, "skill"),
+        "Toggle or manage Skill Mode.",
+    )
+    table.add_row(
         "/context [snapshots|restore ID]",
         _help_current(state, "context"),
         "Inspect or restore context snapshots.",
@@ -2365,6 +2617,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return f"{state.interaction_mode} {_plan_label(state)}"
     if field == "research":
         return f"{state.interaction_mode} {_research_label(state)}"
+    if field == "skill":
+        return _skill_label(state)
     if field == "context":
         return _context_label(state)
     if field == "submit":

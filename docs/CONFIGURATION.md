@@ -153,6 +153,8 @@ uv run colossus research "question" --source repo --depth quick
 The default source preference is `repo`, `web`, and `mcp`, but web search and MCP
 collection only run when configured and approved. With default config, research degrades
 to local repository evidence and records unavailable source lanes as warnings.
+When attached to a session, research uses bounded prior session context and appends the
+completed cited report back to that session for later chat turns.
 
 Enable DuckDuckGo-backed web search:
 
