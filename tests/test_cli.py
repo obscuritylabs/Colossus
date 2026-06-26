@@ -16,7 +16,12 @@ from colossus.domain.messages import UserMessage
 from colossus.domain.models import ModelProfile, ModelRoutingConfig, ResolvedModelProfile
 from colossus.domain.providers import ProviderModelInfo
 from colossus.domain.subagents import SubagentJob
-from colossus.infrastructure.config import ColossusConfig, ProviderConfig
+from colossus.infrastructure.config import (
+    ColossusConfig,
+    ProviderConfig,
+    ResearchConfig,
+    SearchConfig,
+)
 from colossus.infrastructure.paths import config_path
 
 
@@ -190,6 +195,9 @@ def test_cli_models_list_shows_default_roles(tmp_path, monkeypatch) -> None:
     assert "risk_evaluator" in result.stdout
     assert "context_summarizer" in result.stdout
     assert "subagent_default" in result.stdout
+    assert "research_planner" in result.stdout
+    assert "research_worker" in result.stdout
+    assert "research_synthesizer" in result.stdout
 
 
 def test_cli_models_doctor_checks_selected_role(tmp_path, monkeypatch) -> None:
@@ -387,7 +395,10 @@ def test_cli_lists_bundled_skills() -> None:
     assert "offline-dev" in result.stdout
 
 
-def test_cli_lists_builtin_tools() -> None:
+def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
     result = CliRunner().invoke(app, ["tools", "list"])
 
     assert result.exit_code == 0
@@ -400,11 +411,68 @@ def test_cli_lists_builtin_tools() -> None:
     assert "patch.apply" in result.stdout
     assert "repo.map" in result.stdout
     assert "agent.delegate" in result.stdout
-    assert "web.search" in result.stdout
-    assert "mcp.call" in result.stdout
+    assert "web.search" not in result.stdout
+    assert "mcp.call" not in result.stdout
     assert "trace.export" in result.stdout
     assert "context.compact" in result.stdout
     assert "context.restore" in result.stdout
+
+
+def test_cli_tools_list_shows_web_search_when_searxng_is_configured(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    _write_config(
+        ColossusConfig(
+            research=ResearchConfig(
+                search=SearchConfig(
+                    kind="searxng",
+                    endpoint="https://search.example.test",
+                )
+            )
+        )
+    )
+
+    result = CliRunner().invoke(app, ["tools", "list"])
+
+    assert result.exit_code == 0
+    assert "web.search" in result.stdout
+
+
+def test_cli_research_persists_cited_brief(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "research",
+            "How does AgentSpec tool filtering work?",
+            "--source",
+            "repo",
+            "--max-sources",
+            "3",
+            "--events",
+            "off",
+            "--session",
+            "session-research",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Research Brief" in result.stdout
+    assert "[R1]" in result.stdout
+    assert "research_id=research-" in result.stdout
+    assert "session_id=session-research" in result.stdout
+
+
+def test_cli_research_rejects_invalid_source(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    result = CliRunner().invoke(app, ["research", "hello", "--source", "rumor"])
+
+    assert result.exit_code == 2
+    assert "Invalid research source" in result.stdout
 
 
 def test_cli_creates_lists_approves_and_executes_plan(tmp_path, monkeypatch) -> None:

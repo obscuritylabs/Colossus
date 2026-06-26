@@ -28,9 +28,11 @@ def test_model_router_resolves_configured_roles() -> None:
     router = create_model_router(config, require_credentials=False)
     primary = router.resolve("primary")
     risk = router.resolve("risk_evaluator")
+    research = router.resolve("research_synthesizer")
 
     assert primary.profile.model == "main-model"
     assert isinstance(primary.provider, EchoModelProvider)
     assert risk.profile.model == "risk-model"
     assert isinstance(risk.provider, LocalOpenAIChatProvider)
     assert risk.provider.base_url == "http://localhost:12434/v1"
+    assert research.profile.model == "main-model"

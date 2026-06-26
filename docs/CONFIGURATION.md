@@ -55,6 +55,23 @@ The current config is strict: unknown fields are rejected.
       "kind": "sqlite_fts"
     }
   },
+  "research": {
+    "default_depth": "standard",
+    "max_sources": 20,
+    "max_workers": 4,
+    "sources": ["repo", "web", "mcp"],
+    "search": {
+      "kind": "disabled",
+      "endpoint": "https://duckduckgo.com/html/",
+      "api_key_env": null,
+      "auth_header": "Authorization",
+      "auth_scheme": "bearer",
+      "user_agent": "colossus-agent/0.1"
+    },
+    "mcp": {
+      "servers": {}
+    }
+  },
   "allow_user_skill_overrides": false
 }
 ```
@@ -79,7 +96,8 @@ uv run colossus --provider local-openai-chat --base-url http://localhost:8000/v1
 
 Use `models.profiles` and `models.roles` when different jobs should use different
 models. If this block is empty, Colossus maps the legacy `provider` config to `primary`
-and reuses it for `risk_evaluator`, `context_summarizer`, and `subagent_default`.
+and reuses it for `risk_evaluator`, `context_summarizer`, `subagent_default`,
+`research_planner`, `research_worker`, and `research_synthesizer`.
 
 ```json
 {
@@ -103,7 +121,10 @@ and reuses it for `risk_evaluator`, `context_summarizer`, and `subagent_default`
       "primary": "main",
       "risk_evaluator": "risk",
       "context_summarizer": "main",
-      "subagent_default": "main"
+      "subagent_default": "main",
+      "research_planner": "main",
+      "research_worker": "main",
+      "research_synthesizer": "main"
     }
   }
 }
@@ -119,6 +140,96 @@ uv run colossus run --model-role risk_evaluator "hello"
 
 Global provider/model/base-url/API-key/CA CLI overrides apply to the `primary` role for
 that invocation.
+
+## Deep Research
+
+Deep Research Mode is available with:
+
+```bash
+uv run colossus research "question"
+uv run colossus research "question" --source repo --depth quick
+```
+
+The default source preference is `repo`, `web`, and `mcp`, but web search and MCP
+collection only run when configured and approved. With default config, research degrades
+to local repository evidence and records unavailable source lanes as warnings.
+
+Enable DuckDuckGo-backed web search:
+
+```json
+{
+  "research": {
+    "search": {
+      "kind": "duckduckgo"
+    }
+  }
+}
+```
+
+Enable self-hosted SearXNG-backed web search. The SearXNG instance must have `json`
+enabled under `search.formats`; public instances often disable JSON output or rate-limit
+automation.
+
+Start the local development instance:
+
+```bash
+docker compose -f docker-compose.searxng.yml up -d
+curl 'http://localhost:8888/search?q=colossus&format=json'
+```
+
+```json
+{
+  "research": {
+    "search": {
+      "kind": "searxng",
+      "endpoint": "http://localhost:8888/search"
+    }
+  }
+}
+```
+
+For a protected SearXNG instance, keep the secret in the environment and reference only
+the variable name from config:
+
+```json
+{
+  "research": {
+    "search": {
+      "kind": "searxng",
+      "endpoint": "https://search.example.test",
+      "api_key_env": "SEARXNG_API_KEY",
+      "auth_header": "Authorization",
+      "auth_scheme": "bearer"
+    }
+  }
+}
+```
+
+Configure MCP research tools with explicit stdio server commands and allowlisted tools.
+The gateway uses the official MCP Python SDK when installed:
+
+```json
+{
+  "research": {
+    "mcp": {
+      "servers": {
+        "docs": {
+          "command": "mcp-docs-server",
+          "args": [],
+          "allowed_tools": ["search_docs"],
+          "research_tools": [
+            {
+              "tool": "search_docs",
+              "arguments": {"query": "{query}"},
+              "title": "Docs search"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
 
 ## Subagents
 
@@ -180,6 +291,7 @@ Runtime controls:
 - `/session show [ID]`
 - `/session resume <id>`, `/session latest`, or `/session new`
 - `/tasks [open|all|STATUS]`
+- `/research [on|off|show|sources|QUESTION]`
 - `/decisions [all|STATUS]`
 - `/decision <text>` or `/decision archive <id>` or `/decision supersede <id> <text>`
 - `/memories [all|STATUS]`

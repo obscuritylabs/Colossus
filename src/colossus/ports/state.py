@@ -9,6 +9,7 @@ from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, Memory
 from colossus.domain.messages import Message
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.research import ResearchClaim, ResearchRun, ResearchSource
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
@@ -104,6 +105,34 @@ class StateStore(Protocol):
         session_id: str | None = None,
     ) -> tuple[MemoryItem, ...]:
         """List memories with optional scope, kind, status, and owner filters."""
+        ...
+
+    async def save_research_run(self, run: ResearchRun) -> None:
+        """Persist a research run."""
+        ...
+
+    async def get_research_run(self, run_id: str) -> ResearchRun | None:
+        """Load a research run by id."""
+        ...
+
+    async def list_research_runs(self, session_id: str | None = None) -> tuple[ResearchRun, ...]:
+        """List research runs, optionally scoped to a session."""
+        ...
+
+    async def save_research_source(self, source: ResearchSource) -> None:
+        """Persist a research source."""
+        ...
+
+    async def list_research_sources(self, run_id: str) -> tuple[ResearchSource, ...]:
+        """List sources for a research run."""
+        ...
+
+    async def save_research_claim(self, claim: ResearchClaim) -> None:
+        """Persist a research claim."""
+        ...
+
+    async def list_research_claims(self, run_id: str) -> tuple[ResearchClaim, ...]:
+        """List claims for a research run."""
         ...
 
     async def save_subagent_job(self, job: SubagentJob) -> None:

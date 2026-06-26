@@ -146,7 +146,7 @@ class AgentOrchestrator:
                 model=request.agent.model,
                 instructions=request.agent.instructions,
                 messages=prepared_messages,
-                tools=self._tool_registry.list_specs(),
+                tools=self._tool_specs_for_agent(request.agent.tools),
             )
             pending_tool_calls: list[ToolCall] = []
             collected_text: list[str] = []
@@ -234,6 +234,13 @@ class AgentOrchestrator:
 
     def tool_specs(self) -> tuple[ToolSpec, ...]:
         return self._tool_registry.list_specs()
+
+    def _tool_specs_for_agent(self, allowed_tools: tuple[str, ...]) -> tuple[ToolSpec, ...]:
+        specs = self._tool_registry.list_specs()
+        if not allowed_tools:
+            return specs
+        allowed = set(allowed_tools)
+        return tuple(spec for spec in specs if spec.name in allowed)
 
     async def _execute_tool(
         self,

@@ -38,6 +38,19 @@ uv run colossus sessions show SESSION_ID
 
 Inside the REPL, use `/resume` to choose from recent sessions without copying an id.
 
+Deep Research Mode collects bounded repo evidence, optional approval-gated web search,
+and optional configured MCP sources into a persisted cited brief:
+
+```bash
+uv run colossus research "How should this harness handle long-running investigations?"
+uv run colossus research "Summarize the local tool security posture" --source repo
+# then inside the REPL: /research on, /research show, /research sources
+```
+
+Configure self-hosted SearXNG as the recommended `web.search` backend by setting
+`research.search.kind` to `searxng` and `research.search.endpoint` to your instance;
+keep protected-instance tokens in an environment variable referenced by `api_key_env`.
+
 REPL display choices can be previewed and persisted:
 
 ```bash
@@ -111,13 +124,13 @@ Colossus ships an offline-first local coding tool loop:
 - Git status/diff/show and structured `shell.run`.
 - Model-callable task, key decision, memory, plan, patch, repo context, subagent, trace,
   eval, and verification tools.
-- Web/docs and MCP tool schemas that are visible but disabled by default until a
-  network-enabled profile or adapter is explicitly configured.
+- Web/docs fetch tools plus opt-in web search and MCP calls when adapters are explicitly
+  configured.
 - Automatic context compaction with durable snapshots, active key-decision injection,
   relevant memory injection, and per-model context windows.
 - Session discovery and explicit resume for prior local conversations.
 - Named model roles for primary agent turns, context summarization, subagents, and
-  shell-command risk review.
+  shell-command risk review, plus research planner/worker/synthesizer turns.
 
 Inspect the current catalog with:
 

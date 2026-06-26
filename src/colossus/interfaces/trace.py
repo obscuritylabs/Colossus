@@ -12,6 +12,7 @@ from colossus.domain.events import (
     FinalOutputEvent,
     ModelDeltaEvent,
     ReasoningSummaryEvent,
+    ResearchStatusEvent,
     RiskAssessmentEvent,
     RunEvent,
     SubagentStatusEvent,
@@ -31,6 +32,7 @@ class TraceRenderTheme:
     approval_requested: str = "bold yellow"
     approval_auto_granted: str = "bold green"
     risk_assessment: str = "bold magenta"
+    research: str = "bold cyan"
 
 
 @dataclass
@@ -125,6 +127,16 @@ class RichRunEventRenderer:
             )
             if self.events_mode == "verbose":
                 self.console.print(f"task {task}", markup=False)
+            return
+        if isinstance(event, ResearchStatusEvent):
+            message = _truncate(event.message, self.argument_preview_chars)
+            self.console.print(
+                f"{_label('research', self.theme.research)} {event.phase} "
+                f"[dim]run={event.research_id} status={event.status} "
+                f"sources={event.sources_collected}[/dim]"
+            )
+            if message and self.events_mode == "verbose":
+                self.console.print(message, markup=False)
             return
         if isinstance(event, ToolCallCompletedEvent):
             preview = _truncate(event.output.replace("\n", "\\n"), self.output_preview_chars)

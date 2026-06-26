@@ -14,6 +14,7 @@ from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, Memory
 from colossus.domain.messages import Message, UserMessage
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
+from colossus.domain.research import ResearchClaim, ResearchRun, ResearchSource
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
@@ -393,6 +394,99 @@ class SQLiteStateStore:
             ).fetchall()
         return tuple(row[0] for row in rows)
 
+    async def save_research_run(self, run: ResearchRun) -> None:
+        await self.ensure_session(run.session_id, title=run.question[:80])
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into research_runs(id, session_id, status, payload)
+                values (?, ?, ?, ?)
+                on conflict(id) do update set
+                    session_id = excluded.session_id,
+                    status = excluded.status,
+                    payload = excluded.payload
+                """,
+                (run.id, run.session_id, run.status, run.model_dump_json()),
+            )
+            conn.commit()
+
+    async def get_research_run(self, run_id: str) -> ResearchRun | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute(
+                "select payload from research_runs where id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ResearchRun.model_validate_json(row[0])
+
+    async def list_research_runs(self, session_id: str | None = None) -> tuple[ResearchRun, ...]:
+        query = "select payload from research_runs"
+        params: tuple[str, ...] = ()
+        if session_id is not None:
+            query += " where session_id = ?"
+            params = (session_id,)
+        query += " order by created_at desc, id desc"
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return tuple(ResearchRun.model_validate_json(row[0]) for row in rows)
+
+    async def save_research_source(self, source: ResearchSource) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into research_sources(id, run_id, label, kind, payload)
+                values (?, ?, ?, ?, ?)
+                on conflict(id) do update set
+                    run_id = excluded.run_id,
+                    label = excluded.label,
+                    kind = excluded.kind,
+                    payload = excluded.payload
+                """,
+                (
+                    source.id,
+                    source.run_id,
+                    source.label,
+                    source.kind,
+                    source.model_dump_json(),
+                ),
+            )
+            conn.commit()
+
+    async def list_research_sources(self, run_id: str) -> tuple[ResearchSource, ...]:
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(
+                """
+                select payload from research_sources
+                where run_id = ?
+                order by cast(substr(label, 2) as integer), label
+                """,
+                (run_id,),
+            ).fetchall()
+        return tuple(ResearchSource.model_validate_json(row[0]) for row in rows)
+
+    async def save_research_claim(self, claim: ResearchClaim) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into research_claims(id, run_id, payload)
+                values (?, ?, ?)
+                on conflict(id) do update set
+                    run_id = excluded.run_id,
+                    payload = excluded.payload
+                """,
+                (claim.id, claim.run_id, claim.model_dump_json()),
+            )
+            conn.commit()
+
+    async def list_research_claims(self, run_id: str) -> tuple[ResearchClaim, ...]:
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(
+                "select payload from research_claims where run_id = ? order by id",
+                (run_id,),
+            ).fetchall()
+        return tuple(ResearchClaim.model_validate_json(row[0]) for row in rows)
+
     async def save_subagent_job(self, job: SubagentJob) -> None:
         await self.ensure_session(job.session_id)
         await self.ensure_session(job.child_session_id, title=f"subagent {job.id}")
@@ -681,6 +775,55 @@ class SQLiteStateStore:
                 create virtual table if not exists memories_fts
                 using fts5(memory_id unindexed, scope, kind, text, rationale)
                 """
+            )
+            conn.execute(
+                """
+                create table if not exists research_runs (
+                    id text primary key,
+                    session_id text not null,
+                    status text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_research_runs_session "
+                "on research_runs(session_id)"
+            )
+            conn.execute(
+                "create index if not exists idx_research_runs_status "
+                "on research_runs(status)"
+            )
+            conn.execute(
+                """
+                create table if not exists research_sources (
+                    id text primary key,
+                    run_id text not null,
+                    label text not null,
+                    kind text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_research_sources_run "
+                "on research_sources(run_id)"
+            )
+            conn.execute(
+                """
+                create table if not exists research_claims (
+                    id text primary key,
+                    run_id text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_research_claims_run "
+                "on research_claims(run_id)"
             )
             conn.execute(
                 """

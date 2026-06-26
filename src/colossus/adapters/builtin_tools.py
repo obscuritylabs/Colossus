@@ -24,6 +24,7 @@ from colossus.domain.errors import ToolExecutionError
 from colossus.domain.tools import ToolPermission, ToolSpec
 from colossus.domain.user_prompts import UserPromptChoice
 from colossus.ports.model_provider import ModelProvider
+from colossus.ports.research import McpGateway, SearchProvider
 from colossus.ports.user_prompt import UserPromptHandler
 
 JsonObject = dict[str, Any]
@@ -44,6 +45,8 @@ def create_builtin_tools(
     subagent_service: SubagentService | None = None,
     include_agent_delegate: bool = True,
     user_prompt_handler: UserPromptHandler | None = None,
+    search_provider: SearchProvider | None = None,
+    mcp_gateway: McpGateway | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     broker = SubprocessBroker()
     handlers = BuiltinToolHandlers(workspace, broker, user_prompt_handler=user_prompt_handler)
@@ -68,6 +71,8 @@ def create_builtin_tools(
         memory_service=memory_service,
         subagent_service=subagent_service,
         include_agent_delegate=include_agent_delegate,
+        search_provider=search_provider,
+        mcp_gateway=mcp_gateway,
     )
     context_specs, context_handlers = create_context_tools(
         context_service,

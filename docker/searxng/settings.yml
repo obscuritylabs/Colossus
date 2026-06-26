@@ -1,0 +1,29 @@
+# Local SearXNG settings for Colossus Deep Research.
+# This is intentionally local-dev oriented; do not expose this instance publicly as-is.
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Colossus Local SearXNG"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "colossus-local-dev-change-me"
+  bind_address: "0.0.0.0"
+  port: 8080
+  limiter: false
+  image_proxy: false
+  method: "GET"
+
+ui:
+  static_use_hash: true
+
+valkey:
+  url: false

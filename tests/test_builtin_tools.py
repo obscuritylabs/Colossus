@@ -74,14 +74,29 @@ def test_builtin_tool_catalog_has_handlers_and_roadmap_families(tmp_path: Path) 
     assert "patch.apply" in names
     assert "repo.symbol_search" in names
     assert "agent.delegate" in names
-    assert "web.search" in names
-    assert "mcp.call" in names
+    assert "web.search" not in names
+    assert "mcp.call" not in names
     assert "trace.export" in names
     assert "eval.run" in names
     assert "user.ask" not in names
     assert "structured argv" in shell_spec.description
     assert "pipes" in shell_spec.description
     assert specs[-1].name == "echo"
+
+
+def test_roadmap_extension_tools_are_opt_in(tmp_path: Path) -> None:
+    specs, handlers = create_roadmap_tools(
+        Workspace(tmp_path),
+        CapturingBroker(),
+        include_web_search=True,
+        include_mcp_call=True,
+    )
+    names = {spec.name for spec in specs}
+
+    assert "web.search" in names
+    assert "web.search" in handlers
+    assert "mcp.call" in names
+    assert "mcp.call" in handlers
 
 
 def test_builtin_tool_catalog_includes_user_ask_when_handler_is_wired(tmp_path: Path) -> None:
@@ -657,7 +672,7 @@ async def test_network_tools_reject_non_http_urls(tmp_path: Path) -> None:
 async def test_mcp_calls_are_disabled_by_default(tmp_path: Path) -> None:
     executor = _executor(tmp_path)
 
-    with pytest.raises(ToolExecutionError, match="MCP calls require"):
+    with pytest.raises(ToolExecutionError, match=r"Unknown tool: mcp\.call"):
         await executor.execute(
             ToolCall(
                 call_id="1",
@@ -668,6 +683,25 @@ async def test_mcp_calls_are_disabled_by_default(tmp_path: Path) -> None:
 
     servers = await executor.execute(ToolCall(call_id="2", name="mcp.servers", arguments={}))
     assert json.loads(servers.output)["configured"] is False
+
+
+@pytest.mark.asyncio
+async def test_opted_in_mcp_calls_require_adapter(tmp_path: Path) -> None:
+    specs, handlers = create_roadmap_tools(
+        Workspace(tmp_path),
+        CapturingBroker(),
+        include_mcp_call=True,
+    )
+    executor = FunctionToolExecutor(handlers, InMemoryToolRegistry(specs))
+
+    with pytest.raises(ToolExecutionError, match="MCP calls require"):
+        await executor.execute(
+            ToolCall(
+                call_id="1",
+                name="mcp.call",
+                arguments={"server": "s", "tool": "t", "arguments": {}},
+            )
+        )
 
 
 @pytest.mark.asyncio

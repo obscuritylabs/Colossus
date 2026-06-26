@@ -33,6 +33,7 @@ from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.planning import PlanService
 from colossus.application.preferences import ReplPreferencesService
+from colossus.application.research import ResearchService
 from colossus.application.sessions import SessionService
 from colossus.application.skills import SkillResolver
 from colossus.application.subagents import SubagentService
@@ -45,6 +46,7 @@ from colossus.domain.memories import MemoryItem, MemoryStatus
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences, TranscriptStylePreference
 from colossus.domain.requests import AgentRunRequest
+from colossus.domain.research import ResearchRun, ResearchSource
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
@@ -78,6 +80,7 @@ SlashCommand = Literal[
     "memories",
     "agents",
     "plan",
+    "research",
     "help",
     "audit",
     "compact",
@@ -86,7 +89,7 @@ SlashCommand = Literal[
     "exit",
 ]
 RunStatus = Literal["idle", "running", "done", "failed"]
-ReplInteractionMode = Literal["chat", "plan"]
+ReplInteractionMode = Literal["chat", "plan", "research"]
 
 PLAN_MODE_INSTRUCTIONS = (
     "You are Colossus operating in REPL Plan Mode. Create a concise markdown "
@@ -131,6 +134,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/memories",
     "/agents",
     "/plan",
+    "/research",
     "/help",
     "/audit",
     "/compact",
@@ -163,6 +167,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/memories": "Show active memories.",
     "/agents": "Show durable subagent jobs.",
     "/plan": "Toggle or manage REPL Plan Mode.",
+    "/research": "Run or inspect Deep Research Mode.",
     "/help": "Show REPL commands.",
     "/audit": "Reserved audit view.",
     "/compact": "Create a context snapshot for the current session.",
@@ -237,6 +242,7 @@ REQUIRED_TRACE_STYLE_KEYS: frozenset[str] = frozenset(
         "approval_requested",
         "approval_auto_granted",
         "risk_assessment",
+        "research",
     }
 )
 REQUIRED_TRANSCRIPT_STYLE_KEYS: frozenset[str] = frozenset(
@@ -248,6 +254,7 @@ REQUIRED_TRANSCRIPT_STYLE_KEYS: frozenset[str] = frozenset(
         "tool_output",
         "approval",
         "risk",
+        "research",
         "error",
         "meta",
         "border",
@@ -463,6 +470,8 @@ class ReplDisplayState:
     interaction_mode: ReplInteractionMode = "chat"
     active_plan_id: str | None = None
     active_plan_status: str | None = None
+    active_research_id: str | None = None
+    active_research_status: str | None = None
     events_mode: EventDisplayMode = "compact"
     show_reasoning: bool = True
     transcript_style: TranscriptStylePreference = "comfortable"
@@ -520,6 +529,7 @@ async def run_repl(
     session_service: SessionService | None = None,
     plan_service: PlanService | None = None,
     subagent_service: SubagentService | None = None,
+    research_service: ResearchService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -590,6 +600,8 @@ async def run_repl(
         theme=display_state.theme.transcript,
     )
     orchestrator.set_event_observer(trace_renderer.render)
+    if research_service is not None:
+        research_service.set_event_observer(trace_renderer.render)
     if subagent_service is not None:
         await subagent_service.start()
     _render_repl_startup(console, display_state)
@@ -814,6 +826,15 @@ async def run_repl(
                     trace_renderer,
                 )
                 continue
+            if command.command == "research":
+                await _handle_research_command(
+                    console,
+                    research_service,
+                    display_state,
+                    command.argument,
+                    trace_renderer,
+                )
+                continue
             if command.command == "help":
                 _render_help(console, display_state)
                 continue
@@ -882,6 +903,19 @@ async def run_repl(
                     orchestrator,
                     agent,
                     trace_renderer,
+                )
+                await _refresh_context_status(display_state, context_service)
+                await _refresh_task_status(display_state, task_service)
+                continue
+            if display_state.interaction_mode == "research":
+                await _run_research_query(
+                    console,
+                    research_service,
+                    display_state,
+                    line,
+                    trace_renderer,
+                    started=True,
+                    render_prompt=False,
                 )
                 await _refresh_context_status(display_state, context_service)
                 await _refresh_task_status(display_state, task_service)
@@ -1071,6 +1105,7 @@ def run_repl_sync(
     session_service: SessionService | None = None,
     plan_service: PlanService | None = None,
     subagent_service: SubagentService | None = None,
+    research_service: ResearchService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -1097,6 +1132,7 @@ def run_repl_sync(
             session_service=session_service,
             plan_service=plan_service,
             subagent_service=subagent_service,
+            research_service=research_service,
             model_router=model_router,
             active_model_role=active_model_role,
             orchestrator_factory=orchestrator_factory,
@@ -1495,6 +1531,121 @@ async def _handle_plan_command(
     console.print("Use /plan [on|off|show|approve|execute|list|discard].")
 
 
+async def _handle_research_command(
+    console: Console,
+    research_service: ResearchService | None,
+    state: ReplDisplayState,
+    argument: str,
+    trace_renderer: TranscriptRenderer,
+) -> None:
+    if research_service is None:
+        console.print("Research service is not configured.")
+        return
+    action, _, rest = argument.strip().partition(" ")
+    normalized = action.lower()
+    if normalized in {"", "toggle"}:
+        state.interaction_mode = (
+            "chat" if state.interaction_mode == "research" else "research"
+        )
+        console.print(f"Research Mode is {state.interaction_mode}.")
+        return
+    if normalized == "on":
+        state.interaction_mode = "research"
+        console.print("Research Mode is on.")
+        return
+    if normalized == "off":
+        state.interaction_mode = "chat"
+        console.print("Research Mode is off.")
+        return
+    if normalized == "list":
+        _render_research_runs(
+            console,
+            await research_service.list_runs(session_id=state.session_id),
+            active_research_id=state.active_research_id,
+        )
+        return
+    if normalized == "show":
+        run = await _active_research_run(console, research_service, state, rest.strip())
+        if run is not None:
+            console.print(Markdown(run.report or "No report saved."))
+        return
+    if normalized == "sources":
+        run = await _active_research_run(console, research_service, state, rest.strip())
+        if run is not None:
+            _render_research_sources(console, await research_service.list_sources(run.id))
+        return
+    await _run_research_query(
+        console,
+        research_service,
+        state,
+        argument,
+        trace_renderer,
+    )
+
+
+async def _run_research_query(
+    console: Console,
+    research_service: ResearchService | None,
+    state: ReplDisplayState,
+    question: str,
+    trace_renderer: TranscriptRenderer,
+    *,
+    started: bool = False,
+    render_prompt: bool = True,
+) -> None:
+    if research_service is None:
+        if started:
+            trace_renderer.end_run()
+        console.print("Research service is not configured.")
+        return
+    if render_prompt:
+        trace_renderer.render_user_prompt(question)
+    if not started:
+        trace_renderer.begin_run(activity_context=_format_run_toolbar(state, question))
+    state.last_status = "running"
+    try:
+        run = await research_service.run(
+            question=question,
+            session_id=state.session_id,
+        )
+    except ColossusError as exc:
+        trace_renderer.end_run()
+        state.last_status = "failed"
+        console.print(f"[red]Research failed:[/red] {exc}")
+        return
+    trace_renderer.end_run()
+    state.last_run_id = run.id
+    state.last_status = "done"
+    state.active_research_id = run.id
+    state.active_research_status = run.status
+    trace_renderer.render_final_answer(run.report)
+
+
+async def _active_research_run(
+    console: Console,
+    research_service: ResearchService,
+    state: ReplDisplayState,
+    run_id: str = "",
+) -> ResearchRun | None:
+    run: ResearchRun | None
+    try:
+        if run_id:
+            run = await research_service.get_run(run_id)
+        elif state.active_research_id is not None:
+            run = await research_service.get_run(state.active_research_id)
+        else:
+            run = await research_service.latest_run(state.session_id)
+    except ColossusError as exc:
+        console.print(f"Research run is unavailable: {exc}")
+        return None
+    if run is None:
+        console.print("No research run.")
+        return None
+    state.active_research_id = run.id
+    state.active_research_status = run.status
+    return run
+
+
 async def _save_repl_plan(
     plan_service: PlanService | None,
     state: ReplDisplayState,
@@ -1883,8 +2034,10 @@ def _format_repl_toolbar(
     cursor_line: int,
     cursor_column: int,
 ) -> str:
-    mode = state.interaction_mode if state.interaction_mode == "plan" else (
-        "multi" if state.multiline else "single"
+    mode = (
+        state.interaction_mode
+        if state.interaction_mode in {"plan", "research"}
+        else ("multi" if state.multiline else "single")
     )
     lines = _line_count(draft_text)
     return (
@@ -1895,7 +2048,7 @@ def _format_repl_toolbar(
         f"reasoning={_on_off(state.show_reasoning)} "
         f"session={_short_id(state.session_id)} pos={cursor_line}:{cursor_column} "
         f"chars={len(draft_text)} lines={lines} {_context_label(state)} "
-        f"{state.task_summary} {_plan_label(state)} "
+        f"{state.task_summary} {_plan_label(state)} {_research_label(state)} "
         f"last={state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
     )
 
@@ -1904,7 +2057,7 @@ def _format_run_toolbar(state: ReplDisplayState, prompt: str) -> str:
     return (
         f"model={state.active_model_role}:{_short_text(state.model, 24)} "
         f"{_context_label(state)} session={_short_id(state.session_id)} "
-        f"{state.task_summary} {_plan_label(state)} chars={len(prompt)} "
+        f"{state.task_summary} {_plan_label(state)} {_research_label(state)} chars={len(prompt)} "
         f"lines={_line_count(prompt)}"
     )
 
@@ -1914,7 +2067,7 @@ def _format_submit_summary(state: ReplDisplayState, prompt: str) -> str:
         f"submit chars={len(prompt)} lines={_line_count(prompt)} "
         f"model={state.active_model_role}:{_short_text(state.model, 40)} "
         f"session={_short_id(state.session_id)} {_context_label(state)} "
-        f"{state.task_summary} {_plan_label(state)}"
+        f"{state.task_summary} {_plan_label(state)} {_research_label(state)}"
     )
 
 
@@ -1945,6 +2098,13 @@ def _plan_label(state: ReplDisplayState) -> str:
         return "plan=-"
     status = state.active_plan_status or "unknown"
     return f"plan={status}:{_short_id(state.active_plan_id)}"
+
+
+def _research_label(state: ReplDisplayState) -> str:
+    if state.active_research_id is None:
+        return "research=-"
+    status = state.active_research_status or "unknown"
+    return f"research={status}:{_short_id(state.active_research_id)}"
 
 
 def _resume_choice(session: SessionSummary) -> UserPromptChoice:
@@ -1985,6 +2145,46 @@ def _render_sessions(console: Console, sessions: tuple[SessionSummary, ...]) -> 
     console.print(table)
 
 
+def _render_research_runs(
+    console: Console,
+    runs: tuple[ResearchRun, ...],
+    *,
+    active_research_id: str | None = None,
+) -> None:
+    if not runs:
+        console.print("No research runs.")
+        return
+    table = Table("Active", "Status", "ID", "Depth", "Question", "Updated")
+    for run in runs:
+        table.add_row(
+            "*" if run.id == active_research_id else "",
+            run.status,
+            run.id,
+            run.depth,
+            _short_text(run.question, 60),
+            run.updated_at,
+        )
+    console.print(table)
+
+
+def _render_research_sources(
+    console: Console,
+    sources: tuple[ResearchSource, ...],
+) -> None:
+    if not sources:
+        console.print("No research sources.")
+        return
+    table = Table("Label", "Type", "Title", "URI")
+    for source in sources:
+        table.add_row(
+            f"[{source.label}]",
+            source.kind,
+            _short_text(source.title, 52),
+            _short_text(source.uri, 70),
+        )
+    console.print(table)
+
+
 def _render_session_summary(console: Console, session: SessionSummary) -> None:
     table = Table("Field", "Value")
     table.add_row("id", session.id)
@@ -2007,6 +2207,8 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
         "mode": state.interaction_mode,
         "active_plan": state.active_plan_id or "",
         "active_plan_status": state.active_plan_status or "",
+        "active_research": state.active_research_id or "",
+        "active_research_status": state.active_research_status or "",
         "theme": state.theme.name,
         "activity_spinner": state.theme.transcript.activity_spinner,
         "composer_mode": "multiline" if state.multiline else "single-line",
@@ -2116,6 +2318,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Toggle or manage REPL Plan Mode.",
     )
     table.add_row(
+        Text("/research [on|off|show|sources|QUESTION]"),
+        _help_current(state, "research"),
+        "Run or inspect Deep Research Mode.",
+    )
+    table.add_row(
         "/context [snapshots|restore ID]",
         _help_current(state, "context"),
         "Inspect or restore context snapshots.",
@@ -2156,6 +2363,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return state.task_summary
     if field == "plan":
         return f"{state.interaction_mode} {_plan_label(state)}"
+    if field == "research":
+        return f"{state.interaction_mode} {_research_label(state)}"
     if field == "context":
         return _context_label(state)
     if field == "submit":

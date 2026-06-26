@@ -20,6 +20,7 @@ from colossus.domain.events import (
     HandoffEvent,
     ModelDeltaEvent,
     ReasoningSummaryEvent,
+    ResearchStatusEvent,
     RiskAssessmentEvent,
     RunEvent,
     SubagentStatusEvent,
@@ -44,6 +45,7 @@ class TranscriptRenderTheme:
     tool_output: str = "green"
     approval: str = "bold yellow"
     risk: str = "bold magenta"
+    research: str = "bold cyan"
     error: str = "bold red"
     meta: str = "dim"
     border: str = "dim"
@@ -239,6 +241,15 @@ class TranscriptRenderer:
                 body = f"{body}\n{event.message}"
             self._render_status_block("subagent", body, self.theme.tool)
             return
+        if isinstance(event, ResearchStatusEvent):
+            body = (
+                f"{event.status} {event.research_id}\n"
+                f"phase={event.phase} sources={event.sources_collected}"
+            )
+            if event.message:
+                body = f"{body}\n{event.message}"
+            self._render_status_block("research", body, self.theme.research)
+            return
         if isinstance(event, ErrorEvent):
             self._render_status_block("error", event.message, self.theme.error)
             return
@@ -293,6 +304,9 @@ class TranscriptRenderer:
             return
         if isinstance(event, SubagentStatusEvent):
             self._set_activity(f"Subagent {event.status}: {event.job_id}")
+            return
+        if isinstance(event, ResearchStatusEvent):
+            self._set_activity(f"Research {event.phase}...")
             return
         if isinstance(event, ApprovalRequestedEvent):
             self._stop_activity()

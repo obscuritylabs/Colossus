@@ -34,6 +34,7 @@ from colossus.domain.providers import (
     model_context_windows_from_provider_models,
 )
 from colossus.domain.requests import AgentRunRequest, AgentRunResult
+from colossus.domain.research import ResearchDepth, ResearchSourceKind
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task
@@ -53,10 +54,13 @@ from colossus.infrastructure.container import (
     create_decision_service,
     create_default_orchestrator,
     create_default_skill_resolver,
+    create_mcp_gateway,
     create_memory_service,
     create_model_router,
     create_plan_service,
     create_repl_preferences_service,
+    create_research_service,
+    create_search_provider,
     create_session_service,
     create_state_store,
     create_subagent_service,
@@ -306,6 +310,29 @@ def _resolve_events_mode(value: str) -> EventDisplayMode:
     raise typer.Exit(code=2)
 
 
+def _research_depth(value: str) -> ResearchDepth:
+    normalized = value.strip().lower()
+    if normalized in {"quick", "standard", "deep"}:
+        return normalized  # type: ignore[return-value]
+    console.print("[red]Invalid research depth.[/red] Use quick, standard, or deep.")
+    raise typer.Exit(code=2)
+
+
+def _research_sources(
+    values: list[str] | None,
+    defaults: tuple[ResearchSourceKind, ...],
+) -> tuple[ResearchSourceKind, ...]:
+    selected = values or list(defaults)
+    normalized: list[ResearchSourceKind] = []
+    for value in selected:
+        item = value.strip().lower()
+        if item not in {"repo", "web", "mcp"}:
+            console.print("[red]Invalid research source.[/red] Use repo, web, or mcp.")
+            raise typer.Exit(code=2)
+        normalized.append(item)  # type: ignore[arg-type]
+    return tuple(dict.fromkeys(normalized))
+
+
 def _normalize_provider(
     value: str | None,
 ) -> ProviderKind | None:
@@ -448,6 +475,8 @@ def run(
         auto_approve_required_tools=resolved_approval_mode == "full-access",
         subagent_service=subagent_service,
         model_router=router,
+        search_provider=create_search_provider(config.research.search),
+        mcp_gateway=create_mcp_gateway(config.research.mcp),
     )
     plan_id = execute_plan
     if execute_plan is not None:
@@ -479,6 +508,101 @@ def run(
         console.print(result.final_output, markup=False)
     console.print(
         f"[dim]run_id={result.run_id} session_id={session_id} events={result.events_recorded}[/dim]"
+    )
+
+
+@app.command()
+def research(
+    ctx: typer.Context,
+    question: Annotated[str, typer.Argument(help="Research question to answer.")],
+    depth: Annotated[
+        str,
+        typer.Option("--depth", help="Research depth: quick, standard, or deep."),
+    ] = "standard",
+    max_sources: Annotated[
+        int,
+        typer.Option("--max-sources", min=1, max=100, help="Maximum evidence sources."),
+    ] = 20,
+    source: Annotated[
+        list[str] | None,
+        typer.Option("--source", help="Source lane to use: repo, web, or mcp. Repeatable."),
+    ] = None,
+    session: Annotated[
+        str | None,
+        typer.Option("--session", help="Use or resume this exact session id."),
+    ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume", help="Attach research to the most recently updated session."),
+    ] = False,
+    events: Annotated[
+        str,
+        typer.Option("--events", help="Event display mode: compact, verbose, or off."),
+    ] = "compact",
+    approval_mode: Annotated[
+        str,
+        typer.Option("--approval-mode", help=f"Approval mode: {APPROVAL_MODE_HELP}."),
+    ] = "ask",
+) -> None:
+    """Run deep research and persist a cited brief."""
+    if resume and session is not None:
+        console.print("[red]Use either --resume or --session, not both.[/red]")
+        raise typer.Exit(code=2)
+    config = load_config(config_path())
+    research_depth = _research_depth(depth)
+    source_kinds = _research_sources(source, config.research.sources)
+    state = create_state_store(data_dir())
+    audit = create_audit_sink(data_dir())
+    if resume:
+        try:
+            session_id = asyncio.run(create_session_service(data_dir()).latest_session()).id
+        except ColossusError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+    else:
+        session_id = session or str(uuid4())
+    overrides = _provider_overrides(ctx)
+    router = create_model_router(config, overrides)
+    resolved_approval_mode = _resolve_approval_mode(approval_mode)
+    events_mode = _resolve_events_mode(events)
+    trace_renderer = RichRunEventRenderer(
+        console,
+        enabled=events_mode != "off",
+        events_mode=events_mode,
+        stream_model_output=False,
+    )
+    service = create_research_service(
+        data_dir(),
+        config=config,
+        model_router=router,
+        workspace_root=Path.cwd(),
+        state_store=state,
+        audit_sink=audit,
+        approval_handler=(
+            RichApprovalHandler(console)
+            if resolved_approval_mode in {"ask", "risk-auto"}
+            else None
+        ),
+        auto_approve_network=resolved_approval_mode == "full-access",
+        event_observer=trace_renderer.render,
+    )
+    trace_renderer.begin_run()
+    try:
+        run_result = asyncio.run(
+            service.run(
+                question=question,
+                session_id=session_id,
+                depth=research_depth,
+                source_kinds=source_kinds,
+                max_sources=max_sources,
+            )
+        )
+    finally:
+        trace_renderer.end_run()
+    console.print(Markdown(run_result.report))
+    console.print(
+        f"[dim]research_id={run_result.id} session_id={session_id} "
+        f"status={run_result.status}[/dim]"
     )
 
 
@@ -581,6 +705,8 @@ def repl(
             auto_approve_required_tools=resolved_approval_mode == "full-access",
             subagent_service=subagent_service,
             model_router=router,
+            search_provider=create_search_provider(config.research.search),
+            mcp_gateway=create_mcp_gateway(config.research.mcp),
         )
 
     history_path = data_dir() / "repl_history.txt"
@@ -604,6 +730,20 @@ def repl(
         session_service=create_session_service(data_dir()),
         plan_service=create_plan_service(data_dir()),
         subagent_service=subagent_service,
+        research_service=create_research_service(
+            data_dir(),
+            config=config,
+            model_router=router,
+            workspace_root=Path.cwd(),
+            state_store=state,
+            audit_sink=audit,
+            approval_handler=(
+                RichApprovalHandler(console)
+                if resolved_approval_mode in {"ask", "risk-auto"}
+                else None
+            ),
+            auto_approve_network=resolved_approval_mode == "full-access",
+        ),
         theme_name=theme,
         initial_session_id=session,
         resume_latest=resume,
@@ -653,7 +793,12 @@ def skills_list() -> None:
 @tools_app.command("list")
 def tools_list() -> None:
     """List built-in tools."""
-    orchestrator = create_default_orchestrator(data_dir())
+    config = load_config(config_path())
+    orchestrator = create_default_orchestrator(
+        data_dir(),
+        search_provider=create_search_provider(config.research.search),
+        mcp_gateway=create_mcp_gateway(config.research.mcp),
+    )
     specs = orchestrator.tool_specs()
     table = Table()
     table.add_column("Name", no_wrap=True)

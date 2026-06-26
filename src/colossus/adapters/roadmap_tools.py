@@ -43,6 +43,7 @@ from colossus.domain.memories import (
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolPermission, ToolSpec
+from colossus.ports.research import McpGateway, SearchProvider
 
 JsonObject = dict[str, Any]
 HandlerMap = dict[str, ToolHandler]
@@ -78,6 +79,10 @@ def create_roadmap_tools(
     memory_service: MemoryService | None = None,
     subagent_service: SubagentService | None = None,
     include_agent_delegate: bool = True,
+    include_web_search: bool = False,
+    include_mcp_call: bool = False,
+    search_provider: SearchProvider | None = None,
+    mcp_gateway: McpGateway | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     handlers = RoadmapToolHandlers(
         workspace,
@@ -88,11 +93,19 @@ def create_roadmap_tools(
         decision_service=decision_service,
         memory_service=memory_service,
         subagent_service=subagent_service,
+        search_provider=search_provider,
+        mcp_gateway=mcp_gateway,
     )
     agent_specs = ((_agent_delegate_spec(),) if include_agent_delegate else ()) + (
         _agent_result_spec(),
         _agent_list_spec(),
     )
+    expose_web_search = include_web_search or (
+        search_provider is not None and search_provider.configured
+    )
+    expose_mcp_call = include_mcp_call or (mcp_gateway is not None and mcp_gateway.configured)
+    web_search_specs = (_web_search_spec(),) if expose_web_search else ()
+    mcp_call_specs = (_mcp_call_spec(),) if expose_mcp_call else ()
     specs = (
         _task_create_spec(),
         _task_update_spec(),
@@ -124,11 +137,11 @@ def create_roadmap_tools(
         _repo_file_summary_spec(),
         *agent_specs,
         _web_fetch_spec(),
-        _web_search_spec(),
+        *web_search_specs,
         _docs_fetch_spec(),
         _mcp_servers_spec(),
         _mcp_tools_spec(),
-        _mcp_call_spec(),
+        *mcp_call_specs,
         _tool_search_spec(),
         _trace_show_spec(),
         _trace_export_spec(),
@@ -166,11 +179,9 @@ def create_roadmap_tools(
         "agent.result": handlers.agent_result,
         "agent.list": handlers.agent_list,
         "web.fetch": handlers.web_fetch,
-        "web.search": handlers.web_search,
         "docs.fetch": handlers.docs_fetch,
         "mcp.servers": handlers.mcp_servers,
         "mcp.tools": handlers.mcp_tools,
-        "mcp.call": handlers.mcp_call,
         "tool.search": handlers.tool_search,
         "trace.show": handlers.trace_show,
         "trace.export": handlers.trace_export,
@@ -178,6 +189,10 @@ def create_roadmap_tools(
     }
     if include_agent_delegate:
         handlers_by_name["agent.delegate"] = handlers.agent_delegate
+    if expose_web_search:
+        handlers_by_name["web.search"] = handlers.web_search
+    if expose_mcp_call:
+        handlers_by_name["mcp.call"] = handlers.mcp_call
     return specs, handlers_by_name
 
 
@@ -192,6 +207,8 @@ class RoadmapToolHandlers:
         decision_service: DecisionService | None = None,
         memory_service: MemoryService | None = None,
         subagent_service: SubagentService | None = None,
+        search_provider: SearchProvider | None = None,
+        mcp_gateway: McpGateway | None = None,
     ) -> None:
         self._workspace = workspace
         self._broker = broker
@@ -201,6 +218,8 @@ class RoadmapToolHandlers:
         self._decision_service = decision_service
         self._memory_service = memory_service
         self._subagent_service = subagent_service
+        self._search_provider = search_provider
+        self._mcp_gateway = mcp_gateway
         self._tasks: list[JsonObject] = []
         self._decisions: list[JsonObject] = []
         self._memories: list[JsonObject] = []
@@ -891,8 +910,25 @@ class RoadmapToolHandlers:
         return await self._fetch_url(url, max_bytes)
 
     async def web_search(self, arguments: JsonObject) -> str:
-        _ = arguments
-        raise ToolExecutionError(WEB_SEARCH_DISABLED)
+        if self._search_provider is None or not self._search_provider.configured:
+            raise ToolExecutionError(WEB_SEARCH_DISABLED)
+        drafts = await self._search_provider.collect(
+            _required_string_arg(arguments, "query"),
+            max_results=_int_arg(arguments, "max_results", 10),
+        )
+        return _json(
+            {
+                "results": [
+                    {
+                        "title": draft.title,
+                        "url": draft.uri,
+                        "snippet": draft.content,
+                        "metadata": draft.metadata,
+                    }
+                    for draft in drafts
+                ]
+            }
+        )
 
     async def docs_fetch(self, arguments: JsonObject) -> str:
         url = _required_string_arg(arguments, "url")
@@ -901,15 +937,40 @@ class RoadmapToolHandlers:
 
     async def mcp_servers(self, arguments: JsonObject) -> str:
         _ = arguments
+        if self._mcp_gateway is not None and self._mcp_gateway.configured:
+            return _json(
+                {
+                    "servers": list(await self._mcp_gateway.list_servers()),
+                    "configured": True,
+                    "message": "",
+                }
+            )
         return _json({"servers": [], "configured": False, "message": MCP_DISABLED})
 
     async def mcp_tools(self, arguments: JsonObject) -> str:
-        _ = arguments
+        if self._mcp_gateway is not None and self._mcp_gateway.configured:
+            return _json(
+                {
+                    "tools": list(
+                        await self._mcp_gateway.list_tools(
+                            _optional_non_empty_string(arguments, "server")
+                        )
+                    ),
+                    "configured": True,
+                    "message": "",
+                }
+            )
         return _json({"tools": [], "configured": False, "message": MCP_DISABLED})
 
     async def mcp_call(self, arguments: JsonObject) -> str:
-        _ = arguments
-        raise ToolExecutionError(MCP_DISABLED)
+        if self._mcp_gateway is None or not self._mcp_gateway.configured:
+            raise ToolExecutionError(MCP_DISABLED)
+        result = await self._mcp_gateway.call_tool(
+            server=_required_string_arg(arguments, "server"),
+            tool=_required_string_arg(arguments, "tool"),
+            arguments=_object_arg(arguments, "arguments"),
+        )
+        return _json({"result": result})
 
     async def tool_search(self, arguments: JsonObject) -> str:
         query = _required_string_arg(arguments, "query").lower()
@@ -1207,6 +1268,13 @@ def _string_list_arg(arguments: JsonObject, name: str) -> list[str]:
     if not all(isinstance(item, str) for item in value):
         raise ToolExecutionError(f"Argument {name} must be an array of strings.")
     return value
+
+
+def _object_arg(arguments: JsonObject, name: str) -> JsonObject:
+    value = arguments.get(name, {})
+    if not isinstance(value, dict):
+        raise ToolExecutionError(f"Argument {name} must be an object.")
+    return {str(key): item for key, item in value.items()}
 
 
 def _now() -> str:
