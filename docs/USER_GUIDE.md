@@ -158,6 +158,10 @@ Integrations are hidden until configured and connected:
 uv run colossus integrations list
 uv run colossus integrations show github
 uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
+uv run colossus integrations connect searxng --base-url http://localhost:8888
+uv run colossus integrations connect opensearch \
+  --base-url http://localhost:9200 \
+  --auth-type none
 uv run colossus tools list
 ```
 
@@ -167,7 +171,9 @@ Inside the REPL:
 /integrations list
 /integrations show github
 /integrations connect github --credential-ref env:GITHUB_TOKEN
+/integrations connect searxng --base-url http://localhost:8888
+/integrations connect opensearch --base-url http://localhost:9200 --auth-type none
 ```
 
-See [Integrations](INTEGRATIONS.md) for GitHub, OpenAPI import, MCP positioning, and
-credential rules.
+See [Integrations](INTEGRATIONS.md) for GitHub, SearXNG, OpenSearch, OpenAPI import, MCP
+positioning, and credential rules.

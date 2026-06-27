@@ -61,6 +61,108 @@ Disconnect:
 uv run colossus integrations disconnect github
 ```
 
+## SearXNG
+
+SearXNG is the first local-first native connector. It exposes model-callable search
+tools backed by a configured local or private SearXNG instance.
+
+Start the bundled local development instance:
+
+```bash
+docker compose -f docker-compose.searxng.yml up -d
+curl 'http://localhost:8888/search?q=colossus&format=json'
+```
+
+Connect it:
+
+```bash
+uv run colossus integrations connect searxng --base-url http://localhost:8888
+uv run colossus tools list
+```
+
+Current tools:
+
+- `searxng.search`
+- `searxng.health`
+
+`searxng.search` accepts `query` and optional `max_results`. The connector normalizes
+SearXNG JSON results into title, URL, content, and metadata fields.
+
+For a protected SearXNG instance, keep the key in the environment and pass only a
+credential ref:
+
+```bash
+export SEARXNG_API_KEY=...
+uv run colossus integrations connect searxng \
+  --base-url https://search.example.test \
+  --credential-ref env:SEARXNG_API_KEY \
+  --auth-header X-Searxng-Key \
+  --auth-scheme raw
+```
+
+`--auth-scheme raw` sends the secret value as the header value. The default
+`--auth-scheme bearer` sends `Bearer VALUE`.
+
+This integration is separate from the Deep Research `web.search` provider setting. Use
+the integration when you want model-callable `searxng.*` tools; use the research config
+when you want `/research` source collection to use SearXNG.
+
+## OpenSearch
+
+OpenSearch is a native document-focused connector for local, private, or proxied
+OpenSearch-compatible clusters. It is hidden until connected and all tools remain
+network approval-gated. Document writes are marked mutating and high risk.
+
+Connect a local unauthenticated development cluster:
+
+```bash
+uv run colossus integrations connect opensearch \
+  --base-url http://localhost:9200 \
+  --auth-type none
+```
+
+Connect through a bearer-token or proxy-auth endpoint:
+
+```bash
+export OPENSEARCH_TOKEN=...
+uv run colossus integrations connect opensearch \
+  --base-url https://search.example.test \
+  --auth-type bearer \
+  --credential-ref env:OPENSEARCH_TOKEN
+```
+
+Connect with basic auth:
+
+```bash
+export OPENSEARCH_USER=...
+export OPENSEARCH_PASSWORD=...
+uv run colossus integrations connect opensearch \
+  --base-url https://search.example.test \
+  --auth-type basic \
+  --username-ref env:OPENSEARCH_USER \
+  --password-ref env:OPENSEARCH_PASSWORD
+```
+
+Current tools:
+
+- `opensearch.info`
+- `opensearch.health`
+- `opensearch.list_indices`
+- `opensearch.get_mapping`
+- `opensearch.search`
+- `opensearch.get_document`
+- `opensearch.index_document`
+- `opensearch.update_document`
+- `opensearch.delete_document`
+
+V1 is document-focused: no bulk API, index administration, security APIs, role APIs, or
+scripted updates. Colossus does not enforce an index allowlist; use OpenSearch roles and
+least-privilege credentials for cluster and index permissions.
+
+Amazon OpenSearch Service can be used through a local or hosted proxy that performs
+AWS SigV4 signing, then connect Colossus with `--auth-type bearer`, `basic`, or `none`
+as appropriate for that proxy. Native SigV4 signing is intentionally deferred.
+
 ## OpenAPI Imports
 
 JSON OpenAPI documents can be imported into the brokered runtime:

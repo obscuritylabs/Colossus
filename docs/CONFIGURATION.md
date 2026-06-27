@@ -208,6 +208,32 @@ Supported v1 auth labels are `none`, `api-key`, `bearer`,
 environment refs only; future keychain or encrypted-store adapters should keep the same
 credential-ref contract.
 
+OpenSearch is configured through the integration connection record rather than config
+files. Use cluster permissions and least-privilege credentials for index access:
+
+```bash
+uv run colossus integrations connect opensearch \
+  --base-url http://localhost:9200 \
+  --auth-type none
+
+export OPENSEARCH_TOKEN=...
+uv run colossus integrations connect opensearch \
+  --base-url https://search.example.test \
+  --auth-type bearer \
+  --credential-ref env:OPENSEARCH_TOKEN
+
+export OPENSEARCH_USER=...
+export OPENSEARCH_PASSWORD=...
+uv run colossus integrations connect opensearch \
+  --base-url https://search.example.test \
+  --auth-type basic \
+  --username-ref env:OPENSEARCH_USER \
+  --password-ref env:OPENSEARCH_PASSWORD
+```
+
+For Amazon OpenSearch Service, put SigV4 signing in a proxy for v1 and connect Colossus
+to that proxy with one of the supported auth modes.
+
 ## Deep Research
 
 Deep Research Mode is available with:
@@ -273,6 +299,17 @@ the variable name from config:
   }
 }
 ```
+
+For model-callable SearXNG tools, connect the native integration instead of editing the
+research search config:
+
+```bash
+uv run colossus integrations connect searxng --base-url http://localhost:8888
+uv run colossus tools list
+```
+
+The integration stores endpoint config and optional credential refs in local connection
+state. It does not place raw SearXNG keys in tool schemas or model requests.
 
 Configure MCP research tools with explicit stdio server commands and allowlisted tools.
 The gateway uses the official MCP Python SDK when installed:

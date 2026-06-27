@@ -62,6 +62,7 @@ from colossus.interfaces.repl import (
     _is_slash_command_draft,
     _match_user_prompt_answer,
     _multiline_mode,
+    _parse_repl_integration_connect,
     _plan_agent,
     _preferences_from_state,
     _prompt_continuation,
@@ -377,6 +378,59 @@ def test_parse_context_commands() -> None:
     assert skill.argument == "use coding"
     assert help_command is not None
     assert help_command.command == "help"
+
+
+def test_parse_repl_integration_connect_supports_searxng_config() -> None:
+    name, credential_ref, credential_refs, scopes, config = _parse_repl_integration_connect(
+        [
+            "connect",
+            "searxng",
+            "--base-url",
+            "http://localhost:8888",
+            "--credential-ref",
+            "env:SEARXNG_API_KEY",
+            "--auth-header",
+            "X-Searxng-Key",
+            "--auth-scheme",
+            "raw",
+        ]
+    )
+
+    assert name == "searxng"
+    assert credential_ref == "env:SEARXNG_API_KEY"
+    assert credential_refs == {}
+    assert scopes == ()
+    assert config == {
+        "base_url": "http://localhost:8888",
+        "auth_header": "X-Searxng-Key",
+        "auth_scheme": "raw",
+    }
+
+
+def test_parse_repl_integration_connect_supports_opensearch_config() -> None:
+    name, credential_ref, credential_refs, scopes, config = _parse_repl_integration_connect(
+        [
+            "connect",
+            "opensearch",
+            "--base-url",
+            "http://localhost:9200",
+            "--auth-type",
+            "basic",
+            "--username-ref",
+            "env:OPENSEARCH_USER",
+            "--password-ref",
+            "env:OPENSEARCH_PASSWORD",
+        ]
+    )
+
+    assert name == "opensearch"
+    assert credential_ref is None
+    assert credential_refs == {
+        "username": "env:OPENSEARCH_USER",
+        "password": "env:OPENSEARCH_PASSWORD",
+    }
+    assert scopes == ()
+    assert config == {"base_url": "http://localhost:9200", "auth_type": "basic"}
 
 
 def test_trace_enabled_parses_toggle_arguments() -> None:
