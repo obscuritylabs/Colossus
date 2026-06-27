@@ -50,7 +50,8 @@ Some tools are intentionally hidden by default:
 
 - `web.search` appears only when a search adapter is configured.
 - `mcp.call` appears only when MCP execution is explicitly configured.
-- `github.*` and `openapi.NAME.*` appear only after the integration is connected.
+- `github.*`, `searxng.*`, `opensearch.*`, and `openapi.NAME.*` appear only after the
+  integration is connected.
 
 ## Tool Requires Approval
 

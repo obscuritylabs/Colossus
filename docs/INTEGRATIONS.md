@@ -113,7 +113,19 @@ OpenSearch is a native document-focused connector for local, private, or proxied
 OpenSearch-compatible clusters. It is hidden until connected and all tools remain
 network approval-gated. Document writes are marked mutating and high risk.
 
-Connect a local unauthenticated development cluster:
+Start the bundled local development cluster:
+
+```bash
+docker compose -f docker-compose.opensearch.yml up -d
+curl 'http://localhost:9200/_cluster/health'
+```
+
+The compose file binds OpenSearch to `127.0.0.1`, disables the OpenSearch security
+plugin, and is intended for local development and integration testing only. Override the
+image tag or host ports with `OPENSEARCH_VERSION`, `OPENSEARCH_PORT`, and
+`OPENSEARCH_PERF_PORT`.
+
+Connect the local unauthenticated development cluster:
 
 ```bash
 uv run colossus integrations connect opensearch \
@@ -162,6 +174,20 @@ least-privilege credentials for cluster and index permissions.
 Amazon OpenSearch Service can be used through a local or hosted proxy that performs
 AWS SigV4 signing, then connect Colossus with `--auth-type bearer`, `basic`, or `none`
 as appropriate for that proxy. Native SigV4 signing is intentionally deferred.
+
+Run the opt-in live integration smoke test against the local cluster:
+
+```bash
+COLOSSUS_OPENSEARCH_LIVE=1 \
+COLOSSUS_OPENSEARCH_URL=http://127.0.0.1:9200 \
+uv run pytest tests/test_opensearch_live.py
+```
+
+Tear down local data when you are done:
+
+```bash
+docker compose -f docker-compose.opensearch.yml down -v
+```
 
 ## OpenAPI Imports
 

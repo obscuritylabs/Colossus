@@ -42,6 +42,7 @@ Connect an integration without exposing raw secrets to the model:
 export GITHUB_TOKEN=...
 uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
 uv run colossus integrations connect searxng --base-url http://localhost:8888
+docker compose -f docker-compose.opensearch.yml up -d
 uv run colossus integrations connect opensearch \
   --base-url http://localhost:9200 \
   --auth-type none

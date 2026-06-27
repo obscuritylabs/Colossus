@@ -212,6 +212,7 @@ OpenSearch is configured through the integration connection record rather than c
 files. Use cluster permissions and least-privilege credentials for index access:
 
 ```bash
+docker compose -f docker-compose.opensearch.yml up -d
 uv run colossus integrations connect opensearch \
   --base-url http://localhost:9200 \
   --auth-type none
@@ -233,6 +234,9 @@ uv run colossus integrations connect opensearch \
 
 For Amazon OpenSearch Service, put SigV4 signing in a proxy for v1 and connect Colossus
 to that proxy with one of the supported auth modes.
+
+The local compose file disables the OpenSearch security plugin and binds to localhost
+only. Use it for development and opt-in live integration testing, not production.
 
 ## Deep Research
 
