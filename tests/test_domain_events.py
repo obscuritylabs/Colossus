@@ -3,6 +3,7 @@ from pydantic import TypeAdapter
 from colossus.domain.events import (
     ApprovalAutoGrantedEvent,
     ModelDeltaEvent,
+    ModelRequestPreparedEvent,
     ReasoningSummaryEvent,
     RiskAssessmentEvent,
     RunEvent,
@@ -52,6 +53,23 @@ def test_reasoning_summary_event_round_trips_with_discriminator() -> None:
     assert isinstance(parsed, ReasoningSummaryEvent)
     assert parsed.summary == "Checked the next safe action."
     assert parsed.provider_format == "openrouter"
+
+
+def test_model_request_prepared_event_round_trips_with_discriminator() -> None:
+    adapter: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
+    event = ModelRequestPreparedEvent(
+        turn=0,
+        model="demo",
+        instructions="system prompt",
+        messages=({"role": "user", "content": "hello"},),
+        tools=({"name": "filesystem.read", "description": "Read files"},),
+    )
+
+    parsed = adapter.validate_json(adapter.dump_json(event))
+
+    assert isinstance(parsed, ModelRequestPreparedEvent)
+    assert parsed.instructions == "system prompt"
+    assert parsed.messages[0]["content"] == "hello"
 
 
 def test_approval_auto_granted_event_round_trips_with_discriminator() -> None:

@@ -4,6 +4,9 @@ Colossus starts with capability-based policy, brokered execution, and append-onl
 logs. OS-level isolation can be added behind the subprocess broker without changing tool
 contracts.
 
+For user-facing setup and troubleshooting, see [Getting Started](GETTING_STARTED.md) and
+[Troubleshooting](TROUBLESHOOTING.md). This document is the trust-boundary reference.
+
 ## Core Rules
 
 - Tools declare command, argument schema, working-root policy, environment allowlist,
@@ -71,6 +74,7 @@ Security-sensitive defaults:
 | `web.search` | None | Allowed by spec | Yes | Exposed only when a search adapter such as SearXNG is configured |
 | `mcp.servers/tools` | None | Denied | No | Returns unconfigured state |
 | `mcp.call` | None | Allowed by spec | Yes | Adapter extension point, not exposed by default |
+| `github.*` and `openapi.NAME.*` | None | Allowed by spec | Yes | Exposed only after integration connection |
 | Deep research | Read | Allowed by configured lanes | Network/MCP lanes | Persists cited reports and source records |
 | `trace.show` | Read | Denied | No | Enabled |
 | `trace.export` | Write | Denied | Yes | Enabled |
@@ -144,6 +148,19 @@ source metadata, or audit payload fields.
 Global HTTP PKI and proxy settings configure transport for Colossus-owned `httpx`
 clients only. They do not grant network approval, expand tool schemas, or affect HTTP
 requests made inside external subprocesses or MCP server processes.
+
+## Integration Credentials
+
+Integration credentials are referenced by local handles such as `env:GITHUB_TOKEN`.
+Connection records store the handle, scopes, manifest, and status, never the raw secret.
+Tool handlers resolve the handle at execution time, inject auth headers in the adapter,
+and audit the connector name, tool name, credential ref, and argument keys only.
+
+Missing credentials produce a pending-auth connection or a tool execution error. Raw API
+keys, bearer tokens, OAuth refresh tokens, client secrets, and service-account JSON must
+not be included in model-visible tool schemas, `ModelRequest` payloads, transcript
+output, trace details, or audit payloads. OpenAPI imports generate operation tools, but
+they do not turn auth fields into model arguments.
 
 ## Reasoning Visibility
 

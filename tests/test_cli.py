@@ -84,6 +84,25 @@ def test_cli_run_accepts_repeatable_skill_option(tmp_path, monkeypatch) -> None:
     assert captured["request"].skill_mode_enabled is True
 
 
+def test_cli_run_accepts_workspace_option(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    captured: dict[str, Path | None] = {}
+    create_default_orchestrator = cli_module.create_default_orchestrator
+
+    def capture_orchestrator(*args, **kwargs):
+        captured["workspace_root"] = kwargs.get("workspace_root")
+        return create_default_orchestrator(*args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "create_default_orchestrator", capture_orchestrator)
+
+    result = CliRunner().invoke(app, ["run", "--workspace", str(workspace), "hello"])
+
+    assert result.exit_code == 0
+    assert captured["workspace_root"] == workspace.resolve()
+
+
 def test_cli_run_rejects_unknown_skill(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
 
@@ -528,6 +547,35 @@ def test_cli_research_persists_cited_report(tmp_path, monkeypatch) -> None:
     assert "[R1]" in result.stdout
     assert "research_id=research-" in result.stdout
     assert "session_id=session-research" in result.stdout
+
+
+def test_cli_research_uses_workspace_option_for_repo_sources(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "workspace-note.txt").write_text(
+        "workspace sentinel evidence for research\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "research",
+            "workspace sentinel evidence",
+            "--source",
+            "repo",
+            "--workspace",
+            str(workspace),
+            "--max-sources",
+            "3",
+            "--events",
+            "off",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "workspace-note.txt" in result.stdout
 
 
 def test_cli_research_rejects_invalid_source(tmp_path, monkeypatch) -> None:

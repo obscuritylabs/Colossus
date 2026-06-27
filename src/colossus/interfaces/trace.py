@@ -11,6 +11,7 @@ from colossus.domain.events import (
     ApprovalRequestedEvent,
     FinalOutputEvent,
     ModelDeltaEvent,
+    ModelRequestPreparedEvent,
     ReasoningSummaryEvent,
     ResearchStatusEvent,
     RiskAssessmentEvent,
@@ -76,6 +77,16 @@ class RichRunEventRenderer:
             summary = _truncate(event.summary, self.argument_preview_chars)
             self.console.print(f"{_label('thinking', self.theme.thinking)} ", end="")
             self.console.print(summary, markup=False)
+            return
+        if isinstance(event, ModelRequestPreparedEvent):
+            if self.events_mode != "verbose":
+                return
+            self.console.print(
+                f"{_label('model request', self.theme.thinking)} "
+                f"{event.model} [dim]turn={event.turn} messages={len(event.messages)} "
+                f"tools={len(event.tools)}[/dim]"
+            )
+            self.console.print(_model_request_dump(event), markup=False)
             return
         if isinstance(event, FinalOutputEvent):
             if self._rendered_model_output and not self._last_model_delta_ended_newline:
@@ -153,6 +164,20 @@ def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return f"{value[: max(0, limit - 3)]}..."
+
+
+def _model_request_dump(event: ModelRequestPreparedEvent) -> str:
+    return json.dumps(
+        {
+            "instructions": event.instructions,
+            "messages": event.messages,
+            "model": event.model,
+            "tools": list(event.tools),
+            "turn": event.turn,
+        },
+        indent=2,
+        sort_keys=True,
+    )
 
 
 def _label(value: str, style: str) -> str:

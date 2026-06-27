@@ -5,6 +5,7 @@ from typing import Protocol
 from colossus.domain.context import ContextSnapshot
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.events import RunEvent
+from colossus.domain.integrations import IntegrationConnection
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import Message
 from colossus.domain.plans import Plan
@@ -149,6 +150,25 @@ class StateStore(Protocol):
         status: SubagentStatus | None = None,
     ) -> tuple[SubagentJob, ...]:
         """List subagent jobs, optionally scoped to a session and status."""
+        ...
+
+    async def save_integration_connection(self, connection: IntegrationConnection) -> None:
+        """Persist an integration connection record."""
+        ...
+
+    async def get_integration_connection(
+        self,
+        name: str,
+    ) -> IntegrationConnection | None:
+        """Load an integration connection by name."""
+        ...
+
+    async def list_integration_connections(self) -> tuple[IntegrationConnection, ...]:
+        """List persisted integration connection records."""
+        ...
+
+    async def delete_integration_connection(self, name: str) -> None:
+        """Delete an integration connection record."""
         ...
 
     async def save_context_snapshot(self, snapshot: ContextSnapshot) -> None:

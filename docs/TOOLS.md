@@ -11,6 +11,9 @@ List the installed catalog:
 uv run colossus tools list
 ```
 
+For task-oriented examples, see [Workflows](WORKFLOWS.md). For integration-generated
+tools, see [Integrations](INTEGRATIONS.md).
+
 ## Permission Defaults
 
 | Family | Tools | Approval | Offline | Notes |
@@ -29,6 +32,7 @@ uv run colossus tools list
 | Subagents | `agent.delegate`, `agent.result`, `agent.list` | No by default | Yes | Durable queued child-agent jobs with bounded local concurrency. |
 | Web/docs | `web.fetch`, `docs.fetch` | Yes | Yes | Approval-gated HTTP(S) fetches. `web.search` is exposed only when a search adapter such as SearXNG is configured. |
 | MCP/discovery | `mcp.servers`, `mcp.tools`, `tool.search` | No | Yes | MCP listing returns unconfigured state; `tool.search` searches the local catalog. `mcp.call` is not exposed unless an MCP adapter is installed. |
+| Integrations | `github.*`, `openapi.NAME.*` | Yes | Partial | Hidden until connected. Calls inject auth through credential refs, then pass policy, approval, audit, and HTTP settings. |
 | Research mode | `colossus research`, `/research` | Network/MCP lanes | Partial | Persists cited reports, sources, claims, and research status events. |
 | Trace/eval | `trace.show`, `trace.export`, `eval.run` | Export/eval only | Yes | Trace export writes a bounded snapshot; eval wraps local pytest. |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Restore only | Yes | Durable snapshots reduce model input without deleting raw history. |
@@ -38,7 +42,10 @@ uv run colossus tools list
 
 Every tool input schema uses `additionalProperties: false`. Important shapes:
 
-- File tools accept workspace-relative `path` values and return relative paths.
+- File tools accept workspace-relative `path` values and return relative paths. The
+  workspace defaults to the process current directory, can be selected with
+  `--workspace`/`-C` for CLI runs, and can be switched inside the REPL with
+  `/workspace PATH`.
 - Search tools return arrays of `{path, line, text}` style match objects plus
   `truncated` when applicable.
 - Command wrappers return `{command, exit_code, stdout, stderr}`.
@@ -56,6 +63,10 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
 - Research runs persist a `ResearchRun` plus labeled `ResearchSource` records and
   source-backed `ResearchClaim` records. Reports cite persisted labels such as `[R1]`.
 - Context tools return session budget/status, snapshot records, or restore confirmation.
+- Integration tools never include credential fields in model-visible schemas. A connected
+  GitHub tool family exposes repository, issue, pull request, check, and release reads.
+  Imported OpenAPI tools are named `openapi.NAME.OPERATION` and map path/query/body
+  parameters from the OpenAPI operation.
 
 ## Security Notes
 
@@ -73,6 +84,11 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
   airgapped environments they should not be approved or will fail at the network layer.
   Configured global HTTP PKI and proxy settings are used for Colossus-owned web fetch
   and web search clients. Web search and MCP calls remain adapter extension points.
+- Integrations store only credential refs such as `env:GITHUB_TOKEN`. Raw API keys,
+  bearer tokens, OAuth secrets, refresh tokens, and service-account JSON must not appear
+  in tool arguments, model requests, transcripts, or audit payloads. V1 resolution is
+  environment-backed; OS keychain or encrypted local storage can be added behind the same
+  credential broker port.
 - Deep Research Mode asks for approval before configured web search or MCP collection.
   If a source lane is disabled or denied, the run continues with available evidence and
   records the limitation in the report.

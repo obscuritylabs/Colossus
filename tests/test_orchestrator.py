@@ -19,6 +19,7 @@ from colossus.domain.errors import ColossusError, ProviderError
 from colossus.domain.events import (
     FinalOutputEvent,
     ModelDeltaEvent,
+    ModelRequestPreparedEvent,
     ReasoningSummaryEvent,
     RunEvent,
     ToolCallCompletedEvent,
@@ -204,8 +205,10 @@ async def test_orchestrator_executes_tool_and_continues(tmp_path) -> None:
     assert isinstance(second_turn_messages[-1], ToolResultMessage)
     assert second_turn_messages[-1].call_id == "call-1"
     assert [event.type for event in observed] == [
+        "model.request.prepared",
         "tool.call.requested",
         "tool.call.completed",
+        "model.request.prepared",
         "final.output",
     ]
 
@@ -292,6 +295,40 @@ async def test_orchestrator_composes_skill_context_and_audits_metadata(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_emits_prepared_model_request_without_persisting_it(
+    tmp_path,
+) -> None:
+    observed: list[RunEvent] = []
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    provider = CapturingFinalProvider()
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=InMemoryToolRegistry(()),
+        tool_executor=FunctionToolExecutor({}, InMemoryToolRegistry(())),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        event_observer=observed.append,
+    )
+
+    await orchestrator.run(AgentRunRequest(prompt="hello", agent=default_agent()))
+
+    prepared = [event for event in observed if isinstance(event, ModelRequestPreparedEvent)]
+    assert len(prepared) == 1
+    assert prepared[0].instructions == provider.requests[0].instructions
+    assert prepared[0].messages == tuple(
+        message.model_dump(mode="json") for message in provider.requests[0].messages
+    )
+    assert prepared[0].tools == tuple(
+        tool.model_dump(mode="json") for tool in provider.requests[0].tools
+    )
+    persisted = await state.list_events("run-1")
+    assert all(not isinstance(event, ModelRequestPreparedEvent) for event in persisted)
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_validates_active_skill_required_tools_before_provider(
     tmp_path,
 ) -> None:
@@ -355,7 +392,10 @@ async def test_orchestrator_rejects_reasoning_only_provider_response(tmp_path) -
 
     with pytest.raises(ProviderError, match="choices\\[\\]\\.delta\\.content"):
         await orchestrator.run(AgentRunRequest(prompt="hello", agent=default_agent()))
-    assert [event.type for event in observed] == ["reasoning.summary"]
+    assert [event.type for event in observed] == [
+        "model.request.prepared",
+        "reasoning.summary",
+    ]
 
 
 @pytest.mark.asyncio
@@ -591,8 +631,10 @@ async def test_orchestrator_returns_invalid_tool_args_to_model(tmp_path) -> None
     assert completed.exit_code == 1
     assert "invalid_arguments" in completed.output
     assert [event.type for event in observed] == [
+        "model.request.prepared",
         "tool.call.requested",
         "tool.call.completed",
+        "model.request.prepared",
         "final.output",
     ]
 

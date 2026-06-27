@@ -3,6 +3,9 @@
 Colossus loads `config.json` from the platform user config directory. If the file does
 not exist, Colossus uses the built-in defaults.
 
+For task-oriented setup, start with [Getting Started](GETTING_STARTED.md). For daily
+command usage, see the [User Guide](USER_GUIDE.md).
+
 Create a default config:
 
 ```bash
@@ -150,6 +153,61 @@ uv run colossus run --model-role risk_evaluator "hello"
 Global provider/model/base-url/API-key/CA CLI overrides apply to the `primary` role for
 that invocation.
 
+## Workspace Selection
+
+Colossus uses the current directory as the workspace root by default. Workspace-bound
+tools, shell commands, repo-scoped memories, repository research, context composition,
+and subagents stay relative to that root.
+
+Use `--workspace` or `-C` to choose a different root for one-shot runs, research, tool
+inspection, or the REPL:
+
+```bash
+uv run colossus run --workspace ../my-project "Inspect this repository"
+uv run colossus research --workspace ../my-project "Summarize local evidence" --source repo
+uv run colossus repl --workspace ../my-project
+```
+
+Inside the REPL, `/workspace` shows the current root and `/workspace PATH` switches the
+active workspace for later tool calls, context checks, memories, and research runs.
+Relative REPL workspace paths are resolved from the current workspace root.
+
+## Integrations
+
+Integrations are persisted local connection records, not config-file secrets. The first
+credential adapter resolves refs of the form `env:VARIABLE_NAME`; Colossus stores the ref
+and injects the secret only inside the tool handler.
+
+For the integration user guide, see [Integrations](INTEGRATIONS.md).
+
+```bash
+export GITHUB_TOKEN=...
+uv run colossus integrations list
+uv run colossus integrations show github
+uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
+uv run colossus tools list
+uv run colossus integrations disconnect github
+```
+
+Inside the REPL, use `/integrations list`, `/integrations show github`, and
+`/integrations connect github --credential-ref env:GITHUB_TOKEN`. A successful connect
+refreshes the live tool catalog.
+
+Imported OpenAPI tools use the same brokered runtime:
+
+```bash
+export DEMO_API_TOKEN=...
+uv run colossus integrations import-openapi demo ./openapi.json \
+  --base-url https://api.example.test \
+  --credential-ref env:DEMO_API_TOKEN \
+  --auth-type bearer
+```
+
+Supported v1 auth labels are `none`, `api-key`, `bearer`,
+`oauth2-authorization-code`, and `service-account`. The current local broker resolves
+environment refs only; future keychain or encrypted-store adapters should keep the same
+credential-ref contract.
+
 ## Deep Research
 
 Deep Research Mode is available with:
@@ -296,6 +354,7 @@ Runtime controls:
 - `/stream on|raw|off`
 - `/events compact|verbose|off`
 - `/reasoning on|off`
+- `/workspace [PATH]`
 - `/resume [LIMIT]`
 - `/sessions [LIMIT]`
 - `/session show [ID]`
@@ -325,9 +384,9 @@ previews remain visible, while local submit metrics and the final `done` marker 
 hidden. `/events off` hides those event blocks but keeps a single-line activity spinner
 visible while the run is active, such as `Thinking...`, `Using filesystem.read...`, or
 `Reviewing risk for shell.run...`. Use `/events verbose` when debugging run metadata
-such as prompt size, session/context counters, completion markers, and larger tool
-details. Use `/transcript compact` for a tighter terminal stream, or `/transcript
-comfortable` for the default Pi-like spacing.
+such as prompt size, session/context counters, the composed model request, completion
+markers, and larger tool details. Use `/transcript compact` for a tighter terminal
+stream, or `/transcript comfortable` for the default Pi-like spacing.
 
 REPL preferences are stored in the local SQLite state database under the Colossus data
 directory. Saved preferences currently include theme, multiline mode, model output

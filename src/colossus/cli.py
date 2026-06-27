@@ -12,17 +12,21 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from colossus.adapters.bundles import ManifestBundleVerifier
+from colossus.adapters.credentials_env import EnvCredentialBroker
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.providers import ProviderDiagnostics
+from colossus.application.research import ResearchService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.subagents import SubagentService
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.errors import BundleVerificationError, ColossusError
+from colossus.domain.integrations import IntegrationAuthType, IntegrationStatusView
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import AssistantMessage, Message, ToolResultMessage, UserMessage
 from colossus.domain.models import ProviderKind
@@ -56,6 +60,7 @@ from colossus.infrastructure.container import (
     create_decision_service,
     create_default_orchestrator,
     create_default_skill_resolver,
+    create_integration_service,
     create_mcp_gateway,
     create_memory_service,
     create_model_router,
@@ -73,6 +78,7 @@ from colossus.infrastructure.logging import configure_logging
 from colossus.infrastructure.paths import config_path, data_dir
 from colossus.interfaces.approval import RichApprovalHandler
 from colossus.interfaces.repl import (
+    ReplWorkspaceServices,
     RichUserPromptHandler,
     load_user_repl_themes,
     repl_theme_names,
@@ -104,6 +110,7 @@ decisions_app = typer.Typer(help="Inspect and manage key decisions.")
 memories_app = typer.Typer(help="Inspect and manage durable memories.")
 context_app = typer.Typer(help="Inspect and manage context compaction.")
 sessions_app = typer.Typer(help="Discover and resume persisted sessions.")
+integrations_app = typer.Typer(help="Manage app and service integrations.")
 app.add_typer(config_app, name="config")
 app.add_typer(skills_app, name="skills")
 app.add_typer(tools_app, name="tools")
@@ -117,6 +124,7 @@ app.add_typer(decisions_app, name="decisions")
 app.add_typer(memories_app, name="memories")
 app.add_typer(context_app, name="context")
 app.add_typer(sessions_app, name="sessions")
+app.add_typer(integrations_app, name="integrations")
 
 console = Console()
 
@@ -308,6 +316,18 @@ def _http_client_config(ctx: typer.Context, config: ColossusConfig) -> HttpClien
     return http_client_config_from_config(config, _http_overrides(ctx))
 
 
+def _workspace_root(value: Path | None = None) -> Path:
+    root = value or Path.cwd()
+    resolved = root.expanduser().resolve()
+    if not resolved.exists():
+        console.print(f"[red]Workspace does not exist:[/red] {resolved}")
+        raise typer.Exit(code=2)
+    if not resolved.is_dir():
+        console.print(f"[red]Workspace is not a directory:[/red] {resolved}")
+        raise typer.Exit(code=2)
+    return resolved
+
+
 def _context_runtime(
     ctx: typer.Context,
     model: str | None,
@@ -447,6 +467,63 @@ def _normalize_provider(
     return normalized  # type: ignore[return-value]
 
 
+def _integration_runtime() -> IntegrationService:
+    state = create_state_store(data_dir())
+    audit = create_audit_sink(data_dir())
+    return create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=EnvCredentialBroker(),
+    )
+
+
+def _integration_auth_type(value: str) -> IntegrationAuthType:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized not in {
+        "none",
+        "api_key",
+        "bearer",
+        "oauth2_authorization_code",
+        "service_account",
+    }:
+        console.print(
+            "[red]Invalid auth type.[/red] Use none, api-key, bearer, "
+            "oauth2-authorization-code, or service-account."
+        )
+        raise typer.Exit(code=2)
+    return cast(IntegrationAuthType, normalized)
+
+
+def _print_integration_statuses(statuses: tuple[IntegrationStatusView, ...]) -> None:
+    table = Table("Name", "Kind", "Status", "Auth", "Credential", "Scopes", "Tools")
+    for status in statuses:
+        table.add_row(
+            status.name,
+            status.kind,
+            status.status,
+            status.auth_type,
+            status.credential_ref or "-",
+            ", ".join(status.scopes) or "-",
+            str(len(status.tools)),
+        )
+    console.print(table)
+
+
+def _print_integration_connection(
+    name: str,
+    status: str,
+    credential_ref: str | None,
+) -> None:
+    if status == "pending_auth":
+        console.print(
+            f"Integration {name} is pending auth. "
+            "Reconnect with --credential-ref env:VARIABLE_NAME when ready."
+        )
+        return
+    console.print(f"Integration {name} connected with credential_ref={credential_ref or '-'}.")
+
+
 @app.command()
 def run(
     ctx: typer.Context,
@@ -508,6 +585,14 @@ def run(
         list[str] | None,
         typer.Option("--skill", help="Activate a skill for this one-shot run."),
     ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root for tools, shell commands, repo context, and subagents.",
+        ),
+    ] = None,
 ) -> None:
     """Run one agent turn."""
     if plan and execute_plan is not None:
@@ -535,6 +620,7 @@ def run(
         created = asyncio.run(create_plan_service(data_dir()).create_plan(prompt, session_id))
         _print_plan(created)
         return
+    workspace_root = _workspace_root(workspace)
     config = load_config(config_path())
     overrides = _provider_overrides(ctx)
     http_client_config = _http_client_config(ctx, config)
@@ -548,6 +634,14 @@ def run(
     model_context_windows = _resolved_model_context_windows(config, overrides, router)
     resolved_approval_mode = _resolve_approval_mode(approval_mode, ask_approval=ask_approval)
     audit = create_audit_sink(data_dir())
+    credential_broker = EnvCredentialBroker()
+    integration_service = create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=credential_broker,
+    )
+    integration_connections = asyncio.run(integration_service.connected_connections())
     subagent_service = create_subagent_service(
         data_dir(),
         state_store=state,
@@ -567,6 +661,7 @@ def run(
     orchestrator = create_default_orchestrator(
         data_dir(),
         route.provider,
+        workspace_root=workspace_root,
         state_store=state,
         audit_sink=audit,
         context_config=config.context,
@@ -587,6 +682,8 @@ def run(
         search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
         http_client_config=http_client_config,
+        integration_connections=integration_connections,
+        credential_broker=credential_broker,
     )
     plan_id = execute_plan
     if execute_plan is not None:
@@ -641,6 +738,14 @@ def research(
         list[str] | None,
         typer.Option("--source", help="Source lane to use: repo, web, or mcp. Repeatable."),
     ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root for repo evidence collection.",
+        ),
+    ] = None,
     session: Annotated[
         str | None,
         typer.Option("--session", help="Use or resume this exact session id."),
@@ -663,6 +768,7 @@ def research(
         console.print("[red]Use either --resume or --session, not both.[/red]")
         raise typer.Exit(code=2)
     config = load_config(config_path())
+    workspace_root = _workspace_root(workspace)
     research_depth = _research_depth(depth)
     source_kinds = _research_sources(source, config.research.sources)
     state = create_state_store(data_dir())
@@ -694,7 +800,7 @@ def research(
         data_dir(),
         config=config,
         model_router=router,
-        workspace_root=Path.cwd(),
+        workspace_root=workspace_root,
         state_store=state,
         audit_sink=audit,
         approval_handler=(
@@ -764,6 +870,14 @@ def repl(
         bool,
         typer.Option("--resume", help="Resume the most recently updated session."),
     ] = False,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root for tools, research, memories, and context.",
+        ),
+    ] = None,
 ) -> None:
     """Start the interactive REPL."""
     if resume and session is not None:
@@ -776,6 +890,7 @@ def repl(
             f"[red]Invalid REPL theme.[/red] Use {', '.join(available_theme_names)}."
         )
         raise typer.Exit(code=2)
+    workspace_root = _workspace_root(workspace)
     config = load_config(config_path())
     overrides = _provider_overrides(ctx)
     http_client_config = _http_client_config(ctx, config)
@@ -790,28 +905,39 @@ def repl(
     resolved_approval_mode = _resolve_approval_mode(approval_mode)
     state = create_state_store(data_dir())
     audit = create_audit_sink(data_dir())
+    credential_broker = EnvCredentialBroker()
+    integration_service = create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=credential_broker,
+    )
+    active_integration_connections = asyncio.run(integration_service.connected_connections())
     subagent_service = create_subagent_service(
         data_dir(),
         state_store=state,
         audit_sink=audit,
         max_concurrent=config.subagents.max_concurrent,
     )
+    memory_service = MemoryService(state, audit, state)
+    user_prompt_handler = RichUserPromptHandler(console)
+    active_workspace_root = workspace_root
     context_service = create_context_service(
         data_dir(),
-        workspace_root=Path.cwd(),
+        workspace_root=active_workspace_root,
         state_store=state,
         audit_sink=audit,
         context_config=config.context,
         model_context_windows=model_context_windows,
-        memory_service=MemoryService(state, audit, state),
+        memory_service=memory_service,
     )
-    user_prompt_handler = RichUserPromptHandler(console)
 
     def build_orchestrator(model_role: str) -> AgentOrchestrator:
         route = router.resolve(model_role)
         return create_default_orchestrator(
             data_dir(),
             route.provider,
+            workspace_root=active_workspace_root,
             state_store=state,
             audit_sink=audit,
             context_service=context_service,
@@ -833,6 +959,52 @@ def repl(
             search_provider=create_search_provider(config.research.search, http_client_config),
             mcp_gateway=create_mcp_gateway(config.research.mcp),
             http_client_config=http_client_config,
+            integration_connections=active_integration_connections,
+            credential_broker=credential_broker,
+        )
+
+    def build_research_service(workspace_root: Path) -> ResearchService:
+        return create_research_service(
+            data_dir(),
+            config=config,
+            model_router=router,
+            workspace_root=workspace_root,
+            state_store=state,
+            audit_sink=audit,
+            approval_handler=(
+                RichApprovalHandler(console)
+                if resolved_approval_mode in {"ask", "risk-auto"}
+                else None
+            ),
+            auto_approve_network=resolved_approval_mode == "full-access",
+            http_client_config=http_client_config,
+        )
+
+    research_service = build_research_service(active_workspace_root)
+
+    async def refresh_integrations(model_role: str) -> AgentOrchestrator:
+        nonlocal active_integration_connections
+        active_integration_connections = await integration_service.connected_connections()
+        return build_orchestrator(model_role)
+
+    def build_workspace_services(workspace_root: Path, model_role: str) -> ReplWorkspaceServices:
+        nonlocal active_workspace_root, context_service, research_service
+        active_workspace_root = workspace_root
+        context_service = create_context_service(
+            data_dir(),
+            workspace_root=active_workspace_root,
+            state_store=state,
+            audit_sink=audit,
+            context_config=config.context,
+            model_context_windows=model_context_windows,
+            memory_service=memory_service,
+        )
+        research_service = build_research_service(active_workspace_root)
+        return ReplWorkspaceServices(
+            workspace_root=active_workspace_root,
+            orchestrator=build_orchestrator(model_role),
+            context_service=context_service,
+            research_service=research_service,
         )
 
     history_path = data_dir() / "repl_history.txt"
@@ -852,29 +1024,18 @@ def repl(
         preferences_service=create_repl_preferences_service(data_dir()),
         task_service=create_task_service(data_dir()),
         decision_service=DecisionService(state, audit),
-        memory_service=MemoryService(state, audit, state),
+        memory_service=memory_service,
         session_service=create_session_service(data_dir()),
         plan_service=create_plan_service(data_dir()),
         subagent_service=subagent_service,
-        research_service=create_research_service(
-            data_dir(),
-            config=config,
-            model_router=router,
-            workspace_root=Path.cwd(),
-            state_store=state,
-            audit_sink=audit,
-            approval_handler=(
-                RichApprovalHandler(console)
-                if resolved_approval_mode in {"ask", "risk-auto"}
-                else None
-            ),
-            auto_approve_network=resolved_approval_mode == "full-access",
-            http_client_config=http_client_config,
-        ),
+        research_service=research_service,
+        integration_service=integration_service,
+        integration_refresh_factory=refresh_integrations,
+        workspace_factory=build_workspace_services,
         theme_name=theme,
         initial_session_id=session,
         resume_latest=resume,
-        repo_root=Path.cwd(),
+        repo_root=active_workspace_root,
         theme_dirs=theme_dirs,
     )
 
@@ -912,15 +1073,41 @@ def skills_list() -> None:
 
 
 @tools_app.command("list")
-def tools_list(ctx: typer.Context) -> None:
+def tools_list(
+    ctx: typer.Context,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root used to compose workspace-bound tool handlers.",
+        ),
+    ] = None,
+) -> None:
     """List built-in tools."""
     config = load_config(config_path())
+    workspace_root = _workspace_root(workspace)
     http_client_config = _http_client_config(ctx, config)
+    state = create_state_store(data_dir())
+    audit = create_audit_sink(data_dir())
+    credential_broker = EnvCredentialBroker()
+    integration_service = create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=credential_broker,
+    )
+    integration_connections = asyncio.run(integration_service.connected_connections())
     orchestrator = create_default_orchestrator(
         data_dir(),
+        workspace_root=workspace_root,
+        state_store=state,
+        audit_sink=audit,
         search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
         http_client_config=http_client_config,
+        integration_connections=integration_connections,
+        credential_broker=credential_broker,
     )
     specs = orchestrator.tool_specs()
     table = Table()
@@ -942,6 +1129,144 @@ def tools_list(ctx: typer.Context) -> None:
             spec.description,
         )
     console.print(table)
+
+
+@integrations_app.command("list")
+def integrations_list() -> None:
+    """List available and configured integrations."""
+    service = _integration_runtime()
+    _print_integration_statuses(asyncio.run(service.list_statuses()))
+
+
+@integrations_app.command("show")
+def integrations_show(name: Annotated[str, typer.Argument(help="Integration name.")]) -> None:
+    """Show integration manifest and connection state."""
+    service = _integration_runtime()
+    try:
+        manifest = asyncio.run(service.get_manifest(name))
+        connection = asyncio.run(service.get_connection(manifest.name))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    table = Table("Field", "Value")
+    table.add_row("name", manifest.name)
+    table.add_row("title", manifest.title)
+    table.add_row("kind", manifest.kind)
+    table.add_row("auth", manifest.auth.type)
+    table.add_row("scopes", ", ".join(manifest.auth.scopes) or "-")
+    table.add_row("status", connection.status if connection is not None else "available")
+    table.add_row(
+        "credential_ref",
+        connection.credential_ref if connection is not None and connection.credential_ref else "-",
+    )
+    table.add_row("description", manifest.description)
+    console.print(table)
+    tools_table = Table("Tool", "Network", "Approval", "Risk", "Description")
+    for tool in manifest.tools:
+        tools_table.add_row(
+            tool.name,
+            tool.permissions.network,
+            str(tool.permissions.approval_required or tool.permissions.mutation),
+            tool.permissions.risk,
+            tool.description,
+        )
+    console.print(tools_table)
+
+
+@integrations_app.command("connect")
+def integrations_connect(
+    name: Annotated[str, typer.Argument(help="Integration name.")],
+    credential_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--credential-ref",
+            help="Credential handle such as env:GITHUB_TOKEN. Raw secrets are not accepted.",
+        ),
+    ] = None,
+    scope: Annotated[
+        list[str] | None,
+        typer.Option("--scope", help="Scope to record for this connection. Repeatable."),
+    ] = None,
+) -> None:
+    """Connect an integration using a local credential ref."""
+    service = _integration_runtime()
+    try:
+        connection = asyncio.run(
+            service.connect(
+                name,
+                credential_ref=credential_ref,
+                scopes=tuple(scope or ()),
+            )
+        )
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    _print_integration_connection(connection.name, connection.status, connection.credential_ref)
+
+
+@integrations_app.command("disconnect")
+def integrations_disconnect(
+    name: Annotated[str, typer.Argument(help="Integration name.")],
+) -> None:
+    """Disconnect an integration."""
+    service = _integration_runtime()
+    try:
+        asyncio.run(service.disconnect(name))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Disconnected integration {name}.")
+
+
+@integrations_app.command("import-openapi")
+def integrations_import_openapi(
+    name: Annotated[str, typer.Argument(help="Integration name.")],
+    spec_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to a JSON OpenAPI document.",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ],
+    base_url: Annotated[
+        str | None,
+        typer.Option("--base-url", help="Override the OpenAPI server URL."),
+    ] = None,
+    credential_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--credential-ref",
+            help="Credential handle such as env:API_TOKEN. Raw secrets are not accepted.",
+        ),
+    ] = None,
+    auth_type: Annotated[
+        str,
+        typer.Option(
+            "--auth-type",
+            help="Auth type: none, api-key, bearer, oauth2-authorization-code, or service-account.",
+        ),
+    ] = "bearer",
+) -> None:
+    """Import a JSON OpenAPI document as a brokered integration."""
+    service = _integration_runtime()
+    try:
+        connection = asyncio.run(
+            service.import_openapi(
+                name,
+                spec_path=spec_path,
+                base_url=base_url,
+                credential_ref=credential_ref,
+                auth_type=_integration_auth_type(auth_type),
+            )
+        )
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    _print_integration_connection(connection.name, connection.status, connection.credential_ref)
 
 
 @context_app.command("show")

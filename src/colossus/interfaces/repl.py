@@ -2,8 +2,9 @@
 
 import asyncio
 import json
+import shlex
 import tomllib
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
@@ -28,6 +29,7 @@ from rich.text import Text
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
@@ -42,6 +44,11 @@ from colossus.domain.agents import AgentSpec
 from colossus.domain.context import ContextStatus
 from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
+from colossus.domain.integrations import (
+    IntegrationAuthType,
+    IntegrationManifest,
+    IntegrationStatusView,
+)
 from colossus.domain.memories import MemoryItem, MemoryStatus
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences, TranscriptStylePreference
@@ -71,6 +78,7 @@ SlashCommand = Literal[
     "multiline",
     "theme",
     "repl",
+    "workspace",
     "status",
     "resume",
     "session",
@@ -83,6 +91,7 @@ SlashCommand = Literal[
     "agents",
     "plan",
     "research",
+    "integrations",
     "help",
     "audit",
     "compact",
@@ -126,6 +135,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/multiline",
     "/theme",
     "/repl",
+    "/workspace",
     "/status",
     "/resume",
     "/session",
@@ -138,6 +148,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/agents",
     "/plan",
     "/research",
+    "/integrations",
     "/help",
     "/audit",
     "/compact",
@@ -160,6 +171,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/multiline": "Toggle multiline composer mode.",
     "/theme": "Show, preview, switch, save, or reset REPL theme.",
     "/repl": "Show, save, or reset REPL preferences.",
+    "/workspace": "Show or switch the active workspace root.",
     "/status": "Show full REPL, model, session, and context status.",
     "/resume": "Choose a persisted session to resume.",
     "/session": "Show, resume, or create a session.",
@@ -172,6 +184,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/agents": "Show durable subagent jobs.",
     "/plan": "Toggle or manage REPL Plan Mode.",
     "/research": "Run or inspect Deep Research Mode.",
+    "/integrations": "Manage app and service integrations.",
     "/help": "Show REPL commands.",
     "/audit": "Reserved audit view.",
     "/compact": "Create a context snapshot for the current session.",
@@ -264,6 +277,14 @@ class ReplTheme:
     styles: dict[str, str]
     trace: TraceRenderTheme = field(default_factory=TraceRenderTheme)
     transcript: TranscriptRenderTheme = field(default_factory=TranscriptRenderTheme)
+
+
+@dataclass(frozen=True)
+class ReplWorkspaceServices:
+    workspace_root: Path
+    orchestrator: AgentOrchestrator
+    context_service: ContextService | None = None
+    research_service: ResearchService | None = None
 
 
 REQUIRED_THEME_STYLE_KEYS: frozenset[str] = frozenset(
@@ -534,6 +555,7 @@ class ReplDisplayState:
     task_summary: str = "tasks=n/a"
     theme: ReplTheme = field(default_factory=lambda: REPL_THEMES["default"])
     saved_preferences: ReplPreferences = field(default_factory=ReplPreferences)
+    workspace_root: Path = field(default_factory=lambda: Path.cwd().resolve())
 
 
 @dataclass
@@ -581,9 +603,12 @@ async def run_repl(
     plan_service: PlanService | None = None,
     subagent_service: SubagentService | None = None,
     research_service: ResearchService | None = None,
+    integration_service: IntegrationService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
+    integration_refresh_factory: Callable[[str], Awaitable[AgentOrchestrator]] | None = None,
+    workspace_factory: Callable[[Path, str], ReplWorkspaceServices] | None = None,
     context_model: str | None = None,
     approval_mode: str = "ask",
     history_path: Path | None = None,
@@ -641,6 +666,7 @@ async def run_repl(
         multiline=preferences.multiline,
         theme=startup_theme,
         saved_preferences=preferences,
+        workspace_root=(repo_root or Path.cwd()).resolve(),
     )
     trace_renderer = TranscriptRenderer(
         console,
@@ -791,6 +817,24 @@ async def run_repl(
                     preferences_service,
                 )
                 continue
+            if command.command == "workspace":
+                services = _handle_workspace_command(
+                    console,
+                    display_state,
+                    command.argument,
+                    workspace_factory,
+                    display_state.active_model_role,
+                )
+                if services is not None:
+                    orchestrator = services.orchestrator
+                    context_service = services.context_service
+                    research_service = services.research_service
+                    orchestrator.set_event_observer(trace_renderer.render)
+                    if research_service is not None:
+                        research_service.set_event_observer(trace_renderer.render)
+                    await _refresh_context_status(display_state, context_service)
+                    await _refresh_task_status(display_state, task_service)
+                continue
             if command.command == "status":
                 await _refresh_context_status(display_state, context_service)
                 await _refresh_task_status(display_state, task_service)
@@ -849,7 +893,7 @@ async def run_repl(
                     console,
                     memory_service,
                     display_state.session_id,
-                    repo_root or Path.cwd(),
+                    display_state.workspace_root,
                     command.argument,
                 )
                 continue
@@ -858,7 +902,7 @@ async def run_repl(
                     console,
                     memory_service,
                     display_state.session_id,
-                    repo_root or Path.cwd(),
+                    display_state.workspace_root,
                     command.argument,
                 )
                 continue
@@ -889,6 +933,19 @@ async def run_repl(
                     command.argument,
                     trace_renderer,
                 )
+                continue
+            if command.command == "integrations":
+                changed = await _handle_integrations_command(
+                    console,
+                    integration_service,
+                    command.argument,
+                )
+                if changed and integration_refresh_factory is not None:
+                    orchestrator = await integration_refresh_factory(
+                        display_state.active_model_role
+                    )
+                    orchestrator.set_event_observer(trace_renderer.render)
+                    console.print("Integration tool catalog refreshed.")
                 continue
             if command.command == "help":
                 _render_help(console, display_state)
@@ -1175,9 +1232,12 @@ def run_repl_sync(
     plan_service: PlanService | None = None,
     subagent_service: SubagentService | None = None,
     research_service: ResearchService | None = None,
+    integration_service: IntegrationService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
+    integration_refresh_factory: Callable[[str], Awaitable[AgentOrchestrator]] | None = None,
+    workspace_factory: Callable[[Path, str], ReplWorkspaceServices] | None = None,
     context_model: str | None = None,
     approval_mode: str = "ask",
     history_path: Path | None = None,
@@ -1202,9 +1262,12 @@ def run_repl_sync(
             plan_service=plan_service,
             subagent_service=subagent_service,
             research_service=research_service,
+            integration_service=integration_service,
             model_router=model_router,
             active_model_role=active_model_role,
             orchestrator_factory=orchestrator_factory,
+            integration_refresh_factory=integration_refresh_factory,
+            workspace_factory=workspace_factory,
             context_model=context_model,
             approval_mode=approval_mode,
             history_path=history_path,
@@ -1223,6 +1286,7 @@ def _render_repl_startup(console: Console, state: ReplDisplayState) -> None:
     console.print("[bold]Colossus REPL[/bold]  Type /exit to leave.")
     console.print(
         f"[dim]session_id={state.session_id} "
+        f"workspace={state.workspace_root} "
         f"mode={state.interaction_mode} "
         f"composer={'multi' if state.multiline else 'single'} "
         f"theme={state.theme.name} stream={_stream_mode_label(state)} "
@@ -1555,6 +1619,189 @@ async def _handle_repl_command(
         console.print("Reset REPL preferences.")
         return
     console.print("Use /repl prefs, /repl save, or /repl reset.")
+
+
+async def _handle_integrations_command(
+    console: Console,
+    integration_service: IntegrationService | None,
+    argument: str,
+) -> bool:
+    if integration_service is None:
+        console.print("Integration service is not configured.")
+        return False
+    try:
+        parts = shlex.split(argument)
+    except ValueError as exc:
+        console.print(f"Invalid /integrations command: {exc}")
+        return False
+    action = parts[0] if parts else "list"
+    try:
+        if action in {"", "list"}:
+            _render_integration_statuses(console, await integration_service.list_statuses())
+            return False
+        if action == "show":
+            if len(parts) != 2:
+                console.print("Use /integrations show NAME.")
+                return False
+            manifest = await integration_service.get_manifest(parts[1])
+            connection = await integration_service.get_connection(manifest.name)
+            status = connection.status if connection is not None else None
+            _render_integration_manifest(console, manifest, status)
+            return False
+        if action == "connect":
+            name, credential_ref, scopes = _parse_repl_integration_connect(parts)
+            connection = await integration_service.connect(
+                name,
+                credential_ref=credential_ref,
+                scopes=scopes,
+            )
+            _render_repl_integration_connection(console, connection.name, connection.status)
+            return connection.status == "connected"
+        if action == "disconnect":
+            if len(parts) != 2:
+                console.print("Use /integrations disconnect NAME.")
+                return False
+            await integration_service.disconnect(parts[1])
+            console.print(f"Disconnected integration {parts[1]}.")
+            return True
+        if action == "import-openapi":
+            name, spec_path, base_url, credential_ref, auth_type = _parse_repl_openapi_import(parts)
+            connection = await integration_service.import_openapi(
+                name,
+                spec_path=spec_path,
+                base_url=base_url,
+                credential_ref=credential_ref,
+                auth_type=auth_type,
+            )
+            _render_repl_integration_connection(console, connection.name, connection.status)
+            return connection.status == "connected"
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return False
+    console.print(
+        "Use /integrations list, show NAME, connect NAME [--credential-ref REF], "
+        "disconnect NAME, or import-openapi NAME SPEC."
+    )
+    return False
+
+
+def _parse_repl_integration_connect(
+    parts: list[str],
+) -> tuple[str, str | None, tuple[str, ...]]:
+    if len(parts) < 2:
+        raise ColossusError("Use /integrations connect NAME [--credential-ref REF].")
+    name = parts[1]
+    credential_ref: str | None = None
+    scopes: list[str] = []
+    index = 2
+    while index < len(parts):
+        token = parts[index]
+        if token == "--credential-ref":
+            index += 1
+            if index >= len(parts):
+                raise ColossusError("--credential-ref requires a value.")
+            credential_ref = parts[index]
+        elif token == "--scope":
+            index += 1
+            if index >= len(parts):
+                raise ColossusError("--scope requires a value.")
+            scopes.append(parts[index])
+        elif credential_ref is None:
+            credential_ref = token
+        else:
+            raise ColossusError(f"Unknown integration connect argument: {token}")
+        index += 1
+    return name, credential_ref, tuple(scopes)
+
+
+def _parse_repl_openapi_import(
+    parts: list[str],
+) -> tuple[str, Path, str | None, str | None, IntegrationAuthType]:
+    if len(parts) < 3:
+        raise ColossusError("Use /integrations import-openapi NAME SPEC_PATH.")
+    name = parts[1]
+    spec_path = Path(parts[2]).expanduser()
+    base_url: str | None = None
+    credential_ref: str | None = None
+    auth_type: IntegrationAuthType = "bearer"
+    index = 3
+    while index < len(parts):
+        token = parts[index]
+        index += 1
+        if token not in {"--base-url", "--credential-ref", "--auth-type"}:
+            raise ColossusError(f"Unknown OpenAPI import argument: {token}")
+        if index >= len(parts):
+            raise ColossusError(f"{token} requires a value.")
+        value = parts[index]
+        index += 1
+        if token == "--base-url":
+            base_url = value
+        elif token == "--credential-ref":
+            credential_ref = value
+        elif token == "--auth-type":
+            auth_type = _repl_integration_auth_type(value)
+    return name, spec_path, base_url, credential_ref, auth_type
+
+
+def _repl_integration_auth_type(value: str) -> IntegrationAuthType:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized not in {
+        "none",
+        "api_key",
+        "bearer",
+        "oauth2_authorization_code",
+        "service_account",
+    }:
+        raise ColossusError(
+            "Auth type must be none, api-key, bearer, "
+            "oauth2-authorization-code, or service-account."
+        )
+    return cast(IntegrationAuthType, normalized)
+
+
+def _handle_workspace_command(
+    console: Console,
+    state: ReplDisplayState,
+    argument: str,
+    workspace_factory: Callable[[Path, str], ReplWorkspaceServices] | None,
+    active_model_role: str,
+) -> ReplWorkspaceServices | None:
+    normalized = argument.strip()
+    if not normalized or normalized.lower() == "show":
+        _render_workspace(console, state.workspace_root)
+        return None
+    if workspace_factory is None:
+        console.print("Workspace switching is not configured.")
+        return None
+    try:
+        workspace_root = _resolve_workspace_argument(normalized, state.workspace_root)
+        services = workspace_factory(workspace_root, active_model_role)
+    except ColossusError as exc:
+        console.print(f"[red]Workspace switch failed:[/red] {exc}")
+        return None
+    state.workspace_root = services.workspace_root.resolve()
+    state.context_status = None
+    state.context_error = None
+    console.print(f"Workspace set to {state.workspace_root}")
+    return services
+
+
+def _resolve_workspace_argument(value: str, current_root: Path) -> Path:
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = current_root / candidate
+    resolved = candidate.resolve()
+    if not resolved.exists():
+        raise ColossusError(f"Workspace does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise ColossusError(f"Workspace is not a directory: {resolved}")
+    return resolved
+
+
+def _render_workspace(console: Console, workspace_root: Path) -> None:
+    table = Table("Field", "Value")
+    table.add_row("workspace", str(workspace_root))
+    console.print(table)
 
 
 def _handle_skill_command(
@@ -2437,6 +2684,7 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
     table = Table("Field", "Value")
     rows = {
         "session": state.session_id,
+        "workspace": str(state.workspace_root),
         "model_role": state.active_model_role,
         "model": state.model,
         "approval_mode": state.approval_mode,
@@ -2544,6 +2792,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
     )
     table.add_row("/repl prefs|save|reset", "", "Show, save, or reset REPL preferences.")
     table.add_row(
+        "/workspace [PATH]",
+        _help_current(state, "workspace"),
+        "Show or switch the active workspace root.",
+    )
+    table.add_row(
         "/status",
         _help_current(state, "status"),
         "Show full REPL, model, session, and context status.",
@@ -2595,6 +2848,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Run or inspect Deep Research Mode.",
     )
     table.add_row(
+        Text("/integrations [list|show|connect|disconnect|import-openapi]"),
+        "",
+        "Manage app and service integrations.",
+    )
+    table.add_row(
         Text("/skill [on|off|show|use|drop|clear]"),
         _help_current(state, "skill"),
         "Toggle or manage Skill Mode.",
@@ -2632,6 +2890,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return "multiline" if state.multiline else "single-line"
     if field == "theme":
         return state.theme.name
+    if field == "workspace":
+        return _short_text(str(state.workspace_root), 28)
     if field == "status":
         return f"{state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
     if field == "session":
@@ -2805,6 +3065,60 @@ def _render_tools(console: Console, specs: tuple[ToolSpec, ...]) -> None:
             spec.description,
         )
     console.print(table)
+
+
+def _render_integration_statuses(
+    console: Console,
+    statuses: tuple[IntegrationStatusView, ...],
+) -> None:
+    table = Table("Name", "Kind", "Status", "Auth", "Credential", "Scopes", "Tools")
+    for status in statuses:
+        table.add_row(
+            status.name,
+            status.kind,
+            status.status,
+            status.auth_type,
+            status.credential_ref or "-",
+            ", ".join(status.scopes) or "-",
+            str(len(status.tools)),
+        )
+    console.print(table)
+
+
+def _render_integration_manifest(
+    console: Console,
+    manifest: IntegrationManifest,
+    status: str | None,
+) -> None:
+    table = Table("Field", "Value")
+    table.add_row("name", manifest.name)
+    table.add_row("title", manifest.title)
+    table.add_row("kind", manifest.kind)
+    table.add_row("status", status or "available")
+    table.add_row("auth", manifest.auth.type)
+    table.add_row("scopes", ", ".join(manifest.auth.scopes) or "-")
+    table.add_row("description", manifest.description)
+    console.print(table)
+    tools_table = Table("Tool", "Network", "Approval", "Risk", "Description")
+    for tool in manifest.tools:
+        tools_table.add_row(
+            tool.name,
+            tool.permissions.network,
+            str(tool.permissions.approval_required or tool.permissions.mutation),
+            tool.permissions.risk,
+            tool.description,
+        )
+    console.print(tools_table)
+
+
+def _render_repl_integration_connection(console: Console, name: str, status: str) -> None:
+    if status == "pending_auth":
+        console.print(
+            f"Integration {name} is pending auth. "
+            "Reconnect with --credential-ref env:VARIABLE_NAME when ready."
+        )
+        return
+    console.print(f"Integration {name} connected.")
 
 
 def _render_model(

@@ -17,6 +17,7 @@ from colossus.domain.events import (
     ApprovalRequestedEvent,
     FinalOutputEvent,
     ModelDeltaEvent,
+    ModelRequestPreparedEvent,
     RunEvent,
     ToolCallCompletedEvent,
     ToolCallRequestedEvent,
@@ -157,7 +158,7 @@ class AgentOrchestrator:
         final_text = ""
         events_recorded = 0
 
-        for _turn in range(request.agent.max_turns):
+        for turn in range(request.agent.max_turns):
             prepared_messages = tuple(messages)
             if self._context_service is not None:
                 context_result = await self._context_service.prepare_messages(
@@ -175,6 +176,7 @@ class AgentOrchestrator:
                 messages=prepared_messages,
                 tools=tool_specs,
             )
+            self._observe_event(_model_request_prepared_event(turn, model_request))
             pending_tool_calls: list[ToolCall] = []
             collected_text: list[str] = []
             turn_final_text = ""
@@ -505,6 +507,16 @@ def _with_execution_context(
     if not changed:
         return call
     return call.model_copy(update={"arguments": arguments})
+
+
+def _model_request_prepared_event(turn: int, request: ModelRequest) -> ModelRequestPreparedEvent:
+    return ModelRequestPreparedEvent(
+        turn=turn,
+        model=request.model,
+        instructions=request.instructions,
+        messages=tuple(message.model_dump(mode="json") for message in request.messages),
+        tools=tuple(tool.model_dump(mode="json") for tool in request.tools),
+    )
 
 
 _KEY_DECISION_PROMPT_PATTERN = re.compile(
