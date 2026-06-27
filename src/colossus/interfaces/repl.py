@@ -46,6 +46,7 @@ from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
 from colossus.domain.integrations import (
     IntegrationAuthType,
+    IntegrationConnection,
     IntegrationManifest,
     IntegrationStatusView,
 )
@@ -1645,15 +1646,18 @@ async def _handle_integrations_command(
                 return False
             manifest = await integration_service.get_manifest(parts[1])
             connection = await integration_service.get_connection(manifest.name)
-            status = connection.status if connection is not None else None
-            _render_integration_manifest(console, manifest, status)
+            _render_integration_manifest(console, manifest, connection)
             return False
         if action == "connect":
-            name, credential_ref, scopes = _parse_repl_integration_connect(parts)
+            name, credential_ref, credential_refs, scopes, config = (
+                _parse_repl_integration_connect(parts)
+            )
             connection = await integration_service.connect(
                 name,
                 credential_ref=credential_ref,
+                credential_refs=credential_refs,
                 scopes=scopes,
+                config=config,
             )
             _render_repl_integration_connection(console, connection.name, connection.status)
             return connection.status == "connected"
@@ -1680,6 +1684,7 @@ async def _handle_integrations_command(
         return False
     console.print(
         "Use /integrations list, show NAME, connect NAME [--credential-ref REF], "
+        "connect searxng [--base-url URL], connect opensearch [--base-url URL], "
         "disconnect NAME, or import-openapi NAME SPEC."
     )
     return False
@@ -1687,31 +1692,53 @@ async def _handle_integrations_command(
 
 def _parse_repl_integration_connect(
     parts: list[str],
-) -> tuple[str, str | None, tuple[str, ...]]:
+) -> tuple[str, str | None, dict[str, str], tuple[str, ...], dict[str, object]]:
     if len(parts) < 2:
         raise ColossusError("Use /integrations connect NAME [--credential-ref REF].")
     name = parts[1]
     credential_ref: str | None = None
+    credential_refs: dict[str, str] = {}
     scopes: list[str] = []
+    config: dict[str, object] = {}
     index = 2
     while index < len(parts):
         token = parts[index]
-        if token == "--credential-ref":
+        if token in {
+            "--credential-ref",
+            "--scope",
+            "--base-url",
+            "--auth-type",
+            "--auth-header",
+            "--auth-scheme",
+            "--username-ref",
+            "--password-ref",
+        }:
             index += 1
             if index >= len(parts):
-                raise ColossusError("--credential-ref requires a value.")
-            credential_ref = parts[index]
-        elif token == "--scope":
-            index += 1
-            if index >= len(parts):
-                raise ColossusError("--scope requires a value.")
-            scopes.append(parts[index])
+                raise ColossusError(f"{token} requires a value.")
+            value = parts[index]
+            if token == "--credential-ref":
+                credential_ref = value
+            elif token == "--scope":
+                scopes.append(value)
+            elif token == "--base-url":
+                config["base_url"] = value
+            elif token == "--auth-type":
+                config["auth_type"] = value
+            elif token == "--auth-header":
+                config["auth_header"] = value
+            elif token == "--auth-scheme":
+                config["auth_scheme"] = value
+            elif token == "--username-ref":
+                credential_refs["username"] = value
+            elif token == "--password-ref":
+                credential_refs["password"] = value
         elif credential_ref is None:
             credential_ref = token
         else:
             raise ColossusError(f"Unknown integration connect argument: {token}")
         index += 1
-    return name, credential_ref, tuple(scopes)
+    return name, credential_ref, credential_refs, tuple(scopes), config
 
 
 def _parse_repl_openapi_import(
@@ -3071,14 +3098,14 @@ def _render_integration_statuses(
     console: Console,
     statuses: tuple[IntegrationStatusView, ...],
 ) -> None:
-    table = Table("Name", "Kind", "Status", "Auth", "Credential", "Scopes", "Tools")
+    table = Table("Name", "Kind", "Status", "Auth", "Credentials", "Scopes", "Tools")
     for status in statuses:
         table.add_row(
             status.name,
             status.kind,
             status.status,
             status.auth_type,
-            status.credential_ref or "-",
+            _integration_credential_summary(status.credential_ref, status.credential_refs),
             ", ".join(status.scopes) or "-",
             str(len(status.tools)),
         )
@@ -3088,15 +3115,25 @@ def _render_integration_statuses(
 def _render_integration_manifest(
     console: Console,
     manifest: IntegrationManifest,
-    status: str | None,
+    connection: IntegrationConnection | None,
 ) -> None:
     table = Table("Field", "Value")
     table.add_row("name", manifest.name)
     table.add_row("title", manifest.title)
     table.add_row("kind", manifest.kind)
-    table.add_row("status", status or "available")
+    table.add_row("status", connection.status if connection is not None else "available")
     table.add_row("auth", manifest.auth.type)
     table.add_row("scopes", ", ".join(manifest.auth.scopes) or "-")
+    if connection is not None and connection.credential_refs:
+        table.add_row(
+            "credential_refs",
+            ", ".join(
+                f"{key}={value}" for key, value in sorted(connection.credential_refs.items())
+            ),
+        )
+    if connection is not None:
+        for key, value in sorted(connection.config.items()):
+            table.add_row(f"config.{key}", str(value))
     table.add_row("description", manifest.description)
     console.print(table)
     tools_table = Table("Tool", "Network", "Approval", "Risk", "Description")
@@ -3115,10 +3152,21 @@ def _render_repl_integration_connection(console: Console, name: str, status: str
     if status == "pending_auth":
         console.print(
             f"Integration {name} is pending auth. "
-            "Reconnect with --credential-ref env:VARIABLE_NAME when ready."
+            "Reconnect with the required credential refs when ready."
         )
         return
     console.print(f"Integration {name} connected.")
+
+
+def _integration_credential_summary(
+    credential_ref: str | None,
+    credential_refs: dict[str, str],
+) -> str:
+    parts: list[str] = []
+    if credential_ref:
+        parts.append(credential_ref)
+    parts.extend(f"{key}={value}" for key, value in sorted(credential_refs.items()))
+    return ", ".join(parts) or "-"
 
 
 def _render_model(

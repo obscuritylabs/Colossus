@@ -41,6 +41,11 @@ Connect an integration without exposing raw secrets to the model:
 ```bash
 export GITHUB_TOKEN=...
 uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
+uv run colossus integrations connect searxng --base-url http://localhost:8888
+docker compose -f docker-compose.opensearch.yml up -d
+uv run colossus integrations connect opensearch \
+  --base-url http://localhost:9200 \
+  --auth-type none
 uv run colossus tools list
 ```
 
@@ -88,8 +93,8 @@ Colossus ships an offline-first local coding tool loop:
   eval, and verification tools.
 - Web/docs fetch tools plus opt-in web search and MCP calls when adapters are explicitly
   configured.
-- Connected integration tools for GitHub and imported OpenAPI specs, exposed only after
-  credential-ref configuration and policy validation.
+- Connected integration tools for GitHub, SearXNG, OpenSearch, and imported OpenAPI
+  specs, exposed only after connection configuration and policy validation.
 - Automatic context compaction with durable snapshots, active key-decision injection,
   relevant memory injection, and per-model context windows.
 - Session discovery and explicit resume for prior local conversations.

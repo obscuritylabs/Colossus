@@ -55,9 +55,10 @@ operation arguments. Connected integrations are converted to `ToolSpec`s by adap
 enter the same registry, policy, approval, execution, HTTP configuration, and audit path
 as built-in tools.
 
-The initial native connector is GitHub because it directly supports coding workflows.
-OpenAPI imports generate operation tools from JSON OpenAPI documents and execute through
-the brokered HTTP adapter. MCP remains an explicit configured integration protocol; it is
+The initial native connectors are GitHub for coding workflows, SearXNG for local or
+private metasearch, and OpenSearch for document-focused search and writes. OpenAPI
+imports generate operation tools from JSON OpenAPI documents and execute through the
+brokered HTTP adapter. MCP remains an explicit configured integration protocol; it is
 not exposed as arbitrary model-callable execution unless configured and policy-approved.
 
 Colossus should not depend on ADK in core. Compatibility comes through importers and

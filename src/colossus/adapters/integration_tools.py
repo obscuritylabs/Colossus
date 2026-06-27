@@ -1,11 +1,14 @@
 """Tool adapters for connected integrations."""
 
+import base64
 import json
 import re
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
+from colossus.adapters.research_sources import SearxngSearchProvider
 from colossus.application.tools import ToolHandler
 from colossus.domain.errors import ColossusError, ToolExecutionError
 from colossus.domain.integrations import IntegrationConnection, IntegrationToolManifest
@@ -70,6 +73,7 @@ def _handler_for_tool(
 ) -> ToolHandler:
     async def handler(arguments: dict[str, object]) -> str:
         credential_value = _resolve_credential(connection, credential_broker)
+        credential_values = _resolve_named_credentials(connection, credential_broker)
         await _audit_tool_call(audit_sink, connection, tool, arguments)
         if connection.kind == "native" and connection.name == "github":
             return await _github_tool_call(
@@ -79,6 +83,26 @@ def _handler_for_tool(
                 http_client_config=http_client_config,
                 http_transport=http_transport,
                 base_url=github_api_base_url,
+                timeout=tool.timeout_seconds,
+            )
+        if connection.kind == "native" and connection.name == "searxng":
+            return await _searxng_tool_call(
+                connection,
+                tool.name,
+                arguments,
+                credential_value,
+                http_client_config=http_client_config,
+                http_transport=http_transport,
+            )
+        if connection.kind == "native" and connection.name == "opensearch":
+            return await _opensearch_tool_call(
+                connection,
+                tool.name,
+                arguments,
+                credential_value,
+                credential_values,
+                http_client_config=http_client_config,
+                http_transport=http_transport,
                 timeout=tool.timeout_seconds,
             )
         if connection.kind == "openapi":
@@ -100,17 +124,30 @@ def _resolve_credential(
     connection: IntegrationConnection,
     credential_broker: CredentialBroker,
 ) -> str | None:
+    if connection.credential_ref:
+        try:
+            return credential_broker.resolve(connection.credential_ref).value
+        except ColossusError as exc:
+            raise ToolExecutionError(str(exc)) from exc
     if connection.manifest.auth.type == "none":
         return None
-    if not connection.credential_ref:
-        raise ToolExecutionError(
-            f"Authentication required for integration {connection.name}. "
-            "Run `colossus integrations connect` with a credential ref."
-        )
-    try:
-        return credential_broker.resolve(connection.credential_ref).value
-    except ColossusError as exc:
-        raise ToolExecutionError(str(exc)) from exc
+    raise ToolExecutionError(
+        f"Authentication required for integration {connection.name}. "
+        "Run `colossus integrations connect` with a credential ref."
+    )
+
+
+def _resolve_named_credentials(
+    connection: IntegrationConnection,
+    credential_broker: CredentialBroker,
+) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for name, ref in connection.credential_refs.items():
+        try:
+            values[name] = credential_broker.resolve(ref).value
+        except ColossusError as exc:
+            raise ToolExecutionError(str(exc)) from exc
+    return values
 
 
 async def _audit_tool_call(
@@ -129,6 +166,7 @@ async def _audit_tool_call(
             "kind": connection.kind,
             "tool": tool.name,
             "credential_ref": connection.credential_ref or "",
+            "credential_refs": dict(sorted(connection.credential_refs.items())),
             "argument_keys": sorted(arguments),
         },
     )
@@ -184,6 +222,218 @@ def _github_request(tool_name: str, arguments: dict[str, object]) -> tuple[str, 
     if tool_name == "github.releases":
         return f"/repos/{owner}/{repo}/releases", {"per_page": max_results}
     raise ToolExecutionError(f"Unsupported GitHub integration tool: {tool_name}")
+
+
+async def _searxng_tool_call(
+    connection: IntegrationConnection,
+    tool_name: str,
+    arguments: dict[str, object],
+    credential_value: str | None,
+    *,
+    http_client_config: HttpClientConfig,
+    http_transport: httpx.AsyncBaseTransport | None,
+) -> str:
+    provider = SearxngSearchProvider(
+        endpoint=_searxng_config(connection, "base_url", "http://localhost:8888/search"),
+        api_key=credential_value,
+        auth_header=_searxng_config(connection, "auth_header", "Authorization"),
+        auth_scheme=_searxng_config(connection, "auth_scheme", "bearer").lower(),
+        transport=http_transport,
+        http_client_config=http_client_config,
+    )
+    if tool_name == "searxng.search":
+        query = _required_str(arguments, "query")
+        max_results = _int_arg(arguments, "max_results", 10, minimum=1, maximum=20)
+        drafts = await _collect_searxng(provider, query, max_results=max_results)
+        return _json(
+            {
+                "query": query,
+                "count": len(drafts),
+                "results": [_source_draft_json(draft) for draft in drafts],
+            }
+        )
+    if tool_name == "searxng.health":
+        drafts = await _collect_searxng(provider, "colossus", max_results=1)
+        return _json({"status": "ok", "result_count": len(drafts)})
+    raise ToolExecutionError(f"Unsupported SearXNG integration tool: {tool_name}")
+
+
+async def _collect_searxng(
+    provider: SearxngSearchProvider,
+    query: str,
+    *,
+    max_results: int,
+) -> tuple[object, ...]:
+    try:
+        return await provider.collect(query, max_results=max_results)
+    except httpx.HTTPStatusError as exc:
+        raise ToolExecutionError(
+            f"SearXNG integration request returned {exc.response.status_code}."
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ToolExecutionError(
+            f"SearXNG integration request failed: {exc.__class__.__name__}."
+        ) from exc
+
+
+def _source_draft_json(draft: object) -> JsonObject:
+    return {
+        "title": str(getattr(draft, "title", "")),
+        "url": str(getattr(draft, "uri", "")),
+        "content": str(getattr(draft, "content", "")),
+        "metadata": _jsonable(getattr(draft, "metadata", {})),
+    }
+
+
+def _searxng_config(connection: IntegrationConnection, key: str, default: str) -> str:
+    value = connection.config.get(key) or connection.manifest.metadata.get(key) or default
+    return str(value)
+
+
+async def _opensearch_tool_call(
+    connection: IntegrationConnection,
+    tool_name: str,
+    arguments: dict[str, object],
+    credential_value: str | None,
+    credential_values: dict[str, str],
+    *,
+    http_client_config: HttpClientConfig,
+    http_transport: httpx.AsyncBaseTransport | None,
+    timeout: float,
+) -> str:
+    method, path, params, body = _opensearch_request(tool_name, arguments)
+    response = await _request_json(
+        method,
+        _join_url(_opensearch_config(connection, "base_url", "http://localhost:9200"), path),
+        headers=_opensearch_auth_headers(connection, credential_value, credential_values),
+        params=params,
+        json_body=body,
+        http_client_config=http_client_config,
+        http_transport=http_transport,
+        timeout=timeout,
+    )
+    return _json(response)
+
+
+def _opensearch_request(
+    tool_name: str,
+    arguments: dict[str, object],
+) -> tuple[str, str, JsonObject, object | None]:
+    if tool_name == "opensearch.info":
+        return "GET", "/", {}, None
+    if tool_name == "opensearch.health":
+        return "GET", "/_cluster/health", {}, None
+    if tool_name == "opensearch.list_indices":
+        return "GET", "/_cat/indices", {"format": "json"}, None
+    if tool_name == "opensearch.get_mapping":
+        index = _opensearch_index(arguments)
+        return "GET", f"/{index}/_mapping", {}, None
+    if tool_name == "opensearch.search":
+        index = _opensearch_index(arguments)
+        search_body: JsonObject = {
+            "query": _object_arg(arguments, "query"),
+            "size": _int_arg(arguments, "size", 10, minimum=1, maximum=100),
+            "from": _int_arg(arguments, "from", 0, minimum=0, maximum=10_000),
+        }
+        source_includes = _string_list_arg(arguments, "source_includes")
+        if source_includes:
+            search_body["_source"] = source_includes
+        sort = _object_list_arg(arguments, "sort")
+        if sort:
+            search_body["sort"] = sort
+        return "POST", f"/{index}/_search", {}, search_body
+    if tool_name == "opensearch.get_document":
+        index = _opensearch_index(arguments)
+        document_id = _opensearch_id(arguments)
+        return "GET", f"/{index}/_doc/{document_id}", {}, None
+    if tool_name == "opensearch.index_document":
+        index = _opensearch_index(arguments)
+        document = _object_arg(arguments, "document")
+        params = _refresh_params(arguments)
+        raw_id = arguments.get("id")
+        if isinstance(raw_id, str) and raw_id.strip():
+            return "PUT", f"/{index}/_doc/{_path_segment(raw_id)}", params, document
+        return "POST", f"/{index}/_doc", params, document
+    if tool_name == "opensearch.update_document":
+        index = _opensearch_index(arguments)
+        document_id = _opensearch_id(arguments)
+        update_body: JsonObject = {"doc": _object_arg(arguments, "doc")}
+        doc_as_upsert = arguments.get("doc_as_upsert")
+        if isinstance(doc_as_upsert, bool):
+            update_body["doc_as_upsert"] = doc_as_upsert
+        return "POST", f"/{index}/_update/{document_id}", _refresh_params(arguments), update_body
+    if tool_name == "opensearch.delete_document":
+        index = _opensearch_index(arguments)
+        document_id = _opensearch_id(arguments)
+        return "DELETE", f"/{index}/_doc/{document_id}", _refresh_params(arguments), None
+    raise ToolExecutionError(f"Unsupported OpenSearch integration tool: {tool_name}")
+
+
+def _opensearch_auth_headers(
+    connection: IntegrationConnection,
+    credential_value: str | None,
+    credential_values: dict[str, str],
+) -> dict[str, str]:
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "colossus-agent/0.1",
+    }
+    auth_type = _opensearch_auth_type(connection.config.get("auth_type"))
+    if auth_type == "none":
+        return headers
+    auth_header = _opensearch_config(connection, "auth_header", "Authorization")
+    if auth_type == "bearer":
+        if credential_value is None:
+            raise ToolExecutionError("OpenSearch bearer/proxy auth requires a credential ref.")
+        auth_scheme = _opensearch_config(connection, "auth_scheme", "Bearer")
+        headers[auth_header] = (
+            credential_value
+            if auth_scheme.lower() == "raw"
+            else f"{auth_scheme} {credential_value}".strip()
+        )
+        return headers
+    if auth_type == "basic":
+        username = credential_values.get("username")
+        password = credential_values.get("password")
+        if username is None or password is None:
+            raise ToolExecutionError(
+                "OpenSearch basic auth requires username and password credential refs."
+            )
+        token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+        headers[auth_header] = f"Basic {token}"
+        return headers
+    raise ToolExecutionError(f"Unsupported OpenSearch auth type: {auth_type}")
+
+
+def _opensearch_config(connection: IntegrationConnection, key: str, default: str) -> str:
+    value = connection.config.get(key) or connection.manifest.metadata.get(key) or default
+    return str(value)
+
+
+def _opensearch_auth_type(value: object) -> str:
+    normalized = str(value or "none").strip().lower().replace("-", "_")
+    if normalized in {"none", "basic", "bearer"}:
+        return normalized
+    raise ToolExecutionError("OpenSearch auth type must be none, basic, or bearer.")
+
+
+def _opensearch_index(arguments: dict[str, object]) -> str:
+    return _path_segment(_required_str(arguments, "index"), safe=",*")
+
+
+def _opensearch_id(arguments: dict[str, object]) -> str:
+    return _path_segment(_required_str(arguments, "id"))
+
+
+def _path_segment(value: str, *, safe: str = "") -> str:
+    return quote(value.strip(), safe=safe)
+
+
+def _refresh_params(arguments: dict[str, object]) -> JsonObject:
+    value = arguments.get("refresh")
+    if isinstance(value, str) and value in {"false", "true", "wait_for"}:
+        return {"refresh": value}
+    return {}
 
 
 async def _openapi_tool_call(
@@ -328,6 +578,42 @@ def _required_str(arguments: dict[str, object], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ToolExecutionError(f"Argument {name} must be a non-empty string.")
     return value.strip()
+
+
+def _object_arg(arguments: dict[str, object], name: str) -> JsonObject:
+    value = arguments.get(name)
+    if not isinstance(value, dict):
+        raise ToolExecutionError(f"Argument {name} must be an object.")
+    return {str(key): _jsonable(item) for key, item in value.items()}
+
+
+def _string_list_arg(arguments: dict[str, object], name: str) -> list[str]:
+    value = arguments.get(name)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ToolExecutionError(f"Argument {name} must be an array of strings.")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ToolExecutionError(f"Argument {name} must be an array of strings.")
+        if item.strip():
+            result.append(item.strip())
+    return result
+
+
+def _object_list_arg(arguments: dict[str, object], name: str) -> list[JsonObject]:
+    value = arguments.get(name)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ToolExecutionError(f"Argument {name} must be an array of objects.")
+    result: list[JsonObject] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ToolExecutionError(f"Argument {name} must be an array of objects.")
+        result.append({str(key): _jsonable(entry) for key, entry in item.items()})
+    return result
 
 
 def _str_arg(arguments: dict[str, object], name: str, *, default: str) -> str:

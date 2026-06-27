@@ -103,3 +103,6 @@ plugins = ["pydantic.mypy"]
 addopts = "--strict-markers --strict-config --cov=colossus --cov-report=term-missing"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+  "integration: opt-in live integration tests that require local services.",
+]

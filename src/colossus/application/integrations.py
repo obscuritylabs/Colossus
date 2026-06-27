@@ -3,6 +3,7 @@
 import json
 import re
 from pathlib import Path
+from typing import cast
 
 from colossus.domain.errors import ColossusError
 from colossus.domain.integrations import (
@@ -36,17 +37,20 @@ class IntegrationService:
 
     async def list_statuses(self) -> tuple[IntegrationStatusView, ...]:
         connections = {connection.name: connection for connection in await self._connections()}
-        views = [_status_for_manifest(GITHUB_MANIFEST, connections.get("github"))]
+        views = [
+            _status_for_manifest(manifest, connections.get(manifest.name))
+            for manifest in BUILTIN_MANIFESTS.values()
+        ]
         for connection in connections.values():
-            if connection.name == "github":
+            if connection.name in BUILTIN_MANIFESTS:
                 continue
             views.append(_status_for_manifest(connection.manifest, connection))
         return tuple(sorted(views, key=lambda item: item.name))
 
     async def get_manifest(self, name: str) -> IntegrationManifest:
         normalized = _normalize_name(name)
-        if normalized == "github":
-            return GITHUB_MANIFEST
+        if normalized in BUILTIN_MANIFESTS:
+            return BUILTIN_MANIFESTS[normalized]
         connection = await self._state_store.get_integration_connection(normalized)
         if connection is None:
             raise ColossusError(f"Unknown integration: {name}")
@@ -67,25 +71,54 @@ class IntegrationService:
         name: str,
         *,
         credential_ref: str | None = None,
+        credential_refs: dict[str, str] | None = None,
         scopes: tuple[str, ...] = (),
+        config: dict[str, object] | None = None,
     ) -> IntegrationConnection:
         manifest = await self.get_manifest(name)
-        status: IntegrationConnectionStatus = "connected"
-        if manifest.auth.type != "none":
-            if credential_ref is None:
-                status = "pending_auth"
-            else:
-                self._credential_broker.resolve(credential_ref)
         now = utc_now_iso()
         existing = await self._state_store.get_integration_connection(manifest.name)
+        connection_config = _connection_config(
+            manifest,
+            existing.config if existing is not None else {},
+            config or {},
+        )
+        named_credential_refs = _connection_credential_refs(
+            existing.credential_refs if existing is not None else {},
+            credential_refs or {},
+        )
+        if manifest.name == "opensearch":
+            opensearch_auth_type = _opensearch_auth_type(connection_config.get("auth_type"))
+            if credential_ref is not None and opensearch_auth_type != "bearer":
+                raise ColossusError(
+                    "OpenSearch --credential-ref is only valid with --auth-type bearer."
+                )
+            if credential_refs and opensearch_auth_type != "basic":
+                raise ColossusError(
+                    "OpenSearch --username-ref and --password-ref are only valid "
+                    "with --auth-type basic."
+                )
+            if opensearch_auth_type != "basic":
+                named_credential_refs = {}
+        status = _connection_status(
+            manifest,
+            credential_ref=credential_ref,
+            credential_refs=named_credential_refs,
+            config=connection_config,
+        )
+        if credential_ref is not None:
+            self._credential_broker.resolve(credential_ref)
+        for ref in named_credential_refs.values():
+            self._credential_broker.resolve(ref)
         connection = IntegrationConnection(
             name=manifest.name,
             kind=manifest.kind,
             status=status,
             credential_ref=credential_ref,
+            credential_refs=named_credential_refs,
             scopes=scopes or manifest.auth.scopes,
             manifest=manifest,
-            config=(existing.config if existing is not None else {}),
+            config=connection_config,
             connected_at=existing.connected_at if existing is not None else now,
             updated_at=now,
         )
@@ -295,8 +328,9 @@ def _status_for_manifest(
         title=manifest.title,
         kind=manifest.kind,
         status=connection.status if connection is not None else "available",
-        auth_type=manifest.auth.type,
+        auth_type=_status_auth_type(manifest, connection),
         credential_ref=connection.credential_ref if connection is not None else None,
+        credential_refs=connection.credential_refs if connection is not None else {},
         scopes=connection.scopes if connection is not None else manifest.auth.scopes,
         tools=tuple(tool.name for tool in manifest.tools),
     )
@@ -308,9 +342,158 @@ def _audit_connection_details(connection: IntegrationConnection) -> dict[str, ob
         "kind": connection.kind,
         "status": connection.status,
         "credential_ref": connection.credential_ref or "",
+        "credential_refs": dict(sorted(connection.credential_refs.items())),
         "scopes": list(connection.scopes),
         "tools": [tool.name for tool in connection.manifest.tools],
+        "config_keys": sorted(connection.config),
     }
+
+
+def _status_auth_type(
+    manifest: IntegrationManifest,
+    connection: IntegrationConnection | None,
+) -> IntegrationAuthType:
+    if connection is not None and manifest.name == "opensearch":
+        return _opensearch_auth_type(connection.config.get("auth_type"))
+    return manifest.auth.type
+
+
+def _connection_status(
+    manifest: IntegrationManifest,
+    *,
+    credential_ref: str | None,
+    credential_refs: dict[str, str],
+    config: dict[str, object],
+) -> IntegrationConnectionStatus:
+    if manifest.name == "opensearch":
+        auth_type = _opensearch_auth_type(config.get("auth_type"))
+        if auth_type == "none":
+            return "connected"
+        if auth_type == "bearer":
+            return "connected" if credential_ref else "pending_auth"
+        if auth_type == "basic":
+            return (
+                "connected"
+                if credential_refs.get("username") and credential_refs.get("password")
+                else "pending_auth"
+            )
+    if credential_ref is not None:
+        return "connected"
+    if manifest.auth.type != "none":
+        return "pending_auth"
+    return "connected"
+
+
+def _connection_credential_refs(
+    existing: dict[str, str],
+    updates: dict[str, str],
+) -> dict[str, str]:
+    result = {str(key): str(value) for key, value in existing.items() if str(value).strip()}
+    for key, value in updates.items():
+        normalized_key = str(key).strip().lower()
+        normalized_value = str(value).strip()
+        if normalized_key and normalized_value:
+            result[normalized_key] = normalized_value
+    return result
+
+
+def _connection_config(
+    manifest: IntegrationManifest,
+    existing: dict[str, object],
+    updates: dict[str, object],
+) -> dict[str, object]:
+    if manifest.name == "opensearch":
+        return _opensearch_connection_config(manifest, existing, updates)
+    if manifest.name != "searxng":
+        unknown = sorted(
+            key for key, value in updates.items() if value is not None and value != ""
+        )
+        if unknown:
+            raise ColossusError(
+                f"Integration {manifest.name} does not support config options: "
+                f"{', '.join(unknown)}"
+            )
+        return existing
+    allowed = {"base_url", "auth_header", "auth_scheme"}
+    unknown = sorted(set(updates) - allowed)
+    if unknown:
+        raise ColossusError(
+            f"Integration searxng does not support config options: {', '.join(unknown)}"
+        )
+    config: dict[str, object] = {
+        "base_url": str(
+            existing.get("base_url")
+            or manifest.metadata.get("base_url")
+            or "http://localhost:8888/search"
+        ),
+        "auth_header": str(
+            existing.get("auth_header")
+            or manifest.metadata.get("auth_header")
+            or "Authorization"
+        ),
+        "auth_scheme": str(
+            existing.get("auth_scheme")
+            or manifest.metadata.get("auth_scheme")
+            or "bearer"
+        ),
+    }
+    for key in allowed:
+        value = updates.get(key)
+        if isinstance(value, str) and value.strip():
+            config[key] = value.strip()
+    if not str(config["base_url"]).strip():
+        raise ColossusError("SearXNG base URL is required.")
+    return config
+
+
+def _opensearch_connection_config(
+    manifest: IntegrationManifest,
+    existing: dict[str, object],
+    updates: dict[str, object],
+) -> dict[str, object]:
+    allowed = {"base_url", "auth_type", "auth_header", "auth_scheme"}
+    unknown = sorted(set(updates) - allowed)
+    if unknown:
+        raise ColossusError(
+            f"Integration opensearch does not support config options: {', '.join(unknown)}"
+        )
+    config: dict[str, object] = {
+        "base_url": str(
+            existing.get("base_url")
+            or manifest.metadata.get("base_url")
+            or "http://localhost:9200"
+        ),
+        "auth_type": _opensearch_auth_type(
+            existing.get("auth_type") or manifest.metadata.get("auth_type") or "none"
+        ),
+        "auth_header": str(
+            existing.get("auth_header")
+            or manifest.metadata.get("auth_header")
+            or "Authorization"
+        ),
+        "auth_scheme": str(
+            existing.get("auth_scheme")
+            or manifest.metadata.get("auth_scheme")
+            or "Bearer"
+        ),
+    }
+    for key in {"base_url", "auth_header", "auth_scheme"}:
+        value = updates.get(key)
+        if isinstance(value, str) and value.strip():
+            config[key] = value.strip()
+    auth_type_update = updates.get("auth_type")
+    if isinstance(auth_type_update, str) and auth_type_update.strip():
+        config["auth_type"] = _opensearch_auth_type(auth_type_update)
+    if not str(config["base_url"]).strip():
+        raise ColossusError("OpenSearch base URL is required.")
+    return config
+
+
+def _opensearch_auth_type(value: object) -> IntegrationAuthType:
+    normalized = str(value or "none").strip().lower().replace("-", "_")
+    if normalized not in {"none", "basic", "bearer"}:
+        raise ColossusError("OpenSearch auth type must be none, basic, or bearer.")
+    return cast(IntegrationAuthType, normalized)
 
 
 def _normalize_name(name: str) -> str:
@@ -358,6 +541,274 @@ def _mapping(value: object) -> dict[str, object]:
 
 def _sequence(value: object) -> list[object]:
     return value if isinstance(value, list) else []
+
+
+SEARXNG_MANIFEST = IntegrationManifest(
+    name="searxng",
+    title="SearXNG",
+    description=(
+        "Native local/private metasearch connector for SearXNG JSON search results."
+    ),
+    kind="native",
+    auth=IntegrationAuthRequirement(type="none"),
+    tools=(
+        IntegrationToolManifest(
+            name="searxng.search",
+            description="Search a configured SearXNG instance and return normalized results.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+                "required": ["query"],
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                working_root_required=False,
+                risk="medium",
+            ),
+            timeout_seconds=20.0,
+            max_output_bytes=64_000,
+        ),
+        IntegrationToolManifest(
+            name="searxng.health",
+            description="Check that the configured SearXNG instance returns JSON results.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                working_root_required=False,
+                risk="medium",
+            ),
+            timeout_seconds=20.0,
+            max_output_bytes=8_000,
+        ),
+    ),
+    metadata={
+        "base_url": "http://localhost:8888/search",
+        "auth_header": "Authorization",
+        "auth_scheme": "bearer",
+    },
+)
+
+
+OPENSEARCH_MANIFEST = IntegrationManifest(
+    name="opensearch",
+    title="OpenSearch",
+    description=(
+        "Native OpenSearch connector for document search, retrieval, indexing, "
+        "updates, deletes, mappings, and cluster health."
+    ),
+    kind="native",
+    auth=IntegrationAuthRequirement(type="none"),
+    tools=(
+        IntegrationToolManifest(
+            name="opensearch.info",
+            description="Fetch basic information from the configured OpenSearch endpoint.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                working_root_required=False,
+                risk="medium",
+            ),
+            max_output_bytes=16_000,
+        ),
+        IntegrationToolManifest(
+            name="opensearch.health",
+            description="Fetch OpenSearch cluster health from _cluster/health.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                working_root_required=False,
+                risk="medium",
+            ),
+            max_output_bytes=16_000,
+        ),
+        IntegrationToolManifest(
+            name="opensearch.list_indices",
+            description="List OpenSearch indices through the JSON cat indices API.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                working_root_required=False,
+                risk="medium",
+            ),
+            max_output_bytes=64_000,
+        ),
+        IntegrationToolManifest(
+            name="opensearch.get_mapping",
+            description="Fetch the mapping for an OpenSearch index or index pattern.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"index": {"type": "string"}},
+                "required": ["index"],
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                working_root_required=False,
+                risk="medium",
+            ),
+            max_output_bytes=64_000,
+        ),
+        IntegrationToolManifest(
+            name="opensearch.search",
+            description="Run an OpenSearch query object against an index or index pattern.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "index": {"type": "string"},
+                    "query": {"type": "object"},
+                    "size": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "from": {"type": "integer", "minimum": 0},
+                    "source_includes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "sort": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["index", "query"],
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                working_root_required=False,
+                risk="medium",
+            ),
+            max_output_bytes=128_000,
+        ),
+        IntegrationToolManifest(
+            name="opensearch.get_document",
+            description="Fetch one OpenSearch document by index and id.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "index": {"type": "string"},
+                    "id": {"type": "string"},
+                },
+                "required": ["index", "id"],
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                working_root_required=False,
+                risk="medium",
+            ),
+            max_output_bytes=64_000,
+        ),
+        IntegrationToolManifest(
+            name="opensearch.index_document",
+            description="Create or replace one OpenSearch document.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "index": {"type": "string"},
+                    "id": {"type": "string"},
+                    "document": {"type": "object"},
+                    "refresh": {"type": "string", "enum": ["false", "true", "wait_for"]},
+                },
+                "required": ["index", "document"],
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                mutation=True,
+                working_root_required=False,
+                risk="high",
+            ),
+            max_output_bytes=32_000,
+        ),
+        IntegrationToolManifest(
+            name="opensearch.update_document",
+            description="Partially update one OpenSearch document using a doc payload.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "index": {"type": "string"},
+                    "id": {"type": "string"},
+                    "doc": {"type": "object"},
+                    "doc_as_upsert": {"type": "boolean"},
+                    "refresh": {"type": "string", "enum": ["false", "true", "wait_for"]},
+                },
+                "required": ["index", "id", "doc"],
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                mutation=True,
+                working_root_required=False,
+                risk="high",
+            ),
+            max_output_bytes=32_000,
+        ),
+        IntegrationToolManifest(
+            name="opensearch.delete_document",
+            description="Delete one OpenSearch document by index and id.",
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "index": {"type": "string"},
+                    "id": {"type": "string"},
+                    "refresh": {"type": "string", "enum": ["false", "true", "wait_for"]},
+                },
+                "required": ["index", "id"],
+            },
+            output_schema={"type": "object"},
+            permissions=ToolPermission(
+                network="allow",
+                approval_required=True,
+                mutation=True,
+                working_root_required=False,
+                risk="high",
+            ),
+            max_output_bytes=32_000,
+        ),
+    ),
+    metadata={
+        "base_url": "http://localhost:9200",
+        "auth_type": "none",
+        "auth_header": "Authorization",
+        "auth_scheme": "Bearer",
+    },
+)
 
 
 GITHUB_MANIFEST = IntegrationManifest(
@@ -490,3 +941,9 @@ GITHUB_MANIFEST = IntegrationManifest(
         ),
     ),
 )
+
+BUILTIN_MANIFESTS = {
+    "github": GITHUB_MANIFEST,
+    "opensearch": OPENSEARCH_MANIFEST,
+    "searxng": SEARXNG_MANIFEST,
+}

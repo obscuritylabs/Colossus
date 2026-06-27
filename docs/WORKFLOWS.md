@@ -87,6 +87,52 @@ uv run colossus tools list
 Then ask for repository, issue, pull request, check, or release context. GitHub tools are
 network-capable, so they still require approval unless approval mode auto-approves them.
 
+## Connect Local SearXNG
+
+```bash
+docker compose -f docker-compose.searxng.yml up -d
+uv run colossus integrations connect searxng --base-url http://localhost:8888
+uv run colossus tools list
+```
+
+Then ask Colossus to search through the connected `searxng.search` tool. SearXNG tools
+are network-capable even when the endpoint is localhost, so approval policy still
+applies unless approval mode auto-approves them.
+
+## Connect OpenSearch
+
+Local development cluster:
+
+```bash
+docker compose -f docker-compose.opensearch.yml up -d
+uv run colossus integrations connect opensearch \
+  --base-url http://localhost:9200 \
+  --auth-type none
+uv run colossus tools list
+```
+
+Bearer or proxy-auth endpoint:
+
+```bash
+export OPENSEARCH_TOKEN=...
+uv run colossus integrations connect opensearch \
+  --base-url https://search.example.test \
+  --auth-type bearer \
+  --credential-ref env:OPENSEARCH_TOKEN
+```
+
+Then ask Colossus to search, inspect mappings, retrieve documents, or perform a
+single-document write through `opensearch.*` tools. Write tools are mutating high-risk
+tools and still require approval unless approval mode auto-approves them.
+
+Run the opt-in live connector smoke test:
+
+```bash
+COLOSSUS_OPENSEARCH_LIVE=1 \
+COLOSSUS_OPENSEARCH_URL=http://127.0.0.1:9200 \
+uv run pytest tests/test_opensearch_live.py
+```
+
 ## Import An Internal API
 
 ```bash

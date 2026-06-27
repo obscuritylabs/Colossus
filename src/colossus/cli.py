@@ -495,15 +495,27 @@ def _integration_auth_type(value: str) -> IntegrationAuthType:
     return cast(IntegrationAuthType, normalized)
 
 
+def _credential_ref_summary(
+    credential_ref: str | None,
+    credential_refs: dict[str, str] | None = None,
+) -> str:
+    refs = credential_refs or {}
+    parts: list[str] = []
+    if credential_ref:
+        parts.append(credential_ref)
+    parts.extend(f"{key}={value}" for key, value in sorted(refs.items()))
+    return ", ".join(parts) or "-"
+
+
 def _print_integration_statuses(statuses: tuple[IntegrationStatusView, ...]) -> None:
-    table = Table("Name", "Kind", "Status", "Auth", "Credential", "Scopes", "Tools")
+    table = Table("Name", "Kind", "Status", "Auth", "Credentials", "Scopes", "Tools")
     for status in statuses:
         table.add_row(
             status.name,
             status.kind,
             status.status,
             status.auth_type,
-            status.credential_ref or "-",
+            _credential_ref_summary(status.credential_ref, status.credential_refs),
             ", ".join(status.scopes) or "-",
             str(len(status.tools)),
         )
@@ -514,14 +526,50 @@ def _print_integration_connection(
     name: str,
     status: str,
     credential_ref: str | None,
+    credential_refs: dict[str, str] | None = None,
 ) -> None:
     if status == "pending_auth":
         console.print(
             f"Integration {name} is pending auth. "
-            "Reconnect with --credential-ref env:VARIABLE_NAME when ready."
+            "Reconnect with the required credential refs when ready."
         )
         return
-    console.print(f"Integration {name} connected with credential_ref={credential_ref or '-'}.")
+    console.print(
+        f"Integration {name} connected with "
+        f"credentials={_credential_ref_summary(credential_ref, credential_refs)}."
+    )
+
+
+def _integration_connect_config(
+    *,
+    base_url: str | None,
+    auth_type: str | None,
+    auth_header: str | None,
+    auth_scheme: str | None,
+) -> dict[str, object]:
+    config: dict[str, object] = {}
+    if base_url is not None:
+        config["base_url"] = base_url
+    if auth_type is not None:
+        config["auth_type"] = auth_type
+    if auth_header is not None:
+        config["auth_header"] = auth_header
+    if auth_scheme is not None:
+        config["auth_scheme"] = auth_scheme
+    return config
+
+
+def _integration_credential_refs(
+    *,
+    username_ref: str | None,
+    password_ref: str | None,
+) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    if username_ref is not None:
+        refs["username"] = username_ref
+    if password_ref is not None:
+        refs["password"] = password_ref
+    return refs
 
 
 @app.command()
@@ -1159,6 +1207,16 @@ def integrations_show(name: Annotated[str, typer.Argument(help="Integration name
         "credential_ref",
         connection.credential_ref if connection is not None and connection.credential_ref else "-",
     )
+    if connection is not None and connection.credential_refs:
+        table.add_row(
+            "credential_refs",
+            ", ".join(
+                f"{key}={value}" for key, value in sorted(connection.credential_refs.items())
+            ),
+        )
+    if connection is not None:
+        for key, value in sorted(connection.config.items()):
+            table.add_row(f"config.{key}", str(value))
     table.add_row("description", manifest.description)
     console.print(table)
     tools_table = Table("Tool", "Network", "Approval", "Risk", "Description")
@@ -1187,21 +1245,78 @@ def integrations_connect(
         list[str] | None,
         typer.Option("--scope", help="Scope to record for this connection. Repeatable."),
     ] = None,
+    base_url: Annotated[
+        str | None,
+        typer.Option(
+            "--base-url",
+            help="Base URL for endpoint integrations such as SearXNG or OpenSearch.",
+        ),
+    ] = None,
+    auth_type: Annotated[
+        str | None,
+        typer.Option(
+            "--auth-type",
+            help="Auth mode for endpoint integrations, for example none, bearer, or basic.",
+        ),
+    ] = None,
+    auth_header: Annotated[
+        str | None,
+        typer.Option(
+            "--auth-header",
+            help="HTTP auth header for optional endpoint auth.",
+        ),
+    ] = None,
+    auth_scheme: Annotated[
+        str | None,
+        typer.Option(
+            "--auth-scheme",
+            help="HTTP auth scheme for optional endpoint auth, for example bearer or raw.",
+        ),
+    ] = None,
+    username_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--username-ref",
+            help="Credential handle for username-based auth, such as env:OPENSEARCH_USER.",
+        ),
+    ] = None,
+    password_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--password-ref",
+            help="Credential handle for password-based auth, such as env:OPENSEARCH_PASSWORD.",
+        ),
+    ] = None,
 ) -> None:
-    """Connect an integration using a local credential ref."""
+    """Connect an integration using local config and optional credential refs."""
     service = _integration_runtime()
     try:
         connection = asyncio.run(
             service.connect(
                 name,
                 credential_ref=credential_ref,
+                credential_refs=_integration_credential_refs(
+                    username_ref=username_ref,
+                    password_ref=password_ref,
+                ),
                 scopes=tuple(scope or ()),
+                config=_integration_connect_config(
+                    base_url=base_url,
+                    auth_type=auth_type,
+                    auth_header=auth_header,
+                    auth_scheme=auth_scheme,
+                ),
             )
         )
     except ColossusError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
-    _print_integration_connection(connection.name, connection.status, connection.credential_ref)
+    _print_integration_connection(
+        connection.name,
+        connection.status,
+        connection.credential_ref,
+        connection.credential_refs,
+    )
 
 
 @integrations_app.command("disconnect")

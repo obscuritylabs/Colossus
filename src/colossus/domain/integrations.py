@@ -11,6 +11,7 @@ IntegrationKind = Literal["native", "openapi", "mcp"]
 IntegrationAuthType = Literal[
     "none",
     "api_key",
+    "basic",
     "bearer",
     "oauth2_authorization_code",
     "service_account",
@@ -82,6 +83,7 @@ class IntegrationConnection(BaseModel):
     kind: IntegrationKind
     status: IntegrationConnectionStatus
     credential_ref: str | None = None
+    credential_refs: dict[str, str] = Field(default_factory=dict)
     scopes: tuple[str, ...] = Field(default_factory=tuple)
     manifest: IntegrationManifest
     config: dict[str, object] = Field(default_factory=dict)
@@ -98,5 +100,6 @@ class IntegrationStatusView(BaseModel):
     status: IntegrationConnectionStatus | Literal["available"]
     auth_type: IntegrationAuthType
     credential_ref: str | None = None
+    credential_refs: dict[str, str] = Field(default_factory=dict)
     scopes: tuple[str, ...] = Field(default_factory=tuple)
     tools: tuple[str, ...] = Field(default_factory=tuple)

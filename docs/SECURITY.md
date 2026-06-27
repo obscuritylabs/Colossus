@@ -74,7 +74,7 @@ Security-sensitive defaults:
 | `web.search` | None | Allowed by spec | Yes | Exposed only when a search adapter such as SearXNG is configured |
 | `mcp.servers/tools` | None | Denied | No | Returns unconfigured state |
 | `mcp.call` | None | Allowed by spec | Yes | Adapter extension point, not exposed by default |
-| `github.*` and `openapi.NAME.*` | None | Allowed by spec | Yes | Exposed only after integration connection |
+| `github.*`, `searxng.*`, `opensearch.*`, and `openapi.NAME.*` | None | Allowed by spec | Yes | Exposed only after integration connection |
 | Deep research | Read | Allowed by configured lanes | Network/MCP lanes | Persists cited reports and source records |
 | `trace.show` | Read | Denied | No | Enabled |
 | `trace.export` | Write | Denied | Yes | Enabled |
@@ -152,9 +152,11 @@ requests made inside external subprocesses or MCP server processes.
 ## Integration Credentials
 
 Integration credentials are referenced by local handles such as `env:GITHUB_TOKEN`.
-Connection records store the handle, scopes, manifest, and status, never the raw secret.
-Tool handlers resolve the handle at execution time, inject auth headers in the adapter,
-and audit the connector name, tool name, credential ref, and argument keys only.
+Connection records store handles, scopes, manifests, config, and status, never raw
+secrets. Some connectors, such as OpenSearch basic auth, store named refs like
+`username=env:OPENSEARCH_USER` and `password=env:OPENSEARCH_PASSWORD`. Tool handlers
+resolve handles at execution time, inject auth headers in the adapter, and audit the
+connector name, tool name, credential refs, and argument keys only.
 
 Missing credentials produce a pending-auth connection or a tool execution error. Raw API
 keys, bearer tokens, OAuth refresh tokens, client secrets, and service-account JSON must
