@@ -71,6 +71,7 @@ SlashCommand = Literal[
     "multiline",
     "theme",
     "repl",
+    "workspace",
     "status",
     "resume",
     "session",
@@ -126,6 +127,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/multiline",
     "/theme",
     "/repl",
+    "/workspace",
     "/status",
     "/resume",
     "/session",
@@ -160,6 +162,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/multiline": "Toggle multiline composer mode.",
     "/theme": "Show, preview, switch, save, or reset REPL theme.",
     "/repl": "Show, save, or reset REPL preferences.",
+    "/workspace": "Show or switch the active workspace root.",
     "/status": "Show full REPL, model, session, and context status.",
     "/resume": "Choose a persisted session to resume.",
     "/session": "Show, resume, or create a session.",
@@ -264,6 +267,14 @@ class ReplTheme:
     styles: dict[str, str]
     trace: TraceRenderTheme = field(default_factory=TraceRenderTheme)
     transcript: TranscriptRenderTheme = field(default_factory=TranscriptRenderTheme)
+
+
+@dataclass(frozen=True)
+class ReplWorkspaceServices:
+    workspace_root: Path
+    orchestrator: AgentOrchestrator
+    context_service: ContextService | None = None
+    research_service: ResearchService | None = None
 
 
 REQUIRED_THEME_STYLE_KEYS: frozenset[str] = frozenset(
@@ -534,6 +545,7 @@ class ReplDisplayState:
     task_summary: str = "tasks=n/a"
     theme: ReplTheme = field(default_factory=lambda: REPL_THEMES["default"])
     saved_preferences: ReplPreferences = field(default_factory=ReplPreferences)
+    workspace_root: Path = field(default_factory=lambda: Path.cwd().resolve())
 
 
 @dataclass
@@ -584,6 +596,7 @@ async def run_repl(
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
+    workspace_factory: Callable[[Path, str], ReplWorkspaceServices] | None = None,
     context_model: str | None = None,
     approval_mode: str = "ask",
     history_path: Path | None = None,
@@ -641,6 +654,7 @@ async def run_repl(
         multiline=preferences.multiline,
         theme=startup_theme,
         saved_preferences=preferences,
+        workspace_root=(repo_root or Path.cwd()).resolve(),
     )
     trace_renderer = TranscriptRenderer(
         console,
@@ -791,6 +805,24 @@ async def run_repl(
                     preferences_service,
                 )
                 continue
+            if command.command == "workspace":
+                services = _handle_workspace_command(
+                    console,
+                    display_state,
+                    command.argument,
+                    workspace_factory,
+                    display_state.active_model_role,
+                )
+                if services is not None:
+                    orchestrator = services.orchestrator
+                    context_service = services.context_service
+                    research_service = services.research_service
+                    orchestrator.set_event_observer(trace_renderer.render)
+                    if research_service is not None:
+                        research_service.set_event_observer(trace_renderer.render)
+                    await _refresh_context_status(display_state, context_service)
+                    await _refresh_task_status(display_state, task_service)
+                continue
             if command.command == "status":
                 await _refresh_context_status(display_state, context_service)
                 await _refresh_task_status(display_state, task_service)
@@ -849,7 +881,7 @@ async def run_repl(
                     console,
                     memory_service,
                     display_state.session_id,
-                    repo_root or Path.cwd(),
+                    display_state.workspace_root,
                     command.argument,
                 )
                 continue
@@ -858,7 +890,7 @@ async def run_repl(
                     console,
                     memory_service,
                     display_state.session_id,
-                    repo_root or Path.cwd(),
+                    display_state.workspace_root,
                     command.argument,
                 )
                 continue
@@ -1178,6 +1210,7 @@ def run_repl_sync(
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
+    workspace_factory: Callable[[Path, str], ReplWorkspaceServices] | None = None,
     context_model: str | None = None,
     approval_mode: str = "ask",
     history_path: Path | None = None,
@@ -1205,6 +1238,7 @@ def run_repl_sync(
             model_router=model_router,
             active_model_role=active_model_role,
             orchestrator_factory=orchestrator_factory,
+            workspace_factory=workspace_factory,
             context_model=context_model,
             approval_mode=approval_mode,
             history_path=history_path,
@@ -1223,6 +1257,7 @@ def _render_repl_startup(console: Console, state: ReplDisplayState) -> None:
     console.print("[bold]Colossus REPL[/bold]  Type /exit to leave.")
     console.print(
         f"[dim]session_id={state.session_id} "
+        f"workspace={state.workspace_root} "
         f"mode={state.interaction_mode} "
         f"composer={'multi' if state.multiline else 'single'} "
         f"theme={state.theme.name} stream={_stream_mode_label(state)} "
@@ -1555,6 +1590,51 @@ async def _handle_repl_command(
         console.print("Reset REPL preferences.")
         return
     console.print("Use /repl prefs, /repl save, or /repl reset.")
+
+
+def _handle_workspace_command(
+    console: Console,
+    state: ReplDisplayState,
+    argument: str,
+    workspace_factory: Callable[[Path, str], ReplWorkspaceServices] | None,
+    active_model_role: str,
+) -> ReplWorkspaceServices | None:
+    normalized = argument.strip()
+    if not normalized or normalized.lower() == "show":
+        _render_workspace(console, state.workspace_root)
+        return None
+    if workspace_factory is None:
+        console.print("Workspace switching is not configured.")
+        return None
+    try:
+        workspace_root = _resolve_workspace_argument(normalized, state.workspace_root)
+        services = workspace_factory(workspace_root, active_model_role)
+    except ColossusError as exc:
+        console.print(f"[red]Workspace switch failed:[/red] {exc}")
+        return None
+    state.workspace_root = services.workspace_root.resolve()
+    state.context_status = None
+    state.context_error = None
+    console.print(f"Workspace set to {state.workspace_root}")
+    return services
+
+
+def _resolve_workspace_argument(value: str, current_root: Path) -> Path:
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = current_root / candidate
+    resolved = candidate.resolve()
+    if not resolved.exists():
+        raise ColossusError(f"Workspace does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise ColossusError(f"Workspace is not a directory: {resolved}")
+    return resolved
+
+
+def _render_workspace(console: Console, workspace_root: Path) -> None:
+    table = Table("Field", "Value")
+    table.add_row("workspace", str(workspace_root))
+    console.print(table)
 
 
 def _handle_skill_command(
@@ -2437,6 +2517,7 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
     table = Table("Field", "Value")
     rows = {
         "session": state.session_id,
+        "workspace": str(state.workspace_root),
         "model_role": state.active_model_role,
         "model": state.model,
         "approval_mode": state.approval_mode,
@@ -2544,6 +2625,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
     )
     table.add_row("/repl prefs|save|reset", "", "Show, save, or reset REPL preferences.")
     table.add_row(
+        "/workspace [PATH]",
+        _help_current(state, "workspace"),
+        "Show or switch the active workspace root.",
+    )
+    table.add_row(
         "/status",
         _help_current(state, "status"),
         "Show full REPL, model, session, and context status.",
@@ -2632,6 +2718,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return "multiline" if state.multiline else "single-line"
     if field == "theme":
         return state.theme.name
+    if field == "workspace":
+        return _short_text(str(state.workspace_root), 28)
     if field == "status":
         return f"{state.last_status}:{_short_id(state.last_run_id) if state.last_run_id else '-'}"
     if field == "session":

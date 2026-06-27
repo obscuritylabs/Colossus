@@ -4,6 +4,7 @@ from colossus.domain.events import (
     ApprovalAutoGrantedEvent,
     FinalOutputEvent,
     ModelDeltaEvent,
+    ModelRequestPreparedEvent,
     ReasoningSummaryEvent,
     RiskAssessmentEvent,
     ToolCallCompletedEvent,
@@ -68,6 +69,44 @@ def test_trace_renderer_compact_collapses_payloads() -> None:
     assert "tool result filesystem.read" in output
     assert '"path": "pyproject.toml"' not in output
     assert "preview " not in output
+
+
+def test_trace_renderer_verbose_dumps_model_request() -> None:
+    console = Console(record=True, width=120)
+    renderer = RichRunEventRenderer(console, events_mode="verbose")
+
+    renderer.render(
+        ModelRequestPreparedEvent(
+            turn=0,
+            model="demo-model",
+            instructions="system prompt text",
+            messages=({"role": "user", "content": "hello"},),
+            tools=({"name": "memory.create", "description": "Save memory"},),
+        )
+    )
+
+    output = console.export_text()
+    assert "model request demo-model" in output
+    assert '"instructions": "system prompt text"' in output
+    assert '"content": "hello"' in output
+    assert '"memory.create"' in output
+
+
+def test_trace_renderer_compact_hides_model_request() -> None:
+    console = Console(record=True, width=120)
+    renderer = RichRunEventRenderer(console, events_mode="compact")
+
+    renderer.render(
+        ModelRequestPreparedEvent(
+            turn=0,
+            model="demo-model",
+            instructions="system prompt text",
+            messages=({"role": "user", "content": "hello"},),
+            tools=({"name": "memory.create", "description": "Save memory"},),
+        )
+    )
+
+    assert console.export_text() == ""
 
 
 def test_trace_renderer_can_be_disabled() -> None:

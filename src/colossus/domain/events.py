@@ -21,6 +21,17 @@ class ReasoningSummaryEvent(BaseModel):
     detail_id: str | None = None
 
 
+class ModelRequestPreparedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["model.request.prepared"] = "model.request.prepared"
+    turn: int
+    model: str
+    instructions: str
+    messages: tuple[dict[str, object], ...] = Field(default_factory=tuple)
+    tools: tuple[dict[str, object], ...] = Field(default_factory=tuple)
+
+
 class ToolCallRequestedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -119,6 +130,7 @@ class ErrorEvent(BaseModel):
 RunEvent = Annotated[
     ModelDeltaEvent
     | ReasoningSummaryEvent
+    | ModelRequestPreparedEvent
     | ToolCallRequestedEvent
     | ApprovalRequestedEvent
     | ApprovalAutoGrantedEvent

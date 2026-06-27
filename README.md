@@ -36,6 +36,14 @@ uv run colossus sessions show SESSION_ID
 ```
 
 Inside the REPL, use `/resume` to choose from recent sessions without copying an id.
+Use `--workspace` (or `-C`) to choose the project root that filesystem, shell, repo
+research, context, memories, and subagents operate inside:
+
+```bash
+uv run colossus run --workspace ../my-project "Inspect the failing tests"
+uv run colossus repl --workspace ../my-project
+# then inside the REPL: /workspace show, /workspace ../other-project
+```
 
 Deep Research Mode collects bounded repo evidence, optional approval-gated web search,
 and optional configured MCP sources into a persisted cited report. Research runs use a
@@ -45,6 +53,7 @@ final report back to the session so normal chat can continue from it:
 ```bash
 uv run colossus research "How should this harness handle long-running investigations?"
 uv run colossus research "Summarize the local tool security posture" --source repo
+uv run colossus research --workspace ../my-project "Find the risky code paths" --source repo
 # then inside the REPL: /research on, /research show, /research sources
 ```
 

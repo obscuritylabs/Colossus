@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 from prompt_toolkit.completion import CompleteEvent
@@ -36,6 +37,7 @@ from colossus.interfaces.repl import (
     REPL_THEMES,
     ReplDisplayState,
     ReplInteractionMode,
+    ReplWorkspaceServices,
     RichUserPromptHandler,
     SlashCommandCompleter,
     _composer_key_bindings,
@@ -55,6 +57,7 @@ from colossus.interfaces.repl import (
     _handle_session_command,
     _handle_sessions_command,
     _handle_skill_command,
+    _handle_workspace_command,
     _is_skill_mention_draft,
     _is_slash_command_draft,
     _match_user_prompt_answer,
@@ -79,6 +82,7 @@ from colossus.interfaces.repl import (
     _render_theme_preview,
     _render_themes,
     _render_tools,
+    _resolve_workspace_argument,
     _right_prompt,
     _save_repl_plan,
     _show_submit_summary,
@@ -204,6 +208,7 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     plan_matches = list(completer.get_completions(Document("/p"), event))
     plan_narrow_matches = list(completer.get_completions(Document("/pl"), event))
     resume_matches = list(completer.get_completions(Document("/res"), event))
+    workspace_matches = list(completer.get_completions(Document("/w"), event))
     event_matches = list(completer.get_completions(Document("/e"), event))
     argument_matches = list(completer.get_completions(Document("/events "), event))
     plain_matches = list(completer.get_completions(Document("hello"), event))
@@ -212,6 +217,7 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     assert [completion.text for completion in plan_matches] == ["/plan"]
     assert [completion.text for completion in plan_narrow_matches] == ["/plan"]
     assert [completion.text for completion in resume_matches] == ["/resume", "/research"]
+    assert [completion.text for completion in workspace_matches] == ["/workspace"]
     assert [completion.text for completion in event_matches] == ["/events", "/exit"]
     assert argument_matches == []
     assert plain_matches == []
@@ -260,6 +266,7 @@ def test_slash_suggestions_show_in_toolbar_for_command_drafts() -> None:
     assert _format_slash_suggestions("/p") == "commands: /plan"
     assert _format_slash_suggestions("/pl") == "commands: /plan"
     assert _format_slash_suggestions("/res") == "commands: /resume /research"
+    assert _format_slash_suggestions("/w") == "commands: /workspace"
     assert _format_slash_suggestions("/e") == "commands: /events /exit"
     assert _format_slash_suggestions("/events ") == ""
     assert _format_slash_suggestions("hello") == ""
@@ -283,6 +290,7 @@ def test_parse_context_commands() -> None:
     multiline = parse_slash_command("/multiline on")
     theme = parse_slash_command("/theme carrot")
     repl = parse_slash_command("/repl prefs")
+    workspace = parse_slash_command("/workspace ../other")
     status = parse_slash_command("/status")
     resume = parse_slash_command("/resume 5")
     session = parse_slash_command("/session resume session-1")
@@ -323,6 +331,9 @@ def test_parse_context_commands() -> None:
     assert repl is not None
     assert repl.command == "repl"
     assert repl.argument == "prefs"
+    assert workspace is not None
+    assert workspace.command == "workspace"
+    assert workspace.argument == "../other"
     assert status is not None
     assert status.command == "status"
     assert resume is not None
@@ -733,10 +744,12 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "activity_spinner" in status_output
     assert "transcript" in status_output
     assert "tasks" in status_output
+    assert "workspace" in status_output
     assert "/multiline on|off|toggle" in help_output
     assert "/transcript comfortable|compact" in help_output
     assert "/theme [NAME]" in help_output
     assert "/repl prefs|save|reset" in help_output
+    assert "/workspace [PATH]" in help_output
     assert "/tasks [open|all|STATUS]" in help_output
     assert "/decisions [all|STATUS]" in help_output
     assert "/decision [archive|supersede|TEXT]" in help_output
@@ -753,6 +766,47 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "hacker" in help_output
     assert "approved:plan-12" in help_output
     assert "Esc+Enter" in help_output
+
+
+def test_workspace_command_shows_and_switches_root(tmp_path: Path) -> None:
+    current = tmp_path / "current"
+    next_root = tmp_path / "next"
+    current.mkdir()
+    next_root.mkdir()
+    state = ReplDisplayState(
+        session_id="session-workspace",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+        workspace_root=current.resolve(),
+    )
+    console = Console(record=True, width=140)
+    captured: dict[str, Path] = {}
+
+    def workspace_factory(root: Path, model_role: str) -> ReplWorkspaceServices:
+        assert model_role == "primary"
+        captured["root"] = root
+        return ReplWorkspaceServices(
+            workspace_root=root,
+            orchestrator=FakePlanOrchestrator(),  # type: ignore[arg-type]
+            context_service=None,
+            research_service=None,
+        )
+
+    _handle_workspace_command(console, state, "show", workspace_factory, "primary")
+    services = _handle_workspace_command(console, state, "../next", workspace_factory, "primary")
+
+    assert services is not None
+    assert captured["root"] == next_root.resolve()
+    assert state.workspace_root == next_root.resolve()
+    output = console.export_text()
+    assert str(current.resolve()) in output
+    assert str(next_root.resolve()) in output
+
+
+def test_resolve_workspace_argument_rejects_missing_path(tmp_path: Path) -> None:
+    with pytest.raises(ColossusError, match="Workspace does not exist"):
+        _resolve_workspace_argument("missing", tmp_path)
 
 
 def test_render_tasks_shows_session_task_rows() -> None:

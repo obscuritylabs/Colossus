@@ -20,6 +20,7 @@ from colossus.domain.events import (
     FinalOutputEvent,
     HandoffEvent,
     ModelDeltaEvent,
+    ModelRequestPreparedEvent,
     ReasoningSummaryEvent,
     ResearchStatusEvent,
     RiskAssessmentEvent,
@@ -213,6 +214,10 @@ class TranscriptRenderer:
             if self.show_reasoning:
                 self._render_reasoning(event)
             return
+        if isinstance(event, ModelRequestPreparedEvent):
+            if self.events_mode == "verbose":
+                self._render_model_request(event)
+            return
         if isinstance(event, FinalOutputEvent):
             rendered_final = False
             if not self._rendered_model_output:
@@ -368,6 +373,10 @@ class TranscriptRenderer:
         summary = _truncate(event.summary, self.argument_preview_chars)
         self._render_status_block("thinking", summary, self.theme.reasoning)
 
+    def _render_model_request(self, event: ModelRequestPreparedEvent) -> None:
+        body = _model_request_dump(event)
+        self._render_status_block("model request", body, self.theme.meta)
+
     def _render_tool_call(self, event: ToolCallRequestedEvent) -> None:
         limit = (
             self.verbose_argument_preview_chars
@@ -426,6 +435,20 @@ def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return f"{value[: max(0, limit - 3)]}..."
+
+
+def _model_request_dump(event: ModelRequestPreparedEvent) -> str:
+    return json.dumps(
+        {
+            "instructions": event.instructions,
+            "messages": event.messages,
+            "model": event.model,
+            "tools": list(event.tools),
+            "turn": event.turn,
+        },
+        indent=2,
+        sort_keys=True,
+    )
 
 
 def _fit_cells(value: str, width: int) -> str:

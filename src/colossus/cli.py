@@ -19,6 +19,7 @@ from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.providers import ProviderDiagnostics
+from colossus.application.research import ResearchService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.subagents import SubagentService
 from colossus.domain.decisions import DecisionStatus, KeyDecision
@@ -73,6 +74,7 @@ from colossus.infrastructure.logging import configure_logging
 from colossus.infrastructure.paths import config_path, data_dir
 from colossus.interfaces.approval import RichApprovalHandler
 from colossus.interfaces.repl import (
+    ReplWorkspaceServices,
     RichUserPromptHandler,
     load_user_repl_themes,
     repl_theme_names,
@@ -308,6 +310,18 @@ def _http_client_config(ctx: typer.Context, config: ColossusConfig) -> HttpClien
     return http_client_config_from_config(config, _http_overrides(ctx))
 
 
+def _workspace_root(value: Path | None = None) -> Path:
+    root = value or Path.cwd()
+    resolved = root.expanduser().resolve()
+    if not resolved.exists():
+        console.print(f"[red]Workspace does not exist:[/red] {resolved}")
+        raise typer.Exit(code=2)
+    if not resolved.is_dir():
+        console.print(f"[red]Workspace is not a directory:[/red] {resolved}")
+        raise typer.Exit(code=2)
+    return resolved
+
+
 def _context_runtime(
     ctx: typer.Context,
     model: str | None,
@@ -508,6 +522,14 @@ def run(
         list[str] | None,
         typer.Option("--skill", help="Activate a skill for this one-shot run."),
     ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root for tools, shell commands, repo context, and subagents.",
+        ),
+    ] = None,
 ) -> None:
     """Run one agent turn."""
     if plan and execute_plan is not None:
@@ -535,6 +557,7 @@ def run(
         created = asyncio.run(create_plan_service(data_dir()).create_plan(prompt, session_id))
         _print_plan(created)
         return
+    workspace_root = _workspace_root(workspace)
     config = load_config(config_path())
     overrides = _provider_overrides(ctx)
     http_client_config = _http_client_config(ctx, config)
@@ -567,6 +590,7 @@ def run(
     orchestrator = create_default_orchestrator(
         data_dir(),
         route.provider,
+        workspace_root=workspace_root,
         state_store=state,
         audit_sink=audit,
         context_config=config.context,
@@ -641,6 +665,14 @@ def research(
         list[str] | None,
         typer.Option("--source", help="Source lane to use: repo, web, or mcp. Repeatable."),
     ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root for repo evidence collection.",
+        ),
+    ] = None,
     session: Annotated[
         str | None,
         typer.Option("--session", help="Use or resume this exact session id."),
@@ -663,6 +695,7 @@ def research(
         console.print("[red]Use either --resume or --session, not both.[/red]")
         raise typer.Exit(code=2)
     config = load_config(config_path())
+    workspace_root = _workspace_root(workspace)
     research_depth = _research_depth(depth)
     source_kinds = _research_sources(source, config.research.sources)
     state = create_state_store(data_dir())
@@ -694,7 +727,7 @@ def research(
         data_dir(),
         config=config,
         model_router=router,
-        workspace_root=Path.cwd(),
+        workspace_root=workspace_root,
         state_store=state,
         audit_sink=audit,
         approval_handler=(
@@ -764,6 +797,14 @@ def repl(
         bool,
         typer.Option("--resume", help="Resume the most recently updated session."),
     ] = False,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root for tools, research, memories, and context.",
+        ),
+    ] = None,
 ) -> None:
     """Start the interactive REPL."""
     if resume and session is not None:
@@ -776,6 +817,7 @@ def repl(
             f"[red]Invalid REPL theme.[/red] Use {', '.join(available_theme_names)}."
         )
         raise typer.Exit(code=2)
+    workspace_root = _workspace_root(workspace)
     config = load_config(config_path())
     overrides = _provider_overrides(ctx)
     http_client_config = _http_client_config(ctx, config)
@@ -796,22 +838,25 @@ def repl(
         audit_sink=audit,
         max_concurrent=config.subagents.max_concurrent,
     )
+    memory_service = MemoryService(state, audit, state)
+    user_prompt_handler = RichUserPromptHandler(console)
+    active_workspace_root = workspace_root
     context_service = create_context_service(
         data_dir(),
-        workspace_root=Path.cwd(),
+        workspace_root=active_workspace_root,
         state_store=state,
         audit_sink=audit,
         context_config=config.context,
         model_context_windows=model_context_windows,
-        memory_service=MemoryService(state, audit, state),
+        memory_service=memory_service,
     )
-    user_prompt_handler = RichUserPromptHandler(console)
 
     def build_orchestrator(model_role: str) -> AgentOrchestrator:
         route = router.resolve(model_role)
         return create_default_orchestrator(
             data_dir(),
             route.provider,
+            workspace_root=active_workspace_root,
             state_store=state,
             audit_sink=audit,
             context_service=context_service,
@@ -835,6 +880,45 @@ def repl(
             http_client_config=http_client_config,
         )
 
+    def build_research_service(workspace_root: Path) -> ResearchService:
+        return create_research_service(
+            data_dir(),
+            config=config,
+            model_router=router,
+            workspace_root=workspace_root,
+            state_store=state,
+            audit_sink=audit,
+            approval_handler=(
+                RichApprovalHandler(console)
+                if resolved_approval_mode in {"ask", "risk-auto"}
+                else None
+            ),
+            auto_approve_network=resolved_approval_mode == "full-access",
+            http_client_config=http_client_config,
+        )
+
+    research_service = build_research_service(active_workspace_root)
+
+    def build_workspace_services(workspace_root: Path, model_role: str) -> ReplWorkspaceServices:
+        nonlocal active_workspace_root, context_service, research_service
+        active_workspace_root = workspace_root
+        context_service = create_context_service(
+            data_dir(),
+            workspace_root=active_workspace_root,
+            state_store=state,
+            audit_sink=audit,
+            context_config=config.context,
+            model_context_windows=model_context_windows,
+            memory_service=memory_service,
+        )
+        research_service = build_research_service(active_workspace_root)
+        return ReplWorkspaceServices(
+            workspace_root=active_workspace_root,
+            orchestrator=build_orchestrator(model_role),
+            context_service=context_service,
+            research_service=research_service,
+        )
+
     history_path = data_dir() / "repl_history.txt"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     run_repl_sync(
@@ -852,29 +936,16 @@ def repl(
         preferences_service=create_repl_preferences_service(data_dir()),
         task_service=create_task_service(data_dir()),
         decision_service=DecisionService(state, audit),
-        memory_service=MemoryService(state, audit, state),
+        memory_service=memory_service,
         session_service=create_session_service(data_dir()),
         plan_service=create_plan_service(data_dir()),
         subagent_service=subagent_service,
-        research_service=create_research_service(
-            data_dir(),
-            config=config,
-            model_router=router,
-            workspace_root=Path.cwd(),
-            state_store=state,
-            audit_sink=audit,
-            approval_handler=(
-                RichApprovalHandler(console)
-                if resolved_approval_mode in {"ask", "risk-auto"}
-                else None
-            ),
-            auto_approve_network=resolved_approval_mode == "full-access",
-            http_client_config=http_client_config,
-        ),
+        research_service=research_service,
+        workspace_factory=build_workspace_services,
         theme_name=theme,
         initial_session_id=session,
         resume_latest=resume,
-        repo_root=Path.cwd(),
+        repo_root=active_workspace_root,
         theme_dirs=theme_dirs,
     )
 
@@ -912,12 +983,24 @@ def skills_list() -> None:
 
 
 @tools_app.command("list")
-def tools_list(ctx: typer.Context) -> None:
+def tools_list(
+    ctx: typer.Context,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root used to compose workspace-bound tool handlers.",
+        ),
+    ] = None,
+) -> None:
     """List built-in tools."""
     config = load_config(config_path())
+    workspace_root = _workspace_root(workspace)
     http_client_config = _http_client_config(ctx, config)
     orchestrator = create_default_orchestrator(
         data_dir(),
+        workspace_root=workspace_root,
         search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
         http_client_config=http_client_config,

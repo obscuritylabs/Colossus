@@ -38,7 +38,10 @@ uv run colossus tools list
 
 Every tool input schema uses `additionalProperties: false`. Important shapes:
 
-- File tools accept workspace-relative `path` values and return relative paths.
+- File tools accept workspace-relative `path` values and return relative paths. The
+  workspace defaults to the process current directory, can be selected with
+  `--workspace`/`-C` for CLI runs, and can be switched inside the REPL with
+  `/workspace PATH`.
 - Search tools return arrays of `{path, line, text}` style match objects plus
   `truncated` when applicable.
 - Command wrappers return `{command, exit_code, stdout, stderr}`.
