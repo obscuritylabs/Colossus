@@ -210,6 +210,7 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     resume_matches = list(completer.get_completions(Document("/res"), event))
     workspace_matches = list(completer.get_completions(Document("/w"), event))
     event_matches = list(completer.get_completions(Document("/e"), event))
+    integration_matches = list(completer.get_completions(Document("/i"), event))
     argument_matches = list(completer.get_completions(Document("/events "), event))
     plain_matches = list(completer.get_completions(Document("hello"), event))
 
@@ -219,6 +220,7 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     assert [completion.text for completion in resume_matches] == ["/resume", "/research"]
     assert [completion.text for completion in workspace_matches] == ["/workspace"]
     assert [completion.text for completion in event_matches] == ["/events", "/exit"]
+    assert [completion.text for completion in integration_matches] == ["/integrations"]
     assert argument_matches == []
     assert plain_matches == []
 
@@ -268,6 +270,7 @@ def test_slash_suggestions_show_in_toolbar_for_command_drafts() -> None:
     assert _format_slash_suggestions("/res") == "commands: /resume /research"
     assert _format_slash_suggestions("/w") == "commands: /workspace"
     assert _format_slash_suggestions("/e") == "commands: /events /exit"
+    assert _format_slash_suggestions("/i") == "commands: /integrations"
     assert _format_slash_suggestions("/events ") == ""
     assert _format_slash_suggestions("hello") == ""
     assert _format_slash_suggestions("/wat") == "commands: no matches"
@@ -302,6 +305,7 @@ def test_parse_context_commands() -> None:
     memories = parse_slash_command("/memories all")
     plan = parse_slash_command("/plan approve")
     research = parse_slash_command("/research show")
+    integrations = parse_slash_command("/integrations list")
     skill = parse_slash_command("/skill use coding")
     help_command = parse_slash_command("/help")
 
@@ -364,6 +368,9 @@ def test_parse_context_commands() -> None:
     assert plan.argument == "approve"
     assert research is not None
     assert research.command == "research"
+    assert integrations is not None
+    assert integrations.command == "integrations"
+    assert integrations.argument == "list"
     assert research.argument == "show"
     assert skill is not None
     assert skill.command == "skill"

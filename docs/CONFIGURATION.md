@@ -3,6 +3,9 @@
 Colossus loads `config.json` from the platform user config directory. If the file does
 not exist, Colossus uses the built-in defaults.
 
+For task-oriented setup, start with [Getting Started](GETTING_STARTED.md). For daily
+command usage, see the [User Guide](USER_GUIDE.md).
+
 Create a default config:
 
 ```bash
@@ -168,6 +171,42 @@ uv run colossus repl --workspace ../my-project
 Inside the REPL, `/workspace` shows the current root and `/workspace PATH` switches the
 active workspace for later tool calls, context checks, memories, and research runs.
 Relative REPL workspace paths are resolved from the current workspace root.
+
+## Integrations
+
+Integrations are persisted local connection records, not config-file secrets. The first
+credential adapter resolves refs of the form `env:VARIABLE_NAME`; Colossus stores the ref
+and injects the secret only inside the tool handler.
+
+For the integration user guide, see [Integrations](INTEGRATIONS.md).
+
+```bash
+export GITHUB_TOKEN=...
+uv run colossus integrations list
+uv run colossus integrations show github
+uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
+uv run colossus tools list
+uv run colossus integrations disconnect github
+```
+
+Inside the REPL, use `/integrations list`, `/integrations show github`, and
+`/integrations connect github --credential-ref env:GITHUB_TOKEN`. A successful connect
+refreshes the live tool catalog.
+
+Imported OpenAPI tools use the same brokered runtime:
+
+```bash
+export DEMO_API_TOKEN=...
+uv run colossus integrations import-openapi demo ./openapi.json \
+  --base-url https://api.example.test \
+  --credential-ref env:DEMO_API_TOKEN \
+  --auth-type bearer
+```
+
+Supported v1 auth labels are `none`, `api-key`, `bearer`,
+`oauth2-authorization-code`, and `service-account`. The current local broker resolves
+environment refs only; future keychain or encrypted-store adapters should keep the same
+credential-ref contract.
 
 ## Deep Research
 

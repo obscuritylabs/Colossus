@@ -12,9 +12,11 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from colossus.adapters.bundles import ManifestBundleVerifier
+from colossus.adapters.credentials_env import EnvCredentialBroker
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
@@ -24,6 +26,7 @@ from colossus.application.risk import RiskAssessmentService
 from colossus.application.subagents import SubagentService
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.errors import BundleVerificationError, ColossusError
+from colossus.domain.integrations import IntegrationAuthType, IntegrationStatusView
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import AssistantMessage, Message, ToolResultMessage, UserMessage
 from colossus.domain.models import ProviderKind
@@ -57,6 +60,7 @@ from colossus.infrastructure.container import (
     create_decision_service,
     create_default_orchestrator,
     create_default_skill_resolver,
+    create_integration_service,
     create_mcp_gateway,
     create_memory_service,
     create_model_router,
@@ -106,6 +110,7 @@ decisions_app = typer.Typer(help="Inspect and manage key decisions.")
 memories_app = typer.Typer(help="Inspect and manage durable memories.")
 context_app = typer.Typer(help="Inspect and manage context compaction.")
 sessions_app = typer.Typer(help="Discover and resume persisted sessions.")
+integrations_app = typer.Typer(help="Manage app and service integrations.")
 app.add_typer(config_app, name="config")
 app.add_typer(skills_app, name="skills")
 app.add_typer(tools_app, name="tools")
@@ -119,6 +124,7 @@ app.add_typer(decisions_app, name="decisions")
 app.add_typer(memories_app, name="memories")
 app.add_typer(context_app, name="context")
 app.add_typer(sessions_app, name="sessions")
+app.add_typer(integrations_app, name="integrations")
 
 console = Console()
 
@@ -461,6 +467,63 @@ def _normalize_provider(
     return normalized  # type: ignore[return-value]
 
 
+def _integration_runtime() -> IntegrationService:
+    state = create_state_store(data_dir())
+    audit = create_audit_sink(data_dir())
+    return create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=EnvCredentialBroker(),
+    )
+
+
+def _integration_auth_type(value: str) -> IntegrationAuthType:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized not in {
+        "none",
+        "api_key",
+        "bearer",
+        "oauth2_authorization_code",
+        "service_account",
+    }:
+        console.print(
+            "[red]Invalid auth type.[/red] Use none, api-key, bearer, "
+            "oauth2-authorization-code, or service-account."
+        )
+        raise typer.Exit(code=2)
+    return cast(IntegrationAuthType, normalized)
+
+
+def _print_integration_statuses(statuses: tuple[IntegrationStatusView, ...]) -> None:
+    table = Table("Name", "Kind", "Status", "Auth", "Credential", "Scopes", "Tools")
+    for status in statuses:
+        table.add_row(
+            status.name,
+            status.kind,
+            status.status,
+            status.auth_type,
+            status.credential_ref or "-",
+            ", ".join(status.scopes) or "-",
+            str(len(status.tools)),
+        )
+    console.print(table)
+
+
+def _print_integration_connection(
+    name: str,
+    status: str,
+    credential_ref: str | None,
+) -> None:
+    if status == "pending_auth":
+        console.print(
+            f"Integration {name} is pending auth. "
+            "Reconnect with --credential-ref env:VARIABLE_NAME when ready."
+        )
+        return
+    console.print(f"Integration {name} connected with credential_ref={credential_ref or '-'}.")
+
+
 @app.command()
 def run(
     ctx: typer.Context,
@@ -571,6 +634,14 @@ def run(
     model_context_windows = _resolved_model_context_windows(config, overrides, router)
     resolved_approval_mode = _resolve_approval_mode(approval_mode, ask_approval=ask_approval)
     audit = create_audit_sink(data_dir())
+    credential_broker = EnvCredentialBroker()
+    integration_service = create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=credential_broker,
+    )
+    integration_connections = asyncio.run(integration_service.connected_connections())
     subagent_service = create_subagent_service(
         data_dir(),
         state_store=state,
@@ -611,6 +682,8 @@ def run(
         search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
         http_client_config=http_client_config,
+        integration_connections=integration_connections,
+        credential_broker=credential_broker,
     )
     plan_id = execute_plan
     if execute_plan is not None:
@@ -832,6 +905,14 @@ def repl(
     resolved_approval_mode = _resolve_approval_mode(approval_mode)
     state = create_state_store(data_dir())
     audit = create_audit_sink(data_dir())
+    credential_broker = EnvCredentialBroker()
+    integration_service = create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=credential_broker,
+    )
+    active_integration_connections = asyncio.run(integration_service.connected_connections())
     subagent_service = create_subagent_service(
         data_dir(),
         state_store=state,
@@ -878,6 +959,8 @@ def repl(
             search_provider=create_search_provider(config.research.search, http_client_config),
             mcp_gateway=create_mcp_gateway(config.research.mcp),
             http_client_config=http_client_config,
+            integration_connections=active_integration_connections,
+            credential_broker=credential_broker,
         )
 
     def build_research_service(workspace_root: Path) -> ResearchService:
@@ -898,6 +981,11 @@ def repl(
         )
 
     research_service = build_research_service(active_workspace_root)
+
+    async def refresh_integrations(model_role: str) -> AgentOrchestrator:
+        nonlocal active_integration_connections
+        active_integration_connections = await integration_service.connected_connections()
+        return build_orchestrator(model_role)
 
     def build_workspace_services(workspace_root: Path, model_role: str) -> ReplWorkspaceServices:
         nonlocal active_workspace_root, context_service, research_service
@@ -941,6 +1029,8 @@ def repl(
         plan_service=create_plan_service(data_dir()),
         subagent_service=subagent_service,
         research_service=research_service,
+        integration_service=integration_service,
+        integration_refresh_factory=refresh_integrations,
         workspace_factory=build_workspace_services,
         theme_name=theme,
         initial_session_id=session,
@@ -998,12 +1088,26 @@ def tools_list(
     config = load_config(config_path())
     workspace_root = _workspace_root(workspace)
     http_client_config = _http_client_config(ctx, config)
+    state = create_state_store(data_dir())
+    audit = create_audit_sink(data_dir())
+    credential_broker = EnvCredentialBroker()
+    integration_service = create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=credential_broker,
+    )
+    integration_connections = asyncio.run(integration_service.connected_connections())
     orchestrator = create_default_orchestrator(
         data_dir(),
         workspace_root=workspace_root,
+        state_store=state,
+        audit_sink=audit,
         search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
         http_client_config=http_client_config,
+        integration_connections=integration_connections,
+        credential_broker=credential_broker,
     )
     specs = orchestrator.tool_specs()
     table = Table()
@@ -1025,6 +1129,144 @@ def tools_list(
             spec.description,
         )
     console.print(table)
+
+
+@integrations_app.command("list")
+def integrations_list() -> None:
+    """List available and configured integrations."""
+    service = _integration_runtime()
+    _print_integration_statuses(asyncio.run(service.list_statuses()))
+
+
+@integrations_app.command("show")
+def integrations_show(name: Annotated[str, typer.Argument(help="Integration name.")]) -> None:
+    """Show integration manifest and connection state."""
+    service = _integration_runtime()
+    try:
+        manifest = asyncio.run(service.get_manifest(name))
+        connection = asyncio.run(service.get_connection(manifest.name))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    table = Table("Field", "Value")
+    table.add_row("name", manifest.name)
+    table.add_row("title", manifest.title)
+    table.add_row("kind", manifest.kind)
+    table.add_row("auth", manifest.auth.type)
+    table.add_row("scopes", ", ".join(manifest.auth.scopes) or "-")
+    table.add_row("status", connection.status if connection is not None else "available")
+    table.add_row(
+        "credential_ref",
+        connection.credential_ref if connection is not None and connection.credential_ref else "-",
+    )
+    table.add_row("description", manifest.description)
+    console.print(table)
+    tools_table = Table("Tool", "Network", "Approval", "Risk", "Description")
+    for tool in manifest.tools:
+        tools_table.add_row(
+            tool.name,
+            tool.permissions.network,
+            str(tool.permissions.approval_required or tool.permissions.mutation),
+            tool.permissions.risk,
+            tool.description,
+        )
+    console.print(tools_table)
+
+
+@integrations_app.command("connect")
+def integrations_connect(
+    name: Annotated[str, typer.Argument(help="Integration name.")],
+    credential_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--credential-ref",
+            help="Credential handle such as env:GITHUB_TOKEN. Raw secrets are not accepted.",
+        ),
+    ] = None,
+    scope: Annotated[
+        list[str] | None,
+        typer.Option("--scope", help="Scope to record for this connection. Repeatable."),
+    ] = None,
+) -> None:
+    """Connect an integration using a local credential ref."""
+    service = _integration_runtime()
+    try:
+        connection = asyncio.run(
+            service.connect(
+                name,
+                credential_ref=credential_ref,
+                scopes=tuple(scope or ()),
+            )
+        )
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    _print_integration_connection(connection.name, connection.status, connection.credential_ref)
+
+
+@integrations_app.command("disconnect")
+def integrations_disconnect(
+    name: Annotated[str, typer.Argument(help="Integration name.")],
+) -> None:
+    """Disconnect an integration."""
+    service = _integration_runtime()
+    try:
+        asyncio.run(service.disconnect(name))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Disconnected integration {name}.")
+
+
+@integrations_app.command("import-openapi")
+def integrations_import_openapi(
+    name: Annotated[str, typer.Argument(help="Integration name.")],
+    spec_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to a JSON OpenAPI document.",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ],
+    base_url: Annotated[
+        str | None,
+        typer.Option("--base-url", help="Override the OpenAPI server URL."),
+    ] = None,
+    credential_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--credential-ref",
+            help="Credential handle such as env:API_TOKEN. Raw secrets are not accepted.",
+        ),
+    ] = None,
+    auth_type: Annotated[
+        str,
+        typer.Option(
+            "--auth-type",
+            help="Auth type: none, api-key, bearer, oauth2-authorization-code, or service-account.",
+        ),
+    ] = "bearer",
+) -> None:
+    """Import a JSON OpenAPI document as a brokered integration."""
+    service = _integration_runtime()
+    try:
+        connection = asyncio.run(
+            service.import_openapi(
+                name,
+                spec_path=spec_path,
+                base_url=base_url,
+                credential_ref=credential_ref,
+                auth_type=_integration_auth_type(auth_type),
+            )
+        )
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    _print_integration_connection(connection.name, connection.status, connection.credential_ref)
 
 
 @context_app.command("show")

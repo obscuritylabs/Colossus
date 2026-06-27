@@ -6,7 +6,9 @@ from pathlib import Path
 
 from colossus.adapters.audit_jsonl import JsonlAuditSink
 from colossus.adapters.builtin_tools import create_builtin_tools
+from colossus.adapters.credentials_env import EnvCredentialBroker
 from colossus.adapters.echo_provider import EchoModelProvider
+from colossus.adapters.integration_tools import create_integration_tools
 from colossus.adapters.research_sources import (
     DisabledMcpGateway,
     DisabledSearchProvider,
@@ -24,6 +26,7 @@ from colossus.application.approvals import DenyByDefaultApprovalHandler
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator, RunEventObserver
@@ -38,6 +41,7 @@ from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig
+from colossus.domain.integrations import IntegrationConnection
 from colossus.domain.models import ResolvedModelProfile
 from colossus.domain.requests import AgentRunRequest, AgentRunResult
 from colossus.domain.subagents import SubagentJob
@@ -52,6 +56,7 @@ from colossus.infrastructure.config import (
 )
 from colossus.infrastructure.http_client import HttpClientConfig
 from colossus.ports.approval import ApprovalHandler
+from colossus.ports.credentials import CredentialBroker
 from colossus.ports.model_provider import ModelProvider
 from colossus.ports.research import McpGateway, SearchProvider
 from colossus.ports.user_prompt import UserPromptHandler
@@ -82,6 +87,8 @@ def create_default_orchestrator(
     mcp_gateway: McpGateway | None = None,
     skill_resolver: SkillResolver | None = None,
     http_client_config: HttpClientConfig | None = None,
+    integration_connections: tuple[IntegrationConnection, ...] = (),
+    credential_broker: CredentialBroker | None = None,
 ) -> AgentOrchestrator:
     data_dir.mkdir(parents=True, exist_ok=True)
     resolved_provider = provider or EchoModelProvider()
@@ -118,6 +125,15 @@ def create_default_orchestrator(
         mcp_gateway=mcp_gateway,
         http_client_config=http_client_config,
     )
+    resolved_credential_broker = credential_broker or EnvCredentialBroker()
+    integration_specs, integration_handlers = create_integration_tools(
+        integration_connections,
+        resolved_credential_broker,
+        audit_sink=resolved_audit,
+        http_client_config=http_client_config,
+    )
+    specs = (*specs, *integration_specs)
+    handlers = {**handlers, **integration_handlers}
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)
     resolved_skill_resolver = skill_resolver or create_default_skill_resolver()
@@ -145,6 +161,8 @@ def create_default_orchestrator(
                 model_router=model_router,
                 skill_resolver=resolved_skill_resolver,
                 http_client_config=http_client_config,
+                integration_connections=integration_connections,
+                credential_broker=resolved_credential_broker,
             )
         )
     return AgentOrchestrator(
@@ -180,6 +198,21 @@ def create_subagent_service(
         state_store or create_state_store(data_dir),
         audit_sink or create_audit_sink(data_dir),
         max_concurrent=max_concurrent,
+    )
+
+
+def create_integration_service(
+    data_dir: Path,
+    *,
+    state_store: SQLiteStateStore | None = None,
+    audit_sink: JsonlAuditSink | None = None,
+    credential_broker: CredentialBroker | None = None,
+) -> IntegrationService:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return IntegrationService(
+        state_store or create_state_store(data_dir),
+        audit_sink or create_audit_sink(data_dir),
+        credential_broker or EnvCredentialBroker(),
     )
 
 
@@ -281,6 +314,8 @@ def _subagent_runner(
     model_router: ModelRouter,
     skill_resolver: SkillResolver,
     http_client_config: HttpClientConfig | None,
+    integration_connections: tuple[IntegrationConnection, ...],
+    credential_broker: CredentialBroker,
 ) -> Callable[[SubagentJob], Awaitable[AgentRunResult]]:
     async def run(job: SubagentJob) -> AgentRunResult:
         route = model_router.resolve(job.role or "subagent_default")
@@ -306,6 +341,8 @@ def _subagent_runner(
             include_agent_delegate=False,
             skill_resolver=skill_resolver,
             http_client_config=http_client_config,
+            integration_connections=integration_connections,
+            credential_broker=credential_broker,
         )
         return await orchestrator.run(
             AgentRunRequest(

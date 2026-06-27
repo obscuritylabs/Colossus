@@ -2,6 +2,9 @@
 
 Colossus uses a ports-and-adapters architecture with strict dependency direction.
 
+For user-facing documentation, start with [Documentation Home](README.md). This document
+is the implementation-boundary reference for contributors.
+
 ```text
 interfaces -> application -> ports -> domain
 adapters   -> application -> ports -> domain
@@ -42,6 +45,25 @@ policy, or state behavior.
 Shell tool calls can optionally pass through `RiskAssessmentService` after deterministic
 policy and before approval. The risk model receives redacted structured metadata with
 tools disabled and can only escalate risk or add audit/trace context.
+
+## Integrations
+
+`IntegrationService` owns typed integration manifests, persisted connection records, and
+connect/disconnect/import workflows. The first `CredentialBroker` adapter resolves
+environment credential refs, but tool schemas and model requests see only normal
+operation arguments. Connected integrations are converted to `ToolSpec`s by adapters and
+enter the same registry, policy, approval, execution, HTTP configuration, and audit path
+as built-in tools.
+
+The initial native connector is GitHub because it directly supports coding workflows.
+OpenAPI imports generate operation tools from JSON OpenAPI documents and execute through
+the brokered HTTP adapter. MCP remains an explicit configured integration protocol; it is
+not exposed as arbitrary model-callable execution unless configured and policy-approved.
+
+Colossus should not depend on ADK in core. Compatibility comes through importers and
+adapters. A future AI proxy should be a separate phase behind the same credential
+boundary for model-provider routing, usage, and rate limits; app credentials and model
+provider credentials stay separate.
 
 ## Context Composition
 

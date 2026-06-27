@@ -16,56 +16,32 @@ uv run colossus repl
 uv run pytest
 ```
 
-For a more Codex-like activity stream, the REPL enables streamed assistant output,
-comfortable transcript blocks, compact tool/risk/approval events, a themed prompt band,
-a power-user status bar, prompt history, and a theme-specific quiet activity spinner when
-event blocks are hidden. One-shot runs can use the same event renderer:
-
-```bash
-uv run colossus run --stream --events compact "hello"
-```
-
-Sessions are local SQLite records. Start fresh by default, resume the latest session
-explicitly, or pick a prior session from inside the REPL:
-
-```bash
-uv run colossus run --resume "continue where we left off"
-uv run colossus repl --resume
-uv run colossus sessions list
-uv run colossus sessions show SESSION_ID
-```
-
-Inside the REPL, use `/resume` to choose from recent sessions without copying an id.
-Use `--workspace` (or `-C`) to choose the project root that filesystem, shell, repo
-research, context, memories, and subagents operate inside:
+Choose a workspace for repository-scoped work:
 
 ```bash
 uv run colossus run --workspace ../my-project "Inspect the failing tests"
 uv run colossus repl --workspace ../my-project
-# then inside the REPL: /workspace show, /workspace ../other-project
 ```
 
-Deep Research Mode collects bounded repo evidence, optional approval-gated web search,
-and optional configured MCP sources into a persisted cited report. Research runs use a
-bounded summary of prior session messages to resolve follow-up questions, then append the
-final report back to the session so normal chat can continue from it:
+Resume prior local sessions:
 
 ```bash
-uv run colossus research "How should this harness handle long-running investigations?"
+uv run colossus run --resume "continue where we left off"
+uv run colossus repl --resume
+```
+
+Run deep research:
+
+```bash
 uv run colossus research "Summarize the local tool security posture" --source repo
-uv run colossus research --workspace ../my-project "Find the risky code paths" --source repo
-# then inside the REPL: /research on, /research show, /research sources
 ```
 
-Configure self-hosted SearXNG as the recommended `web.search` backend by setting
-`research.search.kind` to `searxng` and `research.search.endpoint` to your instance;
-keep protected-instance tokens in an environment variable referenced by `api_key_env`.
-
-REPL display choices can be previewed and persisted:
+Connect an integration without exposing raw secrets to the model:
 
 ```bash
-uv run colossus repl --theme high-contrast
-# then inside the REPL: /theme preview, /transcript compact, /theme save, /repl prefs
+export GITHUB_TOKEN=...
+uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
+uv run colossus tools list
 ```
 
 Initialize a user config when you are ready to use a non-default provider:
@@ -76,60 +52,33 @@ uv run colossus config show
 uv run colossus models list
 ```
 
-Provider, model, base URL, API key environment variable, and CA bundle can also be
-overridden per invocation:
-
-```bash
-uv run colossus --provider local-openai-chat --base-url http://localhost:8000/v1 run "hello"
-uv run colossus --provider openai-responses --model gpt-4.1-mini --api-key-env OPENAI_API_KEY run "hello"
-```
-
-For approval-required tools, one-shot runs can prompt, use model-gated auto approval,
-or intentionally run without approval prompts:
-
-```bash
-uv run colossus run --approval-mode ask "Use shell.run with argv [\"echo\", \"ok\"]."
-uv run colossus run --approval-mode risk-auto "Use shell.run with argv [\"echo\", \"ok\"]."
-uv run colossus run --approval-mode full-access "Use shell.run with argv [\"echo\", \"ok\"]."
-```
-
-`full-access` means approval-required tools are auto-approved without prompting. It does
-not expand filesystem roots, network implementations, tool schemas, or deterministic
-policy denies.
-
 ## Documentation
 
-- [Installation](docs/INSTALLATION.md)
-- [Contributing](docs/CONTRIBUTING.md)
-- [Configuration](docs/CONFIGURATION.md)
+[Documentation Home](docs/README.md) is the canonical index.
+
+Start here:
+
+- [Getting Started](docs/GETTING_STARTED.md)
+- [User Guide](docs/USER_GUIDE.md)
+- [Workflows](docs/WORKFLOWS.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+
+Capability docs:
+
+- [Built-in Tools](docs/TOOLS.md)
+- [Integrations](docs/INTEGRATIONS.md)
+- [Skills](docs/SKILLS.md)
 - [Context compaction](docs/CONTEXT.md)
-- [Offline and airgapped operation](docs/OFFLINE_AIRGAP.md)
-- [Offline bundle format](docs/BUNDLE_FORMAT.md)
+
+Reference docs:
+
+- [Configuration](docs/CONFIGURATION.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md)
-- [Built-in tools](docs/TOOLS.md)
-- [Skills](docs/SKILLS.md)
+- [Offline and airgapped operation](docs/OFFLINE_AIRGAP.md)
 - [Release process](docs/RELEASE.md)
 
-## Architecture
-
-The package follows dependency-inward layering:
-
-- `domain`: typed values, events, specs, decisions, memories, and errors.
-- `ports`: protocols for model providers, tools, state, skills, audit, and approvals.
-- `application`: orchestration, skill resolution, tool execution, and service assembly.
-- `adapters`: OpenAI-compatible providers, SQLite state, package/filesystem skills,
-  subprocess broker, and audit log implementations.
-- `interfaces`: Typer CLI and prompt-toolkit REPL.
-- `infrastructure`: config, package resources, logging, and bundle verification.
-
-Bundled first-party skills live under `src/colossus/bundled_skills/` and are shipped
-as package data.
-
-Skill Mode is enabled for normal agent turns. Use `@skill:coding` in a prompt, repeat
-`--skill coding` for one-shot CLI runs, or manage sticky REPL skills with `/skill`.
-
-## Built-in Tools
+## Capabilities
 
 Colossus ships an offline-first local coding tool loop:
 
@@ -139,23 +88,23 @@ Colossus ships an offline-first local coding tool loop:
   eval, and verification tools.
 - Web/docs fetch tools plus opt-in web search and MCP calls when adapters are explicitly
   configured.
+- Connected integration tools for GitHub and imported OpenAPI specs, exposed only after
+  credential-ref configuration and policy validation.
 - Automatic context compaction with durable snapshots, active key-decision injection,
   relevant memory injection, and per-model context windows.
 - Session discovery and explicit resume for prior local conversations.
 - Named model roles for primary agent turns, context summarization, subagents, and
   shell-command risk review, plus research planner/worker/synthesizer turns.
 
-Inspect the current catalog with:
+The package follows dependency-inward layering:
 
-```bash
-uv run colossus tools list
-```
-
-Durable queued subagent jobs can be inspected with:
-
-```bash
-uv run colossus agents list
-```
+- `domain`: typed values, events, specs, decisions, memories, and errors.
+- `ports`: protocols for model providers, tools, state, skills, audit, and approvals.
+- `application`: orchestration, skill resolution, tool execution, and service assembly.
+- `adapters`: OpenAI-compatible providers, SQLite state, package/filesystem skills,
+  subprocess broker, integration runtimes, and audit log implementations.
+- `interfaces`: Typer CLI and prompt-toolkit REPL.
+- `infrastructure`: config, package resources, logging, and bundle verification.
 
 ## Development
 

@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 from colossus.domain.context import ContextSnapshot
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.events import RunEvent
+from colossus.domain.integrations import IntegrationConnection
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import Message, UserMessage
 from colossus.domain.plans import Plan
@@ -535,6 +536,55 @@ class SQLiteStateStore:
             rows = conn.execute(query, tuple(params)).fetchall()
         return tuple(SubagentJob.model_validate_json(row[0]) for row in rows)
 
+    async def save_integration_connection(self, connection: IntegrationConnection) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into integration_connections(name, kind, status, payload)
+                values (?, ?, ?, ?)
+                on conflict(name) do update set
+                    kind = excluded.kind,
+                    status = excluded.status,
+                    payload = excluded.payload
+                """,
+                (
+                    connection.name,
+                    connection.kind,
+                    connection.status,
+                    connection.model_dump_json(),
+                ),
+            )
+            conn.commit()
+
+    async def get_integration_connection(
+        self,
+        name: str,
+    ) -> IntegrationConnection | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute(
+                "select payload from integration_connections where name = ?",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return IntegrationConnection.model_validate_json(row[0])
+
+    async def list_integration_connections(self) -> tuple[IntegrationConnection, ...]:
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(
+                """
+                select payload
+                from integration_connections
+                order by name
+                """
+            ).fetchall()
+        return tuple(IntegrationConnection.model_validate_json(row[0]) for row in rows)
+
+    async def delete_integration_connection(self, name: str) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute("delete from integration_connections where name = ?", (name,))
+            conn.commit()
+
     async def save_context_snapshot(self, snapshot: ContextSnapshot) -> None:
         await self.ensure_session(snapshot.session_id)
         with closing(sqlite3.connect(self._path)) as conn:
@@ -843,6 +893,25 @@ class SQLiteStateStore:
             conn.execute(
                 "create index if not exists idx_subagent_jobs_status "
                 "on subagent_jobs(status)"
+            )
+            conn.execute(
+                """
+                create table if not exists integration_connections (
+                    name text primary key,
+                    kind text not null,
+                    status text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_integration_connections_kind "
+                "on integration_connections(kind)"
+            )
+            conn.execute(
+                "create index if not exists idx_integration_connections_status "
+                "on integration_connections(status)"
             )
             conn.execute(
                 """
