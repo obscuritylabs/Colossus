@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -42,17 +43,32 @@ class HttpClientConfig:
         follow_redirects: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> dict[str, Any]:
+        verify = self._ssl_context() if self.ca_bundle or self.client_cert else True
         kwargs: dict[str, Any] = {
             "timeout": timeout,
             "follow_redirects": follow_redirects,
-            "verify": str(self.ca_bundle) if self.ca_bundle else True,
+            "verify": verify,
             "trust_env": self.trust_env,
         }
-        cert = self.cert
-        if cert is not None:
-            kwargs["cert"] = cert
         if transport is not None:
             kwargs["transport"] = transport
         elif self.proxy_url:
             kwargs["proxy"] = self.proxy_url
         return kwargs
+
+    def _ssl_context(self) -> ssl.SSLContext:
+        if self.ca_bundle is None:
+            context = httpx.create_ssl_context(verify=True, trust_env=self.trust_env)
+        elif self.ca_bundle.is_dir():
+            context = ssl.create_default_context(capath=str(self.ca_bundle))
+        else:
+            context = ssl.create_default_context(cafile=str(self.ca_bundle))
+
+        if self.client_cert is not None:
+            # httpx 0.28 returns early for verify=<CA path>, so cert=... is skipped.
+            context.load_cert_chain(
+                certfile=str(self.client_cert),
+                keyfile=str(self.client_key) if self.client_key else None,
+                password=self.client_key_password,
+            )
+        return context

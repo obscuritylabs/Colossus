@@ -1,4 +1,5 @@
 import json
+import ssl
 from pathlib import Path
 
 import httpx
@@ -24,6 +25,8 @@ from colossus.domain.errors import ToolExecutionError
 from colossus.domain.messages import UserMessage
 from colossus.domain.tools import ToolCall, ToolSpec
 from colossus.domain.user_prompts import UserPromptAnswer, UserPromptChoice
+from colossus.infrastructure.http_client import HttpClientConfig
+from pem_fixtures import TEST_MTLS_CERT_PEM, TEST_MTLS_KEY_PEM
 
 
 def _executor(root: Path) -> FunctionToolExecutor:
@@ -656,6 +659,58 @@ async def test_web_fetch_uses_bounded_http_client(tmp_path: Path) -> None:
         "truncated": True,
         "url": "https://example.com",
     }
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_loads_client_cert_with_custom_ca_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ca_bundle = tmp_path / "ca.pem"
+    client_pem = tmp_path / "client.pem"
+    ca_bundle.write_text(TEST_MTLS_CERT_PEM, encoding="utf-8")
+    client_pem.write_text(TEST_MTLS_CERT_PEM + TEST_MTLS_KEY_PEM, encoding="utf-8")
+    load_cert_chain_calls: list[tuple[str, str | None, str | None]] = []
+
+    def load_cert_chain(
+        self: ssl.SSLContext,
+        certfile: str,
+        keyfile: str | None = None,
+        password: str | None = None,
+    ) -> None:
+        del self
+        load_cert_chain_calls.append((certfile, keyfile, password))
+
+    monkeypatch.setattr(ssl.SSLContext, "load_cert_chain", load_cert_chain)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"ok", request=request)
+
+    specs, handlers = create_roadmap_tools(
+        Workspace(tmp_path),
+        CapturingBroker(),
+        http_transport=httpx.MockTransport(handler),
+        http_client_config=HttpClientConfig(
+            ca_bundle=ca_bundle,
+            client_cert=client_pem,
+            trust_env=False,
+        ),
+    )
+    registry = InMemoryToolRegistry(specs)
+    executor = FunctionToolExecutor(handlers, registry)
+
+    result = await executor.execute(
+        ToolCall(
+            call_id="1",
+            name="web.fetch",
+            arguments={"url": "https://example.com", "max_bytes": 10},
+        )
+    )
+
+    payload = json.loads(result.output)
+    assert payload["status_code"] == 200
+    assert payload["content"] == "ok"
+    assert load_cert_chain_calls == [(str(client_pem), None, None)]
 
 
 @pytest.mark.asyncio
