@@ -1,3 +1,4 @@
+import ssl
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from colossus.infrastructure.config import (
     http_client_config_from_config,
     provider_from_config,
 )
+from pem_fixtures import TEST_MTLS_CERT_PEM, TEST_MTLS_KEY_PEM
 
 
 def test_local_provider_uses_configured_ca_bundle(tmp_path: Path) -> None:
@@ -86,9 +88,9 @@ def test_http_client_config_resolves_proxy_and_client_cert_from_env(
     ca_bundle = tmp_path / "ca.pem"
     client_cert = tmp_path / "client.pem"
     client_key = tmp_path / "client.key"
-    ca_bundle.write_text("ca", encoding="utf-8")
-    client_cert.write_text("cert", encoding="utf-8")
-    client_key.write_text("key", encoding="utf-8")
+    ca_bundle.write_text(TEST_MTLS_CERT_PEM, encoding="utf-8")
+    client_cert.write_text(TEST_MTLS_CERT_PEM, encoding="utf-8")
+    client_key.write_text(TEST_MTLS_KEY_PEM, encoding="utf-8")
     monkeypatch.setenv("COLOSSUS_PROXY", "http://proxy.example.test:8080")
     monkeypatch.setenv("COLOSSUS_KEY_PASSWORD", "secret")
     config = ColossusConfig(
@@ -108,9 +110,10 @@ def test_http_client_config_resolves_proxy_and_client_cert_from_env(
     assert http_config.cert == (str(client_cert), str(client_key), "secret")
     assert http_config.proxy_url == "http://proxy.example.test:8080"
     assert http_config.trust_env is False
-    assert http_config.async_client_kwargs(timeout=1.0)["proxy"] == (
-        "http://proxy.example.test:8080"
-    )
+    kwargs = http_config.async_client_kwargs(timeout=1.0)
+    assert kwargs["proxy"] == "http://proxy.example.test:8080"
+    assert isinstance(kwargs["verify"], ssl.SSLContext)
+    assert "cert" not in kwargs
 
 
 def test_http_client_config_overrides_merge_with_config(tmp_path: Path) -> None:
