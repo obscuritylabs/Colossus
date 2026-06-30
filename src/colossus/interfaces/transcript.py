@@ -74,6 +74,39 @@ class ReadResultSummary:
     content_bytes: int
 
 
+@dataclass(frozen=True)
+class ShellResultSummary:
+    command: str
+    cwd: str
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+@dataclass(frozen=True)
+class GitStatusSummary:
+    entries: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class DiffResultSummary:
+    title: str
+    diff: str
+    exit_code: int
+    stderr: str
+    additions: int
+    deletions: int
+
+
+_COMPACT_SEMANTIC_TOOL_CALLS = {
+    "filesystem.read",
+    "git.diff",
+    "git.show",
+    "git.status",
+    "shell.run",
+}
+
+
 @dataclass
 class ActivityIndicator:
     console: Console
@@ -136,6 +169,7 @@ class TranscriptRenderer:
     _assistant_started: bool = False
     _activity_context: str = ""
     _model_delta_buffer: list[str] = field(default_factory=list)
+    _tool_call_arguments: dict[str, dict[str, object]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.activity_indicator is None:
@@ -173,6 +207,7 @@ class TranscriptRenderer:
         self._assistant_started = False
         self._activity_context = activity_context or ""
         self._model_delta_buffer.clear()
+        self._tool_call_arguments.clear()
         self._set_activity("Thinking...")
 
     def end_run(self) -> None:
@@ -398,7 +433,8 @@ class TranscriptRenderer:
         self._render_status_block("model request", body, self.theme.meta)
 
     def _render_tool_call(self, event: ToolCallRequestedEvent) -> None:
-        if event.name == "filesystem.read" and self.events_mode != "verbose":
+        self._tool_call_arguments[event.call_id] = event.arguments
+        if event.name in _COMPACT_SEMANTIC_TOOL_CALLS and self.events_mode != "verbose":
             return
         limit = (
             self.verbose_argument_preview_chars
@@ -431,6 +467,40 @@ class TranscriptRenderer:
                     self.verbose_output_preview_chars,
                 )
                 self._render_status_block("raw result", raw_preview, self.theme.meta)
+            return
+        shell_summary = _shell_result_summary(
+            event.name,
+            event.output,
+            self._tool_call_arguments.get(event.call_id, {}),
+        )
+        if shell_summary is not None:
+            self._render_status_block(
+                "shell",
+                _shell_result_text(shell_summary),
+                self.theme.tool_output,
+            )
+            if self.events_mode == "verbose":
+                raw_preview = _truncate(
+                    event.output.replace("\n", "\\n"),
+                    self.verbose_output_preview_chars,
+                )
+                self._render_status_block("raw result", raw_preview, self.theme.meta)
+            return
+        git_status = _git_status_summary(event.name, event.output)
+        if git_status is not None:
+            self._render_status_block(
+                "git status",
+                _git_status_text(git_status),
+                self.theme.tool_output,
+            )
+            return
+        diff_summary = _diff_result_summary(event.name, event.output)
+        if diff_summary is not None:
+            self._render_status_block(
+                diff_summary.title,
+                _diff_result_text(diff_summary),
+                self.theme.tool_output,
+            )
             return
         limit = (
             self.verbose_output_preview_chars
@@ -583,6 +653,145 @@ def _read_result_text(summary: ReadResultSummary) -> Text:
     if preview:
         body.append("\n")
         body.append_text(preview)
+    return body
+
+
+def _shell_result_summary(
+    name: str,
+    output: str,
+    arguments: dict[str, object],
+) -> ShellResultSummary | None:
+    if name != "shell.run":
+        return None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    exit_code = payload.get("exit_code")
+    stdout = payload.get("stdout", "")
+    stderr = payload.get("stderr", "")
+    cwd = payload.get("cwd", ".")
+    if not isinstance(exit_code, int):
+        return None
+    if not isinstance(stdout, str) or not isinstance(stderr, str) or not isinstance(cwd, str):
+        return None
+    argv = arguments.get("argv")
+    command = "shell.run"
+    if isinstance(argv, list):
+        command = " ".join(str(part) for part in argv)
+    return ShellResultSummary(
+        command=command,
+        cwd=cwd,
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def _shell_result_text(summary: ShellResultSummary) -> Text:
+    body = Text()
+    body.append("$ ", style="dim")
+    body.append(summary.command)
+    exit_style = "green" if summary.exit_code == 0 else "red"
+    body.append(f"\nexit={summary.exit_code}", style=exit_style)
+    body.append(f" cwd={summary.cwd}", style="dim")
+    output = _shell_output_preview(summary)
+    if output:
+        body.append("\n")
+        body.append_text(output)
+    return body
+
+
+def _shell_output_preview(summary: ShellResultSummary) -> Text:
+    rendered = Text()
+    if summary.stdout:
+        rendered.append("stdout\n", style="dim")
+        rendered.append_text(_source_preview("stdout", summary.stdout, 1, limit=10))
+    if summary.stderr:
+        rendered.append("stderr\n", style="red")
+        rendered.append_text(_source_preview("stderr", summary.stderr, 1, limit=10))
+    return rendered
+
+
+def _git_status_summary(name: str, output: str) -> GitStatusSummary | None:
+    if name != "git.status":
+        return None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return None
+    parsed: list[tuple[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status")
+        path = entry.get("path")
+        if isinstance(status, str) and isinstance(path, str):
+            parsed.append((status, path))
+    return GitStatusSummary(entries=tuple(parsed))
+
+
+def _git_status_text(summary: GitStatusSummary) -> Text:
+    body = Text()
+    if not summary.entries:
+        body.append("clean", style="green")
+        return body
+    body.append(f"{len(summary.entries)} changed", style="yellow")
+    for status, path in summary.entries[:20]:
+        body.append("\n")
+        body.append(status, style="yellow")
+        body.append("  ")
+        body.append(path)
+    if len(summary.entries) > 20:
+        body.append(f"\n... {len(summary.entries) - 20} more", style="dim")
+    return body
+
+
+def _diff_result_summary(name: str, output: str) -> DiffResultSummary | None:
+    if name not in {"git.diff", "git.show"}:
+        return None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    diff_key = "diff" if name == "git.diff" else "output"
+    diff = payload.get(diff_key)
+    stderr = payload.get("stderr", "")
+    exit_code = payload.get("exit_code", 0)
+    if not isinstance(diff, str) or not isinstance(stderr, str) or not isinstance(exit_code, int):
+        return None
+    additions, deletions = _diff_counts(diff)
+    return DiffResultSummary(
+        title="git diff" if name == "git.diff" else "git show",
+        diff=diff,
+        exit_code=exit_code,
+        stderr=stderr,
+        additions=additions,
+        deletions=deletions,
+    )
+
+
+def _diff_result_text(summary: DiffResultSummary) -> Text:
+    body = Text()
+    body.append(f"(+{summary.additions}", style="green")
+    body.append(" ")
+    body.append(f"-{summary.deletions})", style="red")
+    body.append(f" exit={summary.exit_code}", style="dim")
+    if summary.diff:
+        body.append("\n")
+        body.append_text(_styled_diff(summary.diff))
+    if summary.stderr:
+        body.append("\nstderr\n", style="red")
+        body.append_text(_source_preview("stderr", summary.stderr, 1, limit=8))
     return body
 
 

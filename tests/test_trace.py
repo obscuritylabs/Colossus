@@ -84,6 +84,94 @@ def test_trace_renderer_compact_formats_filesystem_read_result() -> None:
     assert "preview " not in output
 
 
+def test_trace_renderer_compact_formats_shell_result() -> None:
+    console = Console(record=True, width=120)
+    renderer = RichRunEventRenderer(console)
+
+    renderer.render(
+        ToolCallRequestedEvent(
+            call_id="call-1",
+            name="shell.run",
+            arguments={"argv": ["uv", "run", "pytest"], "cwd": "."},
+        )
+    )
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-1",
+            name="shell.run",
+            output=json.dumps(
+                {
+                    "cwd": ".",
+                    "exit_code": 0,
+                    "stdout": "passed\n",
+                    "stderr": "",
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "tool call shell.run" not in output
+    assert "ran uv run pytest" in output
+    assert "exit=0 cwd=." in output
+    assert "stdout" in output
+    assert "passed" in output
+    assert "\\n" not in output
+
+
+def test_trace_renderer_compact_formats_git_status() -> None:
+    console = Console(record=True, width=120)
+    renderer = RichRunEventRenderer(console)
+
+    renderer.render(
+        ToolCallRequestedEvent(call_id="call-1", name="git.status", arguments={})
+    )
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-1",
+            name="git.status",
+            output=json.dumps(
+                {
+                    "entries": [{"status": " M", "path": "src/app.py"}],
+                    "raw": " M src/app.py\n",
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "tool call git.status" not in output
+    assert "git status 1 changed" in output
+    assert "src/app.py" in output
+
+
+def test_trace_renderer_compact_formats_git_diff() -> None:
+    console = Console(record=True, width=120)
+    renderer = RichRunEventRenderer(console)
+
+    renderer.render(
+        ToolCallRequestedEvent(call_id="call-1", name="git.diff", arguments={})
+    )
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-1",
+            name="git.diff",
+            output=json.dumps(
+                {
+                    "diff": "--- a/file\n+++ b/file\n@@\n-old\n+new\n",
+                    "stderr": "",
+                    "exit_code": 0,
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "tool call git.diff" not in output
+    assert "git diff (+1 -1) exit=0" in output
+    assert "+new" in output
+
+
 def test_trace_renderer_formats_edit_results() -> None:
     console = Console(record=True, width=120)
     renderer = RichRunEventRenderer(console)

@@ -185,6 +185,97 @@ def test_transcript_renderer_formats_filesystem_read_in_compact_mode() -> None:
     assert "\\n" not in output
 
 
+def test_transcript_renderer_formats_shell_result_in_compact_mode() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console)
+
+    renderer.render(
+        ToolCallRequestedEvent(
+            call_id="call-123456",
+            name="shell.run",
+            arguments={"argv": ["uv", "run", "pytest"], "cwd": "."},
+        )
+    )
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-123456",
+            name="shell.run",
+            output=json.dumps(
+                {
+                    "cwd": ".",
+                    "exit_code": 0,
+                    "stdout": "passed\n",
+                    "stderr": "",
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "tool call" not in output
+    assert "shell" in output
+    assert "$ uv run pytest" in output
+    assert "exit=0 cwd=." in output
+    assert "stdout" in output
+    assert "passed" in output
+    assert "\\n" not in output
+
+
+def test_transcript_renderer_formats_git_status_in_compact_mode() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console)
+
+    renderer.render(
+        ToolCallRequestedEvent(call_id="call-123456", name="git.status", arguments={})
+    )
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-123456",
+            name="git.status",
+            output=json.dumps(
+                {
+                    "entries": [{"status": " M", "path": "src/app.py"}],
+                    "raw": " M src/app.py\n",
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "tool call" not in output
+    assert "git status" in output
+    assert "1 changed" in output
+    assert "src/app.py" in output
+
+
+def test_transcript_renderer_formats_git_diff_in_compact_mode() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console)
+
+    renderer.render(
+        ToolCallRequestedEvent(call_id="call-123456", name="git.diff", arguments={})
+    )
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-123456",
+            name="git.diff",
+            output=json.dumps(
+                {
+                    "diff": "--- a/file\n+++ b/file\n@@\n-old\n+new\n",
+                    "stderr": "",
+                    "exit_code": 0,
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "tool call" not in output
+    assert "git diff" in output
+    assert "(+1 -1)" in output
+    assert "+new" in output
+
+
 def test_transcript_renderer_formats_edit_result_summary() -> None:
     console = Console(record=True, width=100)
     renderer = TranscriptRenderer(console)
