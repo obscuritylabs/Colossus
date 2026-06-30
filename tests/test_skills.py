@@ -5,22 +5,58 @@ import pytest
 from colossus.adapters.skills_filesystem import FilesystemSkillRepository
 from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.application.defaults import default_agent
+from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.skills import SkillComposer, SkillResolver, extract_skill_mentions
 from colossus.domain.errors import ColossusError
+from colossus.infrastructure.container import create_default_skill_resolver
 
 
 def test_bundled_skills_are_discoverable() -> None:
     resolver = SkillResolver((PackageSkillRepository(),))
     names = {skill.manifest.name for skill in resolver.list_skills()}
 
-    assert {"coding", "security-review", "offline-dev"} <= names
+    assert {"coding", "security-review", "offline-dev", "skill-creator"} <= names
 
 
 def test_bundled_skill_content_loads() -> None:
     skill = PackageSkillRepository().get_skill("coding")
+    creator = PackageSkillRepository().get_skill("skill-creator")
 
     assert skill is not None
     assert "implementing or changing software" in skill.instructions
+    assert creator is not None
+    assert "design, write, or revise a Colossus skill" in creator.instructions
+
+
+def test_skill_authoring_service_scaffolds_and_validates_skill(tmp_path) -> None:
+    service = SkillAuthoringService(tmp_path / "skills")
+
+    result = service.scaffold_user_skill("demo-skill", description="Demo workflow.")
+    validation = service.validate(result.path)
+
+    assert result.path == tmp_path / "skills" / "demo-skill"
+    assert result.manifest.name == "demo-skill"
+    assert result.manifest.description == "Demo workflow."
+    assert (result.path / "manifest.json").is_file()
+    assert (result.path / "SKILL.md").is_file()
+    assert validation.valid is True
+    assert validation.manifest is not None
+    assert validation.manifest.name == "demo-skill"
+
+    with pytest.raises(ColossusError, match="already exists"):
+        service.scaffold_user_skill("demo-skill")
+
+
+def test_default_skill_resolver_loads_user_skills_and_controls_overrides(tmp_path) -> None:
+    _write_skill(tmp_path / "custom", name="custom")
+    _write_skill(tmp_path / "coding", name="coding", instructions="User override")
+
+    resolver = create_default_skill_resolver(tmp_path)
+    override_resolver = create_default_skill_resolver(tmp_path, allow_user_overrides=True)
+
+    assert resolver.get_skill("custom") is not None
+    assert resolver.get_skill("coding").source == "package:coding"  # type: ignore[union-attr]
+    assert override_resolver.get_skill("coding").instructions == "User override"  # type: ignore[union-attr]
 
 
 def test_filesystem_skill_repository_loads_sorted_skills_and_ignores_incomplete_dirs(

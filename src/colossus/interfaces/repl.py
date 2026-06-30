@@ -37,6 +37,7 @@ from colossus.application.planning import PlanService
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.research import ResearchService
 from colossus.application.sessions import SessionService
+from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.skills import SkillResolver, extract_skill_mentions
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
@@ -602,6 +603,7 @@ async def run_repl(
     memory_service: MemoryService | None = None,
     session_service: SessionService | None = None,
     plan_service: PlanService | None = None,
+    skill_authoring_service: SkillAuthoringService | None = None,
     subagent_service: SubagentService | None = None,
     research_service: ResearchService | None = None,
     integration_service: IntegrationService | None = None,
@@ -714,7 +716,14 @@ async def run_repl(
             if command.command == "exit":
                 return
             if command.command == "skill":
-                _handle_skill_command(console, skills, display_state, agent, command.argument)
+                _handle_skill_command(
+                    console,
+                    skills,
+                    display_state,
+                    agent,
+                    command.argument,
+                    skill_authoring_service=skill_authoring_service,
+                )
                 continue
             if command.command == "skills":
                 for skill in skills.list_skills():
@@ -1231,6 +1240,7 @@ def run_repl_sync(
     memory_service: MemoryService | None = None,
     session_service: SessionService | None = None,
     plan_service: PlanService | None = None,
+    skill_authoring_service: SkillAuthoringService | None = None,
     subagent_service: SubagentService | None = None,
     research_service: ResearchService | None = None,
     integration_service: IntegrationService | None = None,
@@ -1261,6 +1271,7 @@ def run_repl_sync(
             memory_service=memory_service,
             session_service=session_service,
             plan_service=plan_service,
+            skill_authoring_service=skill_authoring_service,
             subagent_service=subagent_service,
             research_service=research_service,
             integration_service=integration_service,
@@ -1837,6 +1848,8 @@ def _handle_skill_command(
     state: ReplDisplayState,
     agent: AgentSpec,
     argument: str,
+    *,
+    skill_authoring_service: SkillAuthoringService | None = None,
 ) -> None:
     action, _, rest = argument.strip().partition(" ")
     normalized = action.lower()
@@ -1887,7 +1900,69 @@ def _handle_skill_command(
         state.sticky_skills = ()
         console.print("Sticky skills cleared.")
         return
-    console.print("Use /skill [on|off|show|use NAME|drop NAME|clear].")
+    if normalized == "new":
+        if skill_authoring_service is None:
+            console.print("Skill authoring is not configured.")
+            return
+        try:
+            scaffold_name, parent, force = _parse_skill_new_args(rest)
+            scaffold_result = skill_authoring_service.scaffold(
+                scaffold_name,
+                parent=parent,
+                overwrite=force,
+            )
+        except ColossusError as exc:
+            console.print(f"Skill creation failed: {exc}")
+            return
+        console.print(f"Wrote skill {scaffold_result.name}: {scaffold_result.path}")
+        return
+    if normalized == "validate":
+        if skill_authoring_service is None:
+            console.print("Skill authoring is not configured.")
+            return
+        try:
+            validation_path = _parse_single_path_arg(rest, "Use /skill validate PATH.")
+        except ColossusError as exc:
+            console.print(str(exc))
+            return
+        validation_result = skill_authoring_service.validate(validation_path)
+        if validation_result.valid:
+            validated_name = (
+                validation_result.manifest.name
+                if validation_result.manifest is not None
+                else validation_path.name
+            )
+            console.print(f"Skill is valid: {validated_name} ({validation_result.path})")
+            return
+        console.print(f"Skill is invalid: {validation_result.path}")
+        for error in validation_result.errors:
+            console.print(f"- {error}")
+        return
+    console.print("Use /skill [on|off|show|use NAME|drop NAME|clear|new NAME|validate PATH].")
+
+
+def _parse_skill_new_args(argument: str) -> tuple[str, Path | None, bool]:
+    tokens = shlex.split(argument)
+    force = False
+    filtered: list[str] = []
+    for token in tokens:
+        if token == "--force":
+            force = True
+        else:
+            filtered.append(token)
+    if not filtered:
+        raise ColossusError("Use /skill new NAME [PARENT_DIR] [--force].")
+    if len(filtered) > 2:
+        raise ColossusError("Use /skill new NAME [PARENT_DIR] [--force].")
+    parent = Path(filtered[1]) if len(filtered) == 2 else None
+    return filtered[0], parent, force
+
+
+def _parse_single_path_arg(argument: str, usage: str) -> Path:
+    tokens = shlex.split(argument)
+    if len(tokens) != 1:
+        raise ColossusError(usage)
+    return Path(tokens[0])
 
 
 async def _handle_plan_command(
@@ -2880,9 +2955,9 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Manage app and service integrations.",
     )
     table.add_row(
-        Text("/skill [on|off|show|use|drop|clear]"),
+        Text("/skill [on|off|show|use|drop|clear|new|validate]"),
         _help_current(state, "skill"),
-        "Toggle or manage Skill Mode.",
+        "Toggle, author, or manage Skill Mode.",
     )
     table.add_row(
         "/context [snapshots|restore ID]",

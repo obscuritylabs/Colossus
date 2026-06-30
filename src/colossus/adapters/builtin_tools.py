@@ -8,6 +8,7 @@ from typing import Any
 
 from colossus.adapters.context_tools import create_context_tools
 from colossus.adapters.roadmap_tools import create_roadmap_tools
+from colossus.adapters.skill_tools import create_skill_tools
 from colossus.adapters.subprocess_broker import (
     SubprocessBroker,
     SubprocessCommand,
@@ -17,6 +18,7 @@ from colossus.adapters.workspace import Workspace
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.memories import MemoryService
+from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import ToolHandler
@@ -49,6 +51,7 @@ def create_builtin_tools(
     search_provider: SearchProvider | None = None,
     mcp_gateway: McpGateway | None = None,
     http_client_config: HttpClientConfig | None = None,
+    skill_authoring_service: SkillAuthoringService | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     broker = SubprocessBroker()
     handlers = BuiltinToolHandlers(workspace, broker, user_prompt_handler=user_prompt_handler)
@@ -82,8 +85,20 @@ def create_builtin_tools(
         provider=context_provider,
         default_model=context_model,
     )
+    skill_specs, skill_handlers = (
+        create_skill_tools(skill_authoring_service)
+        if skill_authoring_service is not None
+        else ((), {})
+    )
     user_prompt_specs = (_user_ask_spec(),) if user_prompt_handler is not None else ()
-    specs = (*core_specs, *roadmap_specs, *context_specs, *user_prompt_specs, _echo_spec())
+    specs = (
+        *core_specs,
+        *roadmap_specs,
+        *context_specs,
+        *skill_specs,
+        *user_prompt_specs,
+        _echo_spec(),
+    )
     user_prompt_handlers = (
         {"user.ask": handlers.user_ask} if user_prompt_handler is not None else {}
     )
@@ -100,6 +115,7 @@ def create_builtin_tools(
         "shell.run": handlers.shell_run,
         **roadmap_handlers,
         **context_handlers,
+        **skill_handlers,
         **user_prompt_handlers,
         "echo": handlers.echo,
     }

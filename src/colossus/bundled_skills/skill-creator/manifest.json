@@ -1,0 +1,9 @@
+{
+  "name": "skill-creator",
+  "version": "0.1.0",
+  "description": "Guided workflow for designing and authoring safe Colossus skills.",
+  "triggers": ["skill", "skills", "author", "create", "scaffold"],
+  "required_tools": ["skill.scaffold", "skill.validate"],
+  "permissions": ["filesystem:write"],
+  "offline_compatible": true
+}

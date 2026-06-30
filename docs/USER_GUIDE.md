@@ -126,6 +126,20 @@ uv run colossus run --skill coding "Implement the approved plan"
 /skill drop coding
 ```
 
+Create skills directly, or ask the model to help craft one with the bundled authoring
+skill:
+
+```text
+@skill:skill-creator create a release checklist skill
+/skill new release-checklist
+/skill validate /path/to/skills/release-checklist
+```
+
+```bash
+uv run colossus skills new release-checklist
+uv run colossus skills validate /path/to/skills/release-checklist
+```
+
 See [Skills](SKILLS.md) for authoring and safety guidance.
 
 ## Deep Research

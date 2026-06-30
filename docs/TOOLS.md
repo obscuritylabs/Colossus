@@ -36,6 +36,7 @@ tools, see [Integrations](INTEGRATIONS.md).
 | Research mode | `colossus research`, `/research` | Network/MCP lanes | Partial | Persists cited reports, sources, claims, and research status events. |
 | Trace/eval | `trace.show`, `trace.export`, `eval.run` | Export/eval only | Yes | Trace export writes a bounded snapshot; eval wraps local pytest. |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Restore only | Yes | Durable snapshots reduce model input without deleting raw history. |
+| Skill authoring | `skill.scaffold`, `skill.validate` | Scaffold only | Yes | Data-only user skill creation and validation under the configured skill directory. |
 | Smoke test | `echo` | No | Yes | Deterministic smoke-test tool. |
 
 ## Input And Output Shapes

@@ -18,6 +18,7 @@ from colossus.adapters.workspace import Workspace
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.memories import MemoryService
+from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig
@@ -170,6 +171,56 @@ async def test_user_ask_tool_requires_choices_when_freeform_is_disabled(tmp_path
                 arguments={"question": "Pick a path", "allow_freeform": False},
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_skill_authoring_tools_scaffold_and_validate_user_skill(tmp_path: Path) -> None:
+    service = SkillAuthoringService(tmp_path / "skills")
+    specs, handlers = create_builtin_tools(
+        Workspace(tmp_path),
+        skill_authoring_service=service,
+    )
+    executor = FunctionToolExecutor(handlers, InMemoryToolRegistry(specs))
+    scaffold_spec = next(spec for spec in specs if spec.name == "skill.scaffold")
+    validate_spec = next(spec for spec in specs if spec.name == "skill.validate")
+
+    assert scaffold_spec.permissions.approval_required is True
+    assert scaffold_spec.permissions.mutation is True
+    assert scaffold_spec.permissions.working_root_required is False
+    assert validate_spec.permissions.filesystem == "read"
+    assert validate_spec.permissions.mutation is False
+
+    scaffolded = await executor.execute(
+        ToolCall(
+            call_id="skill-1",
+            name="skill.scaffold",
+            arguments={"name": "demo-skill", "description": "Demo workflow."},
+        )
+    )
+    scaffold_payload = json.loads(scaffolded.output)
+    skill_path = tmp_path / "skills" / "demo-skill"
+
+    assert scaffold_payload["skill"]["name"] == "demo-skill"
+    assert skill_path.is_dir()
+    assert json.loads((skill_path / "manifest.json").read_text(encoding="utf-8"))[
+        "description"
+    ] == "Demo workflow."
+    assert "Demo Skill" in (skill_path / "SKILL.md").read_text(encoding="utf-8")
+
+    with pytest.raises(ToolExecutionError, match="already exists"):
+        await executor.execute(
+            ToolCall(
+                call_id="skill-2",
+                name="skill.scaffold",
+                arguments={"name": "demo-skill"},
+            )
+        )
+
+    validation = await executor.execute(
+        ToolCall(call_id="skill-3", name="skill.validate", arguments={"name": "demo-skill"})
+    )
+
+    assert json.loads(validation.output)["validation"]["valid"] is True
 
 
 @pytest.mark.asyncio

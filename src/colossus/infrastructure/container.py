@@ -19,6 +19,7 @@ from colossus.adapters.research_sources import (
     SearxngSearchProvider,
     WorkspaceRepoResearchProvider,
 )
+from colossus.adapters.skills_filesystem import FilesystemSkillRepository
 from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.adapters.workspace import Workspace
@@ -36,6 +37,7 @@ from colossus.application.preferences import ReplPreferencesService
 from colossus.application.research import ResearchService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.sessions import SessionService
+from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.skills import SkillComposer, SkillResolver
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
@@ -59,6 +61,7 @@ from colossus.ports.approval import ApprovalHandler
 from colossus.ports.credentials import CredentialBroker
 from colossus.ports.model_provider import ModelProvider
 from colossus.ports.research import McpGateway, SearchProvider
+from colossus.ports.skills import SkillRepository
 from colossus.ports.user_prompt import UserPromptHandler
 
 
@@ -124,6 +127,7 @@ def create_default_orchestrator(
         search_provider=search_provider,
         mcp_gateway=mcp_gateway,
         http_client_config=http_client_config,
+        skill_authoring_service=create_skill_authoring_service(data_dir),
     )
     resolved_credential_broker = credential_broker or EnvCredentialBroker()
     integration_specs, integration_handlers = create_integration_tools(
@@ -136,7 +140,7 @@ def create_default_orchestrator(
     handlers = {**handlers, **integration_handlers}
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)
-    resolved_skill_resolver = skill_resolver or create_default_skill_resolver()
+    resolved_skill_resolver = skill_resolver or create_default_skill_resolver(data_dir / "skills")
     if subagent_service is not None and model_router is not None:
         if event_observer is not None:
             subagent_service.set_event_observer(event_observer)
@@ -454,5 +458,16 @@ def create_repl_preferences_service(data_dir: Path) -> ReplPreferencesService:
     return ReplPreferencesService(create_state_store(data_dir))
 
 
-def create_default_skill_resolver() -> SkillResolver:
-    return SkillResolver((PackageSkillRepository(),))
+def create_skill_authoring_service(data_dir: Path) -> SkillAuthoringService:
+    return SkillAuthoringService(data_dir / "skills")
+
+
+def create_default_skill_resolver(
+    user_skill_root: Path | None = None,
+    *,
+    allow_user_overrides: bool = False,
+) -> SkillResolver:
+    repositories: list[SkillRepository] = [PackageSkillRepository()]
+    if user_skill_root is not None:
+        repositories.append(FilesystemSkillRepository(user_skill_root))
+    return SkillResolver(tuple(repositories), allow_user_overrides=allow_user_overrides)

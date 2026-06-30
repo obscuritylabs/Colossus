@@ -16,6 +16,7 @@ from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.planning import PlanService
 from colossus.application.sessions import SessionService
+from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.skills import SkillResolver
 from colossus.application.subagents import SubagentService
 from colossus.domain.context import ContextStatus
@@ -242,6 +243,7 @@ def test_skill_completer_suggests_canonical_skill_mentions() -> None:
         "@skill:coding ",
         "@skill:security-review ",
         "@skill:offline-dev ",
+        "@skill:skill-creator ",
     }
     assert {completion.text for completion in at} >= {"@skill:coding "}
     assert {completion.text for completion in namespace_prefix} >= all_skill_mentions
@@ -817,7 +819,7 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "/memories [all|STATUS]" in help_output
     assert "/memory [archive|search|supersede|TEXT]" in help_output
     assert "/plan [on|off|show|approve|execute|list|discard]" in help_output
-    assert "/skill [on|off|show|use|drop|clear]" in help_output
+    assert "/skill [on|off|show|use|drop|clear|new|validate]" in help_output
     assert "Current" in help_output
     assert "primary:model-a" in help_output
     assert "off" in help_output
@@ -1224,6 +1226,41 @@ def test_handle_skill_command_manages_runtime_skill_mode() -> None:
     assert "available_count" in output
     assert "General software implementation workflow" in output
     assert "Skill Mode is off." in output
+
+
+def test_handle_skill_command_scaffolds_and_validates_skills(tmp_path) -> None:
+    console = Console(record=True, width=140)
+    resolver = SkillResolver((PackageSkillRepository(),))
+    state = ReplDisplayState(
+        session_id="session-1",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+    )
+    agent = default_agent("model-a")
+    service = SkillAuthoringService(tmp_path / "skills")
+
+    _handle_skill_command(
+        console,
+        resolver,
+        state,
+        agent,
+        "new demo-skill",
+        skill_authoring_service=service,
+    )
+    _handle_skill_command(
+        console,
+        resolver,
+        state,
+        agent,
+        f"validate {tmp_path / 'skills' / 'demo-skill'}",
+        skill_authoring_service=service,
+    )
+
+    output = console.export_text()
+    assert (tmp_path / "skills" / "demo-skill" / "manifest.json").is_file()
+    assert "Wrote skill demo-skill" in output
+    assert "Skill is valid: demo-skill" in output
 
 
 def test_render_plan_prefers_markdown_content() -> None:
