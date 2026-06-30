@@ -1,3 +1,5 @@
+import json
+
 from rich.console import Console
 
 from colossus.domain.events import (
@@ -45,7 +47,7 @@ def test_trace_renderer_shows_tool_call_and_bounded_result() -> None:
     assert "first line\\nsecond li..." in output
 
 
-def test_trace_renderer_compact_collapses_payloads() -> None:
+def test_trace_renderer_compact_formats_filesystem_read_result() -> None:
     console = Console(record=True, width=120)
     renderer = RichRunEventRenderer(console, output_preview_chars=24)
 
@@ -60,15 +62,78 @@ def test_trace_renderer_compact_collapses_payloads() -> None:
         ToolCallCompletedEvent(
             call_id="call-1",
             name="filesystem.read",
-            output="first line\nsecond line",
+            output=json.dumps(
+                {
+                    "path": "README.md",
+                    "start_line": 1,
+                    "line_count": 3,
+                    "content": "# Title\n\n> quoted",
+                    "truncated": False,
+                }
+            ),
         )
     )
 
     output = console.export_text()
-    assert "tool call filesystem.read" in output
-    assert "tool result filesystem.read" in output
+    assert "tool call filesystem.read" not in output
+    assert "read README.md" in output
+    assert "lines=3" in output
+    assert "1  # Title" in output
+    assert "3  > quoted" in output
     assert '"path": "pyproject.toml"' not in output
     assert "preview " not in output
+
+
+def test_trace_renderer_formats_edit_results() -> None:
+    console = Console(record=True, width=120)
+    renderer = RichRunEventRenderer(console)
+
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-1",
+            name="patch.apply",
+            output=json.dumps(
+                {
+                    "path": "src/app.py",
+                    "replacements": 1,
+                    "changed_line_ranges": [{"start": 10, "end": 12}],
+                    "diff": "--- a/src/app.py\n+++ b/src/app.py\n@@\n-old\n+new\n",
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "edited src/app.py" in output
+    assert "(+1 -1)" in output
+    assert "lines=10-12" in output
+    assert "+new" in output
+
+
+def test_trace_renderer_verbose_also_shows_edit_diff() -> None:
+    console = Console(record=True, width=120)
+    renderer = RichRunEventRenderer(console, events_mode="verbose")
+
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-1",
+            name="patch.apply",
+            output=json.dumps(
+                {
+                    "path": "src/app.py",
+                    "replacements": 1,
+                    "changed_line_ranges": [{"start": 10, "end": 10}],
+                    "diff": "--- a/src/app.py\n+++ b/src/app.py\n@@\n-old\n+new\n",
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "edited src/app.py" in output
+    assert "(+1 -1)" in output
+    assert "lines=10" in output
+    assert "+new" in output
 
 
 def test_trace_renderer_verbose_dumps_model_request() -> None:

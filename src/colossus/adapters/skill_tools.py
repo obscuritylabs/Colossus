@@ -1,6 +1,7 @@
 """Model-callable skill authoring tools."""
 
 import json
+from pathlib import Path
 from typing import Any
 
 from colossus.application.skill_authoring import SkillAuthoringService, SkillValidationResult
@@ -40,6 +41,7 @@ def create_skill_tools(
             _skill_read_spec(),
             _skill_write_spec(),
             _skill_validate_spec(),
+            _skill_install_spec(),
             *resource_specs,
         ),
         {
@@ -48,6 +50,7 @@ def create_skill_tools(
             "skill.read": handlers.skill_read,
             "skill.write": handlers.skill_write,
             "skill.validate": handlers.skill_validate,
+            "skill.install": handlers.skill_install,
             **resource_handlers,
         },
     )
@@ -222,7 +225,14 @@ class SkillToolHandlers:
 
     async def skill_validate(self, arguments: JsonObject) -> str:
         try:
-            result = self._service.validate_user_skill(_required_string_arg(arguments, "name"))
+            path = _optional_string_arg(arguments, "path")
+            name = _optional_string_arg(arguments, "name")
+            if path is not None:
+                result = self._service.validate(Path(path))
+            elif name is not None:
+                result = self._service.validate_user_skill(name)
+            else:
+                raise ToolExecutionError("name or path is required.")
         except ColossusError as exc:
             raise ToolExecutionError(str(exc)) from exc
         return _json(
@@ -236,6 +246,44 @@ class SkillToolHandlers:
                         else None
                     ),
                     "errors": list(result.errors),
+                }
+            }
+        )
+
+    async def skill_install(self, arguments: JsonObject) -> str:
+        try:
+            result = self._service.install_skill(
+                Path(_required_string_arg(arguments, "source_path")),
+                overwrite=_bool_arg(arguments, "overwrite", False),
+            )
+        except ColossusError as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        if self._audit_sink is not None:
+            await self._audit_sink.record(
+                "agent",
+                "skill.install",
+                {
+                    "skill": result.name,
+                    "source_path": str(result.source_path),
+                    "target_path": str(result.target_path),
+                    "files": [
+                        {"path": file.path, "size": file.size, "sha256": file.sha256}
+                        for file in result.files
+                    ],
+                    "valid": result.validation.valid,
+                },
+            )
+        return _json(
+            {
+                "skill": {
+                    "name": result.name,
+                    "source_path": str(result.source_path),
+                    "target_path": str(result.target_path),
+                    "files": [
+                        {"path": file.path, "size": file.size, "sha256": file.sha256}
+                        for file in result.files
+                    ],
+                    "validation": _validation_payload(result.validation),
                 }
             }
         )
@@ -359,13 +407,42 @@ def _skill_write_spec() -> ToolSpec:
 def _skill_validate_spec() -> ToolSpec:
     return ToolSpec(
         name="skill.validate",
-        description="Validate a user skill by name under the configured skill directory.",
-        input_schema=_object_schema({"name": {"type": "string"}}, ["name"]),
+        description=(
+            "Validate an installed user skill by name or a local skill directory by path."
+        ),
+        input_schema=_object_schema(
+            {"name": {"type": "string"}, "path": {"type": "string"}}
+        ),
         output_schema=_object_schema({"validation": {"type": "object"}}),
         permissions=ToolPermission(
             filesystem="read",
             working_root_required=False,
             risk="low",
+        ),
+    )
+
+
+def _skill_install_spec() -> ToolSpec:
+    return ToolSpec(
+        name="skill.install",
+        description=(
+            "Validate and install a local skill directory into the user-global "
+            "~/.agents/skills directory. Existing global skills require overwrite=true."
+        ),
+        input_schema=_object_schema(
+            {
+                "source_path": {"type": "string"},
+                "overwrite": {"type": "boolean", "default": False},
+            },
+            ["source_path"],
+        ),
+        output_schema=_object_schema({"skill": {"type": "object"}}),
+        permissions=ToolPermission(
+            filesystem="write",
+            approval_required=True,
+            mutation=True,
+            working_root_required=False,
+            risk="high",
         ),
     )
 

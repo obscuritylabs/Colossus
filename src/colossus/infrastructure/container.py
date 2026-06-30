@@ -26,7 +26,7 @@ from colossus.adapters.research_sources import (
     SearxngSearchProvider,
     WorkspaceRepoResearchProvider,
 )
-from colossus.adapters.skills_filesystem import FilesystemSkillRepository
+from colossus.adapters.skills_filesystem import FilesystemSkillRepository, WorkspaceSkillRepository
 from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.adapters.workspace import Workspace
@@ -126,6 +126,7 @@ def create_default_orchestrator(
     resolved_skill_resolver = skill_resolver or create_default_skill_resolver(
         data_dir / "skills",
         pack_root=data_dir / "packs",
+        workspace_root=workspace_root,
     )
     specs, handlers = create_builtin_tools(
         workspace,
@@ -141,7 +142,10 @@ def create_default_orchestrator(
         search_provider=search_provider,
         mcp_gateway=mcp_gateway,
         http_client_config=http_client_config,
-        skill_authoring_service=create_skill_authoring_service(data_dir),
+        skill_authoring_service=create_skill_authoring_service(
+            data_dir,
+            workspace_root=workspace_root,
+        ),
         skill_resource_service=SkillResourceService(resolved_skill_resolver),
         audit_sink=resolved_audit,
     )
@@ -497,8 +501,20 @@ def create_repl_preferences_service(data_dir: Path) -> ReplPreferencesService:
     return ReplPreferencesService(create_state_store(data_dir))
 
 
-def create_skill_authoring_service(data_dir: Path) -> SkillAuthoringService:
-    return SkillAuthoringService(data_dir / "skills")
+def create_skill_authoring_service(
+    data_dir: Path,
+    *,
+    workspace_root: Path | None = None,
+) -> SkillAuthoringService:
+    workspace_skill_root = (
+        workspace_root.resolve(strict=False) / ".agents" / "skills"
+        if workspace_root is not None
+        else None
+    )
+    return SkillAuthoringService(
+        data_dir / "skills",
+        workspace_skill_root=workspace_skill_root,
+    )
 
 
 def create_default_skill_resolver(
@@ -506,6 +522,8 @@ def create_default_skill_resolver(
     *,
     allow_user_overrides: bool = False,
     pack_root: Path | None = None,
+    workspace_root: Path | None = None,
+    global_skill_root: Path | None = None,
 ) -> SkillResolver:
     repositories: list[SkillRepository] = [
         PackageSkillRepository(),
@@ -516,4 +534,8 @@ def create_default_skill_resolver(
     ]
     if user_skill_root is not None:
         repositories.append(FilesystemSkillRepository(user_skill_root))
+    resolved_global_skill_root = global_skill_root or Path.home() / ".agents" / "skills"
+    repositories.append(FilesystemSkillRepository(resolved_global_skill_root))
+    if workspace_root is not None:
+        repositories.append(WorkspaceSkillRepository(workspace_root))
     return SkillResolver(tuple(repositories), allow_user_overrides=allow_user_overrides)

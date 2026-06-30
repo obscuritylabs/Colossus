@@ -17,21 +17,21 @@ skill instead of pretending a standalone skill can safely execute code.
 
 ## Authoring Rules
 
-- Use `skill.scaffold` for installed user skills. Pass the finished `SKILL.md`
-  body through the `instructions` field so the safe authoring path writes it.
-- Use `skill.inspect` and `skill.read` before revising an existing user skill.
-  Do not ask for overwrite just because the skill already exists.
-- Use `skill.write` for targeted edits to `SKILL.md`, `manifest.json`, or files
-  under `references/`, `scripts/`, `assets/`, `examples/`, or `tests/`.
-- When overwriting an existing file with `skill.write`, pass the `expected_sha256`
-  from `skill.read` or `skill.inspect` so stale edits are rejected.
-- Use `skill.validate` after scaffolding, writing, or overwriting a user skill.
+- Create and revise normal skills under workspace `.agents/skills/NAME` using
+  ordinary workspace file tools. Treat local skills as repo code: inspect,
+  edit, test, and validate them like any other project artifact.
+- Use `skill.validate` after scaffolding, writing, or overwriting a skill.
+- Use `skill.install` only when the user wants to promote a validated local
+  skill into the user-global `~/.agents/skills` location.
+- Use `skill.scaffold`, `skill.inspect`, `skill.read`, and `skill.write` only
+  for legacy installed Colossus user skills or when generic workspace file tools
+  cannot reach the target location safely.
 - Use `agent_compatible: true` when the user wants Agent Skills-compatible
   frontmatter in `SKILL.md`.
 - Use `resources` only for allowed directories: `references`, `scripts`,
   `assets`, `examples`, and `tests`.
-- Do not create installed skills with arbitrary workspace file writes, shell
-  commands, helper execution, package installation, or unbounded filesystem paths.
+- Do not write skill content into `.colossus`; that directory is Colossus-owned
+  runtime/control state. Use `.agents/skills` for repo-authored skills.
 - Do not put executable behavior in `SKILL.md`. Code files in `scripts/` are
   resources for inspection unless a pack declares an executable tool or MCP server.
 - Do not include secrets, credentials, hidden policy changes, or instructions to
@@ -98,15 +98,16 @@ aligned with `manifest.json`.
    - Include a short quality bar the agent can check before final response.
 
 5. Create or revise safely.
-   - Call `skill.scaffold` with `name`, `description`, `instructions`, and any
-     non-default manifest fields when creating a new user skill.
-   - Include `resources` for resource skills and `agent_compatible: true` for
-     Agent Skills frontmatter.
-   - If the target already exists, call `skill.inspect` and `skill.read` to
-     understand the current contents.
-   - Use `skill.write` for targeted updates instead of replacing the entire
-     skill. Preserve existing useful content and resources.
+   - Create new repo-local skills in `.agents/skills/NAME` with `SKILL.md` and
+     optional `manifest.json`.
+   - Include resource directories only when the workflow needs them:
+     `references`, `scripts`, `assets`, `examples`, or `tests`.
+   - If the target already exists, inspect the current files before editing.
+   - Use normal file edits for local `.agents/skills` content and preserve
+     existing useful content and resources.
    - Call `skill.validate` and fix any reported errors.
+   - Call `skill.install` only after validation when the user explicitly wants a
+     user-global installation.
 
 6. Iterate from real usage.
    - Treat user complaints and failed runs as evidence.
@@ -161,8 +162,8 @@ Use resources when they materially improve reuse:
   directly from the skill.
 
 When revising resources, keep paths inside the allowed resource directories and
-prefer small text files. Use `skill.write` with `mode: "create"` for new files and
-with `expected_sha256` for overwriting existing files.
+prefer small text files. Local `.agents/skills` resources can be edited with normal
+workspace file tools; installed skill edits should still use the bounded skill tools.
 
 Use a pack when capability needs execution or distribution metadata:
 

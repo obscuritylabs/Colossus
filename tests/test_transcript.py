@@ -1,3 +1,5 @@
+import json
+
 from rich.console import Console
 
 from colossus.domain.events import (
@@ -146,7 +148,7 @@ def test_transcript_renderer_reasoning_summary_hides_detail_id() -> None:
     assert "hidden-detail" not in output
 
 
-def test_transcript_renderer_tool_preview_is_collapsed_in_compact_mode() -> None:
+def test_transcript_renderer_formats_filesystem_read_in_compact_mode() -> None:
     console = Console(record=True, width=100)
     renderer = TranscriptRenderer(console, output_preview_chars=24)
 
@@ -161,16 +163,79 @@ def test_transcript_renderer_tool_preview_is_collapsed_in_compact_mode() -> None
         ToolCallCompletedEvent(
             call_id="call-123456",
             name="filesystem.read",
-            output="first line\nsecond line with more text",
+            output=json.dumps(
+                {
+                    "path": "notes.md",
+                    "start_line": 10,
+                    "line_count": 4,
+                    "content": "# Notes\n\n- One\n> Quote",
+                    "truncated": False,
+                }
+            ),
         )
     )
 
     output = console.export_text()
-    assert "tool call" in output
-    assert "filesystem.read" in output
-    assert "call-123" in output
-    assert "tool result" in output
-    assert "first line\\nsecond li..." in output
+    assert "tool call" not in output
+    assert "read" in output
+    assert "notes.md" in output
+    assert "4 lines" in output
+    assert "10  # Notes" in output
+    assert "13  > Quote" in output
+    assert "\\n" not in output
+
+
+def test_transcript_renderer_formats_edit_result_summary() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console)
+
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-1",
+            name="patch.apply",
+            output=json.dumps(
+                {
+                    "path": "src/app.py",
+                    "replacements": 1,
+                    "changed_line_ranges": [{"start": 4, "end": 5}],
+                    "diff": "--- a/src/app.py\n+++ b/src/app.py\n@@\n-old\n+new\n",
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "edited" in output
+    assert "src/app.py" in output
+    assert "(+1 -1)" in output
+    assert "lines=4-5" in output
+    assert "+new" in output
+
+
+def test_transcript_renderer_verbose_also_formats_edit_diff() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console, events_mode="verbose")
+
+    renderer.render(
+        ToolCallCompletedEvent(
+            call_id="call-1",
+            name="filesystem.replace",
+            output=json.dumps(
+                {
+                    "path": "src/app.py",
+                    "replacements": 1,
+                    "changed_line_ranges": [{"start": 4, "end": 4}],
+                    "diff": "--- a/src/app.py\n+++ b/src/app.py\n@@\n-old\n+new\n",
+                }
+            ),
+        )
+    )
+
+    output = console.export_text()
+    assert "edited" in output
+    assert "(+1 -1)" in output
+    assert "lines=4" in output
+    assert "+new" in output
 
 
 def test_transcript_renderer_verbose_shows_larger_tool_details_and_done() -> None:

@@ -12,9 +12,9 @@ _FRONTMATTER_RE = re.compile(r"\A---\n(?P<meta>.*?)\n---\n?", re.DOTALL)
 
 
 def load_skill_from_directory(root: Path | Traversable, *, source: str) -> Skill | None:
-    skill_path = root / "SKILL.md"
+    skill_path = _skill_markdown_path(root)
     manifest_path = root / "manifest.json"
-    if not skill_path.is_file():
+    if skill_path is None:
         return None
     skill_text = skill_path.read_text(encoding="utf-8")
     frontmatter, instructions = parse_skill_frontmatter(skill_text)
@@ -29,6 +29,18 @@ def load_skill_from_directory(root: Path | Traversable, *, source: str) -> Skill
         source=source,
         resource_root=_resource_root_string(root),
     )
+
+
+def _skill_markdown_path(root: Path | Traversable) -> Path | Traversable | None:
+    canonical = root / "SKILL.md"
+    protocol = root / "skill.md"
+    if canonical.is_file() and protocol.is_file():
+        raise ColossusError("Skill directory must not contain both SKILL.md and skill.md.")
+    if canonical.is_file():
+        return canonical
+    if protocol.is_file():
+        return protocol
+    return None
 
 
 def parse_skill_frontmatter(text: str) -> tuple[dict[str, str], str]:

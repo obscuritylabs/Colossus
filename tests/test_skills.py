@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from colossus.adapters.skills_filesystem import FilesystemSkillRepository
+from colossus.adapters.skills_filesystem import (
+    FilesystemSkillRepository,
+    WorkspaceSkillRepository,
+    workspace_skill_roots,
+)
 from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.application.defaults import default_agent
 from colossus.application.skill_authoring import SkillAuthoringService
@@ -66,6 +70,37 @@ def test_skill_authoring_service_scaffolds_and_validates_skill(tmp_path) -> None
 
     with pytest.raises(ColossusError, match="already exists"):
         service.scaffold_user_skill("demo-skill")
+
+
+def test_skill_authoring_service_defaults_to_workspace_skill_root(tmp_path) -> None:
+    service = SkillAuthoringService(
+        tmp_path / "data-skills",
+        workspace_skill_root=tmp_path / "workspace" / ".agents" / "skills",
+    )
+
+    result = service.scaffold("local-skill")
+
+    assert result.path == tmp_path / "workspace" / ".agents" / "skills" / "local-skill"
+    assert (result.path / "SKILL.md").is_file()
+
+
+def test_skill_authoring_service_installs_valid_skill_to_global_root(tmp_path) -> None:
+    service = SkillAuthoringService(
+        tmp_path / "data-skills",
+        workspace_skill_root=tmp_path / "workspace" / ".agents" / "skills",
+        global_skill_root=tmp_path / "home" / ".agents" / "skills",
+    )
+    local = service.scaffold("local-skill", description="Local workflow.")
+
+    installed = service.install_skill(local.path)
+
+    assert installed.name == "local-skill"
+    assert installed.target_path == tmp_path / "home" / ".agents" / "skills" / "local-skill"
+    assert (installed.target_path / "SKILL.md").is_file()
+    assert {file.path for file in installed.files} == {"SKILL.md", "manifest.json"}
+
+    with pytest.raises(ColossusError, match="already exists"):
+        service.install_skill(local.path)
 
 
 def test_skill_authoring_service_reads_and_writes_existing_user_skill(tmp_path) -> None:
@@ -172,6 +207,42 @@ def test_filesystem_skill_repository_loads_frontmatter_only_skill(tmp_path) -> N
     assert skill.resource_root == str(skill_dir.resolve(strict=False))
 
 
+def test_filesystem_skill_repository_loads_protocol_skill_md_fallback(tmp_path) -> None:
+    skill_dir = tmp_path / "agent-skill"
+    skill_dir.mkdir()
+    (skill_dir / "skill.md").write_text(
+        "---\n"
+        "name: agent-skill\n"
+        "description: Protocol-compatible skill.\n"
+        "---\n\n"
+        "# Agent Skill\n",
+        encoding="utf-8",
+    )
+
+    skill = FilesystemSkillRepository(tmp_path).get_skill("agent-skill")
+
+    assert skill is not None
+    assert skill.manifest.description == "Protocol-compatible skill."
+
+
+def test_filesystem_skill_repository_rejects_duplicate_skill_markdown_names(
+    tmp_path,
+) -> None:
+    skill_dir = tmp_path / "agent-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: agent-skill\ndescription: Canonical.\n---\n\n# Agent Skill\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.md").write_text(
+        "---\nname: agent-skill\ndescription: Protocol.\n---\n\n# Agent Skill\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ColossusError, match=r"both SKILL\.md and skill\.md"):
+        FilesystemSkillRepository(tmp_path).list_skills()
+
+
 def test_filesystem_skill_repository_rejects_frontmatter_manifest_mismatch(tmp_path) -> None:
     skill_dir = tmp_path / "mismatch"
     _write_skill(skill_dir, name="manifest-name", instructions="# Mismatch\n")
@@ -204,6 +275,56 @@ def test_default_skill_resolver_loads_user_skills_and_controls_overrides(tmp_pat
     )
     assert duplicate.selected_source == "package:coding"
     assert override_duplicate.selected_source == str(tmp_path / "coding")
+
+
+def test_default_skill_resolver_loads_global_and_workspace_agent_skills(tmp_path) -> None:
+    legacy_root = tmp_path / "data" / "skills"
+    global_root = tmp_path / "home" / ".agents" / "skills"
+    workspace = tmp_path / "repo" / "service"
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    _write_skill(global_root / "global-skill", name="global-skill")
+    _write_skill(tmp_path / "repo" / ".agents" / "skills" / "root-skill", name="root-skill")
+    _write_skill(workspace / ".agents" / "skills" / "local-skill", name="local-skill")
+
+    resolver = create_default_skill_resolver(
+        legacy_root,
+        global_skill_root=global_root,
+        workspace_root=workspace,
+    )
+
+    assert resolver.get_skill("global-skill") is not None
+    assert resolver.get_skill("root-skill") is not None
+    assert resolver.get_skill("local-skill") is not None
+    assert [skill.manifest.name for skill in WorkspaceSkillRepository(workspace).list_skills()] == [
+        "root-skill",
+        "local-skill",
+    ]
+    assert workspace_skill_roots(workspace) == (
+        tmp_path / "repo" / ".agents" / "skills",
+        workspace / ".agents" / "skills",
+    )
+
+
+def test_default_agent_allows_workspace_skills_by_default(tmp_path) -> None:
+    _write_skill(tmp_path / ".agents" / "skills" / "alpha", name="alpha")
+    composer = SkillComposer(
+        create_default_skill_resolver(
+            tmp_path / "data" / "skills",
+            workspace_root=tmp_path,
+            global_skill_root=tmp_path / "home" / ".agents" / "skills",
+        )
+    )
+
+    composition = composer.compose(
+        instructions="Base instructions.",
+        agent=default_agent(),
+        prompt="@skill:alpha help",
+        active_skills=(),
+        skill_mode_enabled=True,
+        tools=(),
+    )
+
+    assert [skill.manifest.name for skill in composition.active_skills] == ["alpha"]
 
 
 def test_skill_resource_service_restricts_active_text_resources(tmp_path) -> None:
@@ -396,7 +517,7 @@ def _write_skill(
     instructions: str = "instructions",
     required_tools: list[str] | None = None,
 ) -> None:
-    path.mkdir()
+    path.mkdir(parents=True)
     (path / "manifest.json").write_text(
         json.dumps(
             {

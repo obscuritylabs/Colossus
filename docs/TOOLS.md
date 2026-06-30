@@ -36,7 +36,7 @@ tools, see [Integrations](INTEGRATIONS.md).
 | Research mode | `colossus research`, `/research` | Network/MCP lanes | Partial | Persists cited reports, sources, claims, and research status events. |
 | Trace/eval | `trace.show`, `trace.export`, `eval.run` | Export/eval only | Yes | Trace export writes a bounded snapshot; eval wraps local pytest. |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Restore only | Yes | Durable snapshots reduce model input without deleting raw history. |
-| Skill authoring | `skill.scaffold`, `skill.inspect`, `skill.read`, `skill.write`, `skill.validate`, `skill.resource.list`, `skill.resource.read` | Scaffold/write only | Yes | Data-only user skill creation, targeted installed-skill edits, validation, and active-skill resource reads. |
+| Skill authoring | `skill.scaffold`, `skill.inspect`, `skill.read`, `skill.write`, `skill.validate`, `skill.install`, `skill.resource.list`, `skill.resource.read` | Scaffold/write/install only | Yes | Data-only installed-skill edits, local skill validation and install, and active-skill resource reads. |
 | Smoke test | `echo` | No | Yes | Deterministic smoke-test tool. |
 
 ## Input And Output Shapes
@@ -50,8 +50,9 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
 - Search tools return arrays of `{path, line, text}` style match objects plus
   `truncated` when applicable.
 - Command wrappers return `{command, exit_code, stdout, stderr}`.
-- Patch preview returns `{path, replacements, diff}`; patch apply/reverse return
-  `{path, replacements}`.
+- Mutating file tools return edit visibility. `filesystem.write`, `filesystem.replace`,
+  `patch.apply`, and `patch.reverse` include `diff` and `changed_line_ranges`; patch
+  preview returns the same diff without writing.
 - Task, key decision, memory, and plan tools return a single structured `task`,
   `decision`, `memory`, or `plan` object, or arrays for list commands. Memory mutations
   also return a concise `notice` string for user-visible saved-memory feedback.
@@ -64,8 +65,11 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
 - Research runs persist a `ResearchRun` plus labeled `ResearchSource` records and
   source-backed `ResearchClaim` records. Reports cite persisted labels such as `[R1]`.
 - Context tools return session budget/status, snapshot records, or restore confirmation.
+- Local repo skills under `.agents/skills` are normal workspace files. Agents can use
+  regular filesystem and command tools to build and test them under the usual workspace
+  policy. `.colossus` remains a denied control directory for generic workspace tools.
 - `skill.scaffold` writes only `manifest.json` and `SKILL.md` under the configured
-  user skill directory plus requested resource directories. It can accept model-generated
+  installed skill directory plus requested resource directories. It can accept model-generated
   `instructions`, trigger words, required tool names, permission labels, offline
   compatibility, Agent Skills frontmatter, and resource directory names, but it does not
   run helpers or write arbitrary paths.
@@ -77,6 +81,11 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
   `tests/` inside an existing user skill. Existing-file overwrites require the
   `expected_sha256` returned by `skill.read` or `skill.inspect`, and writes are audited
   without content.
+- `skill.validate` validates either an installed user skill by `name` or a local skill
+  directory by `path`.
+- `skill.install` validates a local skill directory and installs it into
+  `~/.agents/skills/NAME`. It is approval-required, refuses overwrite unless requested,
+  and audits file paths, sizes, and hashes without content.
 - `skill.resource.list` and `skill.resource.read` are read-only. The orchestrator injects
   the active skill names, and the tools can only access bounded text-safe files under
   `references/`, `scripts/`, `assets/`, `examples/`, or `tests/` for active skills.

@@ -754,7 +754,15 @@ class RoadmapToolHandlers:
         old_text = _read_text(path)
         updated, replacements = _replace_exact(old_text, arguments)
         path.write_text(updated, encoding="utf-8")
-        return _json({"path": self._workspace.relative(path), "replacements": replacements})
+        relative_path = self._workspace.relative(path)
+        return _json(
+            {
+                "path": relative_path,
+                "replacements": replacements,
+                "diff": _diff(relative_path, old_text, updated),
+                "changed_line_ranges": _changed_line_ranges(old_text, updated),
+            }
+        )
 
     async def patch_reverse(self, arguments: JsonObject) -> str:
         reversed_arguments = {
@@ -766,7 +774,15 @@ class RoadmapToolHandlers:
         old_text = _read_text(path)
         updated, replacements = _replace_exact(old_text, reversed_arguments)
         path.write_text(updated, encoding="utf-8")
-        return _json({"path": self._workspace.relative(path), "replacements": replacements})
+        relative_path = self._workspace.relative(path)
+        return _json(
+            {
+                "path": relative_path,
+                "replacements": replacements,
+                "diff": _diff(relative_path, old_text, updated),
+                "changed_line_ranges": _changed_line_ranges(old_text, updated),
+            }
+        )
 
     async def repo_map(self, arguments: JsonObject) -> str:
         root = self._workspace.resolve(_string_arg(arguments, "path", "."))
@@ -1186,6 +1202,34 @@ def _diff(path: str, old_text: str, new_text: str) -> str:
             tofile=f"b/{path}",
         )
     )
+
+
+def _changed_line_ranges(old_text: str, new_text: str) -> list[JsonObject]:
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    ranges: list[JsonObject] = []
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
+    for tag, _old_start, _old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if new_start == new_end:
+            line = min(new_start + 1, max(len(new_lines), 1))
+            ranges.append({"start": line, "end": line})
+        else:
+            ranges.append({"start": new_start + 1, "end": new_end})
+    return _merge_line_ranges(ranges)
+
+
+def _merge_line_ranges(ranges: list[JsonObject]) -> list[JsonObject]:
+    merged: list[JsonObject] = []
+    for item in ranges:
+        start = int(item["start"])
+        end = int(item["end"])
+        if merged and start <= int(merged[-1]["end"]) + 1:
+            merged[-1]["end"] = max(int(merged[-1]["end"]), end)
+        else:
+            merged.append({"start": start, "end": end})
+    return merged
 
 
 def _read_text(path: Path) -> str:
@@ -1926,7 +1970,12 @@ def _patch_apply_spec() -> ToolSpec:
         description="Apply an exact text patch inside the workspace.",
         input_schema=_patch_schema(),
         output_schema=_object_schema(
-            {"path": {"type": "string"}, "replacements": {"type": "integer"}}
+            {
+                "path": {"type": "string"},
+                "replacements": {"type": "integer"},
+                "diff": {"type": "string"},
+                "changed_line_ranges": {"type": "array"},
+            }
         ),
         permissions=_write_permission(),
     )
@@ -1938,7 +1987,12 @@ def _patch_reverse_spec() -> ToolSpec:
         description="Reverse an exact text patch inside the workspace.",
         input_schema=_patch_schema(),
         output_schema=_object_schema(
-            {"path": {"type": "string"}, "replacements": {"type": "integer"}}
+            {
+                "path": {"type": "string"},
+                "replacements": {"type": "integer"},
+                "diff": {"type": "string"},
+                "changed_line_ranges": {"type": "array"},
+            }
         ),
         permissions=_write_permission(),
     )

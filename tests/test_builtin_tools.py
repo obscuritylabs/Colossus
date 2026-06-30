@@ -177,7 +177,10 @@ async def test_user_ask_tool_requires_choices_when_freeform_is_disabled(tmp_path
 
 @pytest.mark.asyncio
 async def test_skill_authoring_tools_scaffold_and_validate_user_skill(tmp_path: Path) -> None:
-    service = SkillAuthoringService(tmp_path / "skills")
+    service = SkillAuthoringService(
+        tmp_path / "skills",
+        global_skill_root=tmp_path / "home" / ".agents" / "skills",
+    )
     audit_path = tmp_path / "audit.jsonl"
     specs, handlers = create_builtin_tools(
         Workspace(tmp_path),
@@ -190,6 +193,7 @@ async def test_skill_authoring_tools_scaffold_and_validate_user_skill(tmp_path: 
     read_spec = next(spec for spec in specs if spec.name == "skill.read")
     write_spec = next(spec for spec in specs if spec.name == "skill.write")
     validate_spec = next(spec for spec in specs if spec.name == "skill.validate")
+    install_spec = next(spec for spec in specs if spec.name == "skill.install")
 
     assert scaffold_spec.permissions.approval_required is True
     assert scaffold_spec.permissions.mutation is True
@@ -210,6 +214,8 @@ async def test_skill_authoring_tools_scaffold_and_validate_user_skill(tmp_path: 
     assert write_spec.permissions.working_root_required is False
     assert validate_spec.permissions.filesystem == "read"
     assert validate_spec.permissions.mutation is False
+    assert install_spec.permissions.approval_required is True
+    assert install_spec.permissions.mutation is True
 
     scaffolded = await executor.execute(
         ToolCall(
@@ -312,8 +318,30 @@ async def test_skill_authoring_tools_scaffold_and_validate_user_skill(tmp_path: 
     validation = await executor.execute(
         ToolCall(call_id="skill-8", name="skill.validate", arguments={"name": "demo-skill"})
     )
+    path_validation = await executor.execute(
+        ToolCall(
+            call_id="skill-8b",
+            name="skill.validate",
+            arguments={"path": str(skill_path)},
+        )
+    )
 
     assert json.loads(validation.output)["validation"]["valid"] is True
+    assert json.loads(path_validation.output)["validation"]["valid"] is True
+
+    installed = await executor.execute(
+        ToolCall(
+            call_id="skill-9",
+            name="skill.install",
+            arguments={"source_path": str(skill_path)},
+        )
+    )
+    install_payload = json.loads(installed.output)
+
+    assert install_payload["skill"]["name"] == "demo-skill"
+    assert (tmp_path / "home" / ".agents" / "skills" / "demo-skill" / "SKILL.md").is_file()
+    audit_text = audit_path.read_text(encoding="utf-8")
+    assert "skill.install" in audit_text
 
 
 @pytest.mark.asyncio
@@ -432,8 +460,16 @@ async def test_filesystem_write_and_replace_semantics(tmp_path: Path) -> None:
         )
     )
 
-    assert json.loads(written.output)["path"] == "note.txt"
-    assert json.loads(replaced.output)["replacements"] == 2
+    written_payload = json.loads(written.output)
+    replaced_payload = json.loads(replaced.output)
+
+    assert written_payload["path"] == "note.txt"
+    assert "+hello hello" in written_payload["diff"]
+    assert written_payload["changed_line_ranges"] == [{"start": 1, "end": 1}]
+    assert replaced_payload["replacements"] == 2
+    assert "-hello hello" in replaced_payload["diff"]
+    assert "+hi hi" in replaced_payload["diff"]
+    assert replaced_payload["changed_line_ranges"] == [{"start": 1, "end": 1}]
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "hi hi"
 
 
@@ -782,8 +818,14 @@ async def test_patch_preview_apply_and_reverse(tmp_path: Path) -> None:
     )
 
     assert "+gamma" in json.loads(preview.output)["diff"]
-    assert json.loads(applied.output)["replacements"] == 1
-    assert json.loads(reversed_patch.output)["replacements"] == 1
+    applied_payload = json.loads(applied.output)
+    reversed_payload = json.loads(reversed_patch.output)
+    assert applied_payload["replacements"] == 1
+    assert "+gamma" in applied_payload["diff"]
+    assert applied_payload["changed_line_ranges"] == [{"start": 2, "end": 2}]
+    assert reversed_payload["replacements"] == 1
+    assert "+beta" in reversed_payload["diff"]
+    assert reversed_payload["changed_line_ranges"] == [{"start": 2, "end": 2}]
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "alpha\nbeta\n"
 
 

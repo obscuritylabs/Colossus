@@ -325,11 +325,12 @@ def _http_client_config(ctx: typer.Context, config: ColossusConfig) -> HttpClien
     return http_client_config_from_config(config, _http_overrides(ctx))
 
 
-def _skill_resolver(config: ColossusConfig) -> SkillResolver:
+def _skill_resolver(config: ColossusConfig, workspace_root: Path | None = None) -> SkillResolver:
     return create_default_skill_resolver(
         data_dir() / "skills",
         allow_user_overrides=config.allow_user_skill_overrides,
         pack_root=data_dir() / "packs",
+        workspace_root=workspace_root,
     )
 
 
@@ -702,7 +703,7 @@ def run(
         return
     workspace_root = _workspace_root(workspace)
     config = load_config(config_path())
-    skill_resolver = _skill_resolver(config)
+    skill_resolver = _skill_resolver(config, workspace_root)
     overrides = _provider_overrides(ctx)
     http_client_config = _http_client_config(ctx, config)
     router = create_model_router(
@@ -987,7 +988,11 @@ def repl(
         raise typer.Exit(code=2)
     workspace_root = _workspace_root(workspace)
     config = load_config(config_path())
-    skill_resolver = _skill_resolver(config)
+    skill_resolver = _skill_resolver(config, workspace_root)
+    skill_authoring_service = create_skill_authoring_service(
+        data_dir(),
+        workspace_root=workspace_root,
+    )
     overrides = _provider_overrides(ctx)
     http_client_config = _http_client_config(ctx, config)
     router = create_model_router(
@@ -1090,7 +1095,13 @@ def repl(
 
     def build_workspace_services(workspace_root: Path, model_role: str) -> ReplWorkspaceServices:
         nonlocal active_workspace_root, context_service, research_service
+        nonlocal skill_resolver, skill_authoring_service
         active_workspace_root = workspace_root
+        skill_resolver = _skill_resolver(config, active_workspace_root)
+        skill_authoring_service = create_skill_authoring_service(
+            data_dir(),
+            workspace_root=active_workspace_root,
+        )
         context_service = create_context_service(
             data_dir(),
             workspace_root=active_workspace_root,
@@ -1106,6 +1117,8 @@ def repl(
             orchestrator=build_orchestrator(model_role),
             context_service=context_service,
             research_service=research_service,
+            skill_resolver=skill_resolver,
+            skill_authoring_service=skill_authoring_service,
         )
 
     history_path = data_dir() / "repl_history.txt"
@@ -1128,7 +1141,7 @@ def repl(
         memory_service=memory_service,
         session_service=create_session_service(data_dir()),
         plan_service=create_plan_service(data_dir()),
-        skill_authoring_service=create_skill_authoring_service(data_dir()),
+        skill_authoring_service=skill_authoring_service,
         subagent_service=subagent_service,
         research_service=research_service,
         integration_service=integration_service,
@@ -1163,7 +1176,7 @@ def config_show() -> None:
 @skills_app.command("list")
 def skills_list() -> None:
     """List bundled and enabled skills."""
-    resolver = _skill_resolver(load_config(config_path()))
+    resolver = _skill_resolver(load_config(config_path()), Path.cwd())
     table = Table("Name", "Version", "Offline", "Source")
     for skill in resolver.list_skills():
         table.add_row(
@@ -1214,17 +1227,24 @@ def skills_new(
         Path | None,
         typer.Option("--pack", help="Pack root; skill is scaffolded under PACK/skills."),
     ] = None,
+    user: Annotated[
+        bool,
+        typer.Option("--user", help="Create under the legacy Colossus user skill directory."),
+    ] = False,
     force: Annotated[
         bool,
         typer.Option("--force", help="Overwrite manifest and SKILL.md if the skill exists."),
     ] = False,
 ) -> None:
     """Scaffold a local data-only skill."""
-    service = create_skill_authoring_service(data_dir())
-    if path is not None and pack is not None:
-        console.print("[red]Use either --path or --pack, not both.[/red]")
+    service = create_skill_authoring_service(data_dir(), workspace_root=Path.cwd())
+    explicit_targets = sum(1 for value in (path, pack) if value is not None) + int(user)
+    if explicit_targets > 1:
+        console.print("[red]Use only one of --path, --pack, or --user.[/red]")
         raise typer.Exit(code=2)
     parent = pack / "skills" if pack is not None else path
+    if user:
+        parent = service.user_skill_root
     try:
         result = service.scaffold(
             name,
@@ -1251,7 +1271,7 @@ def skills_validate(
     path: Annotated[Path, typer.Argument(help="Skill directory to validate.")],
 ) -> None:
     """Validate a local skill directory."""
-    service = create_skill_authoring_service(data_dir())
+    service = create_skill_authoring_service(data_dir(), workspace_root=Path.cwd())
     result = service.validate(path)
     if result.valid:
         name = result.manifest.name if result.manifest is not None else path.name
@@ -1261,6 +1281,24 @@ def skills_validate(
     for error in result.errors:
         console.print(f"- {error}")
     raise typer.Exit(code=1)
+
+
+@skills_app.command("install")
+def skills_install(
+    path: Annotated[Path, typer.Argument(help="Local skill directory to install.")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Overwrite an existing global skill."),
+    ] = False,
+) -> None:
+    """Install a validated local skill into ~/.agents/skills."""
+    service = create_skill_authoring_service(data_dir(), workspace_root=Path.cwd())
+    try:
+        result = service.install_skill(path, overwrite=force)
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Installed skill {result.name}: {result.target_path}")
 
 
 @packs_app.command("list")

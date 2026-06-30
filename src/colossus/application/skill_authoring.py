@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -84,13 +85,38 @@ class SkillWriteResult:
     validation: SkillValidationResult
 
 
+@dataclass(frozen=True)
+class SkillInstallResult:
+    name: str
+    source_path: Path
+    target_path: Path
+    files: tuple[SkillFileInfo, ...]
+    validation: SkillValidationResult
+
+
 class SkillAuthoringService:
-    def __init__(self, user_skill_root: Path) -> None:
+    def __init__(
+        self,
+        user_skill_root: Path,
+        *,
+        workspace_skill_root: Path | None = None,
+        global_skill_root: Path | None = None,
+    ) -> None:
         self._user_skill_root = user_skill_root
+        self._workspace_skill_root = workspace_skill_root
+        self._global_skill_root = global_skill_root or Path.home() / ".agents" / "skills"
 
     @property
     def user_skill_root(self) -> Path:
         return self._user_skill_root
+
+    @property
+    def workspace_skill_root(self) -> Path | None:
+        return self._workspace_skill_root
+
+    @property
+    def global_skill_root(self) -> Path:
+        return self._global_skill_root
 
     def scaffold(
         self,
@@ -108,7 +134,7 @@ class SkillAuthoringService:
         overwrite: bool = False,
     ) -> SkillScaffoldResult:
         normalized = _normalize_skill_name(name)
-        target_root = parent or self._user_skill_root
+        target_root = parent or self._workspace_skill_root or self._user_skill_root
         path = (target_root / normalized).resolve(strict=False)
         if path.exists() and not overwrite:
             raise ColossusError(
@@ -169,6 +195,74 @@ class SkillAuthoringService:
             overwrite=overwrite,
         )
 
+    def scaffold_workspace_skill(
+        self,
+        name: str,
+        *,
+        description: str | None = None,
+        instructions: str | None = None,
+        triggers: Sequence[str] | None = None,
+        required_tools: Sequence[str] | None = None,
+        permissions: Sequence[str] | None = None,
+        offline_compatible: bool = True,
+        resources: Sequence[str] | None = None,
+        agent_compatible: bool = False,
+        overwrite: bool = False,
+    ) -> SkillScaffoldResult:
+        if self._workspace_skill_root is None:
+            raise ColossusError("Workspace skill root is not configured.")
+        return self.scaffold(
+            name,
+            description=description,
+            instructions=instructions,
+            triggers=triggers,
+            required_tools=required_tools,
+            permissions=permissions,
+            offline_compatible=offline_compatible,
+            resources=resources,
+            agent_compatible=agent_compatible,
+            parent=self._workspace_skill_root,
+            overwrite=overwrite,
+        )
+
+    def install_skill(self, source_path: Path, *, overwrite: bool = False) -> SkillInstallResult:
+        source = source_path.resolve(strict=False)
+        validation = self.validate(source)
+        if not validation.valid or validation.manifest is None:
+            raise ColossusError(
+                "Cannot install invalid skill: " + "; ".join(validation.errors)
+            )
+        _reject_symlinks(source)
+        root = self._global_skill_root.resolve(strict=False)
+        target = (root / validation.manifest.name).resolve(strict=False)
+        if not _is_relative_to(target, root):
+            raise ColossusError("Install target escapes the configured global skill directory.")
+        if target.exists() and not overwrite:
+            raise ColossusError(
+                f"Global skill already exists: {validation.manifest.name}. "
+                "Use --force to overwrite."
+            )
+        root.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if target.is_symlink():
+                raise ColossusError("Install target symlinks are not allowed.")
+            if not target.is_dir():
+                raise ColossusError("Install target is not a directory.")
+            shutil.rmtree(target)
+        shutil.copytree(source, target)
+        installed_validation = self.validate(target)
+        if not installed_validation.valid:
+            raise ColossusError(
+                "Installed skill failed validation: " + "; ".join(installed_validation.errors)
+            )
+        return SkillInstallResult(
+            name=validation.manifest.name,
+            source_path=source,
+            target_path=target,
+            files=_skill_file_infos(target),
+            validation=installed_validation,
+        )
+
     def validate(self, path: Path) -> SkillValidationResult:
         resolved = path.resolve(strict=False)
         errors: list[str] = []
@@ -187,7 +281,7 @@ class SkillAuthoringService:
                 manifest=None,
                 errors=("Skill path is not a directory.",),
             )
-        skill_path = resolved / "SKILL.md"
+        skill_path = _skill_markdown_path(resolved)
         try:
             loaded = load_skill_from_directory(resolved, source=str(resolved))
             if loaded is None:
@@ -201,7 +295,7 @@ class SkillAuthoringService:
                 "manifest.json name must start with a letter and contain only "
                 "letters, numbers, dots, underscores, or hyphens."
             )
-        if not skill_path.is_file():
+        if skill_path is None:
             if "SKILL.md is missing." not in errors:
                 errors.append("SKILL.md is missing.")
         else:
@@ -410,12 +504,14 @@ def _normalize_resource_dirs(resources: Sequence[str] | None) -> tuple[str, ...]
 
 def _validate_skill_resources(path: Path) -> tuple[str, ...]:
     errors: list[str] = []
+    if (path / "SKILL.md").is_file() and (path / "skill.md").is_file():
+        errors.append("Skill directory must not contain both SKILL.md and skill.md.")
     for child in path.iterdir():
         if child.name in _RESOURCE_DIRS:
             if not child.is_dir():
                 errors.append(f"{child.name} must be a directory.")
             continue
-        if child.name in {"manifest.json", "SKILL.md"}:
+        if child.name in {"manifest.json", "SKILL.md", "skill.md"}:
             continue
         if child.name.startswith("."):
             continue
@@ -517,6 +613,34 @@ def _sha256_file(path: Path) -> str:
 
 def _sha256_text(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _skill_markdown_path(path: Path) -> Path | None:
+    canonical = path / "SKILL.md"
+    protocol = path / "skill.md"
+    if canonical.is_file():
+        return canonical
+    if protocol.is_file():
+        return protocol
+    return None
+
+
+def _reject_symlinks(path: Path) -> None:
+    for item in (path, *path.rglob("*")):
+        if item.is_symlink():
+            raise ColossusError(f"Skill symlinks are not allowed: {item}")
+
+
+def _skill_file_infos(skill_dir: Path) -> tuple[SkillFileInfo, ...]:
+    files: list[SkillFileInfo] = []
+    for item in sorted(skill_dir.rglob("*")):
+        if item.is_symlink() or not item.is_file():
+            continue
+        rel_path = item.relative_to(skill_dir).as_posix()
+        files.append(
+            SkillFileInfo(path=rel_path, size=item.stat().st_size, sha256=_sha256_file(item))
+        )
+    return tuple(files)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:

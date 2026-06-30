@@ -29,3 +29,48 @@ class FilesystemSkillRepository:
             if skill.manifest.name == name:
                 return skill
         return None
+
+
+class WorkspaceSkillRepository:
+    def __init__(self, workspace_root: Path) -> None:
+        self._workspace_root = workspace_root.resolve(strict=False)
+
+    def list_skills(self) -> tuple[Skill, ...]:
+        skills: list[Skill] = []
+        for root in workspace_skill_roots(self._workspace_root):
+            skills.extend(FilesystemSkillRepository(root).list_skills())
+        return tuple(skills)
+
+    def get_skill(self, name: str) -> Skill | None:
+        for skill in self.list_skills():
+            if skill.manifest.name == name:
+                return skill
+        return None
+
+
+def workspace_skill_roots(workspace_root: Path) -> tuple[Path, ...]:
+    workspace = workspace_root.resolve(strict=False)
+    repo_root = _git_root_for(workspace)
+    if repo_root is None:
+        return (workspace / ".agents" / "skills",)
+    roots: list[Path] = []
+    current = repo_root
+    roots.append(current / ".agents" / "skills")
+    try:
+        relative = workspace.relative_to(repo_root)
+    except ValueError:
+        return tuple(roots)
+    for part in relative.parts:
+        current = current / part
+        roots.append(current / ".agents" / "skills")
+    return tuple(roots)
+
+
+def _git_root_for(path: Path) -> Path | None:
+    current = path
+    if current.is_file():
+        current = current.parent
+    for candidate in (current, *current.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None

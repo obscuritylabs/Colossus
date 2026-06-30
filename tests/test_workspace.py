@@ -40,3 +40,15 @@ def test_workspace_denies_control_directories(tmp_path: Path) -> None:
 
     with pytest.raises(ToolExecutionError):
         workspace.resolve(".git/config")
+
+    with pytest.raises(ToolExecutionError):
+        workspace.resolve(".colossus/state.json")
+
+
+def test_workspace_allows_agents_directory(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    workspace = Workspace(root)
+
+    assert workspace.resolve(".agents/skills/demo/SKILL.md") == (
+        root / ".agents" / "skills" / "demo" / "SKILL.md"
+    ).resolve(strict=False)

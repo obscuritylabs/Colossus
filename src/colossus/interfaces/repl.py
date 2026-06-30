@@ -293,6 +293,8 @@ class ReplWorkspaceServices:
     orchestrator: AgentOrchestrator
     context_service: ContextService | None = None
     research_service: ResearchService | None = None
+    skill_resolver: SkillResolver | None = None
+    skill_authoring_service: SkillAuthoringService | None = None
 
 
 REQUIRED_THEME_STYLE_KEYS: frozenset[str] = frozenset(
@@ -853,6 +855,11 @@ async def run_repl(
                     orchestrator = services.orchestrator
                     context_service = services.context_service
                     research_service = services.research_service
+                    if services.skill_resolver is not None:
+                        skills = services.skill_resolver
+                        session.completer = SlashCommandCompleter(skills)
+                    if services.skill_authoring_service is not None:
+                        skill_authoring_service = services.skill_authoring_service
                     orchestrator.set_event_observer(trace_renderer.render)
                     if research_service is not None:
                         research_service.set_event_observer(trace_renderer.render)

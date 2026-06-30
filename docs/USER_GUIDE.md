@@ -128,8 +128,8 @@ uv run colossus run --skill coding "Implement the approved plan"
 /skill drop coding
 ```
 
-Create skills directly, or ask the model to help craft one with the bundled authoring
-skill:
+Create repo-local skills under `.agents/skills` directly, or ask the model to help craft
+one with the bundled authoring skill:
 
 ```text
 @skill:skill-creator create a release checklist skill
@@ -141,6 +141,7 @@ skill:
 uv run colossus skills new release-checklist
 uv run colossus skills new release-checklist --agent-compatible --resources references,tests
 uv run colossus skills new release-checklist --pack ./my-pack
+uv run colossus skills install .agents/skills/release-checklist
 uv run colossus skills validate /path/to/skills/release-checklist
 ```
 

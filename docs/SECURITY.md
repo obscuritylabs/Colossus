@@ -44,6 +44,11 @@ paths under allowed resource directories, reject traversal, reject non-regular f
 bound text reads. Resource read audit records include skill name, path, and size, not the
 resource body.
 
+Repo-local `.agents/skills` are workspace-authored files, not Colossus runtime state.
+They are reachable through normal workspace filesystem tools and can be checked into the
+repository. `.colossus` remains a denied control directory for generic workspace tools
+because it is reserved for Colossus-owned runtime/control files.
+
 Packs are the executable distribution boundary. Skills can include code files as
 resources, but Colossus does not execute scripts directly from skill directories.
 Executable tools, MCP servers, binaries, Docker assets, docs, and tests must be declared
@@ -91,10 +96,11 @@ Security-sensitive defaults:
 | `trace.export` | Write | Denied | Yes | Enabled |
 | `context.show/compact/snapshots` | None | Denied | No | Enabled |
 | `context.restore` | None | Denied | Yes | Enabled |
-| `skill.scaffold` | Write | Denied | Yes | Enabled, writes manifest/SKILL.md and requested resource dirs in user skill directory only |
+| `skill.scaffold` | Write | Denied | Yes | Enabled, writes manifest/SKILL.md and requested resource dirs in installed skill directory only |
 | `skill.inspect/read` | Read | Denied | No | Enabled, installed user skill files only |
 | `skill.write` | Write | Denied | Yes | Enabled, installed user skill files only; existing files require expected SHA-256 |
-| `skill.validate` | Read | Denied | No | Enabled, user skill directory only |
+| `skill.validate` | Read | Denied | No | Enabled, validates installed skills by name or local skill directories by path |
+| `skill.install` | Write | Denied | Yes | Enabled, validates a local skill directory and installs into `~/.agents/skills` |
 | `skill.resource.list/read` | Read | Denied | No | Enabled, active skill resources only |
 
 The default policy requires approval for declared mutations, explicit approval flags,

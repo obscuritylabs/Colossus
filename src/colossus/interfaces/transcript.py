@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from rich import box
 from rich.cells import cell_len, set_cell_size
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.status import Status
@@ -52,6 +52,26 @@ class TranscriptRenderTheme:
     meta: str = "dim"
     border: str = "dim"
     activity_spinner: str = "dots"
+
+
+@dataclass(frozen=True)
+class EditResultSummary:
+    path: str
+    diff: str
+    lines: str
+    replacements: str
+    additions: int
+    deletions: int
+
+
+@dataclass(frozen=True)
+class ReadResultSummary:
+    path: str
+    content: str
+    start_line: int
+    line_count: int
+    truncated: bool
+    content_bytes: int
 
 
 @dataclass
@@ -378,6 +398,8 @@ class TranscriptRenderer:
         self._render_status_block("model request", body, self.theme.meta)
 
     def _render_tool_call(self, event: ToolCallRequestedEvent) -> None:
+        if event.name == "filesystem.read" and self.events_mode != "verbose":
+            return
         limit = (
             self.verbose_argument_preview_chars
             if self.events_mode == "verbose"
@@ -388,6 +410,28 @@ class TranscriptRenderer:
         self._render_status_block("tool call", body, self.theme.tool)
 
     def _render_tool_result(self, event: ToolCallCompletedEvent) -> None:
+        edit_summary = _edit_result_summary(event.output)
+        if edit_summary is not None:
+            self._render_status_block(
+                "edited",
+                _edit_result_text(edit_summary),
+                self.theme.tool_output,
+            )
+            return
+        read_summary = _read_result_summary(event.name, event.output)
+        if read_summary is not None:
+            self._render_status_block(
+                "read",
+                _read_result_text(read_summary),
+                self.theme.tool_output,
+            )
+            if self.events_mode == "verbose":
+                raw_preview = _truncate(
+                    event.output.replace("\n", "\\n"),
+                    self.verbose_output_preview_chars,
+                )
+                self._render_status_block("raw result", raw_preview, self.theme.meta)
+            return
         limit = (
             self.verbose_output_preview_chars
             if self.events_mode == "verbose"
@@ -407,20 +451,24 @@ class TranscriptRenderer:
         preview = _truncate(body, self.argument_preview_chars)
         self._render_status_block(title, preview, self.theme.meta)
 
-    def _render_status_block(self, title: str, body: str, style: str) -> None:
+    def _render_status_block(self, title: str, body: str | Text, style: str) -> None:
         if self.transcript_style == "comfortable":
             self.console.print()
             self._panel(title, body, style)
             return
         line = Text(f"{title} ", style=style)
         if body:
-            line.append(body.replace("\n", " "), style=self.theme.meta)
+            if isinstance(body, Text):
+                line.append(body.plain.replace("\n", " "), style=self.theme.meta)
+            else:
+                line.append(body.replace("\n", " "), style=self.theme.meta)
         self.console.print(line)
 
-    def _panel(self, title: str, body: str, style: str) -> None:
+    def _panel(self, title: str, body: str | Text, style: str) -> None:
+        renderable: RenderableType = body if isinstance(body, Text) else Text(body, style=style)
         self.console.print(
             Panel(
-                Text(body, style=style),
+                renderable,
                 title=f" {title} ",
                 title_align="left",
                 border_style=self.theme.border,
@@ -449,6 +497,182 @@ def _model_request_dump(event: ModelRequestPreparedEvent) -> str:
         indent=2,
         sort_keys=True,
     )
+
+
+def _edit_result_summary(output: str) -> EditResultSummary | None:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    path = payload.get("path")
+    diff = payload.get("diff")
+    if not isinstance(path, str) or not isinstance(diff, str):
+        return None
+    replacements = payload.get("replacements", "")
+    if "bytes_written" in payload:
+        replacements = "write"
+    additions, deletions = _diff_counts(diff)
+    return EditResultSummary(
+        path=path,
+        diff=diff,
+        lines=_line_ranges(payload.get("changed_line_ranges")),
+        replacements=str(replacements),
+        additions=additions,
+        deletions=deletions,
+    )
+
+
+def _edit_result_text(summary: EditResultSummary) -> Text:
+    body = Text()
+    body.append(summary.path)
+    body.append(" ")
+    body.append(f"(+{summary.additions}", style="green")
+    body.append(" ")
+    body.append(f"-{summary.deletions})", style="red")
+    body.append(f"\nlines={summary.lines} replacements={summary.replacements}", style="dim")
+    if summary.diff:
+        body.append("\n")
+        body.append_text(_styled_diff(summary.diff))
+    return body
+
+
+def _read_result_summary(name: str, output: str) -> ReadResultSummary | None:
+    if name != "filesystem.read":
+        return None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    path = payload.get("path")
+    content = payload.get("content")
+    start_line = payload.get("start_line", 1)
+    line_count = payload.get("line_count")
+    truncated = payload.get("truncated", False)
+    if not isinstance(path, str) or not isinstance(content, str):
+        return None
+    if not isinstance(start_line, int):
+        start_line = 1
+    if not isinstance(line_count, int):
+        line_count = len(content.splitlines())
+    if not isinstance(truncated, bool):
+        truncated = False
+    return ReadResultSummary(
+        path=path,
+        content=content,
+        start_line=start_line,
+        line_count=line_count,
+        truncated=truncated,
+        content_bytes=len(content.encode("utf-8")),
+    )
+
+
+def _read_result_text(summary: ReadResultSummary) -> Text:
+    body = Text()
+    body.append(summary.path)
+    body.append(
+        f"  {summary.line_count} lines, {summary.content_bytes} bytes",
+        style="dim",
+    )
+    if summary.truncated:
+        body.append("  truncated", style="yellow")
+    preview = _source_preview(summary.path, summary.content, summary.start_line)
+    if preview:
+        body.append("\n")
+        body.append_text(preview)
+    return body
+
+
+def _source_preview(path: str, content: str, start_line: int, limit: int = 16) -> Text:
+    lines = content.splitlines()
+    rendered = Text()
+    for line_number, line in _preview_lines(lines, start_line, limit):
+        if line_number is None:
+            rendered.append("  ...\n", style="dim")
+            continue
+        rendered.append(f"{line_number:>4}  ", style="dim")
+        rendered.append(line, style=_source_line_style(path, line))
+        rendered.append("\n")
+    return rendered
+
+
+def _preview_lines(
+    lines: list[str],
+    start_line: int,
+    limit: int,
+) -> list[tuple[int | None, str]]:
+    numbered: list[tuple[int | None, str]] = [
+        (start_line + index, line) for index, line in enumerate(lines)
+    ]
+    if len(numbered) <= limit:
+        return numbered
+    head_count = max(1, limit // 2)
+    tail_count = max(1, limit - head_count - 1)
+    return [*numbered[:head_count], (None, ""), *numbered[-tail_count:]]
+
+
+def _source_line_style(path: str, line: str) -> str:
+    if path.endswith((".md", ".markdown")):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            return "bold cyan"
+        if stripped.startswith(">"):
+            return "italic dim"
+        if stripped.startswith("```"):
+            return "magenta"
+        if set(stripped) <= {"|", "-", ":", " "} and "|" in stripped:
+            return "dim"
+        if stripped.startswith(("-", "*", "+")):
+            return "cyan"
+    return ""
+
+
+def _diff_counts(diff: str) -> tuple[int, int]:
+    additions = 0
+    deletions = 0
+    for line in diff.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            additions += 1
+        elif line.startswith("-"):
+            deletions += 1
+    return additions, deletions
+
+
+def _styled_diff(diff: str) -> Text:
+    rendered = Text()
+    for line in diff.splitlines():
+        style = ""
+        if line.startswith("@@"):
+            style = "cyan"
+        elif line.startswith("+++") or line.startswith("---"):
+            style = "dim"
+        elif line.startswith("+"):
+            style = "green"
+        elif line.startswith("-"):
+            style = "red"
+        rendered.append(line, style=style)
+        rendered.append("\n")
+    return rendered
+
+
+def _line_ranges(value: object) -> str:
+    if not isinstance(value, list) or not value:
+        return "unknown"
+    ranges: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        start = item.get("start")
+        end = item.get("end")
+        if not isinstance(start, int) or not isinstance(end, int):
+            continue
+        ranges.append(str(start) if start == end else f"{start}-{end}")
+    return ",".join(ranges) or "unknown"
 
 
 def _fit_cells(value: str, width: int) -> str:

@@ -53,5 +53,5 @@ def default_agent(
         model=model,
         max_turns=max_turns,
         tools=(),
-        skills=("coding", "security-review", "offline-dev", "skill-creator"),
+        skills=(),
     )

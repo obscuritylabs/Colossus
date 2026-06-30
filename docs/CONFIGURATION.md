@@ -574,9 +574,10 @@ and certificate environment variables for Colossus-owned `httpx` clients.
 
 ## Skill overrides
 
-Bundled skills are always available. User-installed skills can override bundled skills
-only when `allow_user_skill_overrides` is set to `true`. Keep this disabled in shared,
-regulated, or airgapped deployments unless the override source is reviewed and pinned.
+Bundled skills are always available. Legacy user, user-global, and workspace skills can
+override earlier skills only when `allow_user_skill_overrides` is set to `true`. Keep
+this disabled in shared, regulated, or airgapped deployments unless the override source
+is reviewed and pinned.
 
 ## Tool profiles
 

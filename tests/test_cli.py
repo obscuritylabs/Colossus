@@ -541,12 +541,13 @@ def test_cli_lists_bundled_skills() -> None:
 
 def test_cli_skills_new_scaffolds_and_refuses_overwrite(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.chdir(tmp_path)
 
     created = CliRunner().invoke(
         app,
         ["skills", "new", "demo-skill", "--description", "Demo workflow."],
     )
-    skill_dir = cli_module.data_dir() / "skills" / "demo-skill"
+    skill_dir = tmp_path / ".agents" / "skills" / "demo-skill"
 
     assert created.exit_code == 0
     assert "demo-skill" in created.stdout
@@ -565,6 +566,7 @@ def test_cli_skills_new_scaffolds_and_refuses_overwrite(tmp_path, monkeypatch) -
 
 def test_cli_skills_new_accepts_custom_parent_path(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.chdir(tmp_path)
     parent = tmp_path / "custom-skills"
 
     result = CliRunner().invoke(
@@ -582,6 +584,7 @@ def test_cli_skills_new_accepts_resources_agent_frontmatter_and_pack_path(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.chdir(tmp_path)
     pack_root = tmp_path / "demo-pack"
 
     result = CliRunner().invoke(
@@ -610,8 +613,9 @@ def test_cli_skills_new_accepts_resources_agent_frontmatter_and_pack_path(
 
 def test_cli_skills_validate_reports_success_and_failure(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.chdir(tmp_path)
     created = CliRunner().invoke(app, ["skills", "new", "valid-skill"])
-    skill_dir = cli_module.data_dir() / "skills" / "valid-skill"
+    skill_dir = tmp_path / ".agents" / "skills" / "valid-skill"
     invalid_dir = tmp_path / "invalid"
     invalid_dir.mkdir()
 
@@ -623,6 +627,23 @@ def test_cli_skills_validate_reports_success_and_failure(tmp_path, monkeypatch) 
     assert "Skill is valid" in valid.stdout
     assert invalid.exit_code == 1
     assert "SKILL.md is missing" in invalid.stdout
+
+
+def test_cli_skills_new_user_and_install_global_skill(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+
+    local = CliRunner().invoke(app, ["skills", "new", "installable-skill"])
+    local_dir = tmp_path / ".agents" / "skills" / "installable-skill"
+    installed = CliRunner().invoke(app, ["skills", "install", str(local_dir)])
+    user = CliRunner().invoke(app, ["skills", "new", "legacy-skill", "--user"])
+
+    assert local.exit_code == 0
+    assert installed.exit_code == 0
+    assert (tmp_path / "home" / ".agents" / "skills" / "installable-skill").is_dir()
+    assert user.exit_code == 0
+    assert (cli_module.data_dir() / "skills" / "legacy-skill").is_dir()
 
 
 def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
@@ -646,6 +667,7 @@ def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
     assert "skill.read" in result.stdout
     assert "skill.write" in result.stdout
     assert "skill.validate" in result.stdout
+    assert "skill.install" in result.stdout
     assert "skill.resource.list" in result.stdout
     assert "skill.resource.read" in result.stdout
     assert "web.search" not in result.stdout

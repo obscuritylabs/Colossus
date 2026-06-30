@@ -1,5 +1,6 @@
 """Built-in filesystem, git, shell, and smoke-test tools."""
 
+import difflib
 import json
 import re
 import shutil
@@ -231,6 +232,7 @@ class BuiltinToolHandlers:
 
     async def filesystem_write(self, arguments: JsonObject) -> str:
         path = self._workspace.resolve(_required_string_arg(arguments, "path"))
+        relative_path = self._workspace.relative(path)
         content = _required_string_arg(arguments, "content")
         mode = _string_arg(arguments, "mode", "overwrite")
         if mode not in {"create", "overwrite", "append"}:
@@ -240,17 +242,26 @@ class BuiltinToolHandlers:
             raise ToolExecutionError(
                 "filesystem.write create mode refuses to overwrite existing files."
             )
+        old_text = path.read_text(encoding="utf-8") if path.exists() and path.is_file() else ""
         if mode == "append":
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(content)
+            new_text = old_text + content
         else:
             path.write_text(content, encoding="utf-8")
+            new_text = content
         return _json(
-            {"path": self._workspace.relative(path), "bytes_written": len(content.encode())}
+            {
+                "path": relative_path,
+                "bytes_written": len(content.encode()),
+                "diff": _diff(relative_path, old_text, new_text),
+                "changed_line_ranges": _changed_line_ranges(old_text, new_text),
+            }
         )
 
     async def filesystem_replace(self, arguments: JsonObject) -> str:
         path = self._workspace.resolve(_required_string_arg(arguments, "path"))
+        relative_path = self._workspace.relative(path)
         old = _required_string_arg(arguments, "old")
         new = _required_string_arg(arguments, "new")
         replace_all = _bool_arg(arguments, "replace_all", False)
@@ -264,8 +275,10 @@ class BuiltinToolHandlers:
         path.write_text(updated, encoding="utf-8")
         return _json(
             {
-                "path": self._workspace.relative(path),
+                "path": relative_path,
                 "replacements": occurrences if replace_all else 1,
+                "diff": _diff(relative_path, text, updated),
+                "changed_line_ranges": _changed_line_ranges(text, updated),
             }
         )
 
@@ -461,6 +474,45 @@ def _string_list_arg(arguments: JsonObject, name: str) -> list[str]:
     return value
 
 
+def _diff(path: str, old_text: str, new_text: str) -> str:
+    return "".join(
+        difflib.unified_diff(
+            old_text.splitlines(keepends=True),
+            new_text.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+        )
+    )
+
+
+def _changed_line_ranges(old_text: str, new_text: str) -> list[JsonObject]:
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    ranges: list[JsonObject] = []
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
+    for tag, _old_start, _old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if new_start == new_end:
+            line = min(new_start + 1, max(len(new_lines), 1))
+            ranges.append({"start": line, "end": line})
+        else:
+            ranges.append({"start": new_start + 1, "end": new_end})
+    return _merge_line_ranges(ranges)
+
+
+def _merge_line_ranges(ranges: list[JsonObject]) -> list[JsonObject]:
+    merged: list[JsonObject] = []
+    for item in ranges:
+        start = int(item["start"])
+        end = int(item["end"])
+        if merged and start <= int(merged[-1]["end"]) + 1:
+            merged[-1]["end"] = max(int(merged[-1]["end"]), end)
+        else:
+            merged.append({"start": start, "end": end})
+    return merged
+
+
 def _prompt_choices_arg(arguments: JsonObject) -> tuple[UserPromptChoice, ...]:
     value = arguments.get("choices", [])
     if not isinstance(value, list):
@@ -577,7 +629,12 @@ def _filesystem_write_spec() -> ToolSpec:
             ["path", "content", "mode"],
         ),
         output_schema=_object_schema(
-            {"path": {"type": "string"}, "bytes_written": {"type": "integer"}}
+            {
+                "path": {"type": "string"},
+                "bytes_written": {"type": "integer"},
+                "diff": {"type": "string"},
+                "changed_line_ranges": {"type": "array"},
+            }
         ),
         permissions=ToolPermission(
             filesystem="write",
@@ -602,7 +659,12 @@ def _filesystem_replace_spec() -> ToolSpec:
             ["path", "old", "new"],
         ),
         output_schema=_object_schema(
-            {"path": {"type": "string"}, "replacements": {"type": "integer"}}
+            {
+                "path": {"type": "string"},
+                "replacements": {"type": "integer"},
+                "diff": {"type": "string"},
+                "changed_line_ranges": {"type": "array"},
+            }
         ),
         permissions=ToolPermission(
             filesystem="write",

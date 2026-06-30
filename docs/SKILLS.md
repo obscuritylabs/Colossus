@@ -9,15 +9,18 @@ Supported skill layouts:
 
 - Agent Skills-compatible: `SKILL.md` with YAML frontmatter containing `name` and
   `description`.
+- `.agents Protocol` compatibility: `skill.md` is accepted only when `SKILL.md` is
+  absent. New skills use `SKILL.md`; a directory with both names is invalid.
 - Colossus manifest-backed: `manifest.json` plus `SKILL.md`.
 - Hybrid: both files. When both exist, the frontmatter `name` and `description` must
   match `manifest.json`.
 - Optional resource directories: `references/`, `scripts/`, `assets/`, `examples/`, and
   `tests/`.
 
-Bundled skills ship inside the package. User-installed skills live in the user data
-directory. Pack-backed skills live under `skills/` inside bundled or installed packs.
-Offline bundle skills are installed after bundle verification.
+Bundled skills ship inside the package. Workspace skills live under `.agents/skills`.
+User-global skills live under `~/.agents/skills`. Legacy Colossus user skills live in
+the user data directory. Pack-backed skills live under `skills/` inside bundled or
+installed packs. Offline bundle skills are installed after bundle verification.
 
 Precedence:
 
@@ -25,7 +28,10 @@ Precedence:
 2. Bundled system skills are always recoverable.
 3. Bundled first-party pack skills are next.
 4. Installed pack skills are next.
-5. User skills are last. They may override earlier skills only when override mode is
+5. Legacy user skills are next.
+6. User-global `~/.agents/skills` skills are next.
+7. Workspace `.agents/skills` roots are last, from repository root down to the active
+   workspace directory. Later skills may override earlier skills only when override mode is
    explicitly enabled.
 
 `skills list` and REPL skill status report duplicate names so shadowed skills are visible.
@@ -87,19 +93,31 @@ The model should use `skill.scaffold` for new installed user skills, then
 file requires the `expected_sha256` returned by `skill.read` or `skill.inspect`, which
 prevents stale edits. `skill.scaffold` and `skill.write` do not execute helpers.
 
+For normal repo-local authoring, create and edit skills under `.agents/skills/NAME`
+with the regular workspace filesystem and command tools. Local skills are code-like
+workspace artifacts and can include validation fixtures or helper resources. Keep
+`.colossus/` for Colossus runtime/control state; generic workspace tools intentionally
+cannot write there.
+
 Create and validate skills directly from the CLI:
 
 ```bash
 uv run colossus skills new release-checklist --description "Release review workflow."
 uv run colossus skills new release-checklist --agent-compatible --resources references,tests
 uv run colossus skills new release-checklist --pack ./my-pack
+uv run colossus skills install .agents/skills/release-checklist
 uv run colossus skills validate /path/to/skills/release-checklist
 ```
 
 `skills new` writes `manifest.json` and `SKILL.md`, refuses to overwrite an existing
-skill unless `--force` is supplied, and defaults to the user data `skills/` directory.
-Use `--path PATH` to choose a parent directory for generated files, or `--pack PATH` to
-create under `PATH/skills`.
+skill unless `--force` is supplied, and defaults to `.agents/skills` in the current
+workspace. Use `--user` for the legacy user data `skills/` directory, `--path PATH` to
+choose a parent directory for generated files, or `--pack PATH` to create under
+`PATH/skills`.
+
+`skills install PATH` validates a local skill directory and copies it into
+`~/.agents/skills/NAME`. It refuses to overwrite an existing global skill unless
+`--force` is supplied.
 
 `skills validate` accepts frontmatter-only skills and manifest-backed skills. It checks
 frontmatter, manifest consistency, path safety, allowed resource directories, text-safe
