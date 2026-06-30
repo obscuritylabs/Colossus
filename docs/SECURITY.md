@@ -80,6 +80,8 @@ Security-sensitive defaults:
 | `trace.export` | Write | Denied | Yes | Enabled |
 | `context.show/compact/snapshots` | None | Denied | No | Enabled |
 | `context.restore` | None | Denied | Yes | Enabled |
+| `skill.scaffold` | Write | Denied | Yes | Enabled, user skill directory only |
+| `skill.validate` | Read | Denied | No | Enabled, user skill directory only |
 
 The default policy requires approval for declared mutations, explicit approval flags,
 network-capable tools, and high-risk tools. The orchestrator validates model-provided

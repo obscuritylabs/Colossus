@@ -67,6 +67,8 @@ packages = ["src/colossus"]
 "src/colossus/bundled_skills/security-review/SKILL.md" = "colossus/bundled_skills/security-review/SKILL.md"
 "src/colossus/bundled_skills/offline-dev/manifest.json" = "colossus/bundled_skills/offline-dev/manifest.json"
 "src/colossus/bundled_skills/offline-dev/SKILL.md" = "colossus/bundled_skills/offline-dev/SKILL.md"
+"src/colossus/bundled_skills/skill-creator/manifest.json" = "colossus/bundled_skills/skill-creator/manifest.json"
+"src/colossus/bundled_skills/skill-creator/SKILL.md" = "colossus/bundled_skills/skill-creator/SKILL.md"
 
 [tool.hatch.build.targets.sdist]
 include = [

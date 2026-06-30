@@ -23,6 +23,7 @@ from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.providers import ProviderDiagnostics
 from colossus.application.research import ResearchService
 from colossus.application.risk import RiskAssessmentService
+from colossus.application.skills import SkillResolver
 from colossus.application.subagents import SubagentService
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.errors import BundleVerificationError, ColossusError
@@ -69,6 +70,7 @@ from colossus.infrastructure.container import (
     create_research_service,
     create_search_provider,
     create_session_service,
+    create_skill_authoring_service,
     create_state_store,
     create_subagent_service,
     create_task_service,
@@ -314,6 +316,13 @@ def _http_overrides(ctx: typer.Context) -> HttpOverrides:
 
 def _http_client_config(ctx: typer.Context, config: ColossusConfig) -> HttpClientConfig:
     return http_client_config_from_config(config, _http_overrides(ctx))
+
+
+def _skill_resolver(config: ColossusConfig) -> SkillResolver:
+    return create_default_skill_resolver(
+        data_dir() / "skills",
+        allow_user_overrides=config.allow_user_skill_overrides,
+    )
 
 
 def _workspace_root(value: Path | None = None) -> Path:
@@ -670,6 +679,7 @@ def run(
         return
     workspace_root = _workspace_root(workspace)
     config = load_config(config_path())
+    skill_resolver = _skill_resolver(config)
     overrides = _provider_overrides(ctx)
     http_client_config = _http_client_config(ctx, config)
     router = create_model_router(
@@ -732,6 +742,7 @@ def run(
         http_client_config=http_client_config,
         integration_connections=integration_connections,
         credential_broker=credential_broker,
+        skill_resolver=skill_resolver,
     )
     plan_id = execute_plan
     if execute_plan is not None:
@@ -940,6 +951,7 @@ def repl(
         raise typer.Exit(code=2)
     workspace_root = _workspace_root(workspace)
     config = load_config(config_path())
+    skill_resolver = _skill_resolver(config)
     overrides = _provider_overrides(ctx)
     http_client_config = _http_client_config(ctx, config)
     router = create_model_router(
@@ -1009,6 +1021,7 @@ def repl(
             http_client_config=http_client_config,
             integration_connections=active_integration_connections,
             credential_broker=credential_broker,
+            skill_resolver=skill_resolver,
         )
 
     def build_research_service(workspace_root: Path) -> ResearchService:
@@ -1059,7 +1072,7 @@ def repl(
     history_path.parent.mkdir(parents=True, exist_ok=True)
     run_repl_sync(
         build_orchestrator("primary"),
-        create_default_skill_resolver(),
+        skill_resolver,
         context_service,
         context_route.provider,
         default_agent(primary_route.profile.model),
@@ -1075,6 +1088,7 @@ def repl(
         memory_service=memory_service,
         session_service=create_session_service(data_dir()),
         plan_service=create_plan_service(data_dir()),
+        skill_authoring_service=create_skill_authoring_service(data_dir()),
         subagent_service=subagent_service,
         research_service=research_service,
         integration_service=integration_service,
@@ -1108,7 +1122,7 @@ def config_show() -> None:
 @skills_app.command("list")
 def skills_list() -> None:
     """List bundled and enabled skills."""
-    resolver = create_default_skill_resolver()
+    resolver = _skill_resolver(load_config(config_path()))
     table = Table("Name", "Version", "Offline", "Source")
     for skill in resolver.list_skills():
         table.add_row(
@@ -1118,6 +1132,57 @@ def skills_list() -> None:
             skill.source,
         )
     console.print(table)
+
+
+@skills_app.command("new")
+def skills_new(
+    name: Annotated[str, typer.Argument(help="Skill name to scaffold.")],
+    path: Annotated[
+        Path | None,
+        typer.Option(
+            "--path",
+            help="Parent directory for the generated skill. Defaults to user data skills.",
+        ),
+    ] = None,
+    description: Annotated[
+        str | None,
+        typer.Option("--description", help="Manifest description for the generated skill."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Overwrite manifest and SKILL.md if the skill exists."),
+    ] = False,
+) -> None:
+    """Scaffold a local data-only skill."""
+    service = create_skill_authoring_service(data_dir())
+    try:
+        result = service.scaffold(
+            name,
+            description=description,
+            parent=path,
+            overwrite=force,
+        )
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Wrote skill {result.name}: {result.path}")
+
+
+@skills_app.command("validate")
+def skills_validate(
+    path: Annotated[Path, typer.Argument(help="Skill directory to validate.")],
+) -> None:
+    """Validate a local skill directory."""
+    service = create_skill_authoring_service(data_dir())
+    result = service.validate(path)
+    if result.valid:
+        name = result.manifest.name if result.manifest is not None else path.name
+        console.print(f"Skill is valid: {name} ({result.path})")
+        return
+    console.print(f"[red]Skill is invalid:[/red] {result.path}")
+    for error in result.errors:
+        console.print(f"- {error}")
+    raise typer.Exit(code=1)
 
 
 @tools_app.command("list")

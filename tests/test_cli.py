@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 from pathlib import Path
 
@@ -476,6 +477,62 @@ def test_cli_lists_bundled_skills() -> None:
     assert result.exit_code == 0
     assert "coding" in result.stdout
     assert "offline-dev" in result.stdout
+    assert "skill-creator" in result.stdout
+
+
+def test_cli_skills_new_scaffolds_and_refuses_overwrite(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    created = CliRunner().invoke(
+        app,
+        ["skills", "new", "demo-skill", "--description", "Demo workflow."],
+    )
+    skill_dir = cli_module.data_dir() / "skills" / "demo-skill"
+
+    assert created.exit_code == 0
+    assert "demo-skill" in created.stdout
+    assert skill_dir.is_dir()
+    assert json.loads((skill_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "description"
+    ] == "Demo workflow."
+
+    duplicate = CliRunner().invoke(app, ["skills", "new", "demo-skill"])
+    forced = CliRunner().invoke(app, ["skills", "new", "demo-skill", "--force"])
+
+    assert duplicate.exit_code == 1
+    assert "already exists" in duplicate.stdout
+    assert forced.exit_code == 0
+
+
+def test_cli_skills_new_accepts_custom_parent_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    parent = tmp_path / "custom-skills"
+
+    result = CliRunner().invoke(
+        app,
+        ["skills", "new", "custom-skill", "--path", str(parent)],
+    )
+
+    assert result.exit_code == 0
+    assert (parent / "custom-skill" / "manifest.json").is_file()
+    assert (parent / "custom-skill" / "SKILL.md").is_file()
+
+
+def test_cli_skills_validate_reports_success_and_failure(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    created = CliRunner().invoke(app, ["skills", "new", "valid-skill"])
+    skill_dir = cli_module.data_dir() / "skills" / "valid-skill"
+    invalid_dir = tmp_path / "invalid"
+    invalid_dir.mkdir()
+
+    valid = CliRunner().invoke(app, ["skills", "validate", str(skill_dir)])
+    invalid = CliRunner().invoke(app, ["skills", "validate", str(invalid_dir)])
+
+    assert created.exit_code == 0
+    assert valid.exit_code == 0
+    assert "Skill is valid" in valid.stdout
+    assert invalid.exit_code == 1
+    assert "manifest.json is missing" in invalid.stdout
 
 
 def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
@@ -494,6 +551,8 @@ def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
     assert "patch.apply" in result.stdout
     assert "repo.map" in result.stdout
     assert "agent.delegate" in result.stdout
+    assert "skill.scaffold" in result.stdout
+    assert "skill.validate" in result.stdout
     assert "web.search" not in result.stdout
     assert "mcp.call" not in result.stdout
     assert "trace.export" in result.stdout

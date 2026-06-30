@@ -16,7 +16,7 @@ def research_agent(model: str = "default") -> AgentSpec:
         ),
         model=model,
         tools=research_agent_tools(),
-        skills=("coding", "security-review", "offline-dev"),
+        skills=("coding", "security-review", "offline-dev", "skill-creator"),
     )
 
 
@@ -43,5 +43,5 @@ def default_agent(model: str = "default") -> AgentSpec:
         ),
         model=model,
         tools=(),
-        skills=("coding", "security-review", "offline-dev"),
+        skills=("coding", "security-review", "offline-dev", "skill-creator"),
     )
