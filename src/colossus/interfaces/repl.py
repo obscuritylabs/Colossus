@@ -1089,7 +1089,7 @@ async def run_repl(
                 )
             )
         except ColossusError as exc:
-            trace_renderer.end_run()
+            trace_renderer.abort_run()
             display_state.last_status = "failed"
             await _refresh_context_status(display_state, context_service)
             await _refresh_task_status(display_state, task_service)

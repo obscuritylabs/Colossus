@@ -8,7 +8,7 @@ from colossus.adapters.builtin_tools import create_builtin_tools
 from colossus.adapters.skills_filesystem import FilesystemSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.adapters.workspace import Workspace
-from colossus.application.approvals import AllowAllApprovalHandler
+from colossus.application.approvals import AllowAllApprovalHandler, DenyByDefaultApprovalHandler
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
 from colossus.application.orchestrator import AgentOrchestrator
@@ -177,6 +177,17 @@ class TextToolThenEmptyProvider:
             call_id="call-1",
             name="echo",
             arguments={"text": "from tool"},
+        )
+
+
+class ShellToolProvider:
+    name = "shell-tool"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        yield ToolCallRequestedEvent(
+            call_id="call-1",
+            name="shell.run",
+            arguments={"argv": ["echo", "hello"]},
         )
 
 
@@ -724,6 +735,35 @@ async def test_orchestrator_returns_filesystem_read_errors_to_model(tmp_path) ->
     assert completed.exit_code == 1
     assert "execution_error" in completed.output
     assert "file not found" in completed.output
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_does_not_persist_unmatched_tool_call_on_denial(tmp_path) -> None:
+    state_store = SQLiteStateStore(tmp_path / "state.sqlite3")
+    specs, handlers = create_builtin_tools(Workspace(tmp_path))
+    registry = InMemoryToolRegistry(specs)
+    orchestrator = AgentOrchestrator(
+        provider=ShellToolProvider(),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor(handlers, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=DenyByDefaultApprovalHandler(),
+        state_store=state_store,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+    )
+
+    with pytest.raises(ColossusError, match="denied"):
+        await orchestrator.run(
+            AgentRunRequest(
+                prompt="write a note",
+                agent=default_agent(),
+                session_id="session-1",
+            )
+        )
+
+    messages = await state_store.list_messages("session-1")
+    assert [message.role for message in messages] == ["user"]
 
 
 def _write_skill(

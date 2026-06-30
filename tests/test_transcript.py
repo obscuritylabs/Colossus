@@ -65,6 +65,21 @@ def test_transcript_renderer_raw_streams_assistant_without_duplicate_final_outpu
     assert "done" not in output
 
 
+def test_transcript_renderer_abort_discards_buffered_markdown_output() -> None:
+    console = Console(record=True, width=100)
+    renderer = TranscriptRenderer(console)
+
+    renderer.begin_run()
+    renderer.render(ModelDeltaEvent(text="I'll do zyx. "))
+    renderer.render(ModelDeltaEvent(text="Now I'll do xyz."))
+    renderer.abort_run()
+
+    output = console.export_text()
+    assert "I'll do zyx" not in output
+    assert "Now I'll do xyz" not in output
+    assert renderer.rendered_model_output is False
+
+
 def test_transcript_renderer_ignores_leading_whitespace_delta_before_answer() -> None:
     console = Console(record=True, width=100)
     renderer = TranscriptRenderer(console)

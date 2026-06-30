@@ -216,21 +216,25 @@ class AgentOrchestrator:
                     "include choices[].delta.content or choices[].delta.tool_calls."
                 )
 
+            turn_assistant_message: AssistantMessage | None = None
             if collected_text or pending_tool_calls:
-                assistant_message = AssistantMessage(
+                turn_assistant_message = AssistantMessage(
                     content="".join(collected_text),
                     tool_calls=tuple(pending_tool_calls),
                 )
-                messages.append(assistant_message)
-                if request.session_id is not None:
-                    await self._state_store.append_message(
-                        request.session_id,
-                        run_id,
-                        assistant_message,
-                    )
+                messages.append(turn_assistant_message)
 
             if not pending_tool_calls:
                 final_text = turn_final_text or "".join(collected_text)
+                if (
+                    turn_assistant_message is not None
+                    and request.session_id is not None
+                ):
+                    await self._state_store.append_message(
+                        request.session_id,
+                        run_id,
+                        turn_assistant_message,
+                    )
                 await self._audit_sink.record(
                     "agent",
                     "run.completed",
@@ -243,6 +247,7 @@ class AgentOrchestrator:
                     session_id=request.session_id,
                 )
 
+            tool_messages: list[ToolResultMessage] = []
             for call in pending_tool_calls:
                 result = await self._execute_tool(
                     run_id,
@@ -255,10 +260,21 @@ class AgentOrchestrator:
                     name=result.name,
                     content=result.output,
                 )
+                tool_messages.append(tool_message)
                 messages.append(tool_message)
-                if request.session_id is not None:
-                    await self._state_store.append_message(request.session_id, run_id, tool_message)
                 events_recorded += 1
+            if request.session_id is not None and turn_assistant_message is not None:
+                await self._state_store.append_message(
+                    request.session_id,
+                    run_id,
+                    turn_assistant_message,
+                )
+                for tool_message in tool_messages:
+                    await self._state_store.append_message(
+                        request.session_id,
+                        run_id,
+                        tool_message,
+                    )
 
         await self._audit_sink.record(
             "agent",

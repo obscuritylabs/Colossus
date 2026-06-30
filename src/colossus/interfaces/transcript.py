@@ -221,6 +221,15 @@ class TranscriptRenderer:
         self._assistant_started = False
         self._activity_context = ""
 
+    def abort_run(self) -> None:
+        self._stop_activity()
+        if self._rendered_model_output and not self._last_model_delta_ended_newline:
+            self.console.print()
+        self._model_delta_buffer.clear()
+        self._last_model_delta_ended_newline = True
+        self._assistant_started = False
+        self._activity_context = ""
+
     def render_user_prompt(self, prompt: str) -> None:
         if self.transcript_style == "comfortable":
             self.console.print()
