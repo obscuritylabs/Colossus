@@ -33,13 +33,21 @@ class SubprocessBroker:
         if not command.argv:
             raise ToolExecutionError("Cannot execute an empty argv.")
         env = _clean_env(command.env)
-        process = await asyncio.create_subprocess_exec(
-            *command.argv,
-            cwd=command.cwd,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command.argv,
+                cwd=command.cwd,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError as exc:
+            raise ToolExecutionError(f"Executable not found: {command.argv[0]}") from exc
+        except OSError as exc:
+            reason = exc.strerror or exc.__class__.__name__
+            raise ToolExecutionError(
+                f"Failed to start executable {command.argv[0]}: {reason}"
+            ) from exc
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),

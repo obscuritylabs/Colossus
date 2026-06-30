@@ -50,6 +50,14 @@ async def test_subprocess_broker_rejects_empty_argv(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_subprocess_broker_reports_missing_executable_as_tool_error(tmp_path) -> None:
+    with pytest.raises(ToolExecutionError, match="Executable not found: definitely-missing"):
+        await SubprocessBroker().run(
+            SubprocessCommand(argv=("definitely-missing",), cwd=tmp_path)
+        )
+
+
+@pytest.mark.asyncio
 async def test_subprocess_broker_times_out_and_kills_process(tmp_path) -> None:
     with pytest.raises(ToolExecutionError, match="timed out"):
         await SubprocessBroker().run(
