@@ -10,6 +10,7 @@ Use `run` for a single prompt:
 uv run colossus run "Summarize this repository"
 uv run colossus run --workspace ../my-project "Find likely failing tests"
 uv run colossus run --stream --events compact "Inspect the tool surface"
+uv run colossus run --max-turns 40 "Work until the requested change is verified"
 ```
 
 Use `--approval-mode ask` when you want approval prompts for risky tools, and
@@ -29,6 +30,7 @@ Core commands:
 ```text
 /help
 /status
+/agent show|max-turns N
 /tools
 /workspace [PATH]
 /session show|resume|latest|new
@@ -137,10 +139,14 @@ skill:
 
 ```bash
 uv run colossus skills new release-checklist
+uv run colossus skills new release-checklist --agent-compatible --resources references,tests
+uv run colossus skills new release-checklist --pack ./my-pack
 uv run colossus skills validate /path/to/skills/release-checklist
 ```
 
-See [Skills](SKILLS.md) for authoring and safety guidance.
+Use packs for skills that need executable tools, binaries, Docker assets, MCP servers, or
+integration metadata. See [Skills](SKILLS.md) and [Packs](PACKS.md) for authoring and
+safety guidance.
 
 ## Deep Research
 

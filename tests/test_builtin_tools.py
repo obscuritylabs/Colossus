@@ -8,6 +8,7 @@ import pytest
 from colossus.adapters.audit_jsonl import JsonlAuditSink
 from colossus.adapters.builtin_tools import create_builtin_tools
 from colossus.adapters.roadmap_tools import create_roadmap_tools
+from colossus.adapters.skills_filesystem import FilesystemSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.adapters.subprocess_broker import (
     SubprocessBroker,
@@ -19,6 +20,7 @@ from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.memories import MemoryService
 from colossus.application.skill_authoring import SkillAuthoringService
+from colossus.application.skills import SkillResolver, SkillResourceService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig
@@ -176,17 +178,36 @@ async def test_user_ask_tool_requires_choices_when_freeform_is_disabled(tmp_path
 @pytest.mark.asyncio
 async def test_skill_authoring_tools_scaffold_and_validate_user_skill(tmp_path: Path) -> None:
     service = SkillAuthoringService(tmp_path / "skills")
+    audit_path = tmp_path / "audit.jsonl"
     specs, handlers = create_builtin_tools(
         Workspace(tmp_path),
         skill_authoring_service=service,
+        audit_sink=JsonlAuditSink(audit_path),
     )
     executor = FunctionToolExecutor(handlers, InMemoryToolRegistry(specs))
     scaffold_spec = next(spec for spec in specs if spec.name == "skill.scaffold")
+    inspect_spec = next(spec for spec in specs if spec.name == "skill.inspect")
+    read_spec = next(spec for spec in specs if spec.name == "skill.read")
+    write_spec = next(spec for spec in specs if spec.name == "skill.write")
     validate_spec = next(spec for spec in specs if spec.name == "skill.validate")
 
     assert scaffold_spec.permissions.approval_required is True
     assert scaffold_spec.permissions.mutation is True
     assert scaffold_spec.permissions.working_root_required is False
+    assert "instructions" in scaffold_spec.input_schema["properties"]
+    assert "required_tools" in scaffold_spec.input_schema["properties"]
+    assert scaffold_spec.input_schema["properties"]["resources"]["items"]["enum"] == [
+        "assets",
+        "examples",
+        "references",
+        "scripts",
+        "tests",
+    ]
+    assert inspect_spec.permissions.filesystem == "read"
+    assert read_spec.permissions.filesystem == "read"
+    assert write_spec.permissions.approval_required is True
+    assert write_spec.permissions.mutation is True
+    assert write_spec.permissions.working_root_required is False
     assert validate_spec.permissions.filesystem == "read"
     assert validate_spec.permissions.mutation is False
 
@@ -194,18 +215,36 @@ async def test_skill_authoring_tools_scaffold_and_validate_user_skill(tmp_path: 
         ToolCall(
             call_id="skill-1",
             name="skill.scaffold",
-            arguments={"name": "demo-skill", "description": "Demo workflow."},
+            arguments={
+                "name": "demo-skill",
+                "description": "Demo workflow.",
+                "instructions": (
+                    "# Demo Skill\n\n"
+                    "Use this skill when a demo workflow needs repeatable checks.\n"
+                ),
+                "triggers": ["demo-skill", "demo"],
+                "required_tools": ["filesystem.read"],
+                "permissions": ["filesystem:read"],
+                "offline_compatible": False,
+                "resources": ["references"],
+            },
         )
     )
     scaffold_payload = json.loads(scaffolded.output)
     skill_path = tmp_path / "skills" / "demo-skill"
+    manifest = json.loads((skill_path / "manifest.json").read_text(encoding="utf-8"))
 
     assert scaffold_payload["skill"]["name"] == "demo-skill"
     assert skill_path.is_dir()
-    assert json.loads((skill_path / "manifest.json").read_text(encoding="utf-8"))[
-        "description"
-    ] == "Demo workflow."
-    assert "Demo Skill" in (skill_path / "SKILL.md").read_text(encoding="utf-8")
+    assert manifest["description"] == "Demo workflow."
+    assert manifest["triggers"] == ["demo-skill", "demo"]
+    assert manifest["required_tools"] == ["filesystem.read"]
+    assert manifest["permissions"] == ["filesystem:read"]
+    assert manifest["offline_compatible"] is False
+    assert (
+        "# Demo Skill\n\nUse this skill when a demo workflow"
+        in (skill_path / "SKILL.md").read_text(encoding="utf-8")
+    )
 
     with pytest.raises(ToolExecutionError, match="already exists"):
         await executor.execute(
@@ -216,11 +255,128 @@ async def test_skill_authoring_tools_scaffold_and_validate_user_skill(tmp_path: 
             )
         )
 
+    inspected = await executor.execute(
+        ToolCall(call_id="skill-3", name="skill.inspect", arguments={"name": "demo-skill"})
+    )
+    read = await executor.execute(
+        ToolCall(
+            call_id="skill-4",
+            name="skill.read",
+            arguments={"name": "demo-skill", "path": "SKILL.md"},
+        )
+    )
+    read_payload = json.loads(read.output)
+    written = await executor.execute(
+        ToolCall(
+            call_id="skill-5",
+            name="skill.write",
+            arguments={
+                "name": "demo-skill",
+                "path": "references/guide.md",
+                "content": "# Guide\n\nReusable guidance.\n",
+                "mode": "create",
+            },
+        )
+    )
+
+    assert json.loads(inspected.output)["skill"]["files"][0]["sha256"]
+    assert read_payload["file"]["content"].startswith("# Demo Skill")
+    assert json.loads(written.output)["file"]["validation"]["valid"] is True
+    assert (skill_path / "references" / "guide.md").is_file()
+    audit_text = audit_path.read_text(encoding="utf-8")
+    assert "skill.read" in audit_text
+    assert "skill.write" in audit_text
+    assert "Reusable guidance" not in audit_text
+
+    with pytest.raises(ToolExecutionError, match="expected_sha256 is required"):
+        await executor.execute(
+            ToolCall(
+                call_id="skill-6",
+                name="skill.write",
+                arguments={
+                    "name": "demo-skill",
+                    "path": "SKILL.md",
+                    "content": "# Demo Skill\n\nOverwrite without hash.\n",
+                },
+            )
+        )
+    with pytest.raises(ToolExecutionError, match="safe relative path"):
+        await executor.execute(
+            ToolCall(
+                call_id="skill-7",
+                name="skill.read",
+                arguments={"name": "demo-skill", "path": "../outside.md"},
+            )
+        )
+
     validation = await executor.execute(
-        ToolCall(call_id="skill-3", name="skill.validate", arguments={"name": "demo-skill"})
+        ToolCall(call_id="skill-8", name="skill.validate", arguments={"name": "demo-skill"})
     )
 
     assert json.loads(validation.output)["validation"]["valid"] is True
+
+
+@pytest.mark.asyncio
+async def test_skill_resource_tools_require_active_skill_and_audit_reads(
+    tmp_path: Path,
+) -> None:
+    service = SkillAuthoringService(tmp_path / "skills")
+    scaffolded = service.scaffold_user_skill("resource-skill", resources=("references",))
+    (scaffolded.path / "references" / "guide.md").write_text(
+        "# Guide\n\nUse the reference.\n",
+        encoding="utf-8",
+    )
+    audit_path = tmp_path / "audit.jsonl"
+    specs, handlers = create_builtin_tools(
+        Workspace(tmp_path),
+        skill_authoring_service=service,
+        skill_resource_service=SkillResourceService(
+            SkillResolver((FilesystemSkillRepository(tmp_path / "skills"),))
+        ),
+        audit_sink=JsonlAuditSink(audit_path),
+    )
+    executor = FunctionToolExecutor(handlers, InMemoryToolRegistry(specs))
+    names = {spec.name for spec in specs}
+
+    listed = await executor.execute(
+        ToolCall(
+            call_id="skill-resource-1",
+            name="skill.resource.list",
+            arguments={"skill": "resource-skill", "active_skills": ["resource-skill"]},
+        )
+    )
+    read = await executor.execute(
+        ToolCall(
+            call_id="skill-resource-2",
+            name="skill.resource.read",
+            arguments={
+                "skill": "resource-skill",
+                "path": "references/guide.md",
+                "active_skills": ["resource-skill"],
+            },
+        )
+    )
+
+    assert {"skill.resource.list", "skill.resource.read"} <= names
+    assert json.loads(listed.output)["resources"][0]["path"] == "references/guide.md"
+    assert json.loads(read.output)["resource"]["content"] == "# Guide\n\nUse the reference.\n"
+    audit_text = audit_path.read_text(encoding="utf-8")
+    assert "skill.resource.read" in audit_text
+    assert "references/guide.md" in audit_text
+    assert "Use the reference" not in audit_text
+
+    with pytest.raises(ToolExecutionError, match="not active"):
+        await executor.execute(
+            ToolCall(
+                call_id="skill-resource-3",
+                name="skill.resource.read",
+                arguments={
+                    "skill": "resource-skill",
+                    "path": "references/guide.md",
+                    "active_skills": [],
+                },
+            )
+        )
 
 
 @pytest.mark.asyncio

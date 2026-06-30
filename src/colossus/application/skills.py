@@ -3,6 +3,9 @@
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+
+from pydantic import BaseModel, ConfigDict
 
 from colossus.domain.agents import AgentSpec
 from colossus.domain.errors import ColossusError
@@ -14,6 +17,43 @@ _SKILL_MENTION_RE = re.compile(
     r"(?<![\w.])@(?:(?:skill:)(?P<canonical>[A-Za-z][A-Za-z0-9_.-]*)|"
     r"(?P<shorthand>[A-Za-z][A-Za-z0-9_.-]*))"
 )
+_RESOURCE_DIRS = frozenset({"references", "scripts", "assets", "examples", "tests"})
+_MAX_RESOURCE_BYTES = 64_000
+_TEXT_RESOURCE_SUFFIXES = frozenset(
+    {
+        ".json",
+        ".md",
+        ".py",
+        ".sh",
+        ".txt",
+        ".toml",
+        ".yaml",
+        ".yml",
+    }
+)
+
+
+class SkillResourceEntry(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: str
+    size: int
+    kind: str
+
+
+class SkillResourceRead(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: str
+    size: int
+    content: str
+
+
+@dataclass(frozen=True)
+class SkillDuplicate:
+    name: str
+    selected_source: str
+    sources: tuple[str, ...]
 
 
 class SkillResolver:
@@ -39,6 +79,25 @@ class SkillResolver:
             if skill.manifest.name == name:
                 return skill
         return None
+
+    def duplicate_names(self) -> tuple[SkillDuplicate, ...]:
+        sources_by_name: dict[str, list[str]] = {}
+        for repository in self._repositories:
+            for skill in repository.list_skills():
+                sources_by_name.setdefault(skill.manifest.name, []).append(skill.source)
+        duplicates: list[SkillDuplicate] = []
+        for name, sources in sorted(sources_by_name.items()):
+            if len(sources) < 2:
+                continue
+            selected_source = sources[-1] if self._allow_user_overrides else sources[0]
+            duplicates.append(
+                SkillDuplicate(
+                    name=name,
+                    selected_source=selected_source,
+                    sources=tuple(sources),
+                )
+            )
+        return tuple(duplicates)
 
 
 @dataclass(frozen=True)
@@ -135,6 +194,80 @@ class SkillComposer:
                 )
 
 
+class SkillResourceService:
+    def __init__(self, resolver: SkillResolver) -> None:
+        self._resolver = resolver
+
+    def list_resources(
+        self,
+        *,
+        skill_name: str,
+        active_skills: tuple[str, ...],
+    ) -> tuple[SkillResourceEntry, ...]:
+        skill, root = self._active_skill_root(skill_name, active_skills)
+        del skill
+        resources: list[SkillResourceEntry] = []
+        for resource_dir in sorted(_RESOURCE_DIRS):
+            base = root / resource_dir
+            if not base.is_dir():
+                continue
+            for path in sorted(item for item in base.rglob("*") if item.is_file()):
+                rel_path = path.relative_to(root).as_posix()
+                if path.is_symlink():
+                    continue
+                resources.append(
+                    SkillResourceEntry(
+                        path=rel_path,
+                        size=path.stat().st_size,
+                        kind=resource_dir,
+                    )
+                )
+        return tuple(resources)
+
+    def read_resource(
+        self,
+        *,
+        skill_name: str,
+        path: str,
+        active_skills: tuple[str, ...],
+    ) -> SkillResourceRead:
+        _skill, root = self._active_skill_root(skill_name, active_skills)
+        rel_path = _validate_resource_path(path)
+        resolved = (root / rel_path).resolve(strict=False)
+        root_resolved = root.resolve(strict=False)
+        if resolved != root_resolved and root_resolved not in resolved.parents:
+            raise ColossusError(f"Skill resource path escapes skill root: {path}")
+        if not resolved.is_file() or resolved.is_symlink():
+            raise ColossusError(f"Skill resource is not a regular file: {path}")
+        size = resolved.stat().st_size
+        if size > _MAX_RESOURCE_BYTES:
+            raise ColossusError(f"Skill resource is too large: {path}")
+        if not _is_text_resource(resolved):
+            raise ColossusError(f"Skill resource is not a text-safe file: {path}")
+        return SkillResourceRead(
+            path=rel_path,
+            size=size,
+            content=resolved.read_text(encoding="utf-8"),
+        )
+
+    def _active_skill_root(
+        self,
+        skill_name: str,
+        active_skills: tuple[str, ...],
+    ) -> tuple[Skill, Path]:
+        if skill_name not in set(active_skills):
+            raise ColossusError(f"Skill is not active for this turn: {skill_name}")
+        skill = self._resolver.get_skill(skill_name)
+        if skill is None:
+            raise ColossusError(f"Unknown skill: {skill_name}")
+        if skill.resource_root is None:
+            raise ColossusError(f"Skill has no readable resource root: {skill_name}")
+        root = Path(skill.resource_root)
+        if not root.exists() or not root.is_dir():
+            raise ColossusError(f"Skill resource root is unavailable: {skill_name}")
+        return skill, root
+
+
 def extract_skill_mentions(
     text: str,
     *,
@@ -186,3 +319,21 @@ def _dedupe(names: tuple[str, ...]) -> tuple[str, ...]:
             seen.add(normalized)
             deduped.append(normalized)
     return tuple(deduped)
+
+
+def _validate_resource_path(value: str) -> str:
+    path = PurePosixPath(value.strip())
+    if not path.parts or path.is_absolute() or ".." in path.parts:
+        raise ColossusError(f"Invalid skill resource path: {value}")
+    if path.parts[0] not in _RESOURCE_DIRS:
+        raise ColossusError(
+            "Skill resources must live under references, scripts, assets, examples, or tests."
+        )
+    return path.as_posix()
+
+
+def _is_text_resource(path: Path) -> bool:
+    if path.suffix.lower() in _TEXT_RESOURCE_SUFFIXES:
+        return True
+    data = path.read_bytes()
+    return b"\x00" not in data

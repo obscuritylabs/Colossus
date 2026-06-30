@@ -13,6 +13,7 @@ from colossus.domain.events import RunEvent
 from colossus.domain.integrations import IntegrationConnection
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import Message, UserMessage
+from colossus.domain.packs import InstalledPack, PackTrustRecord
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
 from colossus.domain.research import ResearchClaim, ResearchRun, ResearchSource
@@ -585,6 +586,72 @@ class SQLiteStateStore:
             conn.execute("delete from integration_connections where name = ?", (name,))
             conn.commit()
 
+    async def save_installed_pack(self, pack: InstalledPack) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into installed_packs(name, version, status, payload)
+                values (?, ?, ?, ?)
+                on conflict(name) do update set
+                    version = excluded.version,
+                    status = excluded.status,
+                    payload = excluded.payload,
+                    updated_at = current_timestamp
+                """,
+                (pack.name, pack.version, pack.status, pack.model_dump_json()),
+            )
+            conn.commit()
+
+    async def get_installed_pack(self, name: str) -> InstalledPack | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute(
+                "select payload from installed_packs where name = ?",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return InstalledPack.model_validate_json(row[0])
+
+    async def list_installed_packs(self) -> tuple[InstalledPack, ...]:
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(
+                """
+                select payload
+                from installed_packs
+                order by name
+                """
+            ).fetchall()
+        return tuple(InstalledPack.model_validate_json(row[0]) for row in rows)
+
+    async def delete_installed_pack(self, name: str) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute("delete from installed_packs where name = ?", (name,))
+            conn.commit()
+
+    async def save_pack_trust_record(self, record: PackTrustRecord) -> None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into pack_trust_records(kind, value, payload)
+                values (?, ?, ?)
+                on conflict(kind, value) do update set
+                    payload = excluded.payload
+                """,
+                (record.kind, record.value, record.model_dump_json()),
+            )
+            conn.commit()
+
+    async def list_pack_trust_records(self) -> tuple[PackTrustRecord, ...]:
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(
+                """
+                select payload
+                from pack_trust_records
+                order by kind, value
+                """
+            ).fetchall()
+        return tuple(PackTrustRecord.model_validate_json(row[0]) for row in rows)
+
     async def save_context_snapshot(self, snapshot: ContextSnapshot) -> None:
         await self.ensure_session(snapshot.session_id)
         with closing(sqlite3.connect(self._path)) as conn:
@@ -912,6 +979,33 @@ class SQLiteStateStore:
             conn.execute(
                 "create index if not exists idx_integration_connections_status "
                 "on integration_connections(status)"
+            )
+            conn.execute(
+                """
+                create table if not exists installed_packs (
+                    name text primary key,
+                    version text not null,
+                    status text not null,
+                    payload text not null,
+                    updated_at datetime default current_timestamp,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_installed_packs_status "
+                "on installed_packs(status)"
+            )
+            conn.execute(
+                """
+                create table if not exists pack_trust_records (
+                    kind text not null,
+                    value text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp,
+                    primary key(kind, value)
+                )
+                """
             )
             conn.execute(
                 """

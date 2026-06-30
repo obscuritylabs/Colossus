@@ -33,6 +33,7 @@ from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
+from colossus.application.packs import PackService
 from colossus.application.planning import PlanService
 from colossus.application.preferences import ReplPreferencesService
 from colossus.application.research import ResearchService
@@ -41,7 +42,7 @@ from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.skills import SkillResolver, extract_skill_mentions
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
-from colossus.domain.agents import AgentSpec
+from colossus.domain.agents import DEFAULT_AGENT_MAX_TURNS, MAX_AGENT_MAX_TURNS, AgentSpec
 from colossus.domain.context import ContextStatus
 from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
@@ -52,6 +53,7 @@ from colossus.domain.integrations import (
     IntegrationStatusView,
 )
 from colossus.domain.memories import MemoryItem, MemoryStatus
+from colossus.domain.packs import InstalledPack, PackStatusView
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences, TranscriptStylePreference
 from colossus.domain.requests import AgentRunRequest
@@ -65,6 +67,7 @@ from colossus.domain.user_prompts import UserPromptAnswer, UserPromptChoice
 from colossus.interfaces.trace import EventDisplayMode, TraceRenderTheme
 from colossus.interfaces.transcript import TranscriptRenderer, TranscriptRenderTheme
 from colossus.ports.model_provider import ModelProvider
+from colossus.ports.packs import LoadedPack
 
 SlashCommand = Literal[
     "model",
@@ -94,6 +97,7 @@ SlashCommand = Literal[
     "plan",
     "research",
     "integrations",
+    "packs",
     "help",
     "audit",
     "compact",
@@ -151,6 +155,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/plan",
     "/research",
     "/integrations",
+    "/packs",
     "/help",
     "/audit",
     "/compact",
@@ -161,7 +166,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
 
 SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/model": "Show or switch the active model role.",
-    "/agent": "Show the active agent spec.",
+    "/agent": "Show or tune the active agent spec.",
     "/tools": "List currently registered tools.",
     "/skill": "Toggle or manage Skill Mode.",
     "/skills": "List available skills.",
@@ -187,6 +192,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/plan": "Toggle or manage REPL Plan Mode.",
     "/research": "Run or inspect Deep Research Mode.",
     "/integrations": "Manage app and service integrations.",
+    "/packs": "Manage capability packs.",
     "/help": "Show REPL commands.",
     "/audit": "Reserved audit view.",
     "/compact": "Create a context snapshot for the current session.",
@@ -536,6 +542,7 @@ class ReplDisplayState:
     active_model_role: str
     model: str
     approval_mode: str
+    max_turns: int = DEFAULT_AGENT_MAX_TURNS
     stream_model_output: bool = True
     raw_stream_model_output: bool = False
     interaction_mode: ReplInteractionMode = "chat"
@@ -607,6 +614,7 @@ async def run_repl(
     subagent_service: SubagentService | None = None,
     research_service: ResearchService | None = None,
     integration_service: IntegrationService | None = None,
+    pack_service: PackService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -662,6 +670,7 @@ async def run_repl(
         active_model_role=active_model_role,
         model=agent.model,
         approval_mode=approval_mode,
+        max_turns=agent.max_turns,
         stream_model_output=preferences.stream_model_output,
         events_mode=preferences.events_mode,
         show_reasoning=preferences.show_reasoning,
@@ -734,8 +743,9 @@ async def run_repl(
                     _render_model(console, agent, display_state.active_model_role, model_router)
                     continue
                 if model_router is None or orchestrator_factory is None:
-                    agent = default_agent(command.argument)
+                    agent = default_agent(command.argument, max_turns=agent.max_turns)
                     display_state.model = agent.model
+                    display_state.max_turns = agent.max_turns
                     console.print(f"Model set to {agent.model}.")
                     continue
                 try:
@@ -745,7 +755,8 @@ async def run_repl(
                     continue
                 display_state.active_model_role = command.argument
                 display_state.model = route.profile.model
-                agent = default_agent(route.profile.model)
+                agent = default_agent(route.profile.model, max_turns=agent.max_turns)
+                display_state.max_turns = agent.max_turns
                 orchestrator = orchestrator_factory(display_state.active_model_role)
                 orchestrator.set_event_observer(trace_renderer.render)
                 console.print(
@@ -754,7 +765,10 @@ async def run_repl(
                 )
                 continue
             if command.command == "agent":
-                console.print(agent.model_dump_json(indent=2))
+                updated_agent = _handle_agent_command(console, agent, command.argument)
+                if updated_agent is not None:
+                    agent = updated_agent
+                    display_state.max_turns = agent.max_turns
                 continue
             if command.command == "tools":
                 _render_tools(console, orchestrator.tool_specs())
@@ -956,6 +970,15 @@ async def run_repl(
                     )
                     orchestrator.set_event_observer(trace_renderer.render)
                     console.print("Integration tool catalog refreshed.")
+                continue
+            if command.command == "packs":
+                changed = await _handle_packs_command(console, pack_service, command.argument)
+                if changed and integration_refresh_factory is not None:
+                    orchestrator = await integration_refresh_factory(
+                        display_state.active_model_role
+                    )
+                    orchestrator.set_event_observer(trace_renderer.render)
+                    console.print("Pack and integration catalog refreshed.")
                 continue
             if command.command == "help":
                 _render_help(console, display_state)
@@ -1244,6 +1267,7 @@ def run_repl_sync(
     subagent_service: SubagentService | None = None,
     research_service: ResearchService | None = None,
     integration_service: IntegrationService | None = None,
+    pack_service: PackService | None = None,
     model_router: ModelRouter | None = None,
     active_model_role: str = "primary",
     orchestrator_factory: Callable[[str], AgentOrchestrator] | None = None,
@@ -1275,6 +1299,7 @@ def run_repl_sync(
             subagent_service=subagent_service,
             research_service=research_service,
             integration_service=integration_service,
+            pack_service=pack_service,
             model_router=model_router,
             active_model_role=active_model_role,
             orchestrator_factory=orchestrator_factory,
@@ -1701,6 +1726,148 @@ async def _handle_integrations_command(
     return False
 
 
+async def _handle_packs_command(
+    console: Console,
+    pack_service: PackService | None,
+    argument: str,
+) -> bool:
+    if pack_service is None:
+        console.print("Pack service is not configured.")
+        return False
+    try:
+        parts = shlex.split(argument)
+    except ValueError as exc:
+        console.print(f"Invalid /packs command: {exc}")
+        return False
+    action = parts[0] if parts else "list"
+    try:
+        if action in {"", "list"}:
+            _render_pack_statuses(console, await pack_service.list_statuses())
+            return False
+        if action == "show":
+            if len(parts) != 2:
+                console.print("Use /packs show NAME.")
+                return False
+            _render_pack_detail(console, await pack_service.get_pack(parts[1]))
+            return False
+        if action in {"verify", "validate"}:
+            if len(parts) != 2:
+                console.print(f"Use /packs {action} SOURCE.")
+                return False
+            result = await pack_service.verify(Path(parts[1]))
+            console.print(
+                f"Pack is valid: {result.name} {result.version} "
+                f"({result.source_kind}, {result.trust_status})"
+            )
+            return False
+        if action == "install":
+            source, allow_untrusted = _parse_repl_pack_install(parts)
+            installed = await pack_service.install(source, allow_untrusted=allow_untrusted)
+            console.print(f"Installed pack {installed.name} {installed.version}.")
+            return True
+        if action == "enable":
+            if len(parts) != 2:
+                console.print("Use /packs enable NAME.")
+                return False
+            updated = await pack_service.enable(parts[1])
+            console.print(f"Enabled pack {updated.name}.")
+            return True
+        if action == "disable":
+            if len(parts) != 2:
+                console.print("Use /packs disable NAME.")
+                return False
+            updated = await pack_service.disable(parts[1])
+            console.print(f"Disabled pack {updated.name}.")
+            return True
+        if action == "uninstall":
+            if len(parts) != 2:
+                console.print("Use /packs uninstall NAME.")
+                return False
+            await pack_service.uninstall(parts[1])
+            console.print(f"Uninstalled pack {parts[1]}.")
+            return True
+        if action == "trust":
+            return await _handle_packs_trust_command(console, pack_service, parts[1:])
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return False
+    console.print(
+        "Use /packs list, show NAME, verify SOURCE, install SOURCE [--allow-untrusted], "
+        "enable NAME, disable NAME, uninstall NAME, or trust list|add VALUE."
+    )
+    return False
+
+
+async def _handle_packs_trust_command(
+    console: Console,
+    pack_service: PackService,
+    parts: list[str],
+) -> bool:
+    action = parts[0] if parts else "list"
+    if action in {"", "list"}:
+        table = Table("Kind", "Value", "Added")
+        for record in await pack_service.list_trust():
+            table.add_row(record.kind, record.value, record.added_at)
+        console.print(table)
+        return False
+    if action == "add" and len(parts) == 2:
+        record = await pack_service.add_trust(parts[1])
+        console.print(f"Trusted pack {record.kind}: {record.value}")
+        return False
+    console.print("Use /packs trust list or /packs trust add VALUE.")
+    return False
+
+
+def _parse_repl_pack_install(parts: list[str]) -> tuple[Path, bool]:
+    if len(parts) < 2:
+        raise ColossusError("Use /packs install SOURCE [--allow-untrusted].")
+    source: Path | None = None
+    allow_untrusted = False
+    for token in parts[1:]:
+        if token == "--allow-untrusted":
+            allow_untrusted = True
+        elif source is None:
+            source = Path(token)
+        else:
+            raise ColossusError("Use /packs install SOURCE [--allow-untrusted].")
+    if source is None:
+        raise ColossusError("Use /packs install SOURCE [--allow-untrusted].")
+    return source, allow_untrusted
+
+
+def _render_pack_statuses(console: Console, statuses: Iterable[PackStatusView]) -> None:
+    table = Table("Name", "Version", "Source", "Trust", "Status", "Capabilities")
+    for status in statuses:
+        table.add_row(
+            status.name,
+            status.version,
+            status.source_kind,
+            status.trust_status,
+            status.status,
+            ", ".join(status.capabilities),
+        )
+    console.print(table)
+
+
+def _render_pack_detail(console: Console, pack: InstalledPack | LoadedPack) -> None:
+    manifest = pack.manifest
+    table = Table("Field", "Value")
+    table.add_row("name", manifest.name)
+    table.add_row("version", manifest.version)
+    table.add_row("publisher", manifest.publisher)
+    table.add_row("source", pack.source)
+    table.add_row("source_kind", pack.source_kind)
+    table.add_row("trust", pack.trust_status)
+    table.add_row("status", pack.status)
+    table.add_row("capabilities", ", ".join(manifest.capabilities))
+    table.add_row("permissions", ", ".join(manifest.permissions))
+    table.add_row("skills", ", ".join(ref.path for ref in manifest.skills))
+    table.add_row("integrations", ", ".join(ref.path for ref in manifest.integrations))
+    table.add_row("tools", ", ".join(tool.name for tool in manifest.tools))
+    table.add_row("mcp_servers", ", ".join(server.name for server in manifest.mcp_servers))
+    console.print(table)
+
+
 def _parse_repl_integration_connect(
     parts: list[str],
 ) -> tuple[str, str | None, dict[str, str], tuple[str, ...], dict[str, object]]:
@@ -1842,6 +2009,39 @@ def _render_workspace(console: Console, workspace_root: Path) -> None:
     console.print(table)
 
 
+def _handle_agent_command(
+    console: Console,
+    agent: AgentSpec,
+    argument: str,
+) -> AgentSpec | None:
+    try:
+        parts = shlex.split(argument)
+    except ValueError as exc:
+        console.print(f"[red]Agent command parse failed:[/red] {exc}")
+        return None
+    action = parts[0].lower() if parts else "show"
+    if action in {"show", "status"}:
+        console.print(agent.model_dump_json(indent=2))
+        return None
+    if action in {"max-turns", "max_turns", "turns"}:
+        if len(parts) != 2:
+            console.print("Use /agent max-turns N.")
+            return None
+        try:
+            max_turns = int(parts[1])
+        except ValueError:
+            console.print("Agent max turns must be an integer.")
+            return None
+        if max_turns < 1 or max_turns > MAX_AGENT_MAX_TURNS:
+            console.print(f"Agent max turns must be between 1 and {MAX_AGENT_MAX_TURNS}.")
+            return None
+        updated = agent.model_copy(update={"max_turns": max_turns})
+        console.print(f"Agent max turns set to {max_turns}.")
+        return updated
+    console.print("Use /agent show or /agent max-turns N.")
+    return None
+
+
 def _handle_skill_command(
     console: Console,
     skills: SkillResolver,
@@ -1905,10 +2105,12 @@ def _handle_skill_command(
             console.print("Skill authoring is not configured.")
             return
         try:
-            scaffold_name, parent, force = _parse_skill_new_args(rest)
+            scaffold_name, parent, resources, agent_compatible, force = _parse_skill_new_args(rest)
             scaffold_result = skill_authoring_service.scaffold(
                 scaffold_name,
                 parent=parent,
+                resources=resources,
+                agent_compatible=agent_compatible,
                 overwrite=force,
             )
         except ColossusError as exc:
@@ -1938,24 +2140,50 @@ def _handle_skill_command(
         for error in validation_result.errors:
             console.print(f"- {error}")
         return
-    console.print("Use /skill [on|off|show|use NAME|drop NAME|clear|new NAME|validate PATH].")
+    console.print(
+        "Use /skill [on|off|show|use NAME|drop NAME|clear|new NAME|validate PATH]."
+    )
 
 
-def _parse_skill_new_args(argument: str) -> tuple[str, Path | None, bool]:
+def _parse_skill_new_args(argument: str) -> tuple[str, Path | None, tuple[str, ...], bool, bool]:
     tokens = shlex.split(argument)
     force = False
+    agent_compatible = False
+    resources: tuple[str, ...] = ()
+    pack: Path | None = None
     filtered: list[str] = []
-    for token in tokens:
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
         if token == "--force":
             force = True
+        elif token == "--agent-compatible":
+            agent_compatible = True
+        elif token == "--resources":
+            index += 1
+            if index >= len(tokens):
+                raise ColossusError("Use /skill new NAME [PARENT_DIR] [--resources LIST].")
+            resources = tuple(
+                item.strip() for item in tokens[index].split(",") if item.strip()
+            )
+        elif token == "--pack":
+            index += 1
+            if index >= len(tokens):
+                raise ColossusError("Use /skill new NAME --pack PACK_DIR.")
+            pack = Path(tokens[index])
         else:
             filtered.append(token)
+        index += 1
     if not filtered:
         raise ColossusError("Use /skill new NAME [PARENT_DIR] [--force].")
     if len(filtered) > 2:
         raise ColossusError("Use /skill new NAME [PARENT_DIR] [--force].")
     parent = Path(filtered[1]) if len(filtered) == 2 else None
-    return filtered[0], parent, force
+    if parent is not None and pack is not None:
+        raise ColossusError("Use either PARENT_DIR or --pack, not both.")
+    if pack is not None:
+        parent = pack / "skills"
+    return filtered[0], parent, resources, agent_compatible, force
 
 
 def _parse_single_path_arg(argument: str, usage: str) -> Path:
@@ -2789,6 +3017,7 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
         "workspace": str(state.workspace_root),
         "model_role": state.active_model_role,
         "model": state.model,
+        "max_turns": str(state.max_turns),
         "approval_mode": state.approval_mode,
         "mode": state.interaction_mode,
         "skill_mode": _on_off(state.skill_mode_enabled),
@@ -2837,6 +3066,15 @@ def _render_skill_status(
         "available",
         _format_skill_names(tuple(skill.manifest.name for skill in available)),
     )
+    duplicates = skills.duplicate_names()
+    if duplicates:
+        table.add_row(
+            "duplicates",
+            "; ".join(
+                f"{duplicate.name} selected {duplicate.selected_source}"
+                for duplicate in duplicates
+            ),
+        )
     console.print(table)
 
 
@@ -2860,6 +3098,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "/model [ROLE]",
         _help_current(state, "model"),
         "Show or switch the active model role.",
+    )
+    table.add_row(
+        "/agent [show|max-turns N]",
+        _help_current(state, "agent"),
+        "Show or tune the active agent spec.",
     )
     table.add_row("/tools", "", "List currently registered tools.")
     table.add_row(
@@ -2955,6 +3198,11 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Manage app and service integrations.",
     )
     table.add_row(
+        Text("/packs [list|show|verify|validate|install|enable|disable|trust]"),
+        "",
+        "Manage capability packs.",
+    )
+    table.add_row(
         Text("/skill [on|off|show|use|drop|clear|new|validate]"),
         _help_current(state, "skill"),
         "Toggle, author, or manage Skill Mode.",
@@ -2980,6 +3228,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return ""
     if field == "model":
         return f"{state.active_model_role}:{_short_text(state.model, 24)}"
+    if field == "agent":
+        return f"turns={state.max_turns}"
     if field == "stream":
         return _stream_mode_label(state)
     if field == "events":

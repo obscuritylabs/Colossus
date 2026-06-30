@@ -8,6 +8,7 @@ from colossus.domain.events import RunEvent
 from colossus.domain.integrations import IntegrationConnection
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import Message
+from colossus.domain.packs import InstalledPack, PackTrustRecord
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences
 from colossus.domain.research import ResearchClaim, ResearchRun, ResearchSource
@@ -169,6 +170,30 @@ class StateStore(Protocol):
 
     async def delete_integration_connection(self, name: str) -> None:
         """Delete an integration connection record."""
+        ...
+
+    async def save_installed_pack(self, pack: InstalledPack) -> None:
+        """Persist an installed pack record."""
+        ...
+
+    async def get_installed_pack(self, name: str) -> InstalledPack | None:
+        """Load an installed pack record by name."""
+        ...
+
+    async def list_installed_packs(self) -> tuple[InstalledPack, ...]:
+        """List installed pack records."""
+        ...
+
+    async def delete_installed_pack(self, name: str) -> None:
+        """Delete an installed pack record."""
+        ...
+
+    async def save_pack_trust_record(self, record: PackTrustRecord) -> None:
+        """Persist a pack trust record."""
+        ...
+
+    async def list_pack_trust_records(self) -> tuple[PackTrustRecord, ...]:
+        """List pack trust records."""
         ...
 
     async def save_context_snapshot(self, snapshot: ContextSnapshot) -> None:

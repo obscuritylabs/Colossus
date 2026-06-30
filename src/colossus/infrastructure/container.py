@@ -9,6 +9,13 @@ from colossus.adapters.builtin_tools import create_builtin_tools
 from colossus.adapters.credentials_env import EnvCredentialBroker
 from colossus.adapters.echo_provider import EchoModelProvider
 from colossus.adapters.integration_tools import create_integration_tools
+from colossus.adapters.packs import (
+    PackagePackRepository,
+    PackInstaller,
+    PackIntegrationManifestLoader,
+    PackSkillRepository,
+    write_installed_pack_marker,
+)
 from colossus.adapters.research_sources import (
     DisabledMcpGateway,
     DisabledSearchProvider,
@@ -31,6 +38,7 @@ from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator, RunEventObserver
+from colossus.application.packs import PackService
 from colossus.application.planning import PlanService
 from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.preferences import ReplPreferencesService
@@ -38,10 +46,11 @@ from colossus.application.research import ResearchService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.sessions import SessionService
 from colossus.application.skill_authoring import SkillAuthoringService
-from colossus.application.skills import SkillComposer, SkillResolver
+from colossus.application.skills import SkillComposer, SkillResolver, SkillResourceService
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
+from colossus.domain.agents import DEFAULT_AGENT_MAX_TURNS
 from colossus.domain.context import ContextConfig
 from colossus.domain.integrations import IntegrationConnection
 from colossus.domain.models import ResolvedModelProfile
@@ -92,6 +101,7 @@ def create_default_orchestrator(
     http_client_config: HttpClientConfig | None = None,
     integration_connections: tuple[IntegrationConnection, ...] = (),
     credential_broker: CredentialBroker | None = None,
+    agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS,
 ) -> AgentOrchestrator:
     data_dir.mkdir(parents=True, exist_ok=True)
     resolved_provider = provider or EchoModelProvider()
@@ -113,6 +123,10 @@ def create_default_orchestrator(
         memory_service=resolved_memory,
     )
     workspace = Workspace(workspace_root or Path.cwd())
+    resolved_skill_resolver = skill_resolver or create_default_skill_resolver(
+        data_dir / "skills",
+        pack_root=data_dir / "packs",
+    )
     specs, handlers = create_builtin_tools(
         workspace,
         context_service=resolved_context,
@@ -128,6 +142,8 @@ def create_default_orchestrator(
         mcp_gateway=mcp_gateway,
         http_client_config=http_client_config,
         skill_authoring_service=create_skill_authoring_service(data_dir),
+        skill_resource_service=SkillResourceService(resolved_skill_resolver),
+        audit_sink=resolved_audit,
     )
     resolved_credential_broker = credential_broker or EnvCredentialBroker()
     integration_specs, integration_handlers = create_integration_tools(
@@ -140,7 +156,6 @@ def create_default_orchestrator(
     handlers = {**handlers, **integration_handlers}
     registry = InMemoryToolRegistry(specs)
     executor = FunctionToolExecutor(handlers, registry)
-    resolved_skill_resolver = skill_resolver or create_default_skill_resolver(data_dir / "skills")
     if subagent_service is not None and model_router is not None:
         if event_observer is not None:
             subagent_service.set_event_observer(event_observer)
@@ -167,6 +182,7 @@ def create_default_orchestrator(
                 http_client_config=http_client_config,
                 integration_connections=integration_connections,
                 credential_broker=resolved_credential_broker,
+                agent_max_turns=agent_max_turns,
             )
         )
     return AgentOrchestrator(
@@ -211,12 +227,34 @@ def create_integration_service(
     state_store: SQLiteStateStore | None = None,
     audit_sink: JsonlAuditSink | None = None,
     credential_broker: CredentialBroker | None = None,
+    pack_service: PackService | None = None,
 ) -> IntegrationService:
     data_dir.mkdir(parents=True, exist_ok=True)
+    resolved_state = state_store or create_state_store(data_dir)
+    resolved_audit = audit_sink or create_audit_sink(data_dir)
     return IntegrationService(
+        resolved_state,
+        resolved_audit,
+        credential_broker or EnvCredentialBroker(),
+        pack_service=pack_service
+        or create_pack_service(data_dir, state_store=resolved_state, audit_sink=resolved_audit),
+    )
+
+
+def create_pack_service(
+    data_dir: Path,
+    *,
+    state_store: SQLiteStateStore | None = None,
+    audit_sink: JsonlAuditSink | None = None,
+) -> PackService:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return PackService(
         state_store or create_state_store(data_dir),
         audit_sink or create_audit_sink(data_dir),
-        credential_broker or EnvCredentialBroker(),
+        PackInstaller(data_dir / "packs"),
+        PackagePackRepository(),
+        PackIntegrationManifestLoader(),
+        marker_writer=write_installed_pack_marker,
     )
 
 
@@ -320,6 +358,7 @@ def _subagent_runner(
     http_client_config: HttpClientConfig | None,
     integration_connections: tuple[IntegrationConnection, ...],
     credential_broker: CredentialBroker,
+    agent_max_turns: int,
 ) -> Callable[[SubagentJob], Awaitable[AgentRunResult]]:
     async def run(job: SubagentJob) -> AgentRunResult:
         route = model_router.resolve(job.role or "subagent_default")
@@ -351,7 +390,7 @@ def _subagent_runner(
         return await orchestrator.run(
             AgentRunRequest(
                 prompt=job.task,
-                agent=default_agent(route.profile.model),
+                agent=default_agent(route.profile.model, max_turns=agent_max_turns),
                 session_id=job.child_session_id,
             )
         )
@@ -466,8 +505,15 @@ def create_default_skill_resolver(
     user_skill_root: Path | None = None,
     *,
     allow_user_overrides: bool = False,
+    pack_root: Path | None = None,
 ) -> SkillResolver:
-    repositories: list[SkillRepository] = [PackageSkillRepository()]
+    repositories: list[SkillRepository] = [
+        PackageSkillRepository(),
+        PackSkillRepository(
+            pack_root,
+            bundled_repository=PackagePackRepository(),
+        ),
+    ]
     if user_skill_root is not None:
         repositories.append(FilesystemSkillRepository(user_skill_root))
     return SkillResolver(tuple(repositories), allow_user_overrides=allow_user_overrides)

@@ -21,3 +21,4 @@ class Skill(BaseModel):
     manifest: SkillManifest
     instructions: str
     source: str
+    resource_root: str | None = None

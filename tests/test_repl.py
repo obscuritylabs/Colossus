@@ -47,6 +47,7 @@ from colossus.interfaces.repl import (
     _format_run_toolbar,
     _format_slash_suggestions,
     _format_submit_summary,
+    _handle_agent_command,
     _handle_agents_command,
     _handle_decision_command,
     _handle_decisions_command,
@@ -217,7 +218,7 @@ def test_slash_command_completer_suggests_commands_while_typing() -> None:
     plain_matches = list(completer.get_completions(Document("hello"), event))
 
     assert {completion.text for completion in slash_matches} >= {"/events", "/exit"}
-    assert [completion.text for completion in plan_matches] == ["/plan"]
+    assert [completion.text for completion in plan_matches] == ["/plan", "/packs"]
     assert [completion.text for completion in plan_narrow_matches] == ["/plan"]
     assert [completion.text for completion in resume_matches] == ["/resume", "/research"]
     assert [completion.text for completion in workspace_matches] == ["/workspace"]
@@ -268,7 +269,7 @@ def test_skill_completion_key_bindings_open_menu_while_typing() -> None:
 
 def test_slash_suggestions_show_in_toolbar_for_command_drafts() -> None:
     assert _format_slash_suggestions("/").startswith("commands: /model")
-    assert _format_slash_suggestions("/p") == "commands: /plan"
+    assert _format_slash_suggestions("/p") == "commands: /plan /packs"
     assert _format_slash_suggestions("/pl") == "commands: /plan"
     assert _format_slash_suggestions("/res") == "commands: /resume /research"
     assert _format_slash_suggestions("/w") == "commands: /workspace"
@@ -1201,6 +1202,22 @@ def test_plan_agent_adds_plan_only_instructions() -> None:
     assert "clear trackable work" in planned.instructions
 
 
+def test_handle_agent_command_sets_max_turns() -> None:
+    console = Console(record=True, width=100)
+    agent = default_agent("model-a")
+
+    updated = _handle_agent_command(console, agent, "max-turns 40")
+    invalid = _handle_agent_command(console, updated or agent, "max-turns 101")
+
+    assert updated is not None
+    assert updated.max_turns == 40
+    assert updated.model == "model-a"
+    assert invalid is None
+    output = console.export_text()
+    assert "Agent max turns set to 40." in output
+    assert "between 1 and 100" in output
+
+
 def test_handle_skill_command_manages_runtime_skill_mode() -> None:
     console = Console(record=True, width=140)
     resolver = SkillResolver((PackageSkillRepository(),))
@@ -1245,20 +1262,29 @@ def test_handle_skill_command_scaffolds_and_validates_skills(tmp_path) -> None:
         resolver,
         state,
         agent,
-        "new demo-skill",
+        (
+            f"new demo-skill --pack {tmp_path / 'pack'} "
+            "--resources references,scripts --agent-compatible"
+        ),
         skill_authoring_service=service,
     )
+    skill_dir = tmp_path / "pack" / "skills" / "demo-skill"
     _handle_skill_command(
         console,
         resolver,
         state,
         agent,
-        f"validate {tmp_path / 'skills' / 'demo-skill'}",
+        f"validate {skill_dir}",
         skill_authoring_service=service,
     )
 
     output = console.export_text()
-    assert (tmp_path / "skills" / "demo-skill" / "manifest.json").is_file()
+    assert (skill_dir / "manifest.json").is_file()
+    assert (skill_dir / "references").is_dir()
+    assert (skill_dir / "scripts").is_dir()
+    assert (skill_dir / "SKILL.md").read_text(encoding="utf-8").startswith(
+        "---\nname: demo-skill\n"
+    )
     assert "Wrote skill demo-skill" in output
     assert "Skill is valid: demo-skill" in output
 

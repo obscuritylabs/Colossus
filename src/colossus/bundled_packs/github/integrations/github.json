@@ -1,0 +1,242 @@
+{
+  "name": "github",
+  "title": "GitHub",
+  "description": "Native GitHub connector for repositories, issues, pull requests, checks, and releases.",
+  "kind": "native",
+  "auth": {
+    "type": "bearer",
+    "scopes": [
+      "repo",
+      "workflow"
+    ],
+    "header": "Authorization",
+    "scheme": "Bearer"
+  },
+  "tools": [
+    {
+      "name": "github.repos",
+      "description": "List repositories visible to the connected GitHub token.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "all",
+              "public",
+              "private"
+            ],
+            "default": "all"
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "permissions": {
+        "filesystem": "none",
+        "network": "allow",
+        "approval_required": true,
+        "mutation": false,
+        "working_root_required": false,
+        "risk": "medium"
+      },
+      "timeout_seconds": 30.0,
+      "max_output_bytes": 64000,
+      "operation_id": null,
+      "method": null,
+      "path": null
+    },
+    {
+      "name": "github.issues",
+      "description": "List issues for a GitHub repository.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed",
+              "all"
+            ]
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ]
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "permissions": {
+        "filesystem": "none",
+        "network": "allow",
+        "approval_required": true,
+        "mutation": false,
+        "working_root_required": false,
+        "risk": "medium"
+      },
+      "timeout_seconds": 30.0,
+      "max_output_bytes": 64000,
+      "operation_id": null,
+      "method": null,
+      "path": null
+    },
+    {
+      "name": "github.pull_requests",
+      "description": "List pull requests for a GitHub repository.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed",
+              "all"
+            ]
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ]
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "permissions": {
+        "filesystem": "none",
+        "network": "allow",
+        "approval_required": true,
+        "mutation": false,
+        "working_root_required": false,
+        "risk": "medium"
+      },
+      "timeout_seconds": 30.0,
+      "max_output_bytes": 64000,
+      "operation_id": null,
+      "method": null,
+      "path": null
+    },
+    {
+      "name": "github.checks",
+      "description": "List check runs for a GitHub commit ref.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "ref"
+        ]
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "permissions": {
+        "filesystem": "none",
+        "network": "allow",
+        "approval_required": true,
+        "mutation": false,
+        "working_root_required": false,
+        "risk": "medium"
+      },
+      "timeout_seconds": 30.0,
+      "max_output_bytes": 64000,
+      "operation_id": null,
+      "method": null,
+      "path": null
+    },
+    {
+      "name": "github.releases",
+      "description": "List releases for a GitHub repository.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ]
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "permissions": {
+        "filesystem": "none",
+        "network": "allow",
+        "approval_required": true,
+        "mutation": false,
+        "working_root_required": false,
+        "risk": "medium"
+      },
+      "timeout_seconds": 30.0,
+      "max_output_bytes": 64000,
+      "operation_id": null,
+      "method": null,
+      "path": null
+    }
+  ],
+  "metadata": {}
+}

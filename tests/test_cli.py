@@ -19,6 +19,7 @@ from colossus.domain.providers import ProviderModelInfo
 from colossus.domain.requests import AgentRunRequest, AgentRunResult
 from colossus.domain.subagents import SubagentJob
 from colossus.infrastructure.config import (
+    AgentConfig,
     ColossusConfig,
     ProviderConfig,
     ResearchConfig,
@@ -83,6 +84,52 @@ def test_cli_run_accepts_repeatable_skill_option(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert captured["request"].active_skills == ("coding",)
     assert captured["request"].skill_mode_enabled is True
+
+
+def test_cli_run_accepts_max_turns_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    captured: dict[str, AgentRunRequest] = {}
+
+    async def fake_run_and_drain(orchestrator, subagent_service, request):
+        del orchestrator, subagent_service
+        captured["request"] = request
+        return AgentRunResult(
+            run_id="run-1",
+            final_output="done",
+            events_recorded=0,
+            session_id=request.session_id,
+        )
+
+    monkeypatch.setattr(cli_module, "_run_agent_and_drain_subagents", fake_run_and_drain)
+
+    result = CliRunner().invoke(app, ["run", "--max-turns", "40", "hello"])
+
+    assert result.exit_code == 0
+    assert captured["request"].agent.max_turns == 40
+
+
+def test_cli_run_uses_configured_max_turns(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    _write_config(ColossusConfig(agent=AgentConfig(max_turns=36)))
+    captured: dict[str, AgentRunRequest] = {}
+
+    async def fake_run_and_drain(orchestrator, subagent_service, request):
+        del orchestrator, subagent_service
+        captured["request"] = request
+        return AgentRunResult(
+            run_id="run-1",
+            final_output="done",
+            events_recorded=0,
+            session_id=request.session_id,
+        )
+
+    monkeypatch.setattr(cli_module, "_run_agent_and_drain_subagents", fake_run_and_drain)
+
+    result = CliRunner().invoke(app, ["run", "hello"])
+
+    assert result.exit_code == 0
+    assert captured["request"].agent.max_turns == 36
 
 
 def test_cli_run_accepts_workspace_option(tmp_path, monkeypatch) -> None:
@@ -328,6 +375,7 @@ def test_cli_repl_passes_selected_model_to_agent(tmp_path, monkeypatch) -> None:
     def fake_run_repl_sync(*args, **kwargs) -> None:
         agent = args[4]
         captured["model"] = agent.model
+        captured["max_turns"] = agent.max_turns
         captured["approval_mode"] = kwargs["approval_mode"]
         captured["history_path"] = kwargs["history_path"]
         captured["task_service"] = kwargs["task_service"]
@@ -337,11 +385,22 @@ def test_cli_repl_passes_selected_model_to_agent(tmp_path, monkeypatch) -> None:
 
     result = CliRunner().invoke(
         app,
-        ["--provider", "echo", "--model", "repl-model", "repl", "--theme", "mono"],
+        [
+            "--provider",
+            "echo",
+            "--model",
+            "repl-model",
+            "repl",
+            "--theme",
+            "mono",
+            "--max-turns",
+            "38",
+        ],
     )
 
     assert result.exit_code == 0
     assert captured["model"] == "repl-model"
+    assert captured["max_turns"] == 38
     assert captured["approval_mode"] == "ask"
     assert captured["history_path"].name == "repl_history.txt"
     assert captured["history_path"].parent.exists()
@@ -518,6 +577,37 @@ def test_cli_skills_new_accepts_custom_parent_path(tmp_path, monkeypatch) -> Non
     assert (parent / "custom-skill" / "SKILL.md").is_file()
 
 
+def test_cli_skills_new_accepts_resources_agent_frontmatter_and_pack_path(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    pack_root = tmp_path / "demo-pack"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "skills",
+            "new",
+            "pack-skill",
+            "--pack",
+            str(pack_root),
+            "--resources",
+            "references,scripts,assets",
+            "--agent-compatible",
+        ],
+    )
+    skill_dir = pack_root / "skills" / "pack-skill"
+    skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+
+    assert result.exit_code == 0
+    assert skill_text.startswith("---\nname: pack-skill\n")
+    assert (skill_dir / "manifest.json").is_file()
+    assert (skill_dir / "references").is_dir()
+    assert (skill_dir / "scripts").is_dir()
+    assert (skill_dir / "assets").is_dir()
+
+
 def test_cli_skills_validate_reports_success_and_failure(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     created = CliRunner().invoke(app, ["skills", "new", "valid-skill"])
@@ -532,7 +622,7 @@ def test_cli_skills_validate_reports_success_and_failure(tmp_path, monkeypatch) 
     assert valid.exit_code == 0
     assert "Skill is valid" in valid.stdout
     assert invalid.exit_code == 1
-    assert "manifest.json is missing" in invalid.stdout
+    assert "SKILL.md is missing" in invalid.stdout
 
 
 def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
@@ -552,7 +642,12 @@ def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
     assert "repo.map" in result.stdout
     assert "agent.delegate" in result.stdout
     assert "skill.scaffold" in result.stdout
+    assert "skill.inspect" in result.stdout
+    assert "skill.read" in result.stdout
+    assert "skill.write" in result.stdout
     assert "skill.validate" in result.stdout
+    assert "skill.resource.list" in result.stdout
+    assert "skill.resource.read" in result.stdout
     assert "web.search" not in result.stdout
     assert "mcp.call" not in result.stdout
     assert "trace.export" in result.stdout

@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import cast
 
+from colossus.application.packs import PackService
 from colossus.domain.errors import ColossusError
 from colossus.domain.integrations import (
     IntegrationAuthRequirement,
@@ -30,27 +31,32 @@ class IntegrationService:
         state_store: StateStore,
         audit_sink: AuditSink,
         credential_broker: CredentialBroker,
+        *,
+        pack_service: PackService | None = None,
     ) -> None:
         self._state_store = state_store
         self._audit_sink = audit_sink
         self._credential_broker = credential_broker
+        self._pack_service = pack_service
 
     async def list_statuses(self) -> tuple[IntegrationStatusView, ...]:
         connections = {connection.name: connection for connection in await self._connections()}
+        manifests = await self._available_manifests()
         views = [
             _status_for_manifest(manifest, connections.get(manifest.name))
-            for manifest in BUILTIN_MANIFESTS.values()
+            for manifest in manifests.values()
         ]
         for connection in connections.values():
-            if connection.name in BUILTIN_MANIFESTS:
+            if connection.name in manifests:
                 continue
             views.append(_status_for_manifest(connection.manifest, connection))
         return tuple(sorted(views, key=lambda item: item.name))
 
     async def get_manifest(self, name: str) -> IntegrationManifest:
         normalized = _normalize_name(name)
-        if normalized in BUILTIN_MANIFESTS:
-            return BUILTIN_MANIFESTS[normalized]
+        manifests = await self._available_manifests()
+        if normalized in manifests:
+            return manifests[normalized]
         connection = await self._state_store.get_integration_connection(normalized)
         if connection is None:
             raise ColossusError(f"Unknown integration: {name}")
@@ -192,6 +198,13 @@ class IntegrationService:
 
     async def _connections(self) -> tuple[IntegrationConnection, ...]:
         return await self._state_store.list_integration_connections()
+
+    async def _available_manifests(self) -> dict[str, IntegrationManifest]:
+        manifests = dict(BUILTIN_MANIFESTS)
+        if self._pack_service is not None:
+            for manifest in await self._pack_service.integration_manifests():
+                manifests.setdefault(manifest.name, manifest)
+        return manifests
 
 
 def openapi_manifest_from_file(

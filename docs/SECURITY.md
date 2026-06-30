@@ -39,6 +39,17 @@ are validated against the agent allowlist and active tool catalog before provide
 `required_tools` never auto-approves a tool. Skill audit records include names, versions,
 and sources only, not full `SKILL.md` bodies.
 
+Skill resource tools are read-only and active-skill-scoped. They accept only safe relative
+paths under allowed resource directories, reject traversal, reject non-regular files, and
+bound text reads. Resource read audit records include skill name, path, and size, not the
+resource body.
+
+Packs are the executable distribution boundary. Skills can include code files as
+resources, but Colossus does not execute scripts directly from skill directories.
+Executable tools, MCP servers, binaries, Docker assets, docs, and tests must be declared
+in `colossus.pack.json`; executable and binary files must be hash-listed and
+permission-declared.
+
 ## Tool Execution
 
 Tools are expected to declare their execution permissions up front. Policy can allow,
@@ -80,8 +91,11 @@ Security-sensitive defaults:
 | `trace.export` | Write | Denied | Yes | Enabled |
 | `context.show/compact/snapshots` | None | Denied | No | Enabled |
 | `context.restore` | None | Denied | Yes | Enabled |
-| `skill.scaffold` | Write | Denied | Yes | Enabled, user skill directory only |
+| `skill.scaffold` | Write | Denied | Yes | Enabled, writes manifest/SKILL.md and requested resource dirs in user skill directory only |
+| `skill.inspect/read` | Read | Denied | No | Enabled, installed user skill files only |
+| `skill.write` | Write | Denied | Yes | Enabled, installed user skill files only; existing files require expected SHA-256 |
 | `skill.validate` | Read | Denied | No | Enabled, user skill directory only |
+| `skill.resource.list/read` | Read | Denied | No | Enabled, active skill resources only |
 
 The default policy requires approval for declared mutations, explicit approval flags,
 network-capable tools, and high-risk tools. The orchestrator validates model-provided

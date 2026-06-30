@@ -101,6 +101,21 @@ class TaskToolThenFinalProvider:
             )
 
 
+class SkillResourceToolThenFinalProvider:
+    name = "skill-resource-tool-then-final"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        has_tool_result = any(message.role == "tool" for message in request.messages)
+        if has_tool_result:
+            yield FinalOutputEvent(text="done")
+        else:
+            yield ToolCallRequestedEvent(
+                call_id="call-1",
+                name="skill.resource.read",
+                arguments={"skill": "alpha", "path": "references/guide.md"},
+            )
+
+
 class AgentDelegateThenFinalProvider:
     name = "agent-delegate-then-final"
 
@@ -469,6 +484,52 @@ async def test_orchestrator_injects_session_id_for_task_tools(tmp_path) -> None:
 
     assert result.final_output == "done"
     assert observed_arguments["session_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_injects_active_skills_before_tool_validation(tmp_path) -> None:
+    skill_root = tmp_path / "skills"
+    _write_skill(skill_root / "alpha", name="alpha")
+    observed_arguments: dict[str, object] = {}
+
+    async def read_resource(arguments: dict[str, object]) -> str:
+        observed_arguments.update(arguments)
+        return json.dumps({"resource": {"path": arguments["path"], "content": "guide"}})
+
+    spec = ToolSpec(
+        name="skill.resource.read",
+        description="Read skill resource",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "skill": {"type": "string"},
+                "path": {"type": "string"},
+                "active_skills": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["skill", "path", "active_skills"],
+            "additionalProperties": False,
+        },
+    )
+    registry = InMemoryToolRegistry((spec,))
+    orchestrator = AgentOrchestrator(
+        provider=SkillResourceToolThenFinalProvider(),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({"skill.resource.read": read_resource}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        skill_composer=SkillComposer(SkillResolver((FilesystemSkillRepository(skill_root),))),
+    )
+    agent = default_agent().model_copy(update={"skills": ("alpha",)})
+
+    result = await orchestrator.run(
+        AgentRunRequest(prompt="read guide", agent=agent, active_skills=("alpha",))
+    )
+
+    assert result.final_output == "done"
+    assert observed_arguments["active_skills"] == ["alpha"]
 
 
 @pytest.mark.asyncio

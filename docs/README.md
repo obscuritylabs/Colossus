@@ -20,7 +20,8 @@ how the codebase is put together.
   security notes.
 - [Integrations](INTEGRATIONS.md): GitHub, OpenAPI imports, MCP positioning,
   credential refs, and auth boundaries.
-- [Skills](SKILLS.md): skill authoring, required tools, and Skill Mode.
+- [Skills](SKILLS.md): skill authoring, resources, required tools, and Skill Mode.
+- [Packs](PACKS.md): installable capability packages and executable boundaries.
 - [Context Compaction](CONTEXT.md): session history, snapshots, summaries, and context
   model behavior.
 

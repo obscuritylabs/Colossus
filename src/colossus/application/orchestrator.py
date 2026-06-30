@@ -50,6 +50,7 @@ SESSION_CONTEXT_TOOLS = frozenset(
     }
 )
 RUN_CONTEXT_TOOLS = frozenset({"agent.delegate"})
+ACTIVE_SKILL_CONTEXT_TOOLS = frozenset({"skill.resource.list", "skill.resource.read"})
 
 
 class AgentOrchestrator:
@@ -116,6 +117,11 @@ class AgentOrchestrator:
                 tools=tool_specs,
             )
             instructions = skill_context.instructions
+        active_skill_names = (
+            tuple(skill.manifest.name for skill in skill_context.active_skills)
+            if skill_context is not None
+            else ()
+        )
         messages: list[Message] = []
         if request.session_id is not None:
             await self._state_store.ensure_session(request.session_id, title=request.prompt[:80])
@@ -238,7 +244,12 @@ class AgentOrchestrator:
                 )
 
             for call in pending_tool_calls:
-                result = await self._execute_tool(run_id, call, request.session_id)
+                result = await self._execute_tool(
+                    run_id,
+                    call,
+                    request.session_id,
+                    active_skill_names,
+                )
                 tool_message = ToolResultMessage(
                     call_id=result.call_id,
                     name=result.name,
@@ -276,6 +287,7 @@ class AgentOrchestrator:
         run_id: str,
         call: ToolCall,
         session_id: str | None = None,
+        active_skill_names: tuple[str, ...] = (),
     ) -> ToolCallCompletedEvent:
         spec = self._tool_registry.get_spec(call.name)
         if spec is None:
@@ -286,6 +298,7 @@ class AgentOrchestrator:
                 message=f"Unknown tool requested: {call.name}",
                 audit_action="tool.unknown",
             )
+        call = _with_execution_context(call, session_id, run_id, active_skill_names)
         try:
             validate_tool_call(spec, call)
         except ToolExecutionError as exc:
@@ -296,7 +309,6 @@ class AgentOrchestrator:
                 message=str(exc),
                 audit_action="tool.invalid",
             )
-        call = _with_execution_context(call, session_id, run_id)
         decision = self._policy_engine.decide_tool_call(spec, call)
         await self._audit_sink.record(
             "agent",
@@ -487,6 +499,7 @@ def _with_execution_context(
     call: ToolCall,
     session_id: str | None,
     run_id: str,
+    active_skill_names: tuple[str, ...] = (),
 ) -> ToolCall:
     arguments = dict(call.arguments)
     changed = False
@@ -504,6 +517,9 @@ def _with_execution_context(
         if "parent_call_id" not in arguments:
             arguments["parent_call_id"] = call.call_id
             changed = True
+    if call.name in ACTIVE_SKILL_CONTEXT_TOOLS:
+        arguments["active_skills"] = list(active_skill_names)
+        changed = True
     if not changed:
         return call
     return call.model_copy(update={"arguments": arguments})

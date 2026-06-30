@@ -8,6 +8,7 @@ from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
 from colossus.adapters.openai_responses import OpenAIResponsesProvider
 from colossus.domain.models import ModelProfile, ModelRoutingConfig
 from colossus.infrastructure.config import (
+    AgentConfig,
     ColossusConfig,
     HttpConfig,
     HttpOverrides,
@@ -167,8 +168,17 @@ def test_config_supports_context_defaults_and_model_windows() -> None:
     )
 
     assert config.context.auto_compaction is True
+    assert config.agent.max_turns == 24
     assert config.context.default_context_window_tokens == 32_768
     assert config.provider.model_context_windows["local-model"] == 65_536
+
+
+def test_agent_config_validates_turn_limit() -> None:
+    assert ColossusConfig(agent=AgentConfig(max_turns=40)).agent.max_turns == 40
+    with pytest.raises(ValidationError):
+        ColossusConfig(agent=AgentConfig(max_turns=0))
+    with pytest.raises(ValidationError):
+        ColossusConfig(agent=AgentConfig(max_turns=101))
 
 
 def test_config_supports_memory_index_defaults_and_rejects_unknown_backends() -> None:

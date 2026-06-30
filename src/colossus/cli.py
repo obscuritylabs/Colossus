@@ -20,11 +20,13 @@ from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
 from colossus.application.orchestrator import AgentOrchestrator
+from colossus.application.packs import PackService
 from colossus.application.providers import ProviderDiagnostics
 from colossus.application.research import ResearchService
 from colossus.application.risk import RiskAssessmentService
 from colossus.application.skills import SkillResolver
 from colossus.application.subagents import SubagentService
+from colossus.domain.agents import MAX_AGENT_MAX_TURNS
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.errors import BundleVerificationError, ColossusError
 from colossus.domain.integrations import IntegrationAuthType, IntegrationStatusView
@@ -65,6 +67,7 @@ from colossus.infrastructure.container import (
     create_mcp_gateway,
     create_memory_service,
     create_model_router,
+    create_pack_service,
     create_plan_service,
     create_repl_preferences_service,
     create_research_service,
@@ -113,6 +116,8 @@ memories_app = typer.Typer(help="Inspect and manage durable memories.")
 context_app = typer.Typer(help="Inspect and manage context compaction.")
 sessions_app = typer.Typer(help="Discover and resume persisted sessions.")
 integrations_app = typer.Typer(help="Manage app and service integrations.")
+packs_app = typer.Typer(help="Manage capability packs.")
+packs_trust_app = typer.Typer(help="Manage trusted pack publishers and keys.")
 app.add_typer(config_app, name="config")
 app.add_typer(skills_app, name="skills")
 app.add_typer(tools_app, name="tools")
@@ -127,6 +132,8 @@ app.add_typer(memories_app, name="memories")
 app.add_typer(context_app, name="context")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(integrations_app, name="integrations")
+app.add_typer(packs_app, name="packs")
+packs_app.add_typer(packs_trust_app, name="trust")
 
 console = Console()
 
@@ -322,6 +329,7 @@ def _skill_resolver(config: ColossusConfig) -> SkillResolver:
     return create_default_skill_resolver(
         data_dir() / "skills",
         allow_user_overrides=config.allow_user_skill_overrides,
+        pack_root=data_dir() / "packs",
     )
 
 
@@ -487,6 +495,12 @@ def _integration_runtime() -> IntegrationService:
     )
 
 
+def _pack_runtime() -> PackService:
+    state = create_state_store(data_dir())
+    audit = create_audit_sink(data_dir())
+    return create_pack_service(data_dir(), state_store=state, audit_sink=audit)
+
+
 def _integration_auth_type(value: str) -> IntegrationAuthType:
     normalized = value.strip().lower().replace("-", "_")
     if normalized not in {
@@ -624,6 +638,15 @@ def run(
             help="Model role to use for this agent turn.",
         ),
     ] = "primary",
+    max_turns: Annotated[
+        int | None,
+        typer.Option(
+            "--max-turns",
+            min=1,
+            max=MAX_AGENT_MAX_TURNS,
+            help="Maximum model turns for this run.",
+        ),
+    ] = None,
     ask_approval: Annotated[
         bool,
         typer.Option(
@@ -690,14 +713,17 @@ def run(
     route = router.resolve(model_role)
     context_route = router.resolve("context_summarizer")
     model_context_windows = _resolved_model_context_windows(config, overrides, router)
+    resolved_max_turns = max_turns if max_turns is not None else config.agent.max_turns
     resolved_approval_mode = _resolve_approval_mode(approval_mode, ask_approval=ask_approval)
     audit = create_audit_sink(data_dir())
     credential_broker = EnvCredentialBroker()
+    pack_service = create_pack_service(data_dir(), state_store=state, audit_sink=audit)
     integration_service = create_integration_service(
         data_dir(),
         state_store=state,
         audit_sink=audit,
         credential_broker=credential_broker,
+        pack_service=pack_service,
     )
     integration_connections = asyncio.run(integration_service.connected_connections())
     subagent_service = create_subagent_service(
@@ -743,6 +769,7 @@ def run(
         integration_connections=integration_connections,
         credential_broker=credential_broker,
         skill_resolver=skill_resolver,
+        agent_max_turns=resolved_max_turns,
     )
     plan_id = execute_plan
     if execute_plan is not None:
@@ -760,7 +787,7 @@ def run(
                 subagent_service,
                 AgentRunRequest(
                     prompt=prompt,
-                    agent=default_agent(route.profile.model),
+                    agent=default_agent(route.profile.model, max_turns=resolved_max_turns),
                     session_id=session_id,
                     plan_id=plan_id,
                     active_skills=tuple(skill or ()),
@@ -929,6 +956,15 @@ def repl(
         bool,
         typer.Option("--resume", help="Resume the most recently updated session."),
     ] = False,
+    max_turns: Annotated[
+        int | None,
+        typer.Option(
+            "--max-turns",
+            min=1,
+            max=MAX_AGENT_MAX_TURNS,
+            help="Maximum model turns per REPL run.",
+        ),
+    ] = None,
     workspace: Annotated[
         Path | None,
         typer.Option(
@@ -962,15 +998,18 @@ def repl(
     primary_route = router.resolve("primary")
     context_route = router.resolve("context_summarizer")
     model_context_windows = _resolved_model_context_windows(config, overrides, router)
+    resolved_max_turns = max_turns if max_turns is not None else config.agent.max_turns
     resolved_approval_mode = _resolve_approval_mode(approval_mode)
     state = create_state_store(data_dir())
     audit = create_audit_sink(data_dir())
     credential_broker = EnvCredentialBroker()
+    pack_service = create_pack_service(data_dir(), state_store=state, audit_sink=audit)
     integration_service = create_integration_service(
         data_dir(),
         state_store=state,
         audit_sink=audit,
         credential_broker=credential_broker,
+        pack_service=pack_service,
     )
     active_integration_connections = asyncio.run(integration_service.connected_connections())
     subagent_service = create_subagent_service(
@@ -1022,6 +1061,7 @@ def repl(
             integration_connections=active_integration_connections,
             credential_broker=credential_broker,
             skill_resolver=skill_resolver,
+            agent_max_turns=resolved_max_turns,
         )
 
     def build_research_service(workspace_root: Path) -> ResearchService:
@@ -1075,7 +1115,7 @@ def repl(
         skill_resolver,
         context_service,
         context_route.provider,
-        default_agent(primary_route.profile.model),
+        default_agent(primary_route.profile.model, max_turns=resolved_max_turns),
         model_router=router,
         active_model_role="primary",
         orchestrator_factory=build_orchestrator,
@@ -1092,6 +1132,7 @@ def repl(
         subagent_service=subagent_service,
         research_service=research_service,
         integration_service=integration_service,
+        pack_service=pack_service,
         integration_refresh_factory=refresh_integrations,
         workspace_factory=build_workspace_services,
         theme_name=theme,
@@ -1132,6 +1173,16 @@ def skills_list() -> None:
             skill.source,
         )
     console.print(table)
+    duplicates = resolver.duplicate_names()
+    if duplicates:
+        duplicate_table = Table("Duplicate", "Selected Source", "All Sources")
+        for duplicate in duplicates:
+            duplicate_table.add_row(
+                duplicate.name,
+                duplicate.selected_source,
+                "\n".join(duplicate.sources),
+            )
+        console.print(duplicate_table)
 
 
 @skills_app.command("new")
@@ -1148,6 +1199,21 @@ def skills_new(
         str | None,
         typer.Option("--description", help="Manifest description for the generated skill."),
     ] = None,
+    resources: Annotated[
+        str | None,
+        typer.Option(
+            "--resources",
+            help="Comma-separated resource dirs: references,scripts,assets,examples,tests.",
+        ),
+    ] = None,
+    agent_compatible: Annotated[
+        bool,
+        typer.Option("--agent-compatible", help="Add Agent Skills YAML frontmatter."),
+    ] = False,
+    pack: Annotated[
+        Path | None,
+        typer.Option("--pack", help="Pack root; skill is scaffolded under PACK/skills."),
+    ] = None,
     force: Annotated[
         bool,
         typer.Option("--force", help="Overwrite manifest and SKILL.md if the skill exists."),
@@ -1155,17 +1221,29 @@ def skills_new(
 ) -> None:
     """Scaffold a local data-only skill."""
     service = create_skill_authoring_service(data_dir())
+    if path is not None and pack is not None:
+        console.print("[red]Use either --path or --pack, not both.[/red]")
+        raise typer.Exit(code=2)
+    parent = pack / "skills" if pack is not None else path
     try:
         result = service.scaffold(
             name,
             description=description,
-            parent=path,
+            parent=parent,
+            resources=_comma_list(resources),
+            agent_compatible=agent_compatible,
             overwrite=force,
         )
     except ColossusError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
     console.print(f"Wrote skill {result.name}: {result.path}")
+
+
+def _comma_list(value: str | None) -> tuple[str, ...]:
+    if value is None or not value.strip():
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
 @skills_app.command("validate")
@@ -1183,6 +1261,166 @@ def skills_validate(
     for error in result.errors:
         console.print(f"- {error}")
     raise typer.Exit(code=1)
+
+
+@packs_app.command("list")
+def packs_list() -> None:
+    """List bundled and installed packs."""
+    service = _pack_runtime()
+    statuses = asyncio.run(service.list_statuses())
+    table = Table("Name", "Version", "Publisher", "Source", "Trust", "Status", "Capabilities")
+    for status in statuses:
+        table.add_row(
+            status.name,
+            status.version,
+            status.publisher,
+            status.source_kind,
+            status.trust_status,
+            status.status,
+            ", ".join(status.capabilities),
+        )
+    console.print(table)
+
+
+@packs_app.command("show")
+def packs_show(name: Annotated[str, typer.Argument(help="Pack name.")]) -> None:
+    """Show pack details."""
+    service = _pack_runtime()
+    try:
+        pack = asyncio.run(service.get_pack(name))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    manifest = pack.manifest
+    table = Table("Field", "Value")
+    table.add_row("name", manifest.name)
+    table.add_row("version", manifest.version)
+    table.add_row("publisher", manifest.publisher)
+    table.add_row("source", pack.source)
+    table.add_row("source_kind", pack.source_kind)
+    table.add_row("trust", pack.trust_status)
+    table.add_row("status", pack.status)
+    table.add_row("capabilities", ", ".join(manifest.capabilities))
+    table.add_row("permissions", ", ".join(manifest.permissions))
+    table.add_row("skills", ", ".join(ref.path for ref in manifest.skills))
+    table.add_row("integrations", ", ".join(ref.path for ref in manifest.integrations))
+    table.add_row("mcp_servers", ", ".join(server.name for server in manifest.mcp_servers))
+    table.add_row("tools", ", ".join(tool.name for tool in manifest.tools))
+    console.print(table)
+
+
+@packs_app.command("verify")
+def packs_verify(
+    source: Annotated[Path, typer.Argument(help="Pack directory or OCI layout.")],
+) -> None:
+    """Verify a pack source without installing it."""
+    _verify_pack_source(source)
+
+
+@packs_app.command("validate")
+def packs_validate(
+    source: Annotated[Path, typer.Argument(help="Pack directory or OCI layout.")],
+) -> None:
+    """Validate a pack source without installing it."""
+    _verify_pack_source(source)
+
+
+@packs_app.command("install")
+def packs_install(
+    source: Annotated[Path, typer.Argument(help="Pack directory or OCI layout.")],
+    allow_untrusted: Annotated[
+        bool,
+        typer.Option("--allow-untrusted", help="Install an unsigned or untrusted pack."),
+    ] = False,
+) -> None:
+    """Install a local pack."""
+    service = _pack_runtime()
+    try:
+        installed = asyncio.run(service.install(source, allow_untrusted=allow_untrusted))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(
+        f"Installed pack {installed.name} {installed.version}: {installed.installed_path}"
+    )
+
+
+@packs_app.command("enable")
+def packs_enable(name: Annotated[str, typer.Argument(help="Pack name.")]) -> None:
+    """Enable an installed pack."""
+    service = _pack_runtime()
+    try:
+        updated = asyncio.run(service.enable(name))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Enabled pack {updated.name}.")
+
+
+@packs_app.command("disable")
+def packs_disable(name: Annotated[str, typer.Argument(help="Pack name.")]) -> None:
+    """Disable an installed pack."""
+    service = _pack_runtime()
+    try:
+        updated = asyncio.run(service.disable(name))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Disabled pack {updated.name}.")
+
+
+@packs_app.command("uninstall")
+def packs_uninstall(name: Annotated[str, typer.Argument(help="Pack name.")]) -> None:
+    """Uninstall a pack."""
+    service = _pack_runtime()
+    try:
+        asyncio.run(service.uninstall(name))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Uninstalled pack {name}.")
+
+
+@packs_trust_app.command("list")
+def packs_trust_list() -> None:
+    """List trusted pack publishers and keys."""
+    service = _pack_runtime()
+    records = asyncio.run(service.list_trust())
+    table = Table("Kind", "Value", "Added")
+    for record in records:
+        table.add_row(record.kind, record.value, record.added_at)
+    console.print(table)
+
+
+@packs_trust_app.command("add")
+def packs_trust_add(value: Annotated[str, typer.Argument(help="Publisher or key:KEY_ID.")]) -> None:
+    """Trust a pack publisher or signing key."""
+    service = _pack_runtime()
+    try:
+        record = asyncio.run(service.add_trust(value))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Trusted pack {record.kind}: {record.value}")
+
+
+def _verify_pack_source(source: Path) -> None:
+    service = _pack_runtime()
+    try:
+        result = asyncio.run(service.verify(source))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    table = Table("Field", "Value")
+    table.add_row("name", result.name)
+    table.add_row("version", result.version)
+    table.add_row("source_kind", result.source_kind)
+    table.add_row("trust", result.trust_status)
+    table.add_row("file_count", str(result.file_count))
+    table.add_row("capabilities", ", ".join(result.capabilities))
+    table.add_row("permissions", ", ".join(result.permissions))
+    console.print(f"Pack is valid: {result.name} {result.version}")
+    console.print(table)
 
 
 @tools_app.command("list")

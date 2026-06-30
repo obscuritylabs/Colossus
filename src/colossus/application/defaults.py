@@ -1,9 +1,13 @@
 """Default domain/application specs with no adapter dependencies."""
 
-from colossus.domain.agents import AgentSpec
+from colossus.domain.agents import DEFAULT_AGENT_MAX_TURNS, AgentSpec
 
 
-def research_agent(model: str = "default") -> AgentSpec:
+def research_agent(
+    model: str = "default",
+    *,
+    max_turns: int = DEFAULT_AGENT_MAX_TURNS,
+) -> AgentSpec:
     from colossus.application.research import research_agent_tools
 
     return AgentSpec(
@@ -15,12 +19,17 @@ def research_agent(model: str = "default") -> AgentSpec:
             "external facts without source support."
         ),
         model=model,
+        max_turns=max_turns,
         tools=research_agent_tools(),
         skills=("coding", "security-review", "offline-dev", "skill-creator"),
     )
 
 
-def default_agent(model: str = "default") -> AgentSpec:
+def default_agent(
+    model: str = "default",
+    *,
+    max_turns: int = DEFAULT_AGENT_MAX_TURNS,
+) -> AgentSpec:
     return AgentSpec(
         name="colossus",
         instructions=(
@@ -42,6 +51,7 @@ def default_agent(model: str = "default") -> AgentSpec:
             "Do not invent filenames, modules, commands, or repository contents."
         ),
         model=model,
+        max_turns=max_turns,
         tools=(),
         skills=("coding", "security-review", "offline-dev", "skill-creator"),
     )

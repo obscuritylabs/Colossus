@@ -50,6 +50,9 @@ The current config is strict: unknown fields are rejected.
     "recent_tail_messages": 8,
     "model_assisted": true
   },
+  "agent": {
+    "max_turns": 24
+  },
   "subagents": {
     "max_concurrent": 4
   },
@@ -152,6 +155,12 @@ uv run colossus run --model-role risk_evaluator "hello"
 
 Global provider/model/base-url/API-key/CA CLI overrides apply to the `primary` role for
 that invocation.
+
+## Agent Runtime
+
+`agent.max_turns` controls the maximum number of model/tool turns in a normal agent run.
+The default is `24`. It can be overridden for a one-shot run with `--max-turns`, for a
+REPL session with `repl --max-turns`, or inside the REPL with `/agent max-turns N`.
 
 ## Workspace Selection
 

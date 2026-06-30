@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from colossus.adapters.echo_provider import EchoModelProvider
 from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
 from colossus.adapters.openai_responses import OpenAIResponsesProvider
+from colossus.domain.agents import DEFAULT_AGENT_MAX_TURNS, MAX_AGENT_MAX_TURNS
 from colossus.domain.context import ContextConfig
 from colossus.domain.models import (
     ModelProfile,
@@ -47,6 +48,12 @@ class SubagentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_concurrent: int = Field(default=4, ge=1)
+
+
+class AgentConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_turns: int = Field(default=DEFAULT_AGENT_MAX_TURNS, ge=1, le=MAX_AGENT_MAX_TURNS)
 
 
 class MemoryIndexConfig(BaseModel):
@@ -134,6 +141,7 @@ class ColossusConfig(BaseModel):
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
     models: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     subagents: SubagentConfig = Field(default_factory=SubagentConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     http: HttpConfig = Field(default_factory=HttpConfig)

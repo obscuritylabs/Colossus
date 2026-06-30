@@ -19,6 +19,7 @@ from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.memories import MemoryService
 from colossus.application.skill_authoring import SkillAuthoringService
+from colossus.application.skills import SkillResourceService
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
 from colossus.application.tools import ToolHandler
@@ -26,6 +27,7 @@ from colossus.domain.errors import ToolExecutionError
 from colossus.domain.tools import ToolPermission, ToolSpec
 from colossus.domain.user_prompts import UserPromptChoice
 from colossus.infrastructure.http_client import HttpClientConfig
+from colossus.ports.audit import AuditSink
 from colossus.ports.model_provider import ModelProvider
 from colossus.ports.research import McpGateway, SearchProvider
 from colossus.ports.user_prompt import UserPromptHandler
@@ -52,6 +54,8 @@ def create_builtin_tools(
     mcp_gateway: McpGateway | None = None,
     http_client_config: HttpClientConfig | None = None,
     skill_authoring_service: SkillAuthoringService | None = None,
+    skill_resource_service: SkillResourceService | None = None,
+    audit_sink: AuditSink | None = None,
 ) -> tuple[tuple[ToolSpec, ...], HandlerMap]:
     broker = SubprocessBroker()
     handlers = BuiltinToolHandlers(workspace, broker, user_prompt_handler=user_prompt_handler)
@@ -86,7 +90,7 @@ def create_builtin_tools(
         default_model=context_model,
     )
     skill_specs, skill_handlers = (
-        create_skill_tools(skill_authoring_service)
+        create_skill_tools(skill_authoring_service, skill_resource_service, audit_sink)
         if skill_authoring_service is not None
         else ((), {})
     )

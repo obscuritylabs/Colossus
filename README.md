@@ -73,6 +73,7 @@ Capability docs:
 - [Built-in Tools](docs/TOOLS.md)
 - [Integrations](docs/INTEGRATIONS.md)
 - [Skills](docs/SKILLS.md)
+- [Packs](docs/PACKS.md)
 - [Context compaction](docs/CONTEXT.md)
 
 Reference docs:

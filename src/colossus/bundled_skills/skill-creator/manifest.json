@@ -1,9 +1,24 @@
 {
   "name": "skill-creator",
-  "version": "0.1.0",
-  "description": "Guided workflow for designing and authoring safe Colossus skills.",
-  "triggers": ["skill", "skills", "author", "create", "scaffold"],
-  "required_tools": ["skill.scaffold", "skill.validate"],
+  "version": "0.4.0",
+  "description": "Guided workflow for designing, creating, improving, and validating safe Colossus skills and pack-backed skill resources. Use when the user asks to create a skill, revise a weak skill, design skill triggers, write SKILL.md instructions, scaffold an installed user skill, decide between pure skills, resource skills, and executable packs, or validate a skill package.",
+  "triggers": [
+    "skill",
+    "skills",
+    "skill-creator",
+    "author",
+    "create",
+    "scaffold",
+    "revise",
+    "validate"
+  ],
+  "required_tools": [
+    "skill.scaffold",
+    "skill.inspect",
+    "skill.read",
+    "skill.write",
+    "skill.validate"
+  ],
   "permissions": ["filesystem:write"],
   "offline_compatible": true
 }

@@ -6,7 +6,12 @@ from colossus.adapters.skills_filesystem import FilesystemSkillRepository
 from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.application.defaults import default_agent
 from colossus.application.skill_authoring import SkillAuthoringService
-from colossus.application.skills import SkillComposer, SkillResolver, extract_skill_mentions
+from colossus.application.skills import (
+    SkillComposer,
+    SkillResolver,
+    SkillResourceService,
+    extract_skill_mentions,
+)
 from colossus.domain.errors import ColossusError
 from colossus.infrastructure.container import create_default_skill_resolver
 
@@ -26,25 +31,161 @@ def test_bundled_skill_content_loads() -> None:
     assert "implementing or changing software" in skill.instructions
     assert creator is not None
     assert "design, write, or revise a Colossus skill" in creator.instructions
+    assert "Creation Workflow" in creator.instructions
+    assert "Weak Skill Smells" in creator.instructions
+    assert creator.manifest.version == "0.4.0"
 
 
 def test_skill_authoring_service_scaffolds_and_validates_skill(tmp_path) -> None:
     service = SkillAuthoringService(tmp_path / "skills")
 
-    result = service.scaffold_user_skill("demo-skill", description="Demo workflow.")
+    result = service.scaffold_user_skill(
+        "demo-skill",
+        description="Demo workflow.",
+        instructions="# Demo Skill\n\nUse this skill for demo workflows.\n",
+        triggers=["demo-skill", "demo", "demo"],
+        required_tools=["filesystem.read"],
+        permissions=["filesystem:read"],
+        offline_compatible=False,
+    )
     validation = service.validate(result.path)
 
     assert result.path == tmp_path / "skills" / "demo-skill"
     assert result.manifest.name == "demo-skill"
     assert result.manifest.description == "Demo workflow."
+    assert result.manifest.triggers == ("demo-skill", "demo")
+    assert result.manifest.required_tools == ("filesystem.read",)
+    assert result.manifest.permissions == ("filesystem:read",)
+    assert result.manifest.offline_compatible is False
     assert (result.path / "manifest.json").is_file()
     assert (result.path / "SKILL.md").is_file()
+    assert (result.path / "SKILL.md").read_text(encoding="utf-8").startswith("# Demo Skill")
     assert validation.valid is True
     assert validation.manifest is not None
     assert validation.manifest.name == "demo-skill"
 
     with pytest.raises(ColossusError, match="already exists"):
         service.scaffold_user_skill("demo-skill")
+
+
+def test_skill_authoring_service_reads_and_writes_existing_user_skill(tmp_path) -> None:
+    service = SkillAuthoringService(tmp_path / "skills")
+    result = service.scaffold_user_skill(
+        "demo-skill",
+        description="Demo workflow.",
+        instructions="# Demo Skill\n\nUse this skill for demo workflows.\n",
+        resources=("references",),
+    )
+
+    inspected = service.inspect_user_skill("demo-skill")
+    read = service.read_user_skill_file("demo-skill", "SKILL.md")
+    written = service.write_user_skill_file(
+        "demo-skill",
+        "SKILL.md",
+        "# Demo Skill\n\nUse this skill for stronger demo workflows.\n",
+        expected_sha256=read.sha256,
+    )
+    created_resource = service.write_user_skill_file(
+        "demo-skill",
+        "references/guide.md",
+        "# Guide\n\nReusable guidance.\n",
+        mode="create",
+    )
+
+    assert inspected.path == result.path
+    assert {file.path for file in inspected.files} == {"SKILL.md", "manifest.json"}
+    assert read.content.startswith("# Demo Skill")
+    assert written.validation.valid is True
+    assert written.sha256 != read.sha256
+    assert created_resource.path == "references/guide.md"
+    assert (result.path / "references" / "guide.md").read_text(encoding="utf-8") == (
+        "# Guide\n\nReusable guidance.\n"
+    )
+
+    with pytest.raises(ColossusError, match="changed since it was read"):
+        service.write_user_skill_file(
+            "demo-skill",
+            "SKILL.md",
+            "# Demo Skill\n\nStale edit.\n",
+            expected_sha256=read.sha256,
+        )
+    with pytest.raises(ColossusError, match="safe relative path"):
+        service.read_user_skill_file("demo-skill", "../outside.md")
+    with pytest.raises(ColossusError, match=r"must be SKILL\.md"):
+        service.write_user_skill_file("demo-skill", "notes.md", "Nope.\n", mode="create")
+
+
+def test_skill_authoring_service_scaffolds_agent_compatible_resources(tmp_path) -> None:
+    service = SkillAuthoringService(tmp_path / "skills")
+
+    result = service.scaffold_user_skill(
+        "resource-skill",
+        description="Resource workflow.",
+        resources=("references", "scripts", "assets"),
+        agent_compatible=True,
+    )
+    skill_text = (result.path / "SKILL.md").read_text(encoding="utf-8")
+    validation = service.validate(result.path)
+
+    assert skill_text.startswith("---\nname: resource-skill\n")
+    assert "description: Resource workflow." in skill_text
+    assert (result.path / "references").is_dir()
+    assert (result.path / "scripts").is_dir()
+    assert (result.path / "assets").is_dir()
+    assert validation.valid is True
+
+
+def test_skill_authoring_validation_rejects_unsafe_resource_layout(tmp_path) -> None:
+    service = SkillAuthoringService(tmp_path / "skills")
+    result = service.scaffold_user_skill("bad-resource", resources=("assets",))
+    (result.path / "assets" / "image.png").write_bytes(b"\x89PNG")
+    (result.path / "extra").mkdir()
+
+    validation = service.validate(result.path)
+
+    assert validation.valid is False
+    assert "Unexpected skill directory: extra." in validation.errors
+    assert "Resource file should be text or live in scripts/: assets/image.png." in (
+        validation.errors
+    )
+
+
+def test_filesystem_skill_repository_loads_frontmatter_only_skill(tmp_path) -> None:
+    skill_dir = tmp_path / "agent-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: agent-skill\n"
+        "description: Agent-compatible skill.\n"
+        "---\n\n"
+        "# Agent Skill\n\nUse this frontmatter-only skill.\n",
+        encoding="utf-8",
+    )
+
+    skill = FilesystemSkillRepository(tmp_path).get_skill("agent-skill")
+
+    assert skill is not None
+    assert skill.manifest.version == "0.1.0"
+    assert skill.manifest.description == "Agent-compatible skill."
+    assert skill.manifest.triggers == ("agent-skill", "agent", "skill")
+    assert skill.instructions.startswith("# Agent Skill")
+    assert skill.resource_root == str(skill_dir.resolve(strict=False))
+
+
+def test_filesystem_skill_repository_rejects_frontmatter_manifest_mismatch(tmp_path) -> None:
+    skill_dir = tmp_path / "mismatch"
+    _write_skill(skill_dir, name="manifest-name", instructions="# Mismatch\n")
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: frontmatter-name\n"
+        "description: manifest-name skill\n"
+        "---\n\n"
+        "# Mismatch\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ColossusError, match="does not match"):
+        FilesystemSkillRepository(tmp_path).list_skills()
 
 
 def test_default_skill_resolver_loads_user_skills_and_controls_overrides(tmp_path) -> None:
@@ -57,6 +198,60 @@ def test_default_skill_resolver_loads_user_skills_and_controls_overrides(tmp_pat
     assert resolver.get_skill("custom") is not None
     assert resolver.get_skill("coding").source == "package:coding"  # type: ignore[union-attr]
     assert override_resolver.get_skill("coding").instructions == "User override"  # type: ignore[union-attr]
+    duplicate = next(item for item in resolver.duplicate_names() if item.name == "coding")
+    override_duplicate = next(
+        item for item in override_resolver.duplicate_names() if item.name == "coding"
+    )
+    assert duplicate.selected_source == "package:coding"
+    assert override_duplicate.selected_source == str(tmp_path / "coding")
+
+
+def test_skill_resource_service_restricts_active_text_resources(tmp_path) -> None:
+    skill_dir = tmp_path / "resource-skill"
+    _write_skill(skill_dir, name="resource-skill")
+    (skill_dir / "references").mkdir()
+    (skill_dir / "references" / "guide.md").write_text("# Guide\n", encoding="utf-8")
+    (skill_dir / "references" / "blob.bin").write_bytes(b"abc\x00def")
+    (skill_dir / "references" / "huge.txt").write_text("x" * 64_001, encoding="utf-8")
+    resolver = SkillResolver((FilesystemSkillRepository(tmp_path),))
+    service = SkillResourceService(resolver)
+
+    resources = service.list_resources(
+        skill_name="resource-skill",
+        active_skills=("resource-skill",),
+    )
+    read = service.read_resource(
+        skill_name="resource-skill",
+        path="references/guide.md",
+        active_skills=("resource-skill",),
+    )
+
+    assert [resource.path for resource in resources] == [
+        "references/blob.bin",
+        "references/guide.md",
+        "references/huge.txt",
+    ]
+    assert read.content == "# Guide\n"
+    with pytest.raises(ColossusError, match="not active"):
+        service.list_resources(skill_name="resource-skill", active_skills=())
+    with pytest.raises(ColossusError, match="Invalid skill resource path"):
+        service.read_resource(
+            skill_name="resource-skill",
+            path="../outside.md",
+            active_skills=("resource-skill",),
+        )
+    with pytest.raises(ColossusError, match="not a text-safe"):
+        service.read_resource(
+            skill_name="resource-skill",
+            path="references/blob.bin",
+            active_skills=("resource-skill",),
+        )
+    with pytest.raises(ColossusError, match="too large"):
+        service.read_resource(
+            skill_name="resource-skill",
+            path="references/huge.txt",
+            active_skills=("resource-skill",),
+        )
 
 
 def test_filesystem_skill_repository_loads_sorted_skills_and_ignores_incomplete_dirs(

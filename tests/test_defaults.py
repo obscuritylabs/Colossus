@@ -21,6 +21,11 @@ def test_default_agent_empty_tools_means_full_catalog() -> None:
     assert default_agent().tools == ()
 
 
+def test_default_agent_uses_expanded_turn_limit() -> None:
+    assert default_agent().max_turns == 24
+    assert default_agent(max_turns=40).max_turns == 40
+
+
 def test_research_agent_uses_read_only_tool_subset() -> None:
     agent = research_agent()
 

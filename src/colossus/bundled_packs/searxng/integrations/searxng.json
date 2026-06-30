@@ -1,0 +1,81 @@
+{
+  "name": "searxng",
+  "title": "SearXNG",
+  "description": "Native local/private metasearch connector for SearXNG JSON search results.",
+  "kind": "native",
+  "auth": {
+    "type": "none",
+    "scopes": [],
+    "header": "Authorization",
+    "scheme": "Bearer"
+  },
+  "tools": [
+    {
+      "name": "searxng.search",
+      "description": "Search a configured SearXNG instance and return normalized results.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "permissions": {
+        "filesystem": "none",
+        "network": "allow",
+        "approval_required": true,
+        "mutation": false,
+        "working_root_required": false,
+        "risk": "medium"
+      },
+      "timeout_seconds": 20.0,
+      "max_output_bytes": 64000,
+      "operation_id": null,
+      "method": null,
+      "path": null
+    },
+    {
+      "name": "searxng.health",
+      "description": "Check that the configured SearXNG instance returns JSON results.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "permissions": {
+        "filesystem": "none",
+        "network": "allow",
+        "approval_required": true,
+        "mutation": false,
+        "working_root_required": false,
+        "risk": "medium"
+      },
+      "timeout_seconds": 20.0,
+      "max_output_bytes": 8000,
+      "operation_id": null,
+      "method": null,
+      "path": null
+    }
+  ],
+  "metadata": {
+    "base_url": "http://localhost:8888/search",
+    "auth_header": "Authorization",
+    "auth_scheme": "bearer"
+  }
+}

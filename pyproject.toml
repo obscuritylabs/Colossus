@@ -69,6 +69,12 @@ packages = ["src/colossus"]
 "src/colossus/bundled_skills/offline-dev/SKILL.md" = "colossus/bundled_skills/offline-dev/SKILL.md"
 "src/colossus/bundled_skills/skill-creator/manifest.json" = "colossus/bundled_skills/skill-creator/manifest.json"
 "src/colossus/bundled_skills/skill-creator/SKILL.md" = "colossus/bundled_skills/skill-creator/SKILL.md"
+"src/colossus/bundled_packs/github/colossus.pack.json" = "colossus/bundled_packs/github/colossus.pack.json"
+"src/colossus/bundled_packs/github/integrations/github.json" = "colossus/bundled_packs/github/integrations/github.json"
+"src/colossus/bundled_packs/opensearch/colossus.pack.json" = "colossus/bundled_packs/opensearch/colossus.pack.json"
+"src/colossus/bundled_packs/opensearch/integrations/opensearch.json" = "colossus/bundled_packs/opensearch/integrations/opensearch.json"
+"src/colossus/bundled_packs/searxng/colossus.pack.json" = "colossus/bundled_packs/searxng/colossus.pack.json"
+"src/colossus/bundled_packs/searxng/integrations/searxng.json" = "colossus/bundled_packs/searxng/integrations/searxng.json"
 
 [tool.hatch.build.targets.sdist]
 include = [

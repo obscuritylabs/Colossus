@@ -36,7 +36,7 @@ tools, see [Integrations](INTEGRATIONS.md).
 | Research mode | `colossus research`, `/research` | Network/MCP lanes | Partial | Persists cited reports, sources, claims, and research status events. |
 | Trace/eval | `trace.show`, `trace.export`, `eval.run` | Export/eval only | Yes | Trace export writes a bounded snapshot; eval wraps local pytest. |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Restore only | Yes | Durable snapshots reduce model input without deleting raw history. |
-| Skill authoring | `skill.scaffold`, `skill.validate` | Scaffold only | Yes | Data-only user skill creation and validation under the configured skill directory. |
+| Skill authoring | `skill.scaffold`, `skill.inspect`, `skill.read`, `skill.write`, `skill.validate`, `skill.resource.list`, `skill.resource.read` | Scaffold/write only | Yes | Data-only user skill creation, targeted installed-skill edits, validation, and active-skill resource reads. |
 | Smoke test | `echo` | No | Yes | Deterministic smoke-test tool. |
 
 ## Input And Output Shapes
@@ -64,6 +64,23 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
 - Research runs persist a `ResearchRun` plus labeled `ResearchSource` records and
   source-backed `ResearchClaim` records. Reports cite persisted labels such as `[R1]`.
 - Context tools return session budget/status, snapshot records, or restore confirmation.
+- `skill.scaffold` writes only `manifest.json` and `SKILL.md` under the configured
+  user skill directory plus requested resource directories. It can accept model-generated
+  `instructions`, trigger words, required tool names, permission labels, offline
+  compatibility, Agent Skills frontmatter, and resource directory names, but it does not
+  run helpers or write arbitrary paths.
+- `skill.inspect` and `skill.read` inspect existing installed user skills under the
+  configured user skill directory. They return bounded metadata/content and hashes for
+  safe follow-up edits.
+- `skill.write` creates or overwrites bounded UTF-8 text files only at `SKILL.md`,
+  `manifest.json`, or under `references/`, `scripts/`, `assets/`, `examples/`, or
+  `tests/` inside an existing user skill. Existing-file overwrites require the
+  `expected_sha256` returned by `skill.read` or `skill.inspect`, and writes are audited
+  without content.
+- `skill.resource.list` and `skill.resource.read` are read-only. The orchestrator injects
+  the active skill names, and the tools can only access bounded text-safe files under
+  `references/`, `scripts/`, `assets/`, `examples/`, or `tests/` for active skills.
+  Resource reads are audited by skill, path, and size.
 - Integration tools never include credential fields in model-visible schemas. A connected
   GitHub tool family exposes repository, issue, pull request, check, and release reads.
   A connected SearXNG tool family exposes local/private search and health checks.
