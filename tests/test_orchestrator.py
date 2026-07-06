@@ -225,6 +225,7 @@ async def test_orchestrator_executes_tool_and_continues(tmp_path) -> None:
 
     assert result.final_output == "done"
     assert result.events_recorded == 3
+    assert result.elapsed_seconds >= 0
     second_turn_messages = provider.requests[1].messages
     assert isinstance(second_turn_messages[-2], AssistantMessage)
     assert second_turn_messages[-2].tool_calls[0].call_id == "call-1"

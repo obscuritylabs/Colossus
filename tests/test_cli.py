@@ -35,6 +35,7 @@ def test_cli_run_uses_echo_provider(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "[echo:default] hello" in result.stdout
+    assert "elapsed=" in result.stdout
 
 
 def test_cli_run_streams_without_duplicate_final_output(tmp_path, monkeypatch) -> None:
@@ -45,6 +46,7 @@ def test_cli_run_streams_without_duplicate_final_output(tmp_path, monkeypatch) -
     assert result.exit_code == 0
     assert result.stdout.count("[echo:default] hello") == 1
     assert "run_id=" in result.stdout
+    assert "elapsed=" in result.stdout
 
 
 def test_cli_run_drains_subagents_before_returning(tmp_path, monkeypatch) -> None:
@@ -194,6 +196,7 @@ def test_cli_run_risk_auto_approval_mode_sets_risk_auto_flag(tmp_path, monkeypat
 
     def capture_orchestrator(*args, **kwargs):
         captured["approval_handler"] = kwargs.get("approval_handler")
+        captured["risk_assessment_service"] = kwargs.get("risk_assessment_service")
         captured["risk_auto_approve"] = kwargs.get("risk_auto_approve")
         return create_default_orchestrator(*args, **kwargs)
 
@@ -203,6 +206,7 @@ def test_cli_run_risk_auto_approval_mode_sets_risk_auto_flag(tmp_path, monkeypat
 
     assert result.exit_code == 0
     assert isinstance(captured["approval_handler"], cli_module.RichApprovalHandler)
+    assert captured["risk_assessment_service"] is not None
     assert captured["risk_auto_approve"] is True
     assert "[echo:default] hello" in result.stdout
 
@@ -216,6 +220,7 @@ def test_cli_run_full_access_approval_mode_sets_auto_approval_flag(
 
     def capture_orchestrator(*args, **kwargs):
         captured["approval_handler"] = kwargs.get("approval_handler")
+        captured["risk_assessment_service"] = kwargs.get("risk_assessment_service")
         captured["risk_auto_approve"] = kwargs.get("risk_auto_approve")
         captured["auto_approve_required_tools"] = kwargs.get("auto_approve_required_tools")
         return create_default_orchestrator(*args, **kwargs)
@@ -226,6 +231,7 @@ def test_cli_run_full_access_approval_mode_sets_auto_approval_flag(
 
     assert result.exit_code == 0
     assert captured["approval_handler"] is None
+    assert captured["risk_assessment_service"] is None
     assert captured["risk_auto_approve"] is False
     assert captured["auto_approve_required_tools"] is True
     assert "[echo:default] hello" in result.stdout
@@ -456,6 +462,7 @@ def test_cli_repl_passes_full_access_approval_mode(tmp_path, monkeypatch) -> Non
 
     def capture_orchestrator(*args, **kwargs):
         captured["approval_handler"] = kwargs.get("approval_handler")
+        captured["risk_assessment_service"] = kwargs.get("risk_assessment_service")
         captured["risk_auto_approve"] = kwargs.get("risk_auto_approve")
         captured["auto_approve_required_tools"] = kwargs.get("auto_approve_required_tools")
         return create_default_orchestrator(*args, **kwargs)
@@ -471,6 +478,7 @@ def test_cli_repl_passes_full_access_approval_mode(tmp_path, monkeypatch) -> Non
     assert result.exit_code == 0
     assert captured["approval_mode"] == "full-access"
     assert captured["approval_handler"] is None
+    assert captured["risk_assessment_service"] is None
     assert captured["risk_auto_approve"] is False
     assert captured["auto_approve_required_tools"] is True
 
@@ -517,8 +525,11 @@ def test_cli_agents_list_renders_persisted_jobs(tmp_path, monkeypatch) -> None:
         session_id="session-1",
         parent_run_id="run-1",
         parent_call_id="call-1",
-        task="Check tests",
+        task="Tests",
         child_session_id="session-1:subagent:agent-1",
+        status="completed",
+        child_run_id="child-1",
+        final_output="Done.",
     )
     asyncio.run(state.save_subagent_job(job))
 
@@ -526,8 +537,36 @@ def test_cli_agents_list_renders_persisted_jobs(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "agent-1" in result.stdout
-    assert "Check tests" in result.stdout
+    assert "Tests" in result.stdout
+    assert "Done." in result.stdout
     assert service.max_concurrent == 4
+
+
+def test_cli_agents_status_and_resume(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    state = SQLiteStateStore(tmp_path / "colossus" / "state.sqlite3")
+    job = SubagentJob(
+        id="agent-1",
+        session_id="session-1",
+        parent_run_id="run-1",
+        parent_call_id="call-1",
+        task="Retry tests",
+        status="cancelled",
+        child_session_id="session-1:subagent:agent-1",
+        error="cancelled",
+    )
+    asyncio.run(state.save_subagent_job(job))
+
+    status_result = CliRunner().invoke(app, ["agents", "status", "--session", "session-1"])
+    resume_result = CliRunner().invoke(app, ["agents", "resume", "agent-1"])
+    list_result = CliRunner().invoke(app, ["agents", "list", "--session", "session-1"])
+
+    assert status_result.exit_code == 0
+    assert "Cancelled" in status_result.stdout
+    assert "runner=no" in status_result.stdout
+    assert resume_result.exit_code == 0
+    assert "Resumed subagent agent-1: queued" in resume_result.stdout
+    assert "queued" in list_result.stdout
 
 
 def test_cli_lists_bundled_skills() -> None:
@@ -658,7 +697,6 @@ def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
     assert "shell.run" in result.stdout
     assert "task.create" in result.stdout
     assert "plan.approve_request" in result.stdout
-    assert "test.run" in result.stdout
     assert "patch.apply" in result.stdout
     assert "repo.map" in result.stdout
     assert "agent.delegate" in result.stdout
@@ -672,6 +710,11 @@ def test_cli_lists_builtin_tools(tmp_path, monkeypatch) -> None:
     assert "skill.resource.read" in result.stdout
     assert "web.search" not in result.stdout
     assert "mcp.call" not in result.stdout
+    assert "test.run" not in result.stdout
+    assert "lint.run" not in result.stdout
+    assert "typecheck.run" not in result.stdout
+    assert "build.run" not in result.stdout
+    assert "eval.run" not in result.stdout
     assert "trace.export" in result.stdout
     assert "context.compact" in result.stdout
     assert "context.restore" in result.stdout
@@ -784,6 +827,45 @@ def test_cli_creates_lists_approves_and_executes_plan(tmp_path, monkeypatch) -> 
     assert "session_id=session-1" in executed.stdout
 
 
+def test_cli_executes_approved_plan_as_goal(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    service = cli_module.create_plan_service(cli_module.data_dir())
+    plan = cli_module.asyncio.run(
+        service.create_plan(
+            "ship it",
+            "session-1",
+            content="# Ship It\n\n- Implement\n- Verify",
+        )
+    )
+    cli_module.asyncio.run(service.approve_plan(plan.id))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "--execute-plan",
+            plan.id,
+            "--goal",
+            "--goal-max-iterations",
+            "1",
+            "--events",
+            "off",
+        ],
+    )
+    goals = cli_module.asyncio.run(
+        cli_module.create_goal_service(cli_module.data_dir()).list_goals(session_id="session-1")
+    )
+
+    assert result.exit_code == 0
+    assert "goal_id=" in result.stdout
+    assert "iteration_budget_exhausted=true" in result.stdout
+    assert (awaited_plan := cli_module.asyncio.run(service.get_plan(plan.id))).status == "executed"
+    assert len(goals) == 1
+    assert goals[0].source_plan_id == plan.id
+    assert "# Ship It" in goals[0].objective
+    assert awaited_plan.session_id == "session-1"
+
+
 def test_cli_plans_show_renders_markdown_content(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     service = cli_module.create_plan_service(cli_module.data_dir())
@@ -864,6 +946,28 @@ def test_cli_run_rejects_resume_with_explicit_session(tmp_path, monkeypatch) -> 
 
     assert result.exit_code == 2
     assert "Use either --resume or --session" in result.stdout
+
+
+def test_cli_goal_runs_bounded_loop_and_lists_goal(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["goal", "--events", "off", "--max-iterations", "1", "ship goal mode"],
+    )
+    goal_id = result.stdout.split("goal_id=", 1)[1].split()[0]
+    listed = runner.invoke(app, ["goals", "list"])
+    shown = runner.invoke(app, ["goals", "show", goal_id])
+
+    assert result.exit_code == 0
+    assert "goal_id=" in result.stdout
+    assert "status=active" in result.stdout
+    assert "iteration_budget_exhausted=true" in result.stdout
+    assert listed.exit_code == 0
+    assert "No goals" not in listed.stdout
+    assert shown.exit_code == 0
+    assert "ship goal mode" in shown.stdout
 
 
 def test_cli_run_session_reuses_exact_session_history(tmp_path, monkeypatch) -> None:

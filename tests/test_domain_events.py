@@ -2,9 +2,11 @@ from pydantic import TypeAdapter
 
 from colossus.domain.events import (
     ApprovalAutoGrantedEvent,
+    ContextPreparedEvent,
     ModelDeltaEvent,
     ModelRequestPreparedEvent,
     ReasoningSummaryEvent,
+    ResearchProgressEvent,
     RiskAssessmentEvent,
     RunEvent,
     SubagentStatusEvent,
@@ -72,6 +74,29 @@ def test_model_request_prepared_event_round_trips_with_discriminator() -> None:
     assert parsed.messages[0]["content"] == "hello"
 
 
+def test_context_prepared_event_round_trips_with_discriminator() -> None:
+    adapter: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
+    event = ContextPreparedEvent(
+        turn=0,
+        model="demo",
+        token_estimate=1_200,
+        original_token_estimate=12_000,
+        context_window_tokens=16_000,
+        threshold_tokens=11_200,
+        target_tokens=7_200,
+        snapshot_id="snapshot-1",
+        compacted=True,
+        snapshot_created=True,
+    )
+
+    parsed = adapter.validate_json(adapter.dump_json(event))
+
+    assert isinstance(parsed, ContextPreparedEvent)
+    assert parsed.compacted is True
+    assert parsed.snapshot_id == "snapshot-1"
+    assert parsed.snapshot_created is True
+
+
 def test_approval_auto_granted_event_round_trips_with_discriminator() -> None:
     adapter: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
     event = ApprovalAutoGrantedEvent(call_id="call-1", reason="Low-risk command.")
@@ -96,3 +121,28 @@ def test_subagent_status_event_round_trips_with_discriminator() -> None:
 
     assert isinstance(parsed, SubagentStatusEvent)
     assert parsed.job_id == "agent-1"
+
+
+def test_research_progress_event_round_trips_with_discriminator() -> None:
+    adapter: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
+    event = ResearchProgressEvent(
+        research_id="research-1",
+        phase="collecting",
+        action="web",
+        status="completed",
+        message="Web search returned 4 result(s).",
+        query="deep research progress telemetry",
+        source_kind="web",
+        current=1,
+        total=3,
+        sources_collected=4,
+        claims_collected=0,
+        details={"results": 4, "added": 4, "approved": True},
+    )
+
+    parsed = adapter.validate_json(adapter.dump_json(event))
+
+    assert isinstance(parsed, ResearchProgressEvent)
+    assert parsed.type == "research.progress"
+    assert parsed.source_kind == "web"
+    assert parsed.details["results"] == 4

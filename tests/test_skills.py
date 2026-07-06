@@ -1,4 +1,5 @@
 import json
+import zipfile
 
 import pytest
 
@@ -10,6 +11,7 @@ from colossus.adapters.skills_filesystem import (
 from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.application.defaults import default_agent
 from colossus.application.skill_authoring import SkillAuthoringService
+from colossus.application.skill_loader import load_skill_from_directory
 from colossus.application.skills import (
     SkillComposer,
     SkillResolver,
@@ -17,6 +19,7 @@ from colossus.application.skills import (
     extract_skill_mentions,
 )
 from colossus.domain.errors import ColossusError
+from colossus.domain.tools import ToolSpec
 from colossus.infrastructure.container import create_default_skill_resolver
 
 
@@ -37,6 +40,8 @@ def test_bundled_skill_content_loads() -> None:
     assert "design, write, or revise a Colossus skill" in creator.instructions
     assert "Creation Workflow" in creator.instructions
     assert "Weak Skill Smells" in creator.instructions
+    assert "filesystem_read" in creator.instructions
+    assert "Colossus canonical dotted tool IDs" in creator.instructions
     assert creator.manifest.version == "0.4.0"
 
 
@@ -225,22 +230,24 @@ def test_filesystem_skill_repository_loads_protocol_skill_md_fallback(tmp_path) 
     assert skill.manifest.description == "Protocol-compatible skill."
 
 
-def test_filesystem_skill_repository_rejects_duplicate_skill_markdown_names(
+def test_skill_loader_rejects_duplicate_skill_markdown_names(
     tmp_path,
 ) -> None:
-    skill_dir = tmp_path / "agent-skill"
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: agent-skill\ndescription: Canonical.\n---\n\n# Agent Skill\n",
-        encoding="utf-8",
-    )
-    (skill_dir / "skill.md").write_text(
-        "---\nname: agent-skill\ndescription: Protocol.\n---\n\n# Agent Skill\n",
-        encoding="utf-8",
-    )
+    archive_path = tmp_path / "skills.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "agent-skill/SKILL.md",
+            "---\nname: agent-skill\ndescription: Canonical.\n---\n\n# Agent Skill\n",
+        )
+        archive.writestr(
+            "agent-skill/skill.md",
+            "---\nname: agent-skill\ndescription: Protocol.\n---\n\n# Agent Skill\n",
+        )
 
-    with pytest.raises(ColossusError, match=r"both SKILL\.md and skill\.md"):
-        FilesystemSkillRepository(tmp_path).list_skills()
+    with zipfile.ZipFile(archive_path) as archive:
+        skill_dir = zipfile.Path(archive, "agent-skill/")
+        with pytest.raises(ColossusError, match=r"both SKILL\.md and skill\.md"):
+            load_skill_from_directory(skill_dir, source="test")
 
 
 def test_filesystem_skill_repository_rejects_frontmatter_manifest_mismatch(tmp_path) -> None:
@@ -486,6 +493,36 @@ def test_skill_composer_validates_names_and_required_tools(tmp_path) -> None:
             skill_mode_enabled=True,
             tools=(),
         )
+
+
+def test_skill_composer_suggests_dotted_tool_names_for_provider_safe_names(
+    tmp_path,
+) -> None:
+    _write_skill(
+        tmp_path / "alpha",
+        name="alpha",
+        required_tools=["filesystem_read", "filesystem_write"],
+    )
+    composer = SkillComposer(SkillResolver((FilesystemSkillRepository(tmp_path),)))
+    agent = default_agent().model_copy(update={"skills": ("alpha",)})
+    tools = (
+        ToolSpec(name="filesystem.read", description="Read files.", input_schema={}),
+        ToolSpec(name="filesystem.write", description="Write files.", input_schema={}),
+    )
+
+    with pytest.raises(ColossusError) as exc_info:
+        composer.compose(
+            instructions="Base",
+            agent=agent,
+            prompt="",
+            active_skills=("alpha",),
+            skill_mode_enabled=True,
+            tools=tools,
+        )
+
+    message = str(exc_info.value)
+    assert "filesystem_read (did you mean filesystem.read?)" in message
+    assert "filesystem_write (did you mean filesystem.write?)" in message
 
 
 def test_skill_composer_disabled_mode_blocks_mentions(tmp_path) -> None:

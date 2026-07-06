@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from colossus.adapters.context_tools import create_context_tools
+from colossus.adapters.goal_tools import create_goal_tools
 from colossus.adapters.roadmap_tools import create_roadmap_tools
 from colossus.adapters.skill_tools import create_skill_tools
 from colossus.adapters.subprocess_broker import (
@@ -18,6 +19,7 @@ from colossus.adapters.subprocess_broker import (
 from colossus.adapters.workspace import Workspace
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
+from colossus.application.goals import GoalService
 from colossus.application.memories import MemoryService
 from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.skills import SkillResourceService
@@ -48,6 +50,7 @@ def create_builtin_tools(
     task_service: TaskService | None = None,
     decision_service: DecisionService | None = None,
     memory_service: MemoryService | None = None,
+    goal_service: GoalService | None = None,
     subagent_service: SubagentService | None = None,
     include_agent_delegate: bool = True,
     user_prompt_handler: UserPromptHandler | None = None,
@@ -90,6 +93,9 @@ def create_builtin_tools(
         provider=context_provider,
         default_model=context_model,
     )
+    goal_specs, goal_handlers = (
+        create_goal_tools(goal_service) if goal_service is not None else ((), {})
+    )
     skill_specs, skill_handlers = (
         create_skill_tools(skill_authoring_service, skill_resource_service, audit_sink)
         if skill_authoring_service is not None
@@ -100,6 +106,7 @@ def create_builtin_tools(
         *core_specs,
         *roadmap_specs,
         *context_specs,
+        *goal_specs,
         *skill_specs,
         *user_prompt_specs,
         _echo_spec(),
@@ -120,6 +127,7 @@ def create_builtin_tools(
         "shell.run": handlers.shell_run,
         **roadmap_handlers,
         **context_handlers,
+        **goal_handlers,
         **skill_handlers,
         **user_prompt_handlers,
         "echo": handlers.echo,

@@ -504,7 +504,10 @@ def _normalize_resource_dirs(resources: Sequence[str] | None) -> tuple[str, ...]
 
 def _validate_skill_resources(path: Path) -> tuple[str, ...]:
     errors: list[str] = []
-    if (path / "SKILL.md").is_file() and (path / "skill.md").is_file():
+    if (
+        _file_child_named(path, "SKILL.md") is not None
+        and _file_child_named(path, "skill.md") is not None
+    ):
         errors.append("Skill directory must not contain both SKILL.md and skill.md.")
     for child in path.iterdir():
         if child.name in _RESOURCE_DIRS:
@@ -616,12 +619,19 @@ def _sha256_text(content: str) -> str:
 
 
 def _skill_markdown_path(path: Path) -> Path | None:
-    canonical = path / "SKILL.md"
-    protocol = path / "skill.md"
-    if canonical.is_file():
+    canonical = _file_child_named(path, "SKILL.md")
+    protocol = _file_child_named(path, "skill.md")
+    if canonical is not None:
         return canonical
-    if protocol.is_file():
+    if protocol is not None:
         return protocol
+    return None
+
+
+def _file_child_named(path: Path, name: str) -> Path | None:
+    for child in path.iterdir():
+        if child.name == name and child.is_file():
+            return child
     return None
 
 

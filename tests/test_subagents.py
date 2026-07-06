@@ -94,12 +94,81 @@ async def test_subagent_service_runs_jobs_with_bounded_concurrency(tmp_path: Pat
             job_id=f"agent-{index}",
         )
 
-    await service.drain()
+    status = await service.drain()
     jobs = await state.list_subagent_jobs(session_id="session-1")
 
     assert max_seen == 2
+    assert status.completed == 4
+    assert status.runner_configured is True
     assert {job.status for job in jobs} == {"completed"}
     assert all(job.child_run_id for job in jobs)
+
+
+@pytest.mark.asyncio
+async def test_subagent_service_reports_status_and_resumes_jobs(tmp_path: Path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    failed = SubagentJob(
+        id="agent-1",
+        session_id="session-1",
+        parent_run_id="run-1",
+        parent_call_id="call-1",
+        task="retry work",
+        status="failed",
+        child_session_id="session-1:subagent:agent-1",
+        child_run_id="child-1",
+        final_output="old output",
+        error="boom",
+    )
+    await state.save_subagent_job(failed)
+    service = SubagentService(state, JsonlAuditSink(tmp_path / "audit.jsonl"), max_concurrent=3)
+
+    before = await service.queue_status(session_id="session-1")
+    resumed = await service.resume_job("agent-1")
+    after = await service.queue_status(session_id="session-1")
+
+    assert before.failed == 1
+    assert before.runner_configured is False
+    assert resumed.status == "queued"
+    assert resumed.child_run_id is None
+    assert resumed.final_output == ""
+    assert resumed.error == ""
+    assert after.queued == 1
+    assert after.max_concurrent == 3
+
+
+@pytest.mark.asyncio
+async def test_subagent_service_drain_timeout_does_not_cancel_running_job(tmp_path: Path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = SubagentService(state, JsonlAuditSink(tmp_path / "audit.jsonl"))
+    release = asyncio.Event()
+
+    async def runner(job: SubagentJob) -> AgentRunResult:
+        await release.wait()
+        return AgentRunResult(
+            run_id=f"child-{job.id}",
+            final_output="done",
+            events_recorded=1,
+            session_id=job.child_session_id,
+        )
+
+    service.set_runner(runner)
+    await service.create_job(
+        session_id="session-1",
+        parent_run_id="run-1",
+        parent_call_id="call-1",
+        task="wait",
+        job_id="agent-1",
+    )
+    await asyncio.sleep(0)
+
+    status = await service.drain(timeout_seconds=0)
+    running = await service.get_job("agent-1")
+    release.set()
+    final_status = await service.drain()
+
+    assert status.running == 1
+    assert running.status == "running"
+    assert final_status.completed == 1
 
 
 @pytest.mark.asyncio

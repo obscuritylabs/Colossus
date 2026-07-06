@@ -2,11 +2,18 @@
 
 import re
 from collections.abc import Callable
+from typing import Literal
 from uuid import uuid4
 
 from colossus.application.model_router import ModelRouter
 from colossus.domain.errors import ColossusError
-from colossus.domain.events import FinalOutputEvent, ModelDeltaEvent, ResearchStatusEvent, RunEvent
+from colossus.domain.events import (
+    FinalOutputEvent,
+    ModelDeltaEvent,
+    ResearchProgressEvent,
+    ResearchStatusEvent,
+    RunEvent,
+)
 from colossus.domain.messages import AssistantMessage, Message, UserMessage
 from colossus.domain.policy import PolicyDecision
 from colossus.domain.requests import ModelRequest
@@ -135,10 +142,23 @@ class ResearchService:
         warnings: list[str] = []
         try:
             await self._emit(run, phase="planning", message="Planning research queries.")
-            queries = await self._plan_queries(
+            queries, planner_source = await self._plan_queries(
                 run.question,
                 depth,
                 session_context=session_context,
+            )
+            await self._emit_progress(
+                run,
+                phase="planning",
+                action="queries",
+                status="completed",
+                message=f"Planned {len(queries)} query item(s) via {planner_source}.",
+                total=len(queries),
+                details={
+                    "queries": list(queries),
+                    "depth": depth,
+                    "planner_source": planner_source,
+                },
             )
             await self._emit(
                 run,
@@ -152,15 +172,36 @@ class ResearchService:
                 max_sources=max_sources,
             )
             sources = await self._save_sources(run.id, drafts[:max_sources])
+            await self._emit_progress(
+                run,
+                phase="collecting",
+                action="sources",
+                status="completed",
+                message=f"Saved {len(sources)} source record(s).",
+                sources_collected=len(sources),
+                details={
+                    "sources": _source_detail_preview(sources),
+                    "total_sources": len(sources),
+                },
+            )
             await self._emit(
                 run,
                 phase="workers",
                 message="Extracting source-backed claims.",
                 sources_collected=len(sources),
             )
-            claims = await self._build_claims(run.id, sources)
+            claims = await self._build_claims(run, sources)
             for claim in claims:
                 await self._state_store.save_research_claim(claim)
+            await self._emit_progress(
+                run,
+                phase="workers",
+                action="claims",
+                status="completed",
+                message=f"Extracted {len(claims)} source-backed claim(s).",
+                sources_collected=len(sources),
+                claims_collected=len(claims),
+            )
             await self._emit(
                 run,
                 phase="synthesis",
@@ -251,9 +292,9 @@ class ResearchService:
         depth: ResearchDepth,
         *,
         session_context: str = "",
-    ) -> tuple[str, ...]:
+    ) -> tuple[tuple[str, ...], str]:
         if depth == "quick":
-            return (question,)
+            return (question,), "quick"
         planned = await self._model_text(
             "research_planner",
             (
@@ -272,7 +313,8 @@ class ResearchService:
         limit = 3 if depth == "standard" else 6
         if not queries or any(query.startswith("[echo:") for query in queries):
             queries = _deterministic_queries(question, limit)
-        return queries[:limit]
+            return queries[:limit], "deterministic_fallback"
+        return queries[:limit], "model"
 
     async def _collect_sources(
         self,
@@ -286,16 +328,78 @@ class ResearchService:
         warnings: list[str] = []
         seen: set[tuple[str, str]] = set()
         source_budget = max(1, max_sources // max(len(source_kinds), 1))
-        for query in queries:
+        for query_index, query in enumerate(queries, start=1):
             if len(drafts) >= max_sources:
                 break
             if "repo" in source_kinds:
+                await self._emit_progress(
+                    run,
+                    phase="collecting",
+                    action="repo",
+                    status="started",
+                    message="Collecting repository evidence.",
+                    query=query,
+                    source_kind="repo",
+                    current=query_index,
+                    total=len(queries),
+                    sources_collected=len(drafts),
+                    details={"max_results": source_budget},
+                )
+                before = len(drafts)
                 repo_drafts = await self._repo_provider.collect(query, max_results=source_budget)
                 _extend_unique(drafts, repo_drafts, seen, max_sources)
+                await self._emit_progress(
+                    run,
+                    phase="collecting",
+                    action="repo",
+                    status="completed",
+                    message=f"Repository collection returned {len(repo_drafts)} result(s).",
+                    query=query,
+                    source_kind="repo",
+                    current=query_index,
+                    total=len(queries),
+                    sources_collected=len(drafts),
+                    details={
+                        "results": len(repo_drafts),
+                        "added": len(drafts) - before,
+                        "max_results": source_budget,
+                    },
+                )
             if "web" in source_kinds and len(drafts) < max_sources:
                 if self._search_provider is None or not self._search_provider.configured:
                     _append_once(warnings, "web search is not configured")
+                    await self._emit_progress(
+                        run,
+                        phase="collecting",
+                        action="web",
+                        status="skipped",
+                        message="Web search is not configured.",
+                        query=query,
+                        source_kind="web",
+                        current=query_index,
+                        total=len(queries),
+                        sources_collected=len(drafts),
+                        details={"configured": False},
+                    )
                 elif await self._approve("web.search", run.id, {"query": query}):
+                    await self._emit_progress(
+                        run,
+                        phase="collecting",
+                        action="web",
+                        status="started",
+                        message="Collecting web search evidence.",
+                        query=query,
+                        source_kind="web",
+                        current=query_index,
+                        total=len(queries),
+                        sources_collected=len(drafts),
+                        details={
+                            "configured": True,
+                            "approved": True,
+                            "max_results": source_budget,
+                        },
+                    )
+                    before = len(drafts)
                     try:
                         web_drafts = await self._search_provider.collect(
                             query,
@@ -303,14 +407,89 @@ class ResearchService:
                         )
                     except Exception as exc:
                         _append_once(warnings, f"web search failed: {exc}")
+                        await self._emit_progress(
+                            run,
+                            phase="collecting",
+                            action="web",
+                            status="failed",
+                            message=f"Web search failed: {exc}",
+                            query=query,
+                            source_kind="web",
+                            current=query_index,
+                            total=len(queries),
+                            sources_collected=len(drafts),
+                            details={"configured": True, "approved": True, "error": str(exc)},
+                        )
                     else:
                         _extend_unique(drafts, web_drafts, seen, max_sources)
+                        await self._emit_progress(
+                            run,
+                            phase="collecting",
+                            action="web",
+                            status="completed",
+                            message=f"Web search returned {len(web_drafts)} result(s).",
+                            query=query,
+                            source_kind="web",
+                            current=query_index,
+                            total=len(queries),
+                            sources_collected=len(drafts),
+                            details={
+                                "configured": True,
+                                "approved": True,
+                                "results": len(web_drafts),
+                                "added": len(drafts) - before,
+                            },
+                        )
                 else:
                     _append_once(warnings, "web search was not approved")
+                    await self._emit_progress(
+                        run,
+                        phase="collecting",
+                        action="web",
+                        status="skipped",
+                        message="Web search was not approved.",
+                        query=query,
+                        source_kind="web",
+                        current=query_index,
+                        total=len(queries),
+                        sources_collected=len(drafts),
+                        details={"configured": True, "approved": False},
+                    )
             if "mcp" in source_kinds and len(drafts) < max_sources:
                 if self._mcp_gateway is None or not self._mcp_gateway.configured:
                     _append_once(warnings, "MCP research collection is not configured")
+                    await self._emit_progress(
+                        run,
+                        phase="collecting",
+                        action="mcp",
+                        status="skipped",
+                        message="MCP research collection is not configured.",
+                        query=query,
+                        source_kind="mcp",
+                        current=query_index,
+                        total=len(queries),
+                        sources_collected=len(drafts),
+                        details={"configured": False},
+                    )
                 elif await self._approve("mcp.call", run.id, {"query": query}):
+                    await self._emit_progress(
+                        run,
+                        phase="collecting",
+                        action="mcp",
+                        status="started",
+                        message="Collecting MCP-backed evidence.",
+                        query=query,
+                        source_kind="mcp",
+                        current=query_index,
+                        total=len(queries),
+                        sources_collected=len(drafts),
+                        details={
+                            "configured": True,
+                            "approved": True,
+                            "max_results": source_budget,
+                        },
+                    )
+                    before = len(drafts)
                     try:
                         mcp_drafts = await self._mcp_gateway.collect(
                             query,
@@ -318,12 +497,65 @@ class ResearchService:
                         )
                     except Exception as exc:
                         _append_once(warnings, f"MCP collection failed: {exc}")
+                        await self._emit_progress(
+                            run,
+                            phase="collecting",
+                            action="mcp",
+                            status="failed",
+                            message=f"MCP collection failed: {exc}",
+                            query=query,
+                            source_kind="mcp",
+                            current=query_index,
+                            total=len(queries),
+                            sources_collected=len(drafts),
+                            details={"configured": True, "approved": True, "error": str(exc)},
+                        )
                     else:
                         _extend_unique(drafts, mcp_drafts, seen, max_sources)
+                        await self._emit_progress(
+                            run,
+                            phase="collecting",
+                            action="mcp",
+                            status="completed",
+                            message=f"MCP collection returned {len(mcp_drafts)} result(s).",
+                            query=query,
+                            source_kind="mcp",
+                            current=query_index,
+                            total=len(queries),
+                            sources_collected=len(drafts),
+                            details={
+                                "configured": True,
+                                "approved": True,
+                                "results": len(mcp_drafts),
+                                "added": len(drafts) - before,
+                            },
+                        )
                 else:
                     _append_once(warnings, "MCP research collection was not approved")
+                    await self._emit_progress(
+                        run,
+                        phase="collecting",
+                        action="mcp",
+                        status="skipped",
+                        message="MCP research collection was not approved.",
+                        query=query,
+                        source_kind="mcp",
+                        current=query_index,
+                        total=len(queries),
+                        sources_collected=len(drafts),
+                        details={"configured": True, "approved": False},
+                    )
         if not drafts:
             _append_once(warnings, "no evidence sources were collected")
+        await self._emit_progress(
+            run,
+            phase="collecting",
+            action="collection",
+            status="completed" if drafts else "skipped",
+            message=f"Collected {len(drafts)} draft source(s).",
+            sources_collected=len(drafts),
+            details={"warnings": warnings, "max_sources": max_sources},
+        )
         return drafts, warnings
 
     async def _save_sources(
@@ -350,19 +582,51 @@ class ResearchService:
 
     async def _build_claims(
         self,
-        run_id: str,
+        run: ResearchRun,
         sources: tuple[ResearchSource, ...],
     ) -> tuple[ResearchClaim, ...]:
         claims: list[ResearchClaim] = []
         for index, source in enumerate(sources, start=1):
+            await self._emit_progress(
+                run,
+                phase="workers",
+                action="claim",
+                status="started",
+                message=f"Extracting claim from [{source.label}] {source.title}.",
+                current=index,
+                total=len(sources),
+                sources_collected=len(sources),
+                claims_collected=len(claims),
+                details={
+                    "label": source.label,
+                    "title": source.title,
+                    "kind": source.kind,
+                },
+            )
             summary = await self._source_summary(source)
             claims.append(
                 ResearchClaim(
-                    id=f"{run_id}:claim:{index}",
-                    run_id=run_id,
+                    id=f"{run.id}:claim:{index}",
+                    run_id=run.id,
                     text=summary,
                     source_labels=(source.label,),
                 )
+            )
+            await self._emit_progress(
+                run,
+                phase="workers",
+                action="claim",
+                status="completed",
+                message=f"Extracted claim from [{source.label}].",
+                current=index,
+                total=len(sources),
+                sources_collected=len(sources),
+                claims_collected=len(claims),
+                details={
+                    "label": source.label,
+                    "title": source.title,
+                    "kind": source.kind,
+                },
             )
         return tuple(claims)
 
@@ -398,6 +662,33 @@ class ResearchService:
             warnings,
             session_context=session_context,
         )
+        await self._emit_progress(
+            run,
+            phase="synthesis",
+            action="prompt",
+            status="completed",
+            message=(
+                f"Prepared synthesis prompt from {len(sources)} source(s) and "
+                f"{len(claims)} claim(s)."
+            ),
+            sources_collected=len(sources),
+            claims_collected=len(claims),
+            details={
+                "sources": len(sources),
+                "claims": len(claims),
+                "warnings": len(warnings),
+                "prompt_chars": len(prompt),
+            },
+        )
+        await self._emit_progress(
+            run,
+            phase="synthesis",
+            action="model_synthesis",
+            status="started",
+            message="Asking research synthesizer for a cited report.",
+            sources_collected=len(sources),
+            claims_collected=len(claims),
+        )
         text = await self._model_text(
             "research_synthesizer",
             (
@@ -412,8 +703,39 @@ class ResearchService:
             and not text.startswith("[echo:")
             and _report_is_detailed_enough(text, labels, run.depth)
         ):
+            await self._emit_progress(
+                run,
+                phase="synthesis",
+                action="model_synthesis",
+                status="completed",
+                message="Accepted model-generated cited report.",
+                sources_collected=len(sources),
+                claims_collected=len(claims),
+                details={"report_chars": len(text)},
+            )
             return text
-        return _deterministic_report(run, sources, claims, warnings)
+        await self._emit_progress(
+            run,
+            phase="synthesis",
+            action="model_synthesis",
+            status="skipped",
+            message="Model report was unavailable or did not pass citation/detail checks.",
+            sources_collected=len(sources),
+            claims_collected=len(claims),
+            details={"draft_chars": len(text), "labels": sorted(labels)},
+        )
+        report = _deterministic_report(run, sources, claims, warnings)
+        await self._emit_progress(
+            run,
+            phase="synthesis",
+            action="deterministic_fallback",
+            status="completed",
+            message="Built deterministic cited research report.",
+            sources_collected=len(sources),
+            claims_collected=len(claims),
+            details={"report_chars": len(report)},
+        )
+        return report
 
     async def _model_text(self, role: str, instructions: str, prompt: str) -> str:
         if self._model_router is None:
@@ -491,6 +813,40 @@ class ResearchService:
         if self._event_observer is not None:
             self._event_observer(event)
 
+    async def _emit_progress(
+        self,
+        run: ResearchRun,
+        *,
+        phase: str,
+        action: str,
+        status: Literal["started", "completed", "skipped", "failed"],
+        message: str = "",
+        query: str | None = None,
+        source_kind: ResearchSourceKind | None = None,
+        current: int = 0,
+        total: int = 0,
+        sources_collected: int = 0,
+        claims_collected: int = 0,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        event = ResearchProgressEvent(
+            research_id=run.id,
+            phase=phase,
+            action=action,
+            status=status,
+            message=_truncate(message, 240),
+            query=_truncate(query, 160) if query is not None else None,
+            source_kind=source_kind,
+            current=current,
+            total=total,
+            sources_collected=sources_collected,
+            claims_collected=claims_collected,
+            details=_bounded_progress_details(details or {}),
+        )
+        await self._state_store.append_event(run.id, event)
+        if self._event_observer is not None:
+            self._event_observer(event)
+
 
 def research_agent_tools() -> tuple[str, ...]:
     return tuple(sorted(RESEARCH_READ_ONLY_TOOLS))
@@ -546,6 +902,51 @@ def _extend_unique(
 def _append_once(values: list[str], value: str) -> None:
     if value not in values:
         values.append(value)
+
+
+def _source_detail_preview(sources: tuple[ResearchSource, ...]) -> list[dict[str, str]]:
+    preview: list[dict[str, str]] = []
+    for source in sources[:5]:
+        preview.append(
+            {
+                "label": source.label,
+                "kind": source.kind,
+                "title": _truncate(source.title, 120),
+                "uri": _truncate(source.uri, 160),
+            }
+        )
+    return preview
+
+
+def _bounded_progress_details(details: dict[str, object]) -> dict[str, object]:
+    bounded: dict[str, object] = {}
+    for index, (key, value) in enumerate(details.items()):
+        if index >= 12:
+            bounded["truncated_detail_keys"] = len(details) - index
+            break
+        bounded[str(key)] = _bounded_progress_value(value)
+    return bounded
+
+
+def _bounded_progress_value(value: object) -> object:
+    if isinstance(value, str):
+        return _truncate(value, 240)
+    if isinstance(value, int | float | bool) or value is None:
+        return value
+    if isinstance(value, dict):
+        bounded: dict[str, object] = {}
+        for index, (key, nested) in enumerate(value.items()):
+            if index >= 8:
+                bounded["truncated_keys"] = len(value) - index
+                break
+            bounded[str(key)] = _bounded_progress_value(nested)
+        return bounded
+    if isinstance(value, list | tuple):
+        items = [_bounded_progress_value(item) for item in value[:8]]
+        if len(value) > 8:
+            items.append({"truncated_items": len(value) - 8})
+        return items
+    return _truncate(str(value), 240)
 
 
 def _fallback_claim(source: ResearchSource) -> str:

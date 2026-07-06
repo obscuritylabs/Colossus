@@ -76,14 +76,17 @@ def test_builtin_tool_catalog_has_handlers_and_roadmap_families(tmp_path: Path) 
     assert "decision.create" in names
     assert "memory.create" in names
     assert "plan.approve_request" in names
-    assert "test.run" in names
     assert "patch.apply" in names
     assert "repo.symbol_search" in names
     assert "agent.delegate" in names
     assert "web.search" not in names
     assert "mcp.call" not in names
     assert "trace.export" in names
-    assert "eval.run" in names
+    assert "test.run" not in names
+    assert "lint.run" not in names
+    assert "typecheck.run" not in names
+    assert "build.run" not in names
+    assert "eval.run" not in names
     assert "user.ask" not in names
     assert "structured argv" in shell_spec.description
     assert "pipes" in shell_spec.description
@@ -1033,27 +1036,6 @@ async def test_trace_show_and_export(tmp_path: Path) -> None:
     assert json.loads(shown.output)["events"][0]["event"] == "one"
     assert json.loads(exported.output)["path"] == "trace-export.json"
     assert (tmp_path / "trace-export.json").exists()
-
-
-@pytest.mark.asyncio
-async def test_verification_tools_use_brokered_fixed_commands(tmp_path: Path) -> None:
-    broker = CapturingBroker()
-    catalog: list[ToolSpec] = []
-    specs, handlers = create_roadmap_tools(Workspace(tmp_path), broker, lambda: tuple(catalog))
-    catalog.extend(specs)
-    registry = InMemoryToolRegistry(specs)
-    executor = FunctionToolExecutor(handlers, registry)
-
-    result = await executor.execute(
-        ToolCall(
-            call_id="1",
-            name="test.run",
-            arguments={"paths": ["."], "extra_args": ["-q"]},
-        )
-    )
-
-    assert json.loads(result.output)["stdout"] == "ok"
-    assert broker.commands[0].argv == ("uv", "run", "pytest", ".", "-q")
 
 
 @pytest.mark.asyncio

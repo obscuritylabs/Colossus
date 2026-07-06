@@ -38,6 +38,11 @@ skill instead of pretending a standalone skill can safely execute code.
   auto-approve tools.
 - Prefer empty `permissions`, empty `required_tools`, and `offline_compatible` set
   to `true` unless the workflow truly requires more.
+- When `required_tools` is not empty, use Colossus canonical dotted tool IDs
+  such as `filesystem.list`, `filesystem.read`, `filesystem.search`,
+  `filesystem.write`, and `filesystem.replace`. Do not use provider-safe function
+  names with underscores such as `filesystem_read`; those are API adapter
+  encodings and will fail manifest validation at activation time.
 - Ask before replacing an existing skill wholesale. Use `overwrite: true` only
   when the user explicitly wants replacement. For normal revisions, inspect and
   edit the existing skill with `skill.read` and `skill.write`.
@@ -61,7 +66,9 @@ Write `manifest.json` fields intentionally:
 - `description`: the primary trigger text. Include what the skill does and when
   to use it, because the model sees this before `SKILL.md`.
 - `triggers`: include the full name and the important words users will say.
-- `required_tools`: exact tool names needed for the skill to work.
+- `required_tools`: exact Colossus canonical tool names needed for the skill to
+  work. Use dotted names from the active `/tools` list or `docs/TOOLS.md`, not
+  provider-safe names like `filesystem_read`.
 - `permissions`: explicit capability labels only when needed.
 - `offline_compatible`: true when the workflow works without networked tools.
 

@@ -5,6 +5,7 @@ from typing import Protocol
 from colossus.domain.context import ContextSnapshot
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.events import RunEvent
+from colossus.domain.goals import Goal, GoalStatus
 from colossus.domain.integrations import IntegrationConnection
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import Message
@@ -56,6 +57,22 @@ class StateStore(Protocol):
 
     async def list_plans(self, session_id: str | None = None) -> tuple[Plan, ...]:
         """List plans, optionally scoped to a session."""
+        ...
+
+    async def save_goal(self, goal: Goal) -> None:
+        """Persist a goal-mode record."""
+        ...
+
+    async def get_goal(self, goal_id: str) -> Goal | None:
+        """Load a goal by id."""
+        ...
+
+    async def list_goals(
+        self,
+        session_id: str | None = None,
+        status: GoalStatus | None = None,
+    ) -> tuple[Goal, ...]:
+        """List goals, optionally scoped to a session and status."""
         ...
 
     async def save_task(self, task: Task) -> None:

@@ -32,6 +32,22 @@ class ModelRequestPreparedEvent(BaseModel):
     tools: tuple[dict[str, object], ...] = Field(default_factory=tuple)
 
 
+class ContextPreparedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["context.prepared"] = "context.prepared"
+    turn: int
+    model: str
+    token_estimate: int
+    original_token_estimate: int
+    context_window_tokens: int
+    threshold_tokens: int
+    target_tokens: int
+    snapshot_id: str | None = None
+    compacted: bool = False
+    snapshot_created: bool = False
+
+
 class ToolCallRequestedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -112,6 +128,24 @@ class ResearchStatusEvent(BaseModel):
     sources_collected: int = 0
 
 
+class ResearchProgressEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["research.progress"] = "research.progress"
+    research_id: str
+    phase: str
+    action: str
+    status: Literal["started", "completed", "skipped", "failed"]
+    message: str = ""
+    query: str | None = None
+    source_kind: Literal["repo", "web", "mcp"] | None = None
+    current: int = 0
+    total: int = 0
+    sources_collected: int = 0
+    claims_collected: int = 0
+    details: dict[str, object] = Field(default_factory=dict)
+
+
 class FinalOutputEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -131,6 +165,7 @@ RunEvent = Annotated[
     ModelDeltaEvent
     | ReasoningSummaryEvent
     | ModelRequestPreparedEvent
+    | ContextPreparedEvent
     | ToolCallRequestedEvent
     | ApprovalRequestedEvent
     | ApprovalAutoGrantedEvent
@@ -139,6 +174,7 @@ RunEvent = Annotated[
     | HandoffEvent
     | SubagentStatusEvent
     | ResearchStatusEvent
+    | ResearchProgressEvent
     | FinalOutputEvent
     | ErrorEvent,
     Field(discriminator="type"),

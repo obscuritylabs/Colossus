@@ -1,5 +1,6 @@
 """Local OpenAI-compatible chat-completions adapter."""
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -46,6 +47,8 @@ class LocalOpenAIChatProvider:
         ca_bundle: Path | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         http_client_config: HttpClientConfig | None = None,
+        retry_attempts: int = 3,
+        retry_delay_seconds: float = 0.25,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -55,6 +58,8 @@ class LocalOpenAIChatProvider:
         ).with_ca_bundle(ca_bundle)
         self._ca_bundle = self._http_client_config.ca_bundle
         self._transport = transport
+        self._retry_attempts = max(1, retry_attempts)
+        self._retry_delay_seconds = max(0.0, retry_delay_seconds)
 
     @property
     def base_url(self) -> str:
@@ -191,91 +196,108 @@ class LocalOpenAIChatProvider:
             "provider.chat.stream.request",
             {"url": _safe_url(endpoint), **_chat_request_debug_shape(streamed_payload)},
         )
-        async with client.stream(
-            "POST",
-            endpoint,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            json=streamed_payload,
-        ) as response:
-            _debug_http("provider.chat.stream.response", _http_response_debug_shape(response))
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                _debug_http(
-                    "provider.chat.stream.status_error",
-                    _http_response_debug_shape(exc.response),
-                )
-                raise _StreamingFallbackRequired(_http_status_detail(exc)) from None
-            content_type = response.headers.get("content-type", "")
-            if "text/event-stream" not in content_type:
-                body = await response.aread()
-                data = json.loads(body.decode())
-                _debug_http(
-                    "provider.chat.stream.non_sse_response_shape",
-                    {"response_shape": _chat_completion_shape(data)},
-                )
-                events = [
-                    event
-                    async for event in _events_from_chat_completion(data, tool_name_codec)
-                ]
-                for event in events:
+        try:
+            stream_context = client.stream(
+                "POST",
+                endpoint,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json=streamed_payload,
+            )
+            async with stream_context as response:
+                async for event in self._events_from_stream_response(
+                    response,
+                    tool_name_codec,
+                ):
                     yield event
-                if not _has_assistant_output(events):
-                    raise ProviderError(
-                        "Provider returned no assistant content or tool calls. "
-                        f"response_shape={json.dumps(_chat_completion_shape(data))}"
-                    )
-                return
+        except (httpx.RequestError, OSError) as exc:
+            detail = _transport_error_detail(exc, endpoint)
+            _debug_http("provider.chat.stream.request_error", {"detail": detail})
+            raise _StreamingFallbackRequired(
+                "Provider stream failed before yielding events. "
+                f"{detail}"
+            ) from exc
 
-            output_text: list[str] = []
-            tool_calls: dict[int, _StreamToolCall] = {}
-            chunk_shapes: list[dict[str, object]] = []
-            chunk_count = 0
-            events_yielded = False
-            try:
-                async for item in _stream_json_items(response):
-                    chunk_count += 1
-                    chunk_shapes.append(_stream_chunk_shape(item))
-                    if len(chunk_shapes) > 5:
-                        chunk_shapes.pop(0)
-                    async for event in _events_from_stream_chunk(item, tool_calls, output_text):
-                        events_yielded = True
-                        yield event
-            except httpx.HTTPError as exc:
-                detail = _stream_error_detail(exc)
-                _debug_http("provider.chat.stream.http_error", {"detail": detail})
-                if not events_yielded:
-                    raise _StreamingFallbackRequired(
-                        "Provider stream failed before yielding events. "
-                        f"{detail}"
-                    ) from exc
+    async def _events_from_stream_response(
+        self,
+        response: httpx.Response,
+        tool_name_codec: ToolNameCodec,
+    ) -> AsyncIterator[RunEvent]:
+        _debug_http("provider.chat.stream.response", _http_response_debug_shape(response))
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _debug_http(
+                "provider.chat.stream.status_error",
+                _http_response_debug_shape(exc.response),
+            )
+            raise _StreamingFallbackRequired(_http_status_detail(exc)) from None
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" not in content_type:
+            body = await response.aread()
+            data = json.loads(body.decode())
+            _debug_http(
+                "provider.chat.stream.non_sse_response_shape",
+                {"response_shape": _chat_completion_shape(data)},
+            )
+            events = [event async for event in _events_from_chat_completion(data, tool_name_codec)]
+            for event in events:
+                yield event
+            if not _has_assistant_output(events):
                 raise ProviderError(
-                    "Provider stream failed after a partial response. "
+                    "Provider returned no assistant content or tool calls. "
+                    f"response_shape={json.dumps(_chat_completion_shape(data))}"
+                )
+            return
+
+        output_text: list[str] = []
+        tool_calls: dict[int, _StreamToolCall] = {}
+        chunk_shapes: list[dict[str, object]] = []
+        chunk_count = 0
+        events_yielded = False
+        try:
+            async for item in _stream_json_items(response):
+                chunk_count += 1
+                chunk_shapes.append(_stream_chunk_shape(item))
+                if len(chunk_shapes) > 5:
+                    chunk_shapes.pop(0)
+                async for event in _events_from_stream_chunk(item, tool_calls, output_text):
+                    events_yielded = True
+                    yield event
+        except httpx.HTTPError as exc:
+            detail = _stream_error_detail(exc)
+            _debug_http("provider.chat.stream.http_error", {"detail": detail})
+            if not events_yielded:
+                raise _StreamingFallbackRequired(
+                    "Provider stream failed before yielding events. "
                     f"{detail}"
                 ) from exc
+            raise ProviderError(
+                "Provider stream failed after a partial response. "
+                f"{detail}"
+            ) from exc
 
-            tool_call_events = _tool_call_events(tool_calls, tool_name_codec)
+        tool_call_events = _tool_call_events(tool_calls, tool_name_codec)
+        _debug_http(
+            "provider.chat.stream.complete",
+            {
+                "chunk_count": chunk_count,
+                "text_chars": sum(len(chunk) for chunk in output_text),
+                "tool_call_count": len(tool_call_events),
+            },
+        )
+        for event in tool_call_events:
+            yield event
+        if output_text and not tool_call_events:
+            yield FinalOutputEvent(text="".join(output_text))
+        if not output_text and not tool_call_events:
             _debug_http(
-                "provider.chat.stream.complete",
-                {
-                    "chunk_count": chunk_count,
-                    "text_chars": sum(len(chunk) for chunk in output_text),
-                    "tool_call_count": len(tool_call_events),
-                },
+                "provider.chat.stream.empty",
+                {"chunk_count": chunk_count, "chunk_shapes": chunk_shapes},
             )
-            for event in tool_call_events:
-                yield event
-            if output_text and not tool_call_events:
-                yield FinalOutputEvent(text="".join(output_text))
-            if not output_text and not tool_call_events:
-                _debug_http(
-                    "provider.chat.stream.empty",
-                    {"chunk_count": chunk_count, "chunk_shapes": chunk_shapes},
-                )
-                raise _StreamingFallbackRequired(
-                    "Provider stream returned no assistant content or tool calls. "
-                    f"chunk_shapes={json.dumps(chunk_shapes)}"
-                )
+            raise _StreamingFallbackRequired(
+                "Provider stream returned no assistant content or tool calls. "
+                f"chunk_shapes={json.dumps(chunk_shapes)}"
+            )
 
     async def _non_stream_chat_completion(
         self,
@@ -288,11 +310,12 @@ class LocalOpenAIChatProvider:
             "provider.chat.non_stream.request",
             {"url": _safe_url(endpoint), **_chat_request_debug_shape(payload)},
         )
-        response = await client.post(
-            endpoint,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            json=payload,
-        )
+        try:
+            response = await self._post_chat_with_retries(client, endpoint, payload)
+        except (httpx.RequestError, OSError) as exc:
+            detail = _transport_error_detail(exc, endpoint)
+            _debug_http("provider.chat.non_stream.request_error", {"detail": detail})
+            raise ProviderError(detail) from exc
         _debug_http("provider.chat.non_stream.response", _http_response_debug_shape(response))
         try:
             response.raise_for_status()
@@ -320,6 +343,51 @@ class LocalOpenAIChatProvider:
                 "Provider returned no assistant content or tool calls. "
                 f"response_shape={json.dumps(response_shape)}"
             )
+
+    async def _post_chat_with_retries(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        payload: dict[str, object],
+    ) -> httpx.Response:
+        last_exc: httpx.RequestError | OSError | None = None
+        for attempt in range(1, self._retry_attempts + 1):
+            try:
+                response = await client.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=payload,
+                )
+                if _should_retry_status(response.status_code) and attempt < self._retry_attempts:
+                    _debug_http(
+                        "provider.chat.non_stream.status_retry",
+                        {
+                            "attempt": attempt,
+                            "max_attempts": self._retry_attempts,
+                            "status_code": response.status_code,
+                            "url": _safe_url(str(response.request.url)),
+                        },
+                    )
+                    await asyncio.sleep(_retry_delay(self._retry_delay_seconds, attempt))
+                    continue
+                return response
+            except (httpx.RequestError, OSError) as exc:
+                last_exc = exc
+                detail = _transport_error_detail(exc, endpoint)
+                if attempt >= self._retry_attempts:
+                    raise
+                _debug_http(
+                    "provider.chat.non_stream.transport_retry",
+                    {
+                        "attempt": attempt,
+                        "max_attempts": self._retry_attempts,
+                        "detail": detail,
+                    },
+                )
+                await asyncio.sleep(_retry_delay(self._retry_delay_seconds, attempt))
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("chat completion retry loop exited without a response")
 
 
 def _message_to_chat_message(
@@ -390,7 +458,11 @@ async def _events_from_chat_completion(
         yield ToolCallRequestedEvent(
             call_id=str(tool_call.get("id", "")),
             name=tool_name_codec.decode(str(function.get("name", ""))),
-            arguments=json.loads(str(function.get("arguments") or "{}")),
+            arguments=_parse_tool_arguments(
+                str(function.get("arguments") or "{}"),
+                call_id=str(tool_call.get("id", "")),
+                tool_name=str(function.get("name", "")),
+            ),
         )
     content = _extract_content_text(message.get("content"))
     if content:
@@ -488,10 +560,36 @@ def _tool_call_events(
             ToolCallRequestedEvent(
                 call_id=call.call_id,
                 name=tool_name_codec.decode(call.name),
-                arguments=json.loads(arguments_text),
+                arguments=_parse_tool_arguments(
+                    arguments_text,
+                    call_id=call.call_id,
+                    tool_name=call.name,
+                ),
             )
         )
     return tuple(events)
+
+
+def _parse_tool_arguments(
+    arguments_text: str,
+    *,
+    call_id: str,
+    tool_name: str,
+) -> dict[str, object]:
+    try:
+        parsed = json.loads(arguments_text or "{}")
+    except json.JSONDecodeError as exc:
+        raise ProviderError(
+            "Provider returned invalid JSON for tool call arguments. "
+            f"tool={tool_name or '<unknown>'} call_id={call_id or '<unknown>'} "
+            f"size={len(arguments_text)} position={exc.pos}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ProviderError(
+            "Provider returned non-object JSON for tool call arguments. "
+            f"tool={tool_name or '<unknown>'} call_id={call_id or '<unknown>'}"
+        )
+    return parsed
 
 
 def _extract_content_text(value: object) -> str:
@@ -748,6 +846,28 @@ def _http_status_detail(exc: httpx.HTTPStatusError) -> str:
     content_type = exc.response.headers.get("content-type", "")
     suffix = f" content_type={content_type}" if content_type else ""
     return f"HTTP {exc.response.status_code} from {_safe_url(str(exc.request.url))}{suffix}"
+
+
+def _should_retry_status(status_code: int) -> bool:
+    return status_code in {408, 409, 429} or status_code >= 500
+
+
+def _retry_delay(base_delay_seconds: float, attempt: int) -> float:
+    multiplier = 1.0
+    for _ in range(max(attempt - 1, 0)):
+        multiplier *= 2.0
+    return base_delay_seconds * multiplier
+
+
+def _transport_error_detail(
+    exc: httpx.RequestError | OSError,
+    url: str | None = None,
+) -> str:
+    request = exc.request if isinstance(exc, httpx.RequestError) else None
+    location_url = str(request.url) if request is not None else url
+    location = f" from {_safe_url(location_url)}" if location_url else ""
+    suffix = f": {exc}" if str(exc) else ""
+    return f"{type(exc).__name__}{location}{suffix}"
 
 
 def _stream_error_detail(exc: httpx.HTTPError) -> str:

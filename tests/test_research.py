@@ -9,7 +9,7 @@ from colossus.application.defaults import research_agent
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.research import ResearchService
 from colossus.domain.errors import ToolExecutionError
-from colossus.domain.events import FinalOutputEvent
+from colossus.domain.events import FinalOutputEvent, ResearchProgressEvent, RunEvent
 from colossus.domain.messages import AssistantMessage, UserMessage
 from colossus.domain.models import ResolvedModelProfile
 from colossus.domain.requests import ModelRequest
@@ -324,10 +324,12 @@ def test_search_provider_factory_resolves_searxng_key_from_env(monkeypatch) -> N
 @pytest.mark.asyncio
 async def test_research_service_persists_cited_report_sources_and_claims(tmp_path) -> None:
     state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    observed_events: list[RunEvent] = []
     service = ResearchService(
         state,
         JsonlAuditSink(tmp_path / "audit.jsonl"),
         repo_provider=FakeRepoProvider(),
+        event_observer=observed_events.append,
         run_id_factory=lambda: "research-1",
     )
 
@@ -350,9 +352,70 @@ async def test_research_service_persists_cited_report_sources_and_claims(tmp_pat
     claims = await state.list_research_claims("research-1")
     events = await state.list_events("research-1")
     messages = await state.list_messages("session-1")
+    progress_events = [event for event in events if isinstance(event, ResearchProgressEvent)]
+    observed_progress = [
+        event for event in observed_events if isinstance(event, ResearchProgressEvent)
+    ]
     assert sources[0].label == "R1"
     assert claims[0].source_labels == ("R1",)
     assert any(event.type == "research.status" for event in events)
+    assert progress_events
+    assert len(observed_progress) == len(progress_events)
+    assert any(
+        event.phase == "planning"
+        and event.action == "queries"
+        and event.status == "completed"
+        and event.details["queries"]
+        and event.details["planner_source"] == "deterministic_fallback"
+        for event in progress_events
+    )
+    assert any(
+        event.phase == "collecting"
+        and event.action == "repo"
+        and event.status == "completed"
+        and event.details["results"] == 1
+        for event in progress_events
+    )
+    assert any(
+        event.phase == "collecting"
+        and event.action == "web"
+        and event.status == "skipped"
+        and event.details["configured"] is False
+        for event in progress_events
+    )
+    assert any(
+        event.phase == "collecting"
+        and event.action == "mcp"
+        and event.status == "skipped"
+        and event.details["configured"] is False
+        for event in progress_events
+    )
+    assert any(
+        event.phase == "collecting"
+        and event.action == "sources"
+        and event.details["sources"]
+        for event in progress_events
+    )
+    assert any(
+        event.phase == "workers"
+        and event.action == "claim"
+        and event.status == "completed"
+        and event.current == 1
+        and event.total == 1
+        for event in progress_events
+    )
+    assert any(
+        event.phase == "synthesis"
+        and event.action == "model_synthesis"
+        and event.status == "skipped"
+        for event in progress_events
+    )
+    assert any(
+        event.phase == "synthesis"
+        and event.action == "deterministic_fallback"
+        and event.status == "completed"
+        for event in progress_events
+    )
     assert [message.role for message in messages] == ["user", "assistant"]
     assert messages[0].content == "How should deep research work?"
     assert "# Research Report" in messages[1].content
@@ -423,8 +486,18 @@ async def test_research_service_uses_approved_web_sources(tmp_path) -> None:
     )
 
     sources = await state.list_research_sources(run.id)
+    events = await state.list_events(run.id)
+    progress_events = [event for event in events if isinstance(event, ResearchProgressEvent)]
     assert sources[0].kind == "web"
     assert sources[0].uri == "https://example.com/research"
+    assert any(
+        event.phase == "collecting"
+        and event.action == "web"
+        and event.status == "completed"
+        and event.details["results"] == 1
+        and event.details["approved"] is True
+        for event in progress_events
+    )
     assert "not approved" not in " ".join(run.warnings)
 
 

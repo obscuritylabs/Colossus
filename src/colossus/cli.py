@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated, Literal, cast
 from uuid import uuid4
 
@@ -16,6 +17,12 @@ from colossus.adapters.credentials_env import EnvCredentialBroker
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.goals import (
+    GoalLoopService,
+    GoalRunResult,
+    GoalTurnRunner,
+    goal_objective_from_plan,
+)
 from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
@@ -29,6 +36,7 @@ from colossus.application.subagents import SubagentService
 from colossus.domain.agents import MAX_AGENT_MAX_TURNS
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.errors import BundleVerificationError, ColossusError
+from colossus.domain.goals import Goal, GoalStatus
 from colossus.domain.integrations import IntegrationAuthType, IntegrationStatusView
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import AssistantMessage, Message, ToolResultMessage, UserMessage
@@ -43,7 +51,7 @@ from colossus.domain.providers import (
 from colossus.domain.requests import AgentRunRequest, AgentRunResult
 from colossus.domain.research import ResearchDepth, ResearchSourceKind
 from colossus.domain.sessions import SessionSummary
-from colossus.domain.subagents import SubagentJob, SubagentStatus
+from colossus.domain.subagents import SubagentJob, SubagentQueueStatus, SubagentStatus
 from colossus.domain.tasks import Task
 from colossus.infrastructure.config import (
     ColossusConfig,
@@ -63,6 +71,7 @@ from colossus.infrastructure.container import (
     create_decision_service,
     create_default_orchestrator,
     create_default_skill_resolver,
+    create_goal_service,
     create_integration_service,
     create_mcp_gateway,
     create_memory_service,
@@ -89,6 +98,7 @@ from colossus.interfaces.repl import (
     repl_theme_names,
     run_repl_sync,
 )
+from colossus.interfaces.timing import format_elapsed
 from colossus.interfaces.trace import EventDisplayMode, RichRunEventRenderer
 from colossus.ports.model_provider import ModelProvider
 
@@ -109,6 +119,7 @@ provider_app = typer.Typer(help="Inspect provider readiness and model catalogs."
 models_app = typer.Typer(help="Inspect configured model roles and profiles.")
 agents_app = typer.Typer(help="Inspect durable subagent jobs.")
 bundle_app = typer.Typer(help="Verify and install offline bundles.")
+goals_app = typer.Typer(help="Inspect goal-mode runs.")
 plans_app = typer.Typer(help="Manage persisted plans.")
 tasks_app = typer.Typer(help="Inspect persisted session tasks.")
 decisions_app = typer.Typer(help="Inspect and manage key decisions.")
@@ -125,6 +136,7 @@ app.add_typer(provider_app, name="provider")
 app.add_typer(models_app, name="models")
 app.add_typer(agents_app, name="agents")
 app.add_typer(bundle_app, name="bundle")
+app.add_typer(goals_app, name="goals")
 app.add_typer(plans_app, name="plans")
 app.add_typer(tasks_app, name="tasks")
 app.add_typer(decisions_app, name="decisions")
@@ -608,6 +620,22 @@ def run(
         str | None,
         typer.Option("--execute-plan", help="Execute an approved persisted plan id."),
     ] = None,
+    execute_plan_as_goal: Annotated[
+        bool,
+        typer.Option(
+            "--goal",
+            help="Run --execute-plan through bounded Goal Mode instead of one agent run.",
+        ),
+    ] = False,
+    goal_max_iterations: Annotated[
+        int,
+        typer.Option(
+            "--goal-max-iterations",
+            min=1,
+            max=50,
+            help="Maximum Goal Mode iterations for --execute-plan --goal.",
+        ),
+    ] = 5,
     session: Annotated[
         str | None,
         typer.Option("--session", help="Use or resume this exact session id."),
@@ -685,6 +713,9 @@ def run(
     if resume and (plan or execute_plan is not None):
         console.print("[red]--resume is only supported for direct agent runs.[/red]")
         raise typer.Exit(code=2)
+    if execute_plan_as_goal and execute_plan is None:
+        console.print("[red]Use --goal with --execute-plan PLAN_ID.[/red]")
+        raise typer.Exit(code=2)
     state = create_state_store(data_dir())
     if resume:
         try:
@@ -717,6 +748,7 @@ def run(
     resolved_max_turns = max_turns if max_turns is not None else config.agent.max_turns
     resolved_approval_mode = _resolve_approval_mode(approval_mode, ask_approval=ask_approval)
     audit = create_audit_sink(data_dir())
+    goal_service = create_goal_service(data_dir(), state_store=state, audit_sink=audit)
     credential_broker = EnvCredentialBroker()
     pack_service = create_pack_service(data_dir(), state_store=state, audit_sink=audit)
     integration_service = create_integration_service(
@@ -759,10 +791,13 @@ def run(
             if resolved_approval_mode in {"ask", "risk-auto"}
             else None
         ),
-        risk_assessment_service=RiskAssessmentService(router),
+        risk_assessment_service=(
+            None if resolved_approval_mode == "full-access" else RiskAssessmentService(router)
+        ),
         risk_auto_approve=resolved_approval_mode == "risk-auto",
         auto_approve_required_tools=resolved_approval_mode == "full-access",
         subagent_service=subagent_service,
+        goal_service=goal_service,
         model_router=router,
         search_provider=create_search_provider(config.research.search, http_client_config),
         mcp_gateway=create_mcp_gateway(config.research.mcp),
@@ -773,6 +808,7 @@ def run(
         agent_max_turns=resolved_max_turns,
     )
     plan_id = execute_plan
+    approved_plan: Plan | None = None
     if execute_plan is not None:
         approved_plan = asyncio.run(create_plan_service(data_dir()).require_approved(execute_plan))
         prompt = prompt or approved_plan.prompt
@@ -780,6 +816,38 @@ def run(
     if prompt is None:
         console.print("[red]A prompt or --execute-plan is required.[/red]")
         raise typer.Exit(code=2)
+    if execute_plan_as_goal:
+        if approved_plan is None:
+            console.print("[red]A valid approved plan is required for --goal.[/red]")
+            raise typer.Exit(code=2)
+
+        async def run_goal_turn(request: AgentRunRequest) -> AgentRunResult:
+            return await _run_agent_and_drain_subagents(orchestrator, subagent_service, request)
+
+        goal_loop = GoalLoopService(goal_service, run_goal_turn, audit)
+        trace_renderer.begin_run()
+        try:
+            goal_result = asyncio.run(
+                goal_loop.run(
+                    objective=goal_objective_from_plan(approved_plan),
+                    agent=default_agent(route.profile.model, max_turns=resolved_max_turns),
+                    session_id=session_id,
+                    max_iterations=goal_max_iterations,
+                    source_plan_id=approved_plan.id,
+                    active_skills=tuple(skill or ()),
+                )
+            )
+        except ColossusError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        finally:
+            trace_renderer.end_run()
+        goal_run_id = goal_result.turns[-1].run_id if goal_result.turns else goal_result.goal.id
+        asyncio.run(create_plan_service(data_dir()).mark_executed(approved_plan.id, goal_run_id))
+        if not trace_renderer.rendered_model_output and goal_result.turns:
+            console.print(goal_result.turns[-1].final_output, markup=False)
+        _print_goal_run_result(goal_result, session_id)
+        return
     trace_renderer.begin_run()
     try:
         result = asyncio.run(
@@ -805,8 +873,197 @@ def run(
     if not trace_renderer.rendered_model_output:
         console.print(result.final_output, markup=False)
     console.print(
-        f"[dim]run_id={result.run_id} session_id={session_id} events={result.events_recorded}[/dim]"
+        f"[dim]run_id={result.run_id} session_id={session_id} "
+        f"events={result.events_recorded} elapsed={format_elapsed(result.elapsed_seconds)}[/dim]"
     )
+
+
+@app.command()
+def goal(
+    ctx: typer.Context,
+    objective: Annotated[str, typer.Argument(help="Goal objective to pursue.")],
+    session: Annotated[
+        str | None,
+        typer.Option("--session", help="Use or resume this exact session id."),
+    ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume", help="Resume the most recently updated session."),
+    ] = False,
+    max_iterations: Annotated[
+        int,
+        typer.Option(
+            "--max-iterations",
+            min=1,
+            max=50,
+            help="Maximum autonomous goal iterations before returning control.",
+        ),
+    ] = 5,
+    trace: Annotated[
+        bool,
+        typer.Option("--trace", help="Show observable agent events such as tool calls."),
+    ] = False,
+    stream: Annotated[
+        bool,
+        typer.Option("--stream", help="Stream assistant output while the model responds."),
+    ] = False,
+    events: Annotated[
+        str,
+        typer.Option("--events", help="Event display mode: compact, verbose, or off."),
+    ] = "compact",
+    reasoning: Annotated[
+        bool,
+        typer.Option("--reasoning/--no-reasoning", help="Show provider reasoning summaries."),
+    ] = True,
+    model_role: Annotated[
+        str,
+        typer.Option("--model-role", help="Model role to use for goal iterations."),
+    ] = "primary",
+    max_turns: Annotated[
+        int | None,
+        typer.Option(
+            "--max-turns",
+            min=1,
+            max=MAX_AGENT_MAX_TURNS,
+            help="Maximum model/tool turns per goal iteration.",
+        ),
+    ] = None,
+    ask_approval: Annotated[
+        bool,
+        typer.Option(
+            "--ask-approval",
+            help="Prompt before approval-required tool calls. Defaults to deny in one-shot mode.",
+        ),
+    ] = False,
+    approval_mode: Annotated[
+        str | None,
+        typer.Option("--approval-mode", help=f"Approval mode: {APPROVAL_MODE_HELP}."),
+    ] = None,
+    skill: Annotated[
+        list[str] | None,
+        typer.Option("--skill", help="Activate a skill for this goal run."),
+    ] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            "-C",
+            help="Workspace root for tools, shell commands, repo context, and subagents.",
+        ),
+    ] = None,
+) -> None:
+    """Run a bounded autonomous goal loop."""
+    if resume and session is not None:
+        console.print("[red]Use either --resume or --session, not both.[/red]")
+        raise typer.Exit(code=2)
+    state = create_state_store(data_dir())
+    if resume:
+        try:
+            session_id = asyncio.run(create_session_service(data_dir()).latest_session()).id
+        except ColossusError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+    else:
+        session_id = session or str(uuid4())
+    workspace_root = _workspace_root(workspace)
+    config = load_config(config_path())
+    skill_resolver = _skill_resolver(config, workspace_root)
+    overrides = _provider_overrides(ctx)
+    http_client_config = _http_client_config(ctx, config)
+    router = create_model_router(
+        config,
+        overrides,
+        http_client_config=http_client_config,
+    )
+    route = router.resolve(model_role)
+    context_route = router.resolve("context_summarizer")
+    model_context_windows = _resolved_model_context_windows(config, overrides, router)
+    resolved_max_turns = max_turns if max_turns is not None else config.agent.max_turns
+    resolved_approval_mode = _resolve_approval_mode(approval_mode, ask_approval=ask_approval)
+    audit = create_audit_sink(data_dir())
+    goal_service = create_goal_service(data_dir(), state_store=state, audit_sink=audit)
+    credential_broker = EnvCredentialBroker()
+    pack_service = create_pack_service(data_dir(), state_store=state, audit_sink=audit)
+    integration_service = create_integration_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        credential_broker=credential_broker,
+        pack_service=pack_service,
+    )
+    integration_connections = asyncio.run(integration_service.connected_connections())
+    subagent_service = create_subagent_service(
+        data_dir(),
+        state_store=state,
+        audit_sink=audit,
+        max_concurrent=config.subagents.max_concurrent,
+    )
+    events_mode = _resolve_events_mode(events)
+    if trace and events_mode == "off":
+        events_mode = "compact"
+    trace_renderer = RichRunEventRenderer(
+        console,
+        enabled=events_mode != "off" or stream,
+        events_mode=events_mode,
+        stream_model_output=stream,
+        show_reasoning=reasoning,
+    )
+    orchestrator = create_default_orchestrator(
+        data_dir(),
+        route.provider,
+        workspace_root=workspace_root,
+        state_store=state,
+        audit_sink=audit,
+        context_config=config.context,
+        model_context_windows=model_context_windows,
+        context_model=context_route.profile.model,
+        context_provider=context_route.provider,
+        event_observer=trace_renderer.render,
+        approval_handler=(
+            RichApprovalHandler(console)
+            if resolved_approval_mode in {"ask", "risk-auto"}
+            else None
+        ),
+        risk_assessment_service=(
+            None if resolved_approval_mode == "full-access" else RiskAssessmentService(router)
+        ),
+        risk_auto_approve=resolved_approval_mode == "risk-auto",
+        auto_approve_required_tools=resolved_approval_mode == "full-access",
+        subagent_service=subagent_service,
+        goal_service=goal_service,
+        model_router=router,
+        search_provider=create_search_provider(config.research.search, http_client_config),
+        mcp_gateway=create_mcp_gateway(config.research.mcp),
+        http_client_config=http_client_config,
+        integration_connections=integration_connections,
+        credential_broker=credential_broker,
+        skill_resolver=skill_resolver,
+        agent_max_turns=resolved_max_turns,
+    )
+
+    async def run_goal_turn(request: AgentRunRequest) -> AgentRunResult:
+        return await _run_agent_and_drain_subagents(orchestrator, subagent_service, request)
+
+    goal_loop = GoalLoopService(goal_service, run_goal_turn, audit)
+    trace_renderer.begin_run()
+    try:
+        result = asyncio.run(
+            goal_loop.run(
+                objective=objective,
+                agent=default_agent(route.profile.model, max_turns=resolved_max_turns),
+                session_id=session_id,
+                max_iterations=max_iterations,
+                active_skills=tuple(skill or ()),
+            )
+        )
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        trace_renderer.end_run()
+    if not trace_renderer.rendered_model_output and result.turns:
+        console.print(result.turns[-1].final_output, markup=False)
+    _print_goal_run_result(result, session_id)
 
 
 @app.command()
@@ -924,9 +1181,10 @@ async def _run_agent_and_drain_subagents(
     subagent_service: SubagentService,
     request: AgentRunRequest,
 ) -> AgentRunResult:
+    started = perf_counter()
     result = await orchestrator.run(request)
     await subagent_service.drain()
-    return result
+    return result.model_copy(update={"elapsed_seconds": max(perf_counter() - started, 0.0)})
 
 
 @app.command()
@@ -1007,6 +1265,7 @@ def repl(
     resolved_approval_mode = _resolve_approval_mode(approval_mode)
     state = create_state_store(data_dir())
     audit = create_audit_sink(data_dir())
+    goal_service = create_goal_service(data_dir(), state_store=state, audit_sink=audit)
     credential_broker = EnvCredentialBroker()
     pack_service = create_pack_service(data_dir(), state_store=state, audit_sink=audit)
     integration_service = create_integration_service(
@@ -1055,10 +1314,13 @@ def repl(
                 else None
             ),
             user_prompt_handler=user_prompt_handler,
-            risk_assessment_service=RiskAssessmentService(router),
+            risk_assessment_service=(
+                None if resolved_approval_mode == "full-access" else RiskAssessmentService(router)
+            ),
             risk_auto_approve=resolved_approval_mode == "risk-auto",
             auto_approve_required_tools=resolved_approval_mode == "full-access",
             subagent_service=subagent_service,
+            goal_service=goal_service,
             model_router=router,
             search_provider=create_search_provider(config.research.search, http_client_config),
             mcp_gateway=create_mcp_gateway(config.research.mcp),
@@ -1087,6 +1349,9 @@ def repl(
         )
 
     research_service = build_research_service(active_workspace_root)
+
+    def build_goal_loop(turn_runner: GoalTurnRunner) -> GoalLoopService:
+        return GoalLoopService(goal_service, turn_runner, audit)
 
     async def refresh_integrations(model_role: str) -> AgentOrchestrator:
         nonlocal active_integration_connections
@@ -1141,6 +1406,8 @@ def repl(
         memory_service=memory_service,
         session_service=create_session_service(data_dir()),
         plan_service=create_plan_service(data_dir()),
+        goal_service=goal_service,
+        goal_loop_factory=build_goal_loop,
         skill_authoring_service=skill_authoring_service,
         subagent_service=subagent_service,
         research_service=research_service,
@@ -1999,6 +2266,32 @@ def sessions_show(
     _print_session_messages(messages)
 
 
+@goals_app.command("list")
+def goals_list(
+    session: Annotated[str | None, typer.Option("--session")] = None,
+    status: Annotated[str | None, typer.Option("--status")] = None,
+) -> None:
+    """List persisted goal-mode records."""
+    goals = asyncio.run(
+        create_goal_service(data_dir()).list_goals(
+            session_id=session,
+            status=_goal_status(status),
+        )
+    )
+    _print_goals(goals)
+
+
+@goals_app.command("show")
+def goals_show(goal_id: Annotated[str, typer.Argument(help="Goal id.")]) -> None:
+    """Show a persisted goal-mode record."""
+    try:
+        goal = asyncio.run(create_goal_service(data_dir()).get_goal(goal_id))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    _print_goal(goal)
+
+
 @plans_app.command("list")
 def plans_list(session: Annotated[str | None, typer.Option("--session")] = None) -> None:
     """List persisted plans."""
@@ -2164,6 +2457,18 @@ def agents_list(
     _print_subagents(jobs)
 
 
+@agents_app.command("status")
+def agents_status(session: Annotated[str | None, typer.Option("--session")] = None) -> None:
+    """Show durable subagent queue status."""
+    config = load_config(config_path())
+    service = create_subagent_service(
+        data_dir(),
+        max_concurrent=config.subagents.max_concurrent,
+    )
+    status = asyncio.run(service.queue_status(session_id=session))
+    _print_subagent_queue_status(status)
+
+
 @agents_app.command("show")
 def agents_show(job_id: Annotated[str, typer.Argument(help="Subagent job id.")]) -> None:
     """Show a durable subagent job."""
@@ -2180,6 +2485,23 @@ def agents_show(job_id: Annotated[str, typer.Argument(help="Subagent job id.")])
         console.print(f"[red]{job.error}[/red]")
 
 
+@agents_app.command("drain")
+def agents_drain(
+    timeout: Annotated[
+        float | None,
+        typer.Option("--timeout", help="Maximum seconds to wait for currently runnable jobs."),
+    ] = None,
+) -> None:
+    """Wait for currently runnable subagent jobs to finish."""
+    config = load_config(config_path())
+    service = create_subagent_service(
+        data_dir(),
+        max_concurrent=config.subagents.max_concurrent,
+    )
+    status = asyncio.run(service.drain(timeout_seconds=timeout))
+    _print_subagent_queue_status(status)
+
+
 @agents_app.command("cancel")
 def agents_cancel(job_id: Annotated[str, typer.Argument(help="Subagent job id.")]) -> None:
     """Cancel a queued or running subagent job."""
@@ -2190,6 +2512,18 @@ def agents_cancel(job_id: Annotated[str, typer.Argument(help="Subagent job id.")
     )
     job = asyncio.run(service.cancel_job(job_id))
     console.print(f"Cancelled subagent {job.id}: {job.status}")
+
+
+@agents_app.command("resume")
+def agents_resume(job_id: Annotated[str, typer.Argument(help="Subagent job id.")]) -> None:
+    """Requeue a failed, cancelled, or interrupted subagent job."""
+    config = load_config(config_path())
+    service = create_subagent_service(
+        data_dir(),
+        max_concurrent=config.subagents.max_concurrent,
+    )
+    job = asyncio.run(service.resume_job(job_id))
+    console.print(f"Resumed subagent {job.id}: {job.status}")
 
 
 def _print_plan(plan: Plan) -> None:
@@ -2204,6 +2538,53 @@ def _print_plan(plan: Plan) -> None:
     table = Table("Step", "Title", "Mutation", "Detail")
     for step in plan.steps:
         table.add_row(str(step.index), step.title, str(step.requires_mutation), step.detail)
+    console.print(table)
+
+
+def _print_goal_run_result(result: GoalRunResult, session_id: str) -> None:
+    goal = result.goal
+    suffix = " iteration_budget_exhausted=true" if result.iteration_budget_exhausted else ""
+    console.print(
+        f"[dim]goal_id={goal.id} session_id={session_id} status={goal.status} "
+        f"iterations={goal.iterations_completed}/{goal.iteration_budget or '-'} "
+        f"elapsed={format_elapsed(result.elapsed_seconds)}{suffix}[/dim]"
+    )
+    if goal.summary:
+        console.print(goal.summary, markup=False)
+    if goal.blocked_reason:
+        console.print(f"[yellow]blocked:[/yellow] {goal.blocked_reason}")
+
+
+def _print_goal(goal: Goal) -> None:
+    table = Table("Field", "Value")
+    table.add_row("id", goal.id)
+    table.add_row("session_id", goal.session_id)
+    table.add_row("source_plan_id", goal.source_plan_id or "")
+    table.add_row("status", goal.status)
+    table.add_row("iterations_completed", str(goal.iterations_completed))
+    table.add_row("iteration_budget", str(goal.iteration_budget or ""))
+    table.add_row("created_at", goal.created_at)
+    table.add_row("updated_at", goal.updated_at)
+    table.add_row("objective", goal.objective)
+    table.add_row("summary", goal.summary)
+    table.add_row("blocked_reason", goal.blocked_reason)
+    console.print(table)
+
+
+def _print_goals(goals: tuple[Goal, ...]) -> None:
+    if not goals:
+        console.print("No goals.")
+        return
+    table = Table("Status", "Iterations", "ID", "Session", "Updated", "Objective")
+    for goal in goals:
+        table.add_row(
+            goal.status,
+            f"{goal.iterations_completed}/{goal.iteration_budget or '-'}",
+            goal.id,
+            goal.session_id,
+            goal.updated_at,
+            goal.objective[:100],
+        )
     console.print(table)
 
 
@@ -2313,7 +2694,7 @@ def _print_subagents(jobs: tuple[SubagentJob, ...]) -> None:
     if not jobs:
         console.print("No subagent jobs.")
         return
-    table = Table("Status", "ID", "Role", "Task", "Child Run", "Updated")
+    table = Table("Status", "ID", "Role", "Task", "Child Run", "Result", "Updated")
     for job in jobs:
         table.add_row(
             job.status,
@@ -2321,9 +2702,37 @@ def _print_subagents(jobs: tuple[SubagentJob, ...]) -> None:
             job.role,
             job.task[:80],
             job.child_run_id or "",
+            _subagent_result_preview(job),
             job.updated_at,
         )
     console.print(table)
+
+
+def _print_subagent_queue_status(status: SubagentQueueStatus) -> None:
+    table = Table("Total", "Queued", "Running", "Done", "Failed", "Cancelled", "Interrupted")
+    table.add_row(
+        str(status.total),
+        str(status.queued),
+        str(status.running),
+        str(status.completed),
+        str(status.failed),
+        str(status.cancelled),
+        str(status.interrupted),
+    )
+    console.print(table)
+    runner = "yes" if status.runner_configured else "no"
+    console.print(
+        f"[dim]runner={runner} max_concurrent={status.max_concurrent} "
+        f"available_slots={status.available_slots} started={status.started}[/dim]"
+    )
+
+
+def _subagent_result_preview(job: SubagentJob) -> str:
+    if job.error:
+        return f"error: {job.error[:72]}"
+    if job.final_output:
+        return " ".join(job.final_output.split())[:72]
+    return ""
 
 
 def _subagent_status(value: str | None) -> SubagentStatus | None:
@@ -2333,6 +2742,16 @@ def _subagent_status(value: str | None) -> SubagentStatus | None:
     if normalized in {"queued", "running", "completed", "failed", "cancelled", "interrupted"}:
         return cast(SubagentStatus, normalized)
     console.print("[red]Invalid subagent status.[/red]")
+    raise typer.Exit(code=2)
+
+
+def _goal_status(value: str | None) -> GoalStatus | None:
+    if value is None or value.strip().lower() in {"", "all", "*"}:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"active", "complete", "blocked"}:
+        return cast(GoalStatus, normalized)
+    console.print("[red]Invalid goal status.[/red]")
     raise typer.Exit(code=2)
 
 

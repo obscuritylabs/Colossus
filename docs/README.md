@@ -41,6 +41,8 @@ how the codebase is put together.
 ## Developers
 
 - [Architecture](ARCHITECTURE.md): ports-and-adapters layering and service boundaries.
+- [Feature Inventory And Go Rewrite Map](FEATURE_INVENTORY.md): current feature parity
+  checklist and staged Go prototype plan.
 - [Contributing](CONTRIBUTING.md): commit message expectations.
 - [Installation](INSTALLATION.md): source checkout and platform paths.
 

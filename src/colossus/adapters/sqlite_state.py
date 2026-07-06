@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 from colossus.domain.context import ContextSnapshot
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.events import RunEvent
+from colossus.domain.goals import Goal, GoalStatus
 from colossus.domain.integrations import IntegrationConnection
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
 from colossus.domain.messages import Message, UserMessage
@@ -181,6 +182,50 @@ class SQLiteStateStore:
         with closing(sqlite3.connect(self._path)) as conn:
             rows = conn.execute(query, params).fetchall()
         return tuple(Plan.model_validate_json(row[0]) for row in rows)
+
+    async def save_goal(self, goal: Goal) -> None:
+        await self.ensure_session(goal.session_id)
+        with closing(sqlite3.connect(self._path)) as conn:
+            conn.execute(
+                """
+                insert into goals(id, session_id, status, payload)
+                values (?, ?, ?, ?)
+                on conflict(id) do update set
+                    session_id = excluded.session_id,
+                    status = excluded.status,
+                    payload = excluded.payload
+                """,
+                (goal.id, goal.session_id, goal.status, goal.model_dump_json()),
+            )
+            conn.commit()
+
+    async def get_goal(self, goal_id: str) -> Goal | None:
+        with closing(sqlite3.connect(self._path)) as conn:
+            row = conn.execute("select payload from goals where id = ?", (goal_id,)).fetchone()
+        if row is None:
+            return None
+        return Goal.model_validate_json(row[0])
+
+    async def list_goals(
+        self,
+        session_id: str | None = None,
+        status: GoalStatus | None = None,
+    ) -> tuple[Goal, ...]:
+        query = "select payload from goals"
+        clauses: list[str] = []
+        params: list[str] = []
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            query += f" where {' and '.join(clauses)}"
+        query += " order by created_at desc, id desc"
+        with closing(sqlite3.connect(self._path)) as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return tuple(Goal.model_validate_json(row[0]) for row in rows)
 
     async def save_task(self, task: Task) -> None:
         await self.ensure_session(task.session_id)
@@ -834,6 +879,19 @@ class SQLiteStateStore:
                 """
             )
             conn.execute("create index if not exists idx_plans_session on plans(session_id)")
+            conn.execute(
+                """
+                create table if not exists goals (
+                    id text primary key,
+                    session_id text not null,
+                    status text not null,
+                    payload text not null,
+                    created_at datetime default current_timestamp
+                )
+                """
+            )
+            conn.execute("create index if not exists idx_goals_session on goals(session_id)")
+            conn.execute("create index if not exists idx_goals_status on goals(status)")
             conn.execute(
                 """
                 create table if not exists tasks (

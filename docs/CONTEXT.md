@@ -4,6 +4,12 @@ Colossus keeps raw session messages and run events append-only, then builds a co
 working context only when sending a request to a model. Compaction is an optimization
 layer, not the source of truth.
 
+Automatic compaction runs before provider turns, not during an in-flight tool call.
+When model-assisted summaries are enabled, a new snapshot may use the configured
+`context_summarizer` model role. After a snapshot exists, Colossus reuses it while the
+unsummarized stale tail remains within the target budget; this prevents long goal or
+tool loops from paying for a new summarizer call after every small tool result.
+
 ## Defaults
 
 - Auto compaction is enabled.
@@ -88,6 +94,9 @@ pasted into every later chat prompt.
 estimate after the active snapshot is applied. When a snapshot is active, they also show
 the raw append-only history estimate separately. Raw history can remain above the
 threshold while the effective prompt sent to the model is below it.
+
+Compact event output distinguishes new snapshots from reuse: compact mode highlights
+new automatic compaction, while verbose mode can also show reused snapshots.
 
 For one-off provider/model overrides, set the model window on the command line:
 

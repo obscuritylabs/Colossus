@@ -76,6 +76,7 @@ class ContextBuildResult(BaseModel):
     target_tokens: int
     snapshot_id: str | None = None
     compacted: bool = False
+    snapshot_created: bool = False
 
 
 class ContextStatus(BaseModel):

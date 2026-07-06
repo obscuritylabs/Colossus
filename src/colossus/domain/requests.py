@@ -22,6 +22,7 @@ class AgentRunRequest(BaseModel):
     prompt: str
     agent: AgentSpec
     session_id: str | None = None
+    goal_id: str | None = None
     plan_id: str | None = None
     skill_mode_enabled: bool = True
     active_skills: tuple[str, ...] = Field(default_factory=tuple)
@@ -34,3 +35,4 @@ class AgentRunResult(BaseModel):
     final_output: str
     events_recorded: int
     session_id: str | None = None
+    elapsed_seconds: float = 0.0

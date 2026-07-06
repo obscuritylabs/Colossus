@@ -3,6 +3,7 @@
 import json
 import re
 from collections.abc import Callable
+from time import perf_counter
 from uuid import uuid4
 
 from colossus.application.context import ContextService
@@ -11,10 +12,12 @@ from colossus.application.risk import RiskAssessmentService
 from colossus.application.skills import SkillComposer
 from colossus.application.subagents import SubagentService
 from colossus.application.tools import validate_tool_call
+from colossus.domain.context import ContextBuildResult
 from colossus.domain.errors import PolicyDeniedError, ProviderError, ToolExecutionError
 from colossus.domain.events import (
     ApprovalAutoGrantedEvent,
     ApprovalRequestedEvent,
+    ContextPreparedEvent,
     FinalOutputEvent,
     ModelDeltaEvent,
     ModelRequestPreparedEvent,
@@ -51,6 +54,7 @@ SESSION_CONTEXT_TOOLS = frozenset(
 )
 RUN_CONTEXT_TOOLS = frozenset({"agent.delegate"})
 ACTIVE_SKILL_CONTEXT_TOOLS = frozenset({"skill.resource.list", "skill.resource.read"})
+GOAL_CONTEXT_TOOLS = frozenset({"goal.show", "goal.update"})
 
 
 class AgentOrchestrator:
@@ -103,8 +107,11 @@ class AgentOrchestrator:
             self._subagent_service.set_event_observer(event_observer)
 
     async def run(self, request: AgentRunRequest) -> AgentRunResult:
+        started = perf_counter()
         run_id = self._run_id_factory()
         tool_specs = self._tool_specs_for_agent(request.agent.tools)
+        if request.goal_id is None:
+            tool_specs = tuple(spec for spec in tool_specs if spec.name not in GOAL_CONTEXT_TOOLS)
         instructions = request.agent.instructions
         skill_context = None
         if self._skill_composer is not None:
@@ -153,13 +160,19 @@ class AgentOrchestrator:
                 await self._audit_sink.record(
                     "agent",
                     "run.completed",
-                    {"run_id": run_id, "events": 0, "key_decision_id": captured},
+                    {
+                        "run_id": run_id,
+                        "events": 0,
+                        "key_decision_id": captured,
+                        "elapsed_ms": _elapsed_ms(started),
+                    },
                 )
                 return AgentRunResult(
                     run_id=run_id,
                     final_output=final_text,
                     events_recorded=0,
                     session_id=request.session_id,
+                    elapsed_seconds=_elapsed_seconds(started),
                 )
         final_text = ""
         events_recorded = 0
@@ -176,6 +189,9 @@ class AgentOrchestrator:
                     summary_model=self._context_model,
                 )
                 prepared_messages = context_result.messages
+                self._observe_event(
+                    _context_prepared_event(turn, request.agent.model, context_result)
+                )
             model_request = ModelRequest(
                 model=request.agent.model,
                 instructions=instructions,
@@ -238,13 +254,18 @@ class AgentOrchestrator:
                 await self._audit_sink.record(
                     "agent",
                     "run.completed",
-                    {"run_id": run_id, "events": events_recorded},
+                    {
+                        "run_id": run_id,
+                        "events": events_recorded,
+                        "elapsed_ms": _elapsed_ms(started),
+                    },
                 )
                 return AgentRunResult(
                     run_id=run_id,
                     final_output=final_text,
                     events_recorded=events_recorded,
                     session_id=request.session_id,
+                    elapsed_seconds=_elapsed_seconds(started),
                 )
 
             tool_messages: list[ToolResultMessage] = []
@@ -253,6 +274,7 @@ class AgentOrchestrator:
                     run_id,
                     call,
                     request.session_id,
+                    request.goal_id,
                     active_skill_names,
                 )
                 tool_message = ToolResultMessage(
@@ -279,13 +301,18 @@ class AgentOrchestrator:
         await self._audit_sink.record(
             "agent",
             "run.max_turns",
-            {"run_id": run_id, "events": events_recorded},
+            {
+                "run_id": run_id,
+                "events": events_recorded,
+                "elapsed_ms": _elapsed_ms(started),
+            },
         )
         return AgentRunResult(
             run_id=run_id,
             final_output=final_text,
             events_recorded=events_recorded,
             session_id=request.session_id,
+            elapsed_seconds=_elapsed_seconds(started),
         )
 
     def tool_specs(self) -> tuple[ToolSpec, ...]:
@@ -303,6 +330,7 @@ class AgentOrchestrator:
         run_id: str,
         call: ToolCall,
         session_id: str | None = None,
+        goal_id: str | None = None,
         active_skill_names: tuple[str, ...] = (),
     ) -> ToolCallCompletedEvent:
         spec = self._tool_registry.get_spec(call.name)
@@ -314,7 +342,7 @@ class AgentOrchestrator:
                 message=f"Unknown tool requested: {call.name}",
                 audit_action="tool.unknown",
             )
-        call = _with_execution_context(call, session_id, run_id, active_skill_names)
+        call = _with_execution_context(call, session_id, run_id, goal_id, active_skill_names)
         try:
             validate_tool_call(spec, call)
         except ToolExecutionError as exc:
@@ -354,13 +382,28 @@ class AgentOrchestrator:
                     },
                 )
                 if risk.recommended_decision == "deny":
-                    await self._audit_sink.record(
-                        "agent",
-                        "risk.denied",
-                        {"run_id": run_id, "tool": call.name, "summary": risk.summary},
-                    )
-                    raise PolicyDeniedError(f"Risk assessment denied {call.name}: {risk.summary}")
-                if (
+                    if self._risk_auto_approve:
+                        decision = decision.model_copy(
+                            update={
+                                "decision": "requires_approval",
+                                "reason": f"Risk assessment denied {call.name}: {risk.summary}",
+                            }
+                        )
+                        await self._audit_sink.record(
+                            "agent",
+                            "risk.requires_approval",
+                            {"run_id": run_id, "tool": call.name, "summary": risk.summary},
+                        )
+                    else:
+                        await self._audit_sink.record(
+                            "agent",
+                            "risk.denied",
+                            {"run_id": run_id, "tool": call.name, "summary": risk.summary},
+                        )
+                        raise PolicyDeniedError(
+                            f"Risk assessment denied {call.name}: {risk.summary}"
+                        )
+                elif (
                     decision.decision == "allow"
                     and risk.recommended_decision == "requires_approval"
                 ):
@@ -515,6 +558,7 @@ def _with_execution_context(
     call: ToolCall,
     session_id: str | None,
     run_id: str,
+    goal_id: str | None = None,
     active_skill_names: tuple[str, ...] = (),
 ) -> ToolCall:
     arguments = dict(call.arguments)
@@ -536,6 +580,9 @@ def _with_execution_context(
     if call.name in ACTIVE_SKILL_CONTEXT_TOOLS:
         arguments["active_skills"] = list(active_skill_names)
         changed = True
+    if goal_id is not None and call.name in GOAL_CONTEXT_TOOLS and "goal_id" not in arguments:
+        arguments["goal_id"] = goal_id
+        changed = True
     if not changed:
         return call
     return call.model_copy(update={"arguments": arguments})
@@ -549,6 +596,33 @@ def _model_request_prepared_event(turn: int, request: ModelRequest) -> ModelRequ
         messages=tuple(message.model_dump(mode="json") for message in request.messages),
         tools=tuple(tool.model_dump(mode="json") for tool in request.tools),
     )
+
+
+def _context_prepared_event(
+    turn: int,
+    model: str,
+    result: ContextBuildResult,
+) -> ContextPreparedEvent:
+    return ContextPreparedEvent(
+        turn=turn,
+        model=model,
+        token_estimate=result.token_estimate,
+        original_token_estimate=result.original_token_estimate,
+        context_window_tokens=result.context_window_tokens,
+        threshold_tokens=result.threshold_tokens,
+        target_tokens=result.target_tokens,
+        snapshot_id=result.snapshot_id,
+        compacted=result.compacted,
+        snapshot_created=result.snapshot_created,
+    )
+
+
+def _elapsed_seconds(started: float) -> float:
+    return max(perf_counter() - started, 0.0)
+
+
+def _elapsed_ms(started: float) -> int:
+    return round(_elapsed_seconds(started) * 1000)
 
 
 _KEY_DECISION_PROMPT_PATTERN = re.compile(

@@ -29,6 +29,13 @@ from rich.text import Text
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.goals import (
+    GoalLoopService,
+    GoalRunResult,
+    GoalService,
+    GoalTurnRunner,
+    goal_objective_from_plan,
+)
 from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRouter
@@ -46,6 +53,7 @@ from colossus.domain.agents import DEFAULT_AGENT_MAX_TURNS, MAX_AGENT_MAX_TURNS,
 from colossus.domain.context import ContextStatus
 from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
+from colossus.domain.goals import Goal, GoalStatus
 from colossus.domain.integrations import (
     IntegrationAuthType,
     IntegrationConnection,
@@ -56,14 +64,15 @@ from colossus.domain.memories import MemoryItem, MemoryStatus
 from colossus.domain.packs import InstalledPack, PackStatusView
 from colossus.domain.plans import Plan
 from colossus.domain.preferences import ReplPreferences, TranscriptStylePreference
-from colossus.domain.requests import AgentRunRequest
+from colossus.domain.requests import AgentRunRequest, AgentRunResult
 from colossus.domain.research import ResearchRun, ResearchSource
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.skills import Skill
-from colossus.domain.subagents import SubagentJob, SubagentStatus
+from colossus.domain.subagents import SubagentJob, SubagentQueueStatus, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
 from colossus.domain.tools import ToolSpec
 from colossus.domain.user_prompts import UserPromptAnswer, UserPromptChoice
+from colossus.interfaces.timing import format_elapsed
 from colossus.interfaces.trace import EventDisplayMode, TraceRenderTheme
 from colossus.interfaces.transcript import TranscriptRenderer, TranscriptRenderTheme
 from colossus.ports.model_provider import ModelProvider
@@ -94,6 +103,7 @@ SlashCommand = Literal[
     "memory",
     "memories",
     "agents",
+    "goal",
     "plan",
     "research",
     "integrations",
@@ -152,6 +162,7 @@ SLASH_COMMANDS: tuple[str, ...] = (
     "/memory",
     "/memories",
     "/agents",
+    "/goal",
     "/plan",
     "/research",
     "/integrations",
@@ -189,6 +200,7 @@ SLASH_COMMAND_DESCRIPTIONS: dict[str, str] = {
     "/memory": "Create, archive, search, or supersede durable memories.",
     "/memories": "Show active memories.",
     "/agents": "Show durable subagent jobs.",
+    "/goal": "Run or inspect bounded Goal Mode.",
     "/plan": "Toggle or manage REPL Plan Mode.",
     "/research": "Run or inspect Deep Research Mode.",
     "/integrations": "Manage app and service integrations.",
@@ -321,6 +333,7 @@ REQUIRED_TRACE_STYLE_KEYS: frozenset[str] = frozenset(
         "approval_auto_granted",
         "risk_assessment",
         "research",
+        "context",
     }
 )
 REQUIRED_TRANSCRIPT_STYLE_KEYS: frozenset[str] = frozenset(
@@ -333,6 +346,7 @@ REQUIRED_TRANSCRIPT_STYLE_KEYS: frozenset[str] = frozenset(
         "approval",
         "risk",
         "research",
+        "context",
         "error",
         "meta",
         "border",
@@ -553,6 +567,8 @@ class ReplDisplayState:
     last_active_skills: tuple[str, ...] = field(default_factory=tuple)
     active_plan_id: str | None = None
     active_plan_status: str | None = None
+    active_goal_id: str | None = None
+    active_goal_status: GoalStatus | None = None
     active_research_id: str | None = None
     active_research_status: str | None = None
     events_mode: EventDisplayMode = "compact"
@@ -612,6 +628,8 @@ async def run_repl(
     memory_service: MemoryService | None = None,
     session_service: SessionService | None = None,
     plan_service: PlanService | None = None,
+    goal_service: GoalService | None = None,
+    goal_loop_factory: Callable[[GoalTurnRunner], GoalLoopService] | None = None,
     skill_authoring_service: SkillAuthoringService | None = None,
     subagent_service: SubagentService | None = None,
     research_service: ResearchService | None = None,
@@ -694,6 +712,14 @@ async def run_repl(
     orchestrator.set_event_observer(trace_renderer.render)
     if research_service is not None:
         research_service.set_event_observer(trace_renderer.render)
+
+    async def run_goal_turn(request: AgentRunRequest) -> AgentRunResult:
+        result = await orchestrator.run(request)
+        if subagent_service is not None:
+            await subagent_service.drain()
+        return result
+
+    goal_loop = goal_loop_factory(run_goal_turn) if goal_loop_factory is not None else None
     if subagent_service is not None:
         await subagent_service.start()
     _render_repl_startup(console, display_state)
@@ -945,6 +971,20 @@ async def run_repl(
                     command.argument,
                 )
                 continue
+            if command.command == "goal":
+                await _handle_goal_command(
+                    console,
+                    goal_service,
+                    goal_loop,
+                    display_state,
+                    command.argument,
+                    agent,
+                    skills,
+                    trace_renderer,
+                )
+                await _refresh_context_status(display_state, context_service)
+                await _refresh_task_status(display_state, task_service)
+                continue
             if command.command == "plan":
                 await _handle_plan_command(
                     console,
@@ -954,6 +994,7 @@ async def run_repl(
                     orchestrator,
                     agent,
                     trace_renderer,
+                    goal_loop,
                 )
                 continue
             if command.command == "research":
@@ -1054,6 +1095,7 @@ async def run_repl(
                 )
                 if not trace_renderer.rendered_model_output:
                     trace_renderer.render_final_answer(result.final_output)
+                _render_run_result(console, result, display_state.session_id)
                 await _prompt_for_plan_review(
                     console,
                     plan_service,
@@ -1062,6 +1104,7 @@ async def run_repl(
                     orchestrator,
                     agent,
                     trace_renderer,
+                    goal_loop,
                 )
                 await _refresh_context_status(display_state, context_service)
                 await _refresh_task_status(display_state, task_service)
@@ -1109,6 +1152,7 @@ async def run_repl(
             trace_renderer.render_final_answer(result.final_output)
         if not trace_renderer.rendered_model_output:
             trace_renderer.render_empty_response()
+        _render_run_result(console, result, display_state.session_id)
 
 
 async def _handle_resume_command(
@@ -1222,6 +1266,8 @@ async def _activate_repl_session(
     state.session_id = session_id
     state.active_plan_id = None
     state.active_plan_status = None
+    state.active_goal_id = None
+    state.active_goal_status = None
     state.last_run_id = None
     state.last_status = "idle"
     await _refresh_context_status(state, context_service)
@@ -1270,6 +1316,8 @@ def run_repl_sync(
     memory_service: MemoryService | None = None,
     session_service: SessionService | None = None,
     plan_service: PlanService | None = None,
+    goal_service: GoalService | None = None,
+    goal_loop_factory: Callable[[GoalTurnRunner], GoalLoopService] | None = None,
     skill_authoring_service: SkillAuthoringService | None = None,
     subagent_service: SubagentService | None = None,
     research_service: ResearchService | None = None,
@@ -1302,6 +1350,8 @@ def run_repl_sync(
             memory_service=memory_service,
             session_service=session_service,
             plan_service=plan_service,
+            goal_service=goal_service,
+            goal_loop_factory=goal_loop_factory,
             skill_authoring_service=skill_authoring_service,
             subagent_service=subagent_service,
             research_service=research_service,
@@ -2208,11 +2258,17 @@ async def _handle_plan_command(
     orchestrator: AgentOrchestrator,
     agent: AgentSpec,
     trace_renderer: TranscriptRenderer,
+    goal_loop: GoalLoopService | None = None,
 ) -> None:
     if plan_service is None:
         console.print("Plan service is not configured.")
         return
-    action = argument.strip().lower()
+    try:
+        tokens = shlex.split(argument)
+    except ValueError as exc:
+        console.print(f"Plan command parse failed: {exc}")
+        return
+    action = tokens[0].lower() if tokens else ""
     if action in {"", "toggle"}:
         state.interaction_mode = "chat" if state.interaction_mode == "plan" else "plan"
         console.print(f"Plan Mode is {state.interaction_mode}.")
@@ -2263,7 +2319,23 @@ async def _handle_plan_command(
             trace_renderer,
         )
         return
-    console.print("Use /plan [on|off|show|approve|execute|list|discard].")
+    if action == "goal":
+        try:
+            max_iterations = _parse_plan_goal_iterations(tokens[1:])
+        except ColossusError as exc:
+            console.print(str(exc))
+            return
+        await _execute_active_plan_as_goal(
+            console,
+            plan_service,
+            state,
+            goal_loop,
+            agent,
+            trace_renderer,
+            max_iterations=max_iterations,
+        )
+        return
+    console.print("Use /plan [on|off|show|approve|execute|goal|list|discard].")
 
 
 async def _handle_research_command(
@@ -2413,6 +2485,7 @@ async def _prompt_for_plan_review(
     orchestrator: AgentOrchestrator,
     agent: AgentSpec,
     trace_renderer: TranscriptRenderer,
+    goal_loop: GoalLoopService | None = None,
 ) -> None:
     if plan_service is None:
         console.print(
@@ -2421,14 +2494,23 @@ async def _prompt_for_plan_review(
         return
     console.print(f"Saved draft plan {plan.id}.")
     handler = RichUserPromptHandler(console)
-    answer = await handler.ask(
-        question="Approve this plan?",
-        choices=(
+    choices = [
+        UserPromptChoice(
+            id="approve_execute",
+            label="Approve and execute",
+            description="Approve the active draft and immediately run it.",
+        ),
+    ]
+    if goal_loop is not None:
+        choices.append(
             UserPromptChoice(
-                id="approve_execute",
-                label="Approve and execute",
-                description="Approve the active draft and immediately run it.",
-            ),
+                id="approve_goal",
+                label="Approve and goal",
+                description="Approve the active draft and run it through Goal Mode.",
+            )
+        )
+    choices.extend(
+        [
             UserPromptChoice(
                 id="keep_draft",
                 label="Keep draft",
@@ -2444,7 +2526,11 @@ async def _prompt_for_plan_review(
                 label="Discard",
                 description="Clear the active plan from this REPL session.",
             ),
-        ),
+        ]
+    )
+    answer = await handler.ask(
+        question="Approve this plan?",
+        choices=tuple(choices),
         allow_freeform=False,
     )
     if answer.choice_id == "approve_execute":
@@ -2460,9 +2546,25 @@ async def _prompt_for_plan_review(
             trace_renderer,
         )
         return
+    if answer.choice_id == "approve_goal":
+        approved = await plan_service.approve_plan(plan.id)
+        state.active_plan_status = approved.status
+        console.print(f"Approved plan {approved.id}.")
+        await _execute_active_plan_as_goal(
+            console,
+            plan_service,
+            state,
+            goal_loop,
+            agent,
+            trace_renderer,
+            max_iterations=5,
+        )
+        return
     if answer.choice_id == "keep_draft":
         state.interaction_mode = "chat"
-        console.print("Kept draft plan. Use /plan show, /plan approve, or /plan execute.")
+        console.print(
+            "Kept draft plan. Use /plan show, /plan approve, /plan execute, or /plan goal."
+        )
         return
     if answer.choice_id == "revise":
         state.interaction_mode = "plan"
@@ -2540,7 +2642,71 @@ async def _execute_active_plan(
     state.interaction_mode = "chat"
     if not trace_renderer.rendered_model_output:
         trace_renderer.render_final_answer(result.final_output)
+    _render_run_result(console, result, state.session_id)
     console.print(f"Executed plan {plan.id}.")
+
+
+async def _execute_active_plan_as_goal(
+    console: Console,
+    plan_service: PlanService,
+    state: ReplDisplayState,
+    goal_loop: GoalLoopService | None,
+    agent: AgentSpec,
+    trace_renderer: TranscriptRenderer,
+    *,
+    max_iterations: int,
+) -> None:
+    if goal_loop is None:
+        console.print("Goal loop service is not configured.")
+        return
+    plan = await _active_plan(console, plan_service, state)
+    if plan is None:
+        return
+    if plan.status == "draft":
+        console.print("Approve first with /plan approve.")
+        return
+    if plan.status == "executed":
+        console.print("Plan has already been executed.")
+        return
+    approved_plan = await plan_service.require_approved(plan.id)
+    objective = goal_objective_from_plan(approved_plan)
+    active_skills = _sticky_skills_for_request(state)
+    state.last_status = "running"
+    trace_renderer.begin_run(activity_context=f"goal {max_iterations}x | plan {plan.id}")
+    try:
+        result = await goal_loop.run(
+            objective=objective,
+            agent=agent,
+            session_id=state.session_id,
+            max_iterations=max_iterations,
+            source_plan_id=plan.id,
+            active_skills=active_skills,
+            skill_mode_enabled=state.skill_mode_enabled,
+        )
+    except ColossusError as exc:
+        trace_renderer.end_run()
+        state.last_status = "failed"
+        console.print(f"[red]Plan goal failed:[/red] {exc}")
+        return
+    trace_renderer.end_run()
+    state.last_run_id = _goal_result_run_id(result)
+    state.last_status = "done"
+    state.last_active_skills = active_skills
+    state.active_goal_id = result.goal.id
+    state.active_goal_status = result.goal.status
+    executed = await plan_service.mark_executed(plan.id, state.last_run_id or result.goal.id)
+    state.active_plan_status = executed.status
+    state.interaction_mode = "chat"
+    if not trace_renderer.rendered_model_output and result.turns:
+        trace_renderer.render_final_answer(result.turns[-1].final_output)
+    _render_goal_run_result(console, result)
+    console.print(f"Executed plan {plan.id} as goal {result.goal.id}.")
+
+
+def _goal_result_run_id(result: GoalRunResult) -> str | None:
+    if not result.turns:
+        return None
+    return result.turns[-1].run_id
 
 
 def _plan_agent(agent: AgentSpec) -> AgentSpec:
@@ -2864,6 +3030,13 @@ def _plan_label(state: ReplDisplayState) -> str:
     return f"plan={status}:{_short_id(state.active_plan_id)}"
 
 
+def _goal_label(state: ReplDisplayState) -> str:
+    if state.active_goal_id is None:
+        return "goal=-"
+    status = state.active_goal_status or "unknown"
+    return f"goal={status}:{_short_id(state.active_goal_id)}"
+
+
 def _research_label(state: ReplDisplayState) -> str:
     if state.active_research_id is None:
         return "research=-"
@@ -3032,6 +3205,8 @@ def _render_status(console: Console, state: ReplDisplayState) -> None:
         "last_active_skills": _format_skill_names(state.last_active_skills),
         "active_plan": state.active_plan_id or "",
         "active_plan_status": state.active_plan_status or "",
+        "active_goal": state.active_goal_id or "",
+        "active_goal_status": state.active_goal_status or "",
         "active_research": state.active_research_id or "",
         "active_research_status": state.active_research_status or "",
         "theme": state.theme.name,
@@ -3190,7 +3365,12 @@ def _render_help(console: Console, state: ReplDisplayState | None = None) -> Non
         "Create or update durable memories.",
     )
     table.add_row(
-        Text("/plan [on|off|show|approve|execute|list|discard]"),
+        Text("/goal [--max-iterations N|list|show ID|OBJECTIVE]"),
+        _help_current(state, "goal"),
+        "Run or inspect bounded Goal Mode.",
+    )
+    table.add_row(
+        Text("/plan [on|off|show|approve|execute|goal|list|discard]"),
         _help_current(state, "plan"),
         "Toggle or manage REPL Plan Mode.",
     )
@@ -3257,6 +3437,8 @@ def _help_current(state: ReplDisplayState | None, field: str) -> str:
         return _short_id(state.session_id)
     if field == "tasks":
         return state.task_summary
+    if field == "goal":
+        return _goal_label(state)
     if field == "plan":
         return f"{state.interaction_mode} {_plan_label(state)}"
     if field == "research":
@@ -3685,6 +3867,17 @@ async def _handle_agents_command(
         return
     parts = argument.split()
     try:
+        if argument.strip() == "status":
+            queue_status = await subagent_service.queue_status(session_id=session_id)
+            _render_subagent_queue_status(console, queue_status)
+            return
+        if parts and parts[0] == "drain":
+            if len(parts) > 2:
+                raise ValueError("Use /agents drain [timeout_seconds].")
+            timeout = _optional_float_arg(parts[1], "timeout") if len(parts) == 2 else None
+            queue_status = await subagent_service.drain(timeout_seconds=timeout)
+            _render_subagent_queue_status(console, queue_status)
+            return
         if len(parts) == 2 and parts[0] == "show":
             job = await subagent_service.get_job(parts[1])
             _render_subagents(console, (job,))
@@ -3697,12 +3890,204 @@ async def _handle_agents_command(
             job = await subagent_service.cancel_job(parts[1])
             console.print(f"Cancelled subagent {job.id}: {job.status}")
             return
-        status = _agent_status_filter(argument)
-        jobs = await subagent_service.list_jobs(session_id=session_id, status=status)
+        if len(parts) == 2 and parts[0] == "resume":
+            job = await subagent_service.resume_job(parts[1])
+            console.print(f"Resumed subagent {job.id}: {job.status}")
+            return
+        status_filter = _agent_status_filter(argument)
+        jobs = await subagent_service.list_jobs(session_id=session_id, status=status_filter)
     except ColossusError as exc:
         console.print(f"Subagent command failed: {exc}")
         return
+    except ValueError as exc:
+        console.print(f"Subagent command failed: {exc}")
+        return
     _render_subagents(console, jobs, argument)
+
+
+async def _handle_goal_command(
+    console: Console,
+    goal_service: GoalService | None,
+    goal_loop: GoalLoopService | None,
+    state: ReplDisplayState,
+    argument: str,
+    agent: AgentSpec,
+    skills: SkillResolver,
+    trace_renderer: TranscriptRenderer,
+) -> None:
+    if goal_service is None:
+        console.print("Goal service is not configured.")
+        return
+    try:
+        tokens = shlex.split(argument)
+    except ValueError as exc:
+        console.print(f"Goal command parse failed: {exc}")
+        return
+    action = tokens[0].lower() if tokens else ""
+    if action in {"list", "ls"}:
+        await _handle_goal_list_command(console, goal_service, state.session_id, tokens[1:])
+        return
+    if action == "show":
+        await _handle_goal_show_command(console, goal_service, tokens[1:])
+        return
+    if goal_loop is None:
+        console.print("Goal loop service is not configured.")
+        return
+    try:
+        objective, max_iterations = _parse_goal_run_arguments(argument)
+    except ColossusError as exc:
+        console.print(str(exc))
+        return
+    active_skills = _active_skill_names_for_prompt(state, skills, objective)
+    trace_renderer.render_user_prompt(f"/goal {objective}")
+    if _show_submit_summary(state):
+        console.print(f"[dim]goal iterations={max_iterations} objective={objective}[/dim]")
+    state.last_status = "running"
+    trace_renderer.begin_run(
+        activity_context=f"goal {max_iterations}x | {_short_text(objective, 80)}"
+    )
+    try:
+        result = await goal_loop.run(
+            objective=objective,
+            agent=agent,
+            session_id=state.session_id,
+            max_iterations=max_iterations,
+            active_skills=active_skills,
+            skill_mode_enabled=state.skill_mode_enabled,
+        )
+    except ColossusError as exc:
+        trace_renderer.abort_run()
+        state.last_status = "failed"
+        console.print(f"[red]Goal failed:[/red] {exc}")
+        return
+    trace_renderer.end_run()
+    state.last_run_id = result.turns[-1].run_id if result.turns else None
+    state.last_status = "done"
+    state.last_active_skills = active_skills
+    state.active_goal_id = result.goal.id
+    state.active_goal_status = result.goal.status
+    if not trace_renderer.rendered_model_output and result.turns:
+        trace_renderer.render_final_answer(result.turns[-1].final_output)
+    _render_goal_run_result(console, result)
+
+
+async def _handle_goal_list_command(
+    console: Console,
+    goal_service: GoalService,
+    session_id: str,
+    tokens: list[str],
+) -> None:
+    if len(tokens) > 1:
+        console.print("Use /goal list [all|active|complete|blocked].")
+        return
+    status = _goal_status_filter(tokens[0] if tokens else "")
+    if tokens and status is None and tokens[0].lower() not in {"all", "*"}:
+        console.print("Use /goal list [all|active|complete|blocked].")
+        return
+    try:
+        goals = await goal_service.list_goals(session_id=session_id, status=status)
+    except ColossusError as exc:
+        console.print(f"Goal list failed: {exc}")
+        return
+    _render_goals(console, goals, tokens[0] if tokens else "")
+
+
+async def _handle_goal_show_command(
+    console: Console,
+    goal_service: GoalService,
+    tokens: list[str],
+) -> None:
+    if len(tokens) != 1:
+        console.print("Use /goal show GOAL_ID.")
+        return
+    try:
+        goal = await goal_service.get_goal(tokens[0])
+    except ColossusError as exc:
+        console.print(f"Goal show failed: {exc}")
+        return
+    _render_goal(console, goal)
+
+
+def _parse_goal_run_arguments(argument: str) -> tuple[str, int]:
+    try:
+        tokens = shlex.split(argument)
+    except ValueError as exc:
+        raise ColossusError(f"Goal command parse failed: {exc}") from exc
+    if tokens and tokens[0].lower() == "run":
+        tokens = tokens[1:]
+    max_iterations = 5
+    objective_tokens: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"--max-iterations", "--iterations", "-n"}:
+            index += 1
+            if index >= len(tokens):
+                raise ColossusError("Use /goal [--max-iterations N] OBJECTIVE.")
+            max_iterations = _parse_goal_iteration_budget(tokens[index])
+            index += 1
+            continue
+        if token.startswith("--max-iterations="):
+            max_iterations = _parse_goal_iteration_budget(token.partition("=")[2])
+            index += 1
+            continue
+        objective_tokens.extend(tokens[index:])
+        break
+    objective = " ".join(objective_tokens).strip()
+    if not objective:
+        raise ColossusError("Use /goal [--max-iterations N] OBJECTIVE.")
+    return objective, max_iterations
+
+
+def _parse_plan_goal_iterations(tokens: list[str]) -> int:
+    if not tokens:
+        return 5
+    max_iterations = 5
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"--max-iterations", "--iterations", "-n"}:
+            index += 1
+            if index >= len(tokens):
+                raise ColossusError("Use /plan goal [--max-iterations N].")
+            max_iterations = _parse_goal_iteration_budget(tokens[index])
+            index += 1
+            continue
+        if token.startswith("--max-iterations="):
+            max_iterations = _parse_goal_iteration_budget(token.partition("=")[2])
+            index += 1
+            continue
+        raise ColossusError("Use /plan goal [--max-iterations N].")
+    return max_iterations
+
+
+def _parse_goal_iteration_budget(value: str) -> int:
+    try:
+        max_iterations = int(value)
+    except ValueError as exc:
+        raise ColossusError("Goal max iterations must be an integer.") from exc
+    if max_iterations < 1 or max_iterations > 50:
+        raise ColossusError("Goal max iterations must be between 1 and 50.")
+    return max_iterations
+
+
+def _goal_status_filter(argument: str) -> GoalStatus | None:
+    normalized = argument.strip().lower()
+    if normalized in {"", "all", "*"}:
+        return None
+    if normalized in {"active", "complete", "blocked"}:
+        return cast(GoalStatus, normalized)
+    return None
+
+
+def _optional_float_arg(value: str, name: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number.") from exc
+    if parsed < 0:
+        raise ValueError(f"{name} must be non-negative.")
+    return parsed
 
 
 def _agent_status_filter(argument: str) -> SubagentStatus | None:
@@ -3811,6 +4196,61 @@ def _render_memories(
     console.print(table)
 
 
+def _render_goal_run_result(console: Console, result: GoalRunResult) -> None:
+    goal = result.goal
+    suffix = " iteration_budget_exhausted=true" if result.iteration_budget_exhausted else ""
+    console.print(
+        f"[dim]goal_id={goal.id} status={goal.status} "
+        f"iterations={goal.iterations_completed}/{goal.iteration_budget or '-'} "
+        f"elapsed={format_elapsed(result.elapsed_seconds)}{suffix}[/dim]"
+    )
+    if goal.summary:
+        console.print(goal.summary, markup=False)
+    if goal.blocked_reason:
+        console.print(f"[yellow]blocked:[/yellow] {goal.blocked_reason}")
+
+
+def _render_run_result(console: Console, result: AgentRunResult, session_id: str) -> None:
+    console.print(
+        f"[dim]run_id={result.run_id} session_id={session_id} "
+        f"events={result.events_recorded} elapsed={format_elapsed(result.elapsed_seconds)}[/dim]"
+    )
+
+
+def _render_goal(console: Console, goal: Goal) -> None:
+    table = Table("Field", "Value")
+    table.add_row("id", goal.id)
+    table.add_row("session_id", goal.session_id)
+    table.add_row("source_plan_id", goal.source_plan_id or "")
+    table.add_row("status", goal.status)
+    table.add_row("iterations_completed", str(goal.iterations_completed))
+    table.add_row("iteration_budget", str(goal.iteration_budget or ""))
+    table.add_row("created_at", goal.created_at)
+    table.add_row("updated_at", goal.updated_at)
+    table.add_row("objective", goal.objective)
+    table.add_row("summary", goal.summary)
+    table.add_row("blocked_reason", goal.blocked_reason)
+    console.print(table)
+
+
+def _render_goals(console: Console, goals: tuple[Goal, ...], argument: str = "") -> None:
+    if not goals:
+        scope = argument.strip() or "current-session"
+        console.print(f"No {scope} goals.")
+        return
+    table = Table("State", "Status", "Iterations", "ID", "Updated", "Objective")
+    for goal in goals:
+        table.add_row(
+            Text(_goal_marker(goal.status)),
+            goal.status,
+            f"{goal.iterations_completed}/{goal.iteration_budget or '-'}",
+            goal.id,
+            goal.updated_at,
+            _short_text(goal.objective, 88),
+        )
+    console.print(table)
+
+
 def _render_subagents(
     console: Console,
     jobs: tuple[SubagentJob, ...],
@@ -3820,7 +4260,7 @@ def _render_subagents(
         scope = argument.strip() or "current-session"
         console.print(f"No {scope} subagent jobs.")
         return
-    table = Table("State", "Status", "ID", "Role", "Task", "Child Run")
+    table = Table("State", "Status", "ID", "Role", "Task", "Child Run", "Result")
     for job in jobs:
         table.add_row(
             Text(_subagent_marker(job.status)),
@@ -3829,8 +4269,44 @@ def _render_subagents(
             job.role,
             _short_text(job.task, 72),
             job.child_run_id or "",
+            _short_text(_subagent_result_preview(job), 72),
         )
     console.print(table)
+
+
+def _render_subagent_queue_status(console: Console, status: SubagentQueueStatus) -> None:
+    table = Table("Total", "Queued", "Running", "Done", "Failed", "Cancelled", "Interrupted")
+    table.add_row(
+        str(status.total),
+        str(status.queued),
+        str(status.running),
+        str(status.completed),
+        str(status.failed),
+        str(status.cancelled),
+        str(status.interrupted),
+    )
+    console.print(table)
+    runner = "yes" if status.runner_configured else "no"
+    console.print(
+        f"[dim]runner={runner} max_concurrent={status.max_concurrent} "
+        f"available_slots={status.available_slots} started={status.started}[/dim]"
+    )
+
+
+def _subagent_result_preview(job: SubagentJob) -> str:
+    if job.error:
+        return f"error: {job.error}"
+    if job.final_output:
+        return " ".join(job.final_output.split())
+    return ""
+
+
+def _goal_marker(status: GoalStatus) -> str:
+    if status == "complete":
+        return "[x]"
+    if status == "blocked":
+        return "[!]"
+    return "[~]"
 
 
 def _subagent_marker(status: str) -> str:

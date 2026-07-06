@@ -1,5 +1,6 @@
 """OpenAI Responses API adapter."""
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -44,6 +45,10 @@ class OpenAIResponsesProvider:
         ca_bundle: Path | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         http_client_config: HttpClientConfig | None = None,
+        retry_attempts: int = 3,
+        retry_delay_seconds: float = 0.25,
+        transport_retry_attempts: int | None = None,
+        transport_retry_delay_seconds: float | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
@@ -53,6 +58,15 @@ class OpenAIResponsesProvider:
         ).with_ca_bundle(ca_bundle)
         self._ca_bundle = self._http_client_config.ca_bundle
         self._transport = transport
+        self._retry_attempts = max(1, transport_retry_attempts or retry_attempts)
+        self._retry_delay_seconds = max(
+            0.0,
+            (
+                transport_retry_delay_seconds
+                if transport_retry_delay_seconds is not None
+                else retry_delay_seconds
+            ),
+        )
 
     @property
     def base_url(self) -> str:
@@ -107,7 +121,7 @@ class OpenAIResponsesProvider:
                     ),
                 ),
             )
-        except httpx.RequestError as exc:
+        except (httpx.RequestError, OSError) as exc:
             return ProviderReadiness(
                 provider=self.name,
                 ready=False,
@@ -115,7 +129,7 @@ class OpenAIResponsesProvider:
                     ProviderReadinessCheck(
                         name="models_endpoint",
                         status="fail",
-                        detail=f"Could not reach {self._base_url}/models: {exc}.",
+                        detail=_transport_error_detail(exc, f"{self._base_url}/models"),
                     ),
                 ),
             )
@@ -159,10 +173,10 @@ class OpenAIResponsesProvider:
                 {"url": _safe_url(endpoint), **_responses_request_debug_shape(payload)},
             )
             try:
-                response = await client.post(
+                response = await self._post_responses_with_retries(
+                    client,
                     endpoint,
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    json=payload,
+                    payload,
                 )
                 _debug_http("provider.responses.response", _http_response_debug_shape(response))
                 response.raise_for_status()
@@ -172,8 +186,8 @@ class OpenAIResponsesProvider:
                     _http_response_debug_shape(exc.response),
                 )
                 raise ProviderError(_http_error_detail(exc)) from exc
-            except httpx.RequestError as exc:
-                detail = _request_error_detail(exc)
+            except (httpx.RequestError, OSError) as exc:
+                detail = _transport_error_detail(exc, endpoint)
                 _debug_http("provider.responses.request_error", {"detail": detail})
                 raise ProviderError(detail) from exc
             data = response.json()
@@ -205,7 +219,11 @@ class OpenAIResponsesProvider:
                 yield ToolCallRequestedEvent(
                     call_id=str(item.get("call_id", "")),
                     name=tool_name_codec.decode(str(item.get("name", ""))),
-                    arguments=json.loads(str(item.get("arguments") or "{}")),
+                    arguments=_parse_tool_arguments(
+                        str(item.get("arguments") or "{}"),
+                        call_id=str(item.get("call_id", "")),
+                        tool_name=str(item.get("name", "")),
+                    ),
                 )
             elif item_type == "custom_tool_call":
                 tool_call_count += 1
@@ -244,6 +262,51 @@ class OpenAIResponsesProvider:
                 f"{self._base_url}/models",
                 headers={"Authorization": f"Bearer {self._api_key}"},
             )
+
+    async def _post_responses_with_retries(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        payload: dict[str, object],
+    ) -> httpx.Response:
+        last_exc: httpx.RequestError | OSError | None = None
+        for attempt in range(1, self._retry_attempts + 1):
+            try:
+                response = await client.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=payload,
+                )
+                if _should_retry_status(response.status_code) and attempt < self._retry_attempts:
+                    _debug_http(
+                        "provider.responses.status_retry",
+                        {
+                            "attempt": attempt,
+                            "max_attempts": self._retry_attempts,
+                            "status_code": response.status_code,
+                            "url": _safe_url(str(response.request.url)),
+                        },
+                    )
+                    await asyncio.sleep(_retry_delay(self._retry_delay_seconds, attempt))
+                    continue
+                return response
+            except (httpx.RequestError, OSError) as exc:
+                last_exc = exc
+                detail = _transport_error_detail(exc, endpoint)
+                if attempt >= self._retry_attempts:
+                    raise
+                _debug_http(
+                    "provider.responses.transport_retry",
+                    {
+                        "attempt": attempt,
+                        "max_attempts": self._retry_attempts,
+                        "detail": detail,
+                    },
+                )
+                await asyncio.sleep(_retry_delay(self._retry_delay_seconds, attempt))
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("responses transport retry loop exited without a response")
 
 
 def _messages_to_responses_input(
@@ -425,6 +488,28 @@ def _responses_output_item_shape(item: object) -> dict[str, object]:
     return shape
 
 
+def _parse_tool_arguments(
+    arguments_text: str,
+    *,
+    call_id: str,
+    tool_name: str,
+) -> dict[str, object]:
+    try:
+        parsed = json.loads(arguments_text or "{}")
+    except json.JSONDecodeError as exc:
+        raise ProviderError(
+            "Provider returned invalid JSON for tool call arguments. "
+            f"tool={tool_name or '<unknown>'} call_id={call_id or '<unknown>'} "
+            f"size={len(arguments_text)} position={exc.pos}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ProviderError(
+            "Provider returned non-object JSON for tool call arguments. "
+            f"tool={tool_name or '<unknown>'} call_id={call_id or '<unknown>'}"
+        )
+    return parsed
+
+
 def _typed_item_shape(item: object) -> dict[str, object]:
     if not isinstance(item, dict):
         return {"type": type(item).__name__}
@@ -454,8 +539,24 @@ def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
     return f"{exc.response.status_code} from {_safe_url(str(exc.request.url))}{suffix}"
 
 
-def _request_error_detail(exc: httpx.RequestError) -> str:
-    location = f" from {_safe_url(str(exc.request.url))}" if exc.request else ""
+def _should_retry_status(status_code: int) -> bool:
+    return status_code in {408, 409, 429} or status_code >= 500
+
+
+def _retry_delay(base_delay_seconds: float, attempt: int) -> float:
+    multiplier = 1.0
+    for _ in range(max(attempt - 1, 0)):
+        multiplier *= 2.0
+    return base_delay_seconds * multiplier
+
+
+def _transport_error_detail(
+    exc: httpx.RequestError | OSError,
+    url: str | None = None,
+) -> str:
+    request = exc.request if isinstance(exc, httpx.RequestError) else None
+    location_url = str(request.url) if request is not None else url
+    location = f" from {_safe_url(location_url)}" if location_url else ""
     suffix = f": {exc}" if str(exc) else ""
     return f"{type(exc).__name__}{location}{suffix}"
 

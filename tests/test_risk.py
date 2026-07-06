@@ -178,6 +178,43 @@ async def test_shell_run_risk_deny_stops_before_execution_and_audits(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_shell_run_risk_auto_deny_prompts_for_approval(tmp_path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    specs, handlers = create_builtin_tools(Workspace(tmp_path))
+    registry = InMemoryToolRegistry(specs)
+    orchestrator = AgentOrchestrator(
+        provider=ShellToolProvider({"argv": ["echo", "approved"]}),
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor(handlers, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        risk_assessment_service=RiskAssessmentService(
+            _risk_router(
+                RiskJsonProvider(
+                    '{"risk_level":"high","summary":"Needs explicit user approval",'
+                    '"concerns":[],"recommended_decision":"deny"}'
+                )
+            )
+        ),
+        risk_auto_approve=True,
+    )
+
+    result = await orchestrator.run(AgentRunRequest(prompt="run", agent=default_agent()))
+
+    events = await state.list_events("run-1")
+    audit = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert result.final_output == "done"
+    assert any(isinstance(event, RiskAssessmentEvent) for event in events)
+    assert any(isinstance(event, ApprovalRequestedEvent) for event in events)
+    assert not any(isinstance(event, ApprovalAutoGrantedEvent) for event in events)
+    assert "risk.requires_approval" in audit
+    assert "risk.denied" not in audit
+
+
+@pytest.mark.asyncio
 async def test_shell_run_risk_unavailable_falls_back_to_policy(tmp_path) -> None:
     state = SQLiteStateStore(tmp_path / "state.sqlite3")
     specs, handlers = create_builtin_tools(Workspace(tmp_path))

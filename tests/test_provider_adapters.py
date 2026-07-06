@@ -1,5 +1,6 @@
 import json
 import logging
+import ssl
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -156,6 +157,44 @@ async def test_openai_responses_provider_maps_payload_and_events() -> None:
         ),
         ModelDeltaEvent(text="there"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_rejects_malformed_tool_arguments() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_bad",
+                        "name": "filesystem_read",
+                        "arguments": '{"path": "README.md',
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderError, match="invalid JSON for tool call arguments"):
+        [
+            event
+            async for event in provider.stream(
+                ModelRequest(
+                    model="model-a",
+                    instructions="Be terse.",
+                    messages=(UserMessage(content="hello"),),
+                    tools=(_dotted_tool(),),
+                )
+            )
+        ]
 
 
 @pytest.mark.asyncio
@@ -635,6 +674,64 @@ async def test_local_openai_chat_provider_streams_content_reasoning_and_tool_cal
 
 
 @pytest.mark.asyncio
+async def test_local_openai_chat_provider_rejects_malformed_streamed_tool_arguments() -> None:
+    def sse(value: object) -> str:
+        return f"data: {json.dumps(value)}\n\n"
+
+    content = (
+        sse(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_bad",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "filesystem_read",
+                                        "arguments": '{"path": "README.md',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+        + "data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=content,
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderError, match="invalid JSON for tool call arguments"):
+        [
+            event
+            async for event in provider.stream(
+                ModelRequest(
+                    model="model-b",
+                    instructions="System text.",
+                    messages=(UserMessage(content="question"),),
+                    tools=(_dotted_tool(),),
+                )
+            )
+        ]
+
+
+@pytest.mark.asyncio
 async def test_local_openai_chat_provider_drains_stream_after_done() -> None:
     chunks = (
         b'data: {"choices":[{"delta":{"content":"done"}}]}\n\n',
@@ -938,6 +1035,54 @@ async def test_local_openai_chat_provider_wraps_http_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_openai_chat_provider_retries_transient_non_stream_status() -> None:
+    stream_attempts = 0
+    non_stream_attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal stream_attempts, non_stream_attempts
+        payload = json.loads(request.content)
+        if payload.get("stream") is True:
+            stream_attempts += 1
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b"",
+                request=request,
+            )
+        non_stream_attempts += 1
+        if non_stream_attempts == 1:
+            return httpx.Response(429, text="rate limited", request=request)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "recovered"}}]},
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+        retry_delay_seconds=0,
+    )
+    request = ModelRequest(
+        model="model-b",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(),
+    )
+
+    events = [event async for event in provider.stream(request)]
+
+    assert stream_attempts == 1
+    assert non_stream_attempts == 2
+    assert events == [
+        ModelDeltaEvent(text="recovered"),
+        FinalOutputEvent(text="recovered"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_openai_responses_provider_wraps_http_errors() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, text="forbidden", request=request)
@@ -955,6 +1100,121 @@ async def test_openai_responses_provider_wraps_http_errors() -> None:
     )
 
     with pytest.raises(ProviderError, match=r"403.*forbidden"):
+        _ = [event async for event in provider.stream(request)]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_retries_transient_status_codes() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, text="rate limited", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "recovered"}],
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+        retry_delay_seconds=0,
+    )
+    request = ModelRequest(
+        model="model-a",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(),
+    )
+
+    events = [event async for event in provider.stream(request)]
+
+    assert attempts == 2
+    assert events == [
+        ModelDeltaEvent(text="recovered"),
+        FinalOutputEvent(text="recovered"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_retries_transient_ssl_errors() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ssl.SSLError(
+                "[SSL: SSLV3_ALERT_BAD_RECORD_MAC] ssl/tls alert bad record mac"
+            )
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "recovered"}],
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+        transport_retry_delay_seconds=0,
+    )
+    request = ModelRequest(
+        model="model-a",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(),
+    )
+
+    events = [event async for event in provider.stream(request)]
+
+    assert attempts == 2
+    assert events == [
+        ModelDeltaEvent(text="recovered"),
+        FinalOutputEvent(text="recovered"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_wraps_raw_ssl_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise ssl.SSLError("[SSL: SSLV3_ALERT_BAD_RECORD_MAC] ssl/tls alert bad record mac")
+
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+        transport_retry_delay_seconds=0,
+    )
+    request = ModelRequest(
+        model="model-a",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(),
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match=r"SSLError.*https://provider\.test/v1/responses.*BAD_RECORD_MAC",
+    ):
         _ = [event async for event in provider.stream(request)]
 
 

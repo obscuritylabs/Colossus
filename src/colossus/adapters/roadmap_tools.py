@@ -1,4 +1,4 @@
-"""Roadmap built-in tools for planning, verification, repo context, and extensions."""
+"""Roadmap built-in tools for planning, repo context, and extensions."""
 
 import difflib
 import json
@@ -12,10 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from colossus.adapters.subprocess_broker import (
-    SubprocessBroker,
-    SubprocessCommand,
-)
+from colossus.adapters.subprocess_broker import SubprocessBroker
 from colossus.adapters.tool_schema import (
     injected_argument_schema,
     provider_hidden_argument_schema,
@@ -127,10 +124,6 @@ def create_roadmap_tools(
         _plan_create_spec(),
         _plan_show_spec(),
         _plan_approve_request_spec(),
-        _test_run_spec(),
-        _lint_run_spec(),
-        _typecheck_run_spec(),
-        _build_run_spec(),
         _patch_preview_spec(),
         _patch_apply_spec(),
         _patch_reverse_spec(),
@@ -148,7 +141,6 @@ def create_roadmap_tools(
         _tool_search_spec(),
         _trace_show_spec(),
         _trace_export_spec(),
-        _eval_run_spec(),
     )
     handlers_by_name: HandlerMap = {
         "task.create": handlers.task_create,
@@ -168,10 +160,6 @@ def create_roadmap_tools(
         "plan.create": handlers.plan_create,
         "plan.show": handlers.plan_show,
         "plan.approve_request": handlers.plan_approve_request,
-        "test.run": handlers.test_run,
-        "lint.run": handlers.lint_run,
-        "typecheck.run": handlers.typecheck_run,
-        "build.run": handlers.build_run,
         "patch.preview": handlers.patch_preview,
         "patch.apply": handlers.patch_apply,
         "patch.reverse": handlers.patch_reverse,
@@ -188,7 +176,6 @@ def create_roadmap_tools(
         "tool.search": handlers.tool_search,
         "trace.show": handlers.trace_show,
         "trace.export": handlers.trace_export,
-        "eval.run": handlers.eval_run,
     }
     if include_agent_delegate:
         handlers_by_name["agent.delegate"] = handlers.agent_delegate
@@ -719,24 +706,6 @@ class RoadmapToolHandlers:
         plan["updated_at"] = _now()
         return _json({"approved": True, "plan": plan})
 
-    async def test_run(self, arguments: JsonObject) -> str:
-        paths = _workspace_paths(self._workspace, _string_list_arg(arguments, "paths") or ["tests"])
-        return await self._run_named_command(("uv", "run", "pytest", *paths), arguments)
-
-    async def lint_run(self, arguments: JsonObject) -> str:
-        paths = _workspace_paths(self._workspace, _string_list_arg(arguments, "paths") or ["."])
-        return await self._run_named_command(("uv", "run", "ruff", "check", *paths), arguments)
-
-    async def typecheck_run(self, arguments: JsonObject) -> str:
-        paths = _workspace_paths(
-            self._workspace,
-            _string_list_arg(arguments, "paths") or ["src/colossus"],
-        )
-        return await self._run_named_command(("uv", "run", "mypy", *paths), arguments)
-
-    async def build_run(self, arguments: JsonObject) -> str:
-        return await self._run_named_command(("uv", "run", "python", "-m", "build"), arguments)
-
     async def patch_preview(self, arguments: JsonObject) -> str:
         path = self._workspace.resolve(_required_string_arg(arguments, "path"))
         old_text = _read_text(path)
@@ -1046,31 +1015,6 @@ class RoadmapToolHandlers:
             {"path": self._workspace.relative(output), "bytes_written": output.stat().st_size}
         )
 
-    async def eval_run(self, arguments: JsonObject) -> str:
-        paths = _workspace_paths(self._workspace, _string_list_arg(arguments, "paths") or ["tests"])
-        return await self._run_named_command(("uv", "run", "pytest", *paths), arguments)
-
-    async def _run_named_command(self, argv: tuple[str, ...], arguments: JsonObject) -> str:
-        extra_args = tuple(_string_list_arg(arguments, "extra_args"))
-        if extra_args:
-            argv = (*argv, *extra_args)
-        result = await self._broker.run(
-            SubprocessCommand(
-                argv=argv,
-                cwd=self._workspace.root,
-                timeout_seconds=float(arguments.get("timeout_seconds", 120.0)),
-                max_output_bytes=_int_arg(arguments, "max_output_bytes", 64_000),
-            )
-        )
-        return _json(
-            {
-                "command": list(argv),
-                "exit_code": result.exit_code,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-        )
-
     async def _fetch_url(self, url: str, max_bytes: int) -> str:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -1240,10 +1184,6 @@ def _read_text(path: Path) -> str:
         return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ToolExecutionError("Only UTF-8 text files are supported.") from exc
-
-
-def _workspace_paths(workspace: Workspace, values: list[str]) -> tuple[str, ...]:
-    return tuple(workspace.relative(workspace.resolve(value)) for value in values)
 
 
 def _find_record(records: list[JsonObject], record_id: str, label: str) -> JsonObject:
@@ -1496,35 +1436,6 @@ def _object_schema(properties: JsonObject, required: list[str] | None = None) ->
 
 def _array_of_strings() -> JsonObject:
     return {"type": "array", "items": {"type": "string"}}
-
-
-def _common_run_properties() -> JsonObject:
-    return {
-        "paths": _array_of_strings(),
-        "extra_args": _array_of_strings(),
-        "timeout_seconds": {"type": "number", "minimum": 0.1, "maximum": 600},
-        "max_output_bytes": {"type": "integer", "minimum": 1, "maximum": 200000},
-    }
-
-
-def _run_output_schema() -> JsonObject:
-    return _object_schema(
-        {
-            "command": _array_of_strings(),
-            "exit_code": {"type": "integer"},
-            "stdout": {"type": "string"},
-            "stderr": {"type": "string"},
-        }
-    )
-
-
-def _command_permission() -> ToolPermission:
-    return ToolPermission(
-        filesystem="read",
-        approval_required=True,
-        mutation=True,
-        risk="high",
-    )
 
 
 def _write_permission() -> ToolPermission:
@@ -1894,60 +1805,6 @@ def _plan_approve_request_spec() -> ToolSpec:
     )
 
 
-def _test_run_spec() -> ToolSpec:
-    return ToolSpec(
-        name="test.run",
-        description="Run the configured Python test command through the subprocess broker.",
-        input_schema=_object_schema(_common_run_properties()),
-        output_schema=_run_output_schema(),
-        permissions=_command_permission(),
-        timeout_seconds=120.0,
-        max_output_bytes=64_000,
-    )
-
-
-def _lint_run_spec() -> ToolSpec:
-    return ToolSpec(
-        name="lint.run",
-        description="Run the configured linter through the subprocess broker.",
-        input_schema=_object_schema(_common_run_properties()),
-        output_schema=_run_output_schema(),
-        permissions=_command_permission(),
-        timeout_seconds=120.0,
-        max_output_bytes=64_000,
-    )
-
-
-def _typecheck_run_spec() -> ToolSpec:
-    return ToolSpec(
-        name="typecheck.run",
-        description="Run the configured type checker through the subprocess broker.",
-        input_schema=_object_schema(_common_run_properties()),
-        output_schema=_run_output_schema(),
-        permissions=_command_permission(),
-        timeout_seconds=120.0,
-        max_output_bytes=64_000,
-    )
-
-
-def _build_run_spec() -> ToolSpec:
-    return ToolSpec(
-        name="build.run",
-        description="Run the configured package build through the subprocess broker.",
-        input_schema=_object_schema(
-            {
-                "extra_args": _array_of_strings(),
-                "timeout_seconds": {"type": "number", "minimum": 0.1, "maximum": 600},
-                "max_output_bytes": {"type": "integer", "minimum": 1, "maximum": 200000},
-            }
-        ),
-        output_schema=_run_output_schema(),
-        permissions=_command_permission(),
-        timeout_seconds=120.0,
-        max_output_bytes=64_000,
-    )
-
-
 def _patch_preview_spec() -> ToolSpec:
     return ToolSpec(
         name="patch.preview",
@@ -2309,16 +2166,4 @@ def _trace_export_spec() -> ToolSpec:
             {"path": {"type": "string"}, "bytes_written": {"type": "integer"}}
         ),
         permissions=_write_permission(),
-    )
-
-
-def _eval_run_spec() -> ToolSpec:
-    return ToolSpec(
-        name="eval.run",
-        description="Run a configured local evaluation suite through pytest.",
-        input_schema=_object_schema(_common_run_properties()),
-        output_schema=_run_output_schema(),
-        permissions=_command_permission(),
-        timeout_seconds=120.0,
-        max_output_bytes=64_000,
     )

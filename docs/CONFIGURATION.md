@@ -360,8 +360,11 @@ Inspect durable jobs with:
 
 ```bash
 uv run colossus agents list
+uv run colossus agents status
 uv run colossus agents show agent-123
+uv run colossus agents drain --timeout 10
 uv run colossus agents cancel agent-123
+uv run colossus agents resume agent-123
 ```
 
 ## Run and REPL display
@@ -582,8 +585,8 @@ is reviewed and pinned.
 ## Tool profiles
 
 The current built-in tool profile is offline-first. Local filesystem, git, patch, repo
-context, task, key decision, plan, verification, trace, and eval tools are available
-through policy and approval controls. Network-capable tools require explicit approval.
+context, task, key decision, plan, and trace tools are available through policy and
+approval controls. Network-capable tools require explicit approval.
 `web.fetch` and `docs.fetch` can fetch bounded HTTP(S) responses when approved and
 network access exists; `web.search` and `mcp.call` remain adapter extension points.
 
@@ -603,6 +606,8 @@ model windows under `models.profiles.*.context_window_tokens` or the legacy
 `provider.model_context_windows`; unknown models use `context.default_context_window_tokens`.
 For ad-hoc model overrides, pass `--context-window-tokens` with `--model` so the REPL and
 context service do not fall back to the default window.
+Auto compaction reuses an existing snapshot until the unsummarized stale tail grows past
+the target budget, avoiding repeated model-assisted summarizer calls in long tool loops.
 If a provider's model catalog advertises a window, Colossus uses that as a best-effort
 default only when no explicit window is configured. This is useful for providers such as
 OpenRouter that include `context_length` in `/models`; OpenAI's official `/models`

@@ -34,6 +34,7 @@ from colossus.application.approvals import DenyByDefaultApprovalHandler
 from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.goals import GoalService
 from colossus.application.integrations import IntegrationService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
@@ -92,6 +93,7 @@ def create_default_orchestrator(
     risk_auto_approve: bool = False,
     auto_approve_required_tools: bool = False,
     subagent_service: SubagentService | None = None,
+    goal_service: GoalService | None = None,
     memory_service: MemoryService | None = None,
     model_router: ModelRouter | None = None,
     include_agent_delegate: bool = True,
@@ -108,6 +110,11 @@ def create_default_orchestrator(
     resolved_state = state_store or create_state_store(data_dir)
     resolved_audit = audit_sink or create_audit_sink(data_dir)
     decision_service = DecisionService(resolved_state, resolved_audit)
+    resolved_goal_service = goal_service or create_goal_service(
+        data_dir,
+        state_store=resolved_state,
+        audit_sink=resolved_audit,
+    )
     resolved_memory = memory_service or MemoryService(
         resolved_state,
         resolved_audit,
@@ -136,6 +143,7 @@ def create_default_orchestrator(
         task_service=TaskService(resolved_state, resolved_audit),
         decision_service=decision_service,
         memory_service=resolved_memory,
+        goal_service=resolved_goal_service,
         subagent_service=subagent_service,
         include_agent_delegate=include_agent_delegate,
         user_prompt_handler=user_prompt_handler,
@@ -207,6 +215,19 @@ def create_default_orchestrator(
         subagent_service=subagent_service,
         decision_service=decision_service,
         skill_composer=SkillComposer(resolved_skill_resolver),
+    )
+
+
+def create_goal_service(
+    data_dir: Path,
+    *,
+    state_store: SQLiteStateStore | None = None,
+    audit_sink: JsonlAuditSink | None = None,
+) -> GoalService:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return GoalService(
+        state_store or create_state_store(data_dir),
+        audit_sink or create_audit_sink(data_dir),
     )
 
 

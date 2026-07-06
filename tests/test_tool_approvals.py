@@ -159,8 +159,8 @@ def test_default_policy_gates_network_and_high_risk_tools() -> None:
         permissions=ToolPermission(network="allow", risk="high"),
     )
     high_risk_spec = ToolSpec(
-        name="build.run",
-        description="Build",
+        name="danger.tool",
+        description="High-risk operation",
         input_schema={"type": "object"},
         permissions=ToolPermission(risk="high"),
     )
@@ -171,7 +171,7 @@ def test_default_policy_gates_network_and_high_risk_tools() -> None:
     )
     high_risk_decision = policy.decide_tool_call(
         high_risk_spec,
-        ToolCall(call_id="2", name="build.run", arguments={}),
+        ToolCall(call_id="2", name="danger.tool", arguments={}),
     )
 
     assert network_decision.decision == "requires_approval"

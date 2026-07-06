@@ -190,7 +190,7 @@ class SkillComposer:
             if missing:
                 raise ColossusError(
                     f"Skill {skill.manifest.name} requires unavailable tools: "
-                    f"{', '.join(missing)}"
+                    f"{_format_missing_required_tools(missing, tool_names)}"
                 )
 
 
@@ -308,6 +308,20 @@ def _format_skill_context(
             sections.append(f"## {skill.manifest.name} v{skill.manifest.version}")
             sections.append(skill.instructions.strip())
     return "\n".join(sections)
+
+
+def _format_missing_required_tools(
+    missing: tuple[str, ...],
+    tool_names: set[str],
+) -> str:
+    values: list[str] = []
+    for name in missing:
+        suggestion = name.replace("_", ".")
+        if suggestion in tool_names:
+            values.append(f"{name} (did you mean {suggestion}?)")
+            continue
+        values.append(name)
+    return ", ".join(values)
 
 
 def _dedupe(names: tuple[str, ...]) -> tuple[str, ...]:

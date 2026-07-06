@@ -15,7 +15,7 @@ from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.context import ContextConfig, ContextSnapshot
 from colossus.domain.decisions import KeyDecision
-from colossus.domain.events import FinalOutputEvent, ModelDeltaEvent, RunEvent
+from colossus.domain.events import ContextPreparedEvent, FinalOutputEvent, ModelDeltaEvent, RunEvent
 from colossus.domain.messages import AssistantMessage, ToolResultMessage, UserMessage
 from colossus.domain.requests import AgentRunRequest, ModelRequest
 
@@ -184,6 +184,116 @@ async def test_context_reuses_existing_snapshot_with_new_tail(tmp_path: Path) ->
     assert len(result.messages) == 1
     assert isinstance(result.messages[0], UserMessage)
     assert "new tail" in result.messages[0].content
+
+
+@pytest.mark.asyncio
+async def test_context_reuses_snapshot_without_model_call_for_small_stale_tail(
+    tmp_path: Path,
+) -> None:
+    ids = iter(("snapshot-1", "snapshot-2"))
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = ContextService(
+        state,
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+        config=ContextConfig(
+            default_context_window_tokens=8192,
+            compact_at_percent=0.7,
+            target_percent=0.45,
+            recent_tail_messages=1,
+            model_assisted=True,
+        ),
+        model_context_windows={"model-a": 8192},
+        snapshot_id_factory=lambda: next(ids),
+    )
+    provider = CapturingProvider("assisted summary")
+    messages = (
+        UserMessage(content="Important project history. " + "x" * 18_000),
+        AssistantMessage(content="Large implementation notes. " + "y" * 8_000),
+        UserMessage(content="Continue from here."),
+    )
+
+    first = await service.prepare_messages(
+        session_id="session-1",
+        model="model-a",
+        instructions="",
+        messages=messages,
+        provider=provider,
+    )
+    second = await service.prepare_messages(
+        session_id="session-1",
+        model="model-a",
+        instructions="",
+        messages=(
+            *messages,
+            ToolResultMessage(
+                call_id="call-1",
+                name="filesystem.read",
+                content='{"path":"src/main.rs","bytes":128}',
+            ),
+        ),
+        provider=provider,
+    )
+
+    snapshots = await state.list_context_snapshots("session-1")
+    assert first.snapshot_id == "snapshot-1"
+    assert first.snapshot_created is True
+    assert second.snapshot_id == "snapshot-1"
+    assert second.snapshot_created is False
+    assert len(provider.requests) == 1
+    assert len(snapshots) == 1
+
+
+@pytest.mark.asyncio
+async def test_context_recompacts_when_stale_tail_exceeds_target(
+    tmp_path: Path,
+) -> None:
+    ids = iter(("snapshot-1", "snapshot-2"))
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = ContextService(
+        state,
+        JsonlAuditSink(tmp_path / "audit.jsonl"),
+        config=ContextConfig(
+            default_context_window_tokens=2048,
+            compact_at_percent=0.5,
+            target_percent=0.2,
+            recent_tail_messages=1,
+            model_assisted=True,
+        ),
+        model_context_windows={"model-a": 2048},
+        snapshot_id_factory=lambda: next(ids),
+    )
+    provider = CapturingProvider("assisted summary")
+    messages = (
+        UserMessage(content="Important project history. " + "x" * 8_000),
+        AssistantMessage(content="Large implementation notes. " + "y" * 4_000),
+        UserMessage(content="Continue from here."),
+    )
+    await service.prepare_messages(
+        session_id="session-1",
+        model="model-a",
+        instructions="",
+        messages=messages,
+        provider=provider,
+    )
+
+    result = await service.prepare_messages(
+        session_id="session-1",
+        model="model-a",
+        instructions="",
+        messages=(
+            *messages,
+            AssistantMessage(content="Large new tool output. " + "z" * 4_000),
+            UserMessage(content="Continue again."),
+        ),
+        provider=provider,
+    )
+
+    snapshots = await state.list_context_snapshots("session-1")
+    assert result.snapshot_id == "snapshot-2"
+    assert result.snapshot_created is True
+    assert len(provider.requests) == 2
+    assert len(snapshots) == 2
+    assert snapshots[0].source_message_range == (1, 4)
 
 
 @pytest.mark.asyncio
@@ -397,6 +507,7 @@ async def test_model_assisted_summary_success_and_failure_paths(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_orchestrator_sends_snapshot_plus_recent_tail(tmp_path: Path) -> None:
+    observed: list[RunEvent] = []
     provider = CapturingProvider()
     state = SQLiteStateStore(tmp_path / "state.sqlite3")
     audit = JsonlAuditSink(tmp_path / "audit.jsonl")
@@ -425,6 +536,7 @@ async def test_orchestrator_sends_snapshot_plus_recent_tail(tmp_path: Path) -> N
         audit_sink=audit,
         context_service=context_service,
         run_id_factory=lambda: "run-1",
+        event_observer=observed.append,
     )
 
     result = await orchestrator.run(
@@ -432,6 +544,11 @@ async def test_orchestrator_sends_snapshot_plus_recent_tail(tmp_path: Path) -> N
     )
 
     assert result.final_output == "done"
+    context_event = next(event for event in observed if isinstance(event, ContextPreparedEvent))
+    assert context_event.compacted is True
+    assert context_event.snapshot_id == "snapshot-1"
+    assert context_event.snapshot_created is True
+    assert context_event.original_token_estimate > context_event.token_estimate
     assert isinstance(provider.requests[0].messages[0], UserMessage)
     assert "new prompt" in provider.requests[0].messages[0].content
     assert "context.compacted" in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")

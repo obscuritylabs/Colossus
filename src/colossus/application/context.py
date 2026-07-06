@@ -167,26 +167,46 @@ class ContextService:
         relevant_memories = await self._relevant_memories(session_id, messages)
         compact_until = self._auto_compact_until(len(messages))
         latest = await self._state_store.latest_context_snapshot(session_id)
-        if latest is not None and (
-            original_estimate <= threshold or latest.source_message_range[1] >= compact_until
-        ):
+        if latest is not None:
             compacted_messages = self._messages_from_snapshot(
                 latest,
                 messages,
                 target,
                 active_decisions,
                 relevant_memories,
+                trim_to_target=False,
             )
-            return ContextBuildResult(
-                messages=compacted_messages,
-                token_estimate=self.estimate_tokens(compacted_messages, instructions=instructions),
-                original_token_estimate=original_estimate,
-                context_window_tokens=window,
-                threshold_tokens=threshold,
-                target_tokens=target,
-                snapshot_id=latest.id,
-                compacted=True,
+            token_estimate = self.estimate_tokens(compacted_messages, instructions=instructions)
+            stale_tail_tokens = self._stale_tail_tokens(latest, messages, compact_until)
+            should_reuse_snapshot = (
+                original_estimate <= threshold
+                or latest.source_message_range[1] >= compact_until
+                or (stale_tail_tokens <= target and token_estimate <= threshold)
             )
+            if should_reuse_snapshot:
+                if token_estimate > threshold:
+                    compacted_messages = self._messages_from_snapshot(
+                        latest,
+                        messages,
+                        target,
+                        active_decisions,
+                        relevant_memories,
+                    )
+                    token_estimate = self.estimate_tokens(
+                        compacted_messages,
+                        instructions=instructions,
+                    )
+                return ContextBuildResult(
+                    messages=compacted_messages,
+                    token_estimate=token_estimate,
+                    original_token_estimate=original_estimate,
+                    context_window_tokens=window,
+                    threshold_tokens=threshold,
+                    target_tokens=target,
+                    snapshot_id=latest.id,
+                    compacted=True,
+                    snapshot_created=False,
+                )
 
         if not self._config.auto_compaction or original_estimate <= threshold:
             prepared = self._with_context_header(messages, active_decisions, relevant_memories)
@@ -209,6 +229,7 @@ class ContextService:
                 threshold_tokens=threshold,
                 target_tokens=target,
             )
+
         snapshot = await self._create_snapshot(
             session_id=session_id,
             model=model,
@@ -235,6 +256,7 @@ class ContextService:
             target_tokens=target,
             snapshot_id=snapshot.id,
             compacted=True,
+            snapshot_created=True,
         )
 
     def estimate_tokens(
@@ -352,6 +374,8 @@ class ContextService:
         target_tokens: int,
         active_decisions: tuple[KeyDecision, ...] = (),
         relevant_memories: tuple[MemoryItem, ...] = (),
+        *,
+        trim_to_target: bool = True,
     ) -> tuple[Message, ...]:
         source_end = min(snapshot.source_message_range[1], len(messages))
         summary_message = UserMessage(
@@ -372,10 +396,22 @@ class ContextService:
                 )
             )
         compacted = (summary_message, *tail)
-        while len(tail) > 1 and self.estimate_tokens(compacted) > target_tokens:
+        while trim_to_target and len(tail) > 1 and self.estimate_tokens(compacted) > target_tokens:
             tail.pop(0)
             compacted = (summary_message, *tail)
         return compacted
+
+    def _stale_tail_tokens(
+        self,
+        snapshot: ContextSnapshot,
+        messages: tuple[Message, ...],
+        compact_until: int,
+    ) -> int:
+        source_end = min(snapshot.source_message_range[1], len(messages))
+        bounded_until = min(max(compact_until, source_end), len(messages))
+        if bounded_until <= source_end:
+            return 0
+        return self.estimate_tokens(messages[source_end:bounded_until])
 
     def _with_context_header(
         self,

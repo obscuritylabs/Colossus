@@ -12,6 +12,7 @@ from colossus.adapters.skills_package import PackageSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
+from colossus.application.goals import GoalLoopService, GoalService
 from colossus.application.memories import MemoryService
 from colossus.application.model_router import ModelRoute, ModelRouter
 from colossus.application.planning import PlanService
@@ -22,6 +23,7 @@ from colossus.application.subagents import SubagentService
 from colossus.domain.context import ContextStatus
 from colossus.domain.decisions import KeyDecision
 from colossus.domain.errors import ColossusError
+from colossus.domain.goals import Goal
 from colossus.domain.memories import MemoryItem
 from colossus.domain.messages import UserMessage
 from colossus.domain.models import ResolvedModelProfile
@@ -51,6 +53,7 @@ from colossus.interfaces.repl import (
     _handle_agents_command,
     _handle_decision_command,
     _handle_decisions_command,
+    _handle_goal_command,
     _handle_memories_command,
     _handle_memory_command,
     _handle_plan_command,
@@ -64,6 +67,7 @@ from colossus.interfaces.repl import (
     _is_slash_command_draft,
     _match_user_prompt_answer,
     _multiline_mode,
+    _parse_goal_run_arguments,
     _parse_repl_integration_connect,
     _plan_agent,
     _preferences_from_state,
@@ -71,6 +75,8 @@ from colossus.interfaces.repl import (
     _prompt_for_plan_review,
     _prompt_message,
     _render_decisions,
+    _render_goal,
+    _render_goals,
     _render_help,
     _render_memories,
     _render_model,
@@ -145,6 +151,7 @@ class FakePlanOrchestrator:
             final_output="executed",
             events_recorded=0,
             session_id=request.session_id,
+            elapsed_seconds=1.2,
         )
 
 
@@ -272,6 +279,7 @@ def test_slash_suggestions_show_in_toolbar_for_command_drafts() -> None:
     assert _format_slash_suggestions("/p") == "commands: /plan /packs"
     assert _format_slash_suggestions("/pl") == "commands: /plan"
     assert _format_slash_suggestions("/res") == "commands: /resume /research"
+    assert _format_slash_suggestions("/g") == "commands: /goal"
     assert _format_slash_suggestions("/w") == "commands: /workspace"
     assert _format_slash_suggestions("/e") == "commands: /events /exit"
     assert _format_slash_suggestions("/i") == "commands: /integrations"
@@ -307,6 +315,7 @@ def test_parse_context_commands() -> None:
     decisions = parse_slash_command("/decisions all")
     memory = parse_slash_command("/memory search pytest")
     memories = parse_slash_command("/memories all")
+    goal = parse_slash_command("/goal --max-iterations 2 Fix the REPL")
     plan = parse_slash_command("/plan approve")
     research = parse_slash_command("/research show")
     integrations = parse_slash_command("/integrations list")
@@ -367,6 +376,9 @@ def test_parse_context_commands() -> None:
     assert memories is not None
     assert memories.command == "memories"
     assert memories.argument == "all"
+    assert goal is not None
+    assert goal.command == "goal"
+    assert goal.argument == "--max-iterations 2 Fix the REPL"
     assert plan is not None
     assert plan.command == "plan"
     assert plan.argument == "approve"
@@ -381,6 +393,15 @@ def test_parse_context_commands() -> None:
     assert skill.argument == "use coding"
     assert help_command is not None
     assert help_command.command == "help"
+
+
+def test_parse_goal_run_arguments() -> None:
+    assert _parse_goal_run_arguments("Ship the feature") == ("Ship the feature", 5)
+    assert _parse_goal_run_arguments("--max-iterations 3 Ship it") == ("Ship it", 3)
+    assert _parse_goal_run_arguments("run -n 2 Ship it") == ("Ship it", 2)
+
+    with pytest.raises(ColossusError, match="between 1 and 50"):
+        _parse_goal_run_arguments("--max-iterations 51 Ship it")
 
 
 def test_parse_repl_integration_connect_supports_searxng_config() -> None:
@@ -788,6 +809,8 @@ def test_render_status_and_help_show_composer_details() -> None:
         interaction_mode="plan",
         active_plan_id="plan-123456",
         active_plan_status="approved",
+        active_goal_id="goal-123456",
+        active_goal_status="active",
     )
 
     _render_status(status_console, state)
@@ -803,6 +826,8 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "plan" in status_output
     assert "active_plan" in status_output
     assert "plan-123456" in status_output
+    assert "active_goal" in status_output
+    assert "goal-123456" in status_output
     assert "approval_mode" in status_output
     assert "theme" in status_output
     assert "activity_spinner" in status_output
@@ -819,7 +844,9 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "/decision [archive|supersede|TEXT]" in help_output
     assert "/memories [all|STATUS]" in help_output
     assert "/memory [archive|search|supersede|TEXT]" in help_output
-    assert "/plan [on|off|show|approve|execute|list|discard]" in help_output
+    assert "/goal [--max-iterations N|list|show ID|OBJECTIVE]" in help_output
+    assert "/plan" in help_output
+    assert "execute|goal|list" in help_output
     assert "/skill [on|off|show|use|drop|clear|new|validate]" in help_output
     assert "Current" in help_output
     assert "primary:model-a" in help_output
@@ -829,6 +856,7 @@ def test_render_status_and_help_show_composer_details() -> None:
     assert "multiline" in help_output
     assert "hacker" in help_output
     assert "approved:plan-12" in help_output
+    assert "active:goal-12" in help_output
     assert "Esc+Enter" in help_output
 
 
@@ -948,6 +976,27 @@ def test_render_memories_shows_memory_rows() -> None:
     assert "Run pytest" in output
 
 
+def test_render_goals_shows_goal_rows() -> None:
+    console = Console(record=True, width=140)
+    rendered_goal = Goal(
+        id="goal-1",
+        session_id="session-1",
+        objective="Make Goal Mode visible in the REPL",
+        status="active",
+        iterations_completed=1,
+        iteration_budget=5,
+    )
+
+    _render_goals(console, (rendered_goal,))
+    _render_goal(console, rendered_goal)
+
+    output = console.export_text()
+    assert "goal-1" in output
+    assert "[~]" in output
+    assert "Make Goal Mode visible" in output
+    assert "iterations_completed" in output
+
+
 @pytest.mark.asyncio
 async def test_handle_decision_commands_manage_lifecycle(tmp_path) -> None:
     console = Console(record=True, width=140)
@@ -1037,6 +1086,8 @@ async def test_handle_agents_command_lists_session_jobs(tmp_path) -> None:
             parent_call_id="call-1",
             task="Review docs",
             child_session_id="session-1:subagent:agent-1",
+            status="completed",
+            final_output="Docs look good.",
         )
     )
 
@@ -1045,6 +1096,111 @@ async def test_handle_agents_command_lists_session_jobs(tmp_path) -> None:
     output = console.export_text()
     assert "agent-1" in output
     assert "Review docs" in output
+    assert "Docs look good." in output
+
+
+@pytest.mark.asyncio
+async def test_handle_agents_command_status_drain_and_resume(tmp_path) -> None:
+    console = Console(record=True, width=140)
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    service = SubagentService(state, JsonlAuditSink(tmp_path / "audit.jsonl"))
+    await state.save_subagent_job(
+        SubagentJob(
+            id="agent-1",
+            session_id="session-1",
+            parent_run_id="run-1",
+            parent_call_id="call-1",
+            task="Retry docs",
+            status="interrupted",
+            child_session_id="session-1:subagent:agent-1",
+            error="interrupted",
+        )
+    )
+
+    await _handle_agents_command(console, service, "session-1", "status")
+    await _handle_agents_command(console, service, "session-1", "resume agent-1")
+    await _handle_agents_command(console, service, "session-1", "drain 0")
+
+    output = console.export_text()
+    assert "Interrupted" in output
+    assert "runner=no" in output
+    assert "Resumed subagent agent-1: queued" in output
+    assert "Queued" in output
+
+
+@pytest.mark.asyncio
+async def test_handle_goal_command_runs_lists_and_shows_goal(tmp_path) -> None:
+    console = Console(record=True, width=140)
+    state_store = SQLiteStateStore(tmp_path / "state.sqlite3")
+    audit = JsonlAuditSink(tmp_path / "audit.jsonl")
+    service = GoalService(state_store, audit)
+    captured: list[AgentRunRequest] = []
+
+    async def runner(request: AgentRunRequest) -> AgentRunResult:
+        captured.append(request)
+        assert request.goal_id is not None
+        return AgentRunResult(
+            run_id=f"run-{len(captured)}",
+            final_output="still working",
+            events_recorded=1,
+            session_id=request.session_id,
+        )
+
+    loop = GoalLoopService(service, runner, audit)
+    display = ReplDisplayState(
+        session_id="session-goal",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+    )
+    trace = FakeTraceRenderer()
+    skills = SkillResolver((PackageSkillRepository(),))
+    agent = default_agent("model-a")
+
+    await _handle_goal_command(
+        console,
+        service,
+        loop,
+        display,
+        "--max-iterations 2 Make Goal Mode visible in the REPL",
+        agent,
+        skills,
+        trace,  # type: ignore[arg-type]
+    )
+    goals = await service.list_goals(session_id="session-goal")
+    await _handle_goal_command(
+        console,
+        service,
+        loop,
+        display,
+        "list active",
+        agent,
+        skills,
+        trace,  # type: ignore[arg-type]
+    )
+    await _handle_goal_command(
+        console,
+        service,
+        loop,
+        display,
+        f"show {goals[0].id}",
+        agent,
+        skills,
+        trace,  # type: ignore[arg-type]
+    )
+
+    output = console.export_text()
+    assert len(captured) == 2
+    assert goals[0].status == "active"
+    assert goals[0].iterations_completed == 2
+    assert display.active_goal_id == goals[0].id
+    assert display.active_goal_status == "active"
+    assert display.last_run_id == "run-2"
+    assert trace.final_answer == "still working"
+    assert goals[0].id in output
+    assert "iteration_budget_exhausted=true" in output
+    assert "elapsed=" in output
+    assert "Make Goal Mode visible" in output
 
 
 @pytest.mark.asyncio
@@ -1059,6 +1215,8 @@ async def test_handle_session_commands_list_resume_and_start_new_session(tmp_pat
         approval_mode="ask",
         last_run_id="run-old",
         last_status="done",
+        active_goal_id="goal-old",
+        active_goal_status="active",
     )
     await state_store.append_message("session-new", "run-new", UserMessage(content="resume me"))
 
@@ -1067,6 +1225,8 @@ async def test_handle_session_commands_list_resume_and_start_new_session(tmp_pat
     assert state.session_id == "session-new"
     assert state.last_run_id is None
     assert state.last_status == "idle"
+    assert state.active_goal_id is None
+    assert state.active_goal_status is None
 
     await _handle_session_command(console, service, state, "new", None, None)
     assert state.session_id == "session-fresh"
@@ -1576,6 +1736,70 @@ async def test_plan_review_prompt_approves_and_executes(tmp_path, monkeypatch) -
     output = console.export_text()
     assert "Approve this plan?" in output
     assert "Approved plan" in output
+    assert "Executed plan" in output
+    assert "elapsed=1.2s" in output
+
+
+@pytest.mark.asyncio
+async def test_plan_review_prompt_approves_and_runs_goal(tmp_path, monkeypatch) -> None:
+    state_store = SQLiteStateStore(tmp_path / "state.sqlite3")
+    audit = JsonlAuditSink(tmp_path / "audit.jsonl")
+    service = PlanService(state_store, audit)
+    goal_service = GoalService(state_store, audit)
+    captured: list[AgentRunRequest] = []
+
+    async def runner(request: AgentRunRequest) -> AgentRunResult:
+        captured.append(request)
+        assert request.goal_id is not None
+        await goal_service.update_goal(request.goal_id, status="complete", summary="Done.")
+        return AgentRunResult(
+            run_id="run-goal",
+            final_output="goal done",
+            events_recorded=1,
+            session_id=request.session_id,
+        )
+
+    goal_loop = GoalLoopService(goal_service, runner, audit)
+    state = ReplDisplayState(
+        session_id="session-plan",
+        active_model_role="primary",
+        model="model-a",
+        approval_mode="ask",
+        interaction_mode="plan",
+    )
+    console = Console(record=True, width=140)
+    orchestrator = FakePlanOrchestrator()
+    trace = FakeTraceRenderer()
+    plan = await _save_repl_plan(service, state, prompt="ship it", content="# Ship")
+    monkeypatch.setattr(
+        "colossus.interfaces.repl.RichUserPromptHandler",
+        lambda console: QueuedUserPromptHandler(console, ["2"]),
+    )
+
+    await _prompt_for_plan_review(
+        console,
+        service,
+        state,
+        plan,
+        orchestrator,  # type: ignore[arg-type]
+        default_agent("model-a"),
+        trace,  # type: ignore[arg-type]
+        goal_loop,
+    )
+    goals = await goal_service.list_goals(session_id="session-plan")
+
+    assert orchestrator.request is None
+    assert captured[0].plan_id == plan.id
+    assert "# Ship" in captured[0].agent.instructions
+    assert (await service.get_plan(plan.id)).status == "executed"
+    assert state.active_plan_status == "executed"
+    assert state.active_goal_id == goals[0].id
+    assert state.active_goal_status == "complete"
+    assert state.interaction_mode == "chat"
+    assert trace.final_answer == "goal done"
+    assert goals[0].source_plan_id == plan.id
+    output = console.export_text()
+    assert "Approve and goal" in output
     assert "Executed plan" in output
 
 

@@ -10,10 +10,12 @@ from rich.text import Text
 from colossus.domain.events import (
     ApprovalAutoGrantedEvent,
     ApprovalRequestedEvent,
+    ContextPreparedEvent,
     FinalOutputEvent,
     ModelDeltaEvent,
     ModelRequestPreparedEvent,
     ReasoningSummaryEvent,
+    ResearchProgressEvent,
     ResearchStatusEvent,
     RiskAssessmentEvent,
     RunEvent,
@@ -21,6 +23,7 @@ from colossus.domain.events import (
     ToolCallCompletedEvent,
     ToolCallRequestedEvent,
 )
+from colossus.interfaces.tool_semantics import is_semantic_tool_name, semantic_tool_result
 
 EventDisplayMode = Literal["compact", "verbose", "off"]
 
@@ -35,6 +38,7 @@ class TraceRenderTheme:
     approval_auto_granted: str = "bold green"
     risk_assessment: str = "bold magenta"
     research: str = "bold cyan"
+    context: str = "bold cyan"
 
 
 @dataclass(frozen=True)
@@ -79,15 +83,6 @@ class DiffResultSummary:
     stderr: str
     additions: int
     deletions: int
-
-
-_COMPACT_SEMANTIC_TOOL_CALLS = {
-    "filesystem.read",
-    "git.diff",
-    "git.show",
-    "git.status",
-    "shell.run",
-}
 
 
 @dataclass
@@ -144,6 +139,16 @@ class RichRunEventRenderer:
             )
             self.console.print(_model_request_dump(event), markup=False)
             return
+        if isinstance(event, ContextPreparedEvent):
+            if self.events_mode != "verbose" and (
+                not event.compacted or not event.snapshot_created
+            ):
+                return
+            rendered = Text(_context_prepared_title(event), style=self.theme.context)
+            rendered.append(" ")
+            rendered.append(_context_prepared_text(event), style="dim")
+            self.console.print(rendered)
+            return
         if isinstance(event, FinalOutputEvent):
             if self._rendered_model_output and not self._last_model_delta_ended_newline:
                 self.console.print()
@@ -153,7 +158,7 @@ class RichRunEventRenderer:
             return
         if isinstance(event, ToolCallRequestedEvent):
             self._tool_call_arguments[event.call_id] = event.arguments
-            if event.name in _COMPACT_SEMANTIC_TOOL_CALLS and self.events_mode != "verbose":
+            if is_semantic_tool_name(event.name) and self.events_mode != "verbose":
                 return
             arguments = _truncate(
                 json.dumps(event.arguments, sort_keys=True),
@@ -197,6 +202,17 @@ class RichRunEventRenderer:
             )
             if self.events_mode == "verbose":
                 self.console.print(f"task {task}", markup=False)
+            return
+        if isinstance(event, ResearchProgressEvent):
+            rendered = Text("research progress ", style=self.theme.research)
+            rendered.append(_research_progress_text(event), style="dim")
+            self.console.print(rendered)
+            if self.events_mode == "verbose" and event.details:
+                details = _truncate(
+                    json.dumps(event.details, sort_keys=True),
+                    self.output_preview_chars,
+                )
+                self.console.print(f"details {details}", markup=False)
             return
         if isinstance(event, ResearchStatusEvent):
             message = _truncate(event.message, self.argument_preview_chars)
@@ -307,6 +323,17 @@ class RichRunEventRenderer:
                 if diff_summary.stderr:
                     self.console.print(_source_preview("stderr", diff_summary.stderr, 1, limit=8))
                 return
+            semantic_summary = semantic_tool_result(
+                event.name,
+                event.output,
+                call_id=event.call_id,
+                exit_code=event.exit_code,
+            )
+            if semantic_summary is not None:
+                rendered = Text(f"{semantic_summary.title} ", style=self.theme.tool_result)
+                rendered.append(semantic_summary.body)
+                self.console.print(rendered)
+                return
             output_preview = _truncate(
                 event.output.replace("\n", "\\n"),
                 self.output_preview_chars,
@@ -338,6 +365,76 @@ def _model_request_dump(event: ModelRequestPreparedEvent) -> str:
         indent=2,
         sort_keys=True,
     )
+
+
+def _context_prepared_title(event: ContextPreparedEvent) -> str:
+    if event.compacted and event.snapshot_created:
+        return "auto context compaction"
+    if event.compacted:
+        return "context snapshot reused"
+    return "context prepared"
+
+
+def _context_prepared_text(event: ContextPreparedEvent) -> str:
+    snapshot = _short_snapshot_id(event.snapshot_id)
+    if event.compacted:
+        return (
+            f"snapshot={snapshot} "
+            f"original={event.original_token_estimate:,} -> "
+            f"effective={event.token_estimate:,} "
+            f"threshold={event.threshold_tokens:,} "
+            f"target={event.target_tokens:,}"
+        )
+    return (
+        f"effective={event.token_estimate:,} "
+        f"threshold={event.threshold_tokens:,} "
+        f"window={event.context_window_tokens:,}"
+    )
+
+
+def _research_progress_text(event: ResearchProgressEvent) -> str:
+    lane = event.source_kind or event.action
+    parts = [event.phase, lane, event.status]
+    if event.current and event.total:
+        parts.append(f"{event.current}/{event.total}")
+    _append_detail_count(parts, event.details, "results")
+    _append_detail_count(parts, event.details, "added")
+    _append_detail_count(parts, event.details, "saved")
+    if event.sources_collected:
+        parts.append(f"sources={event.sources_collected}")
+    if event.claims_collected:
+        parts.append(f"claims={event.claims_collected}")
+    _append_detail_count(parts, event.details, "warnings")
+    _append_detail_count(parts, event.details, "prompt_chars")
+    _append_detail_count(parts, event.details, "report_chars")
+    _append_detail_count(parts, event.details, "draft_chars")
+    _append_detail_bool(parts, event.details, "configured")
+    _append_detail_bool(parts, event.details, "approved")
+    if event.query:
+        parts.append(f'query="{_truncate(event.query, 80)}"')
+    if event.message:
+        parts.append(_truncate(event.message, 120))
+    return " ".join(parts)
+
+
+def _append_detail_count(parts: list[str], details: dict[str, object], key: str) -> None:
+    value = details.get(key)
+    if isinstance(value, int) and not isinstance(value, bool):
+        parts.append(f"{key}={value}")
+    elif isinstance(value, list | tuple):
+        parts.append(f"{key}={len(value)}")
+
+
+def _append_detail_bool(parts: list[str], details: dict[str, object], key: str) -> None:
+    value = details.get(key)
+    if isinstance(value, bool):
+        parts.append(f"{key}={str(value).lower()}")
+
+
+def _short_snapshot_id(value: str | None) -> str:
+    if not value:
+        return "-"
+    return value[:8]
 
 
 def _edit_result_summary(output: str) -> EditResultSummary | None:

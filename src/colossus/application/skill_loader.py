@@ -32,14 +32,24 @@ def load_skill_from_directory(root: Path | Traversable, *, source: str) -> Skill
 
 
 def _skill_markdown_path(root: Path | Traversable) -> Path | Traversable | None:
-    canonical = root / "SKILL.md"
-    protocol = root / "skill.md"
-    if canonical.is_file() and protocol.is_file():
+    canonical = _file_child_named(root, "SKILL.md")
+    protocol = _file_child_named(root, "skill.md")
+    if canonical is not None and protocol is not None:
         raise ColossusError("Skill directory must not contain both SKILL.md and skill.md.")
-    if canonical.is_file():
+    if canonical is not None:
         return canonical
-    if protocol.is_file():
+    if protocol is not None:
         return protocol
+    return None
+
+
+def _file_child_named(
+    root: Path | Traversable,
+    name: str,
+) -> Path | Traversable | None:
+    for child in root.iterdir():
+        if child.name == name and child.is_file():
+            return child
     return None
 
 

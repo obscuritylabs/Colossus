@@ -25,8 +25,8 @@ tools, see [Integrations](INTEGRATIONS.md).
 | Task state | `task.create`, `task.update`, `task.list` | No | Yes | Session-scoped progress tracking persisted in SQLite state. |
 | Key decisions | `decision.create`, `decision.update`, `decision.list`, `decision.archive`, `decision.supersede` | Mutations | Yes | Durable session commitments injected into future context. |
 | Memories | `memory.create`, `memory.update`, `memory.list`, `memory.search`, `memory.archive`, `memory.supersede` | No | Yes | Durable global/repo/session context retrieved through SQLite FTS. |
-| Plan state | `plan.create`, `plan.show`, `plan.approve_request` | Approval request only | Yes | Draft plans are runtime-local; approval is policy-gated. |
-| Verification | `test.run`, `lint.run`, `typecheck.run`, `build.run` | Yes | Yes | Fixed command templates through `uv` and the subprocess broker. |
+| Goal mode | `goal.show`, `goal.update` | No | Active goal runs only | Durable active-goal progress and terminal status, including approved plan lineage when a plan is handed to Goal Mode. |
+| Plan state | `plan.create`, `plan.show`, `plan.approve_request` | Approval request only | Yes | Draft plans are runtime-local; approval is policy-gated; approved plans can execute once or hand off to bounded Goal Mode. |
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Apply/reverse only | Yes | Exact text patch preview and mutation. |
 | Repo context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | No | Yes | Local file map, symbol extraction, references, and summaries. |
 | Subagents | `agent.delegate`, `agent.result`, `agent.list` | No by default | Yes | Durable queued child-agent jobs with bounded local concurrency. |
@@ -34,7 +34,7 @@ tools, see [Integrations](INTEGRATIONS.md).
 | MCP/discovery | `mcp.servers`, `mcp.tools`, `tool.search` | No | Yes | MCP listing returns unconfigured state; `tool.search` searches the local catalog. `mcp.call` is not exposed unless an MCP adapter is installed. |
 | Integrations | `github.*`, `searxng.*`, `opensearch.*`, `openapi.NAME.*` | Yes | Partial | Hidden until connected. Calls inject auth through credential refs, then pass policy, approval, audit, and HTTP settings. |
 | Research mode | `colossus research`, `/research` | Network/MCP lanes | Partial | Persists cited reports, sources, claims, and research status events. |
-| Trace/eval | `trace.show`, `trace.export`, `eval.run` | Export/eval only | Yes | Trace export writes a bounded snapshot; eval wraps local pytest. |
+| Trace | `trace.show`, `trace.export` | Export only | Yes | Trace export writes a bounded snapshot. |
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Restore only | Yes | Durable snapshots reduce model input without deleting raw history. |
 | Skill authoring | `skill.scaffold`, `skill.inspect`, `skill.read`, `skill.write`, `skill.validate`, `skill.install`, `skill.resource.list`, `skill.resource.read` | Scaffold/write/install only | Yes | Data-only installed-skill edits, local skill validation and install, and active-skill resource reads. |
 | Smoke test | `echo` | No | Yes | Deterministic smoke-test tool. |
@@ -103,9 +103,11 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
 
 - The default policy requires approval for high-risk tools, network-capable tools,
   declared mutations, and tools with explicit `approval_required`.
-- `--approval-mode full-access` auto-approves approval-required tools without prompting,
-  but it does not change tool schemas, filesystem roots, network implementations, or
-  deterministic policy denies.
+- `--approval-mode risk-auto` auto-approves only low-risk allowed `shell.run` calls;
+  model-risk denies are escalated to approval prompts. `--approval-mode full-access`
+  auto-approves approval-required tools without prompting and skips model-assisted
+  `shell.run` risk review, but it does not change tool schemas, filesystem roots,
+  network implementations, or deterministic policy denies.
 - Subprocess-backed tools use fixed argv templates or structured argv arrays. Colossus
   does not use `shell=True`.
 - For `shell.run`, pass the executable and each argument as separate `argv` entries. A
@@ -127,7 +129,7 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
   `colossus tasks list`. Key decisions are visible with `/decisions` in the REPL or
   `colossus decisions list`. Memories are visible with `/memories` in the REPL or
   `colossus memories list/search`. Subagent jobs are durable queued records visible
-  with `/agents` in the REPL or `colossus agents list/show/cancel`.
+  with `/agents` in the REPL or `colossus agents list/status/show/drain/cancel/resume`.
 - Context snapshots are durable SQLite records, but raw session messages remain the
   source of truth. Active key decisions are injected before snapshot summaries; archived
   and superseded decisions remain persisted but do not steer future context.

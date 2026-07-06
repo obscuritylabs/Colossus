@@ -39,7 +39,7 @@ Precedence:
 ## Required tools
 
 Skill manifests should list built-in dependencies in `required_tools` using exact tool
-names such as `filesystem.read`, `repo.map`, `patch.apply`, or `test.run`. Offline
+names such as `filesystem.read`, `repo.map`, `patch.apply`, or `tool.search`. Offline
 compatibility means every required tool is available without network access, or the skill
 can degrade cleanly when network-gated tools such as `web.search` or `mcp.call` are
 disabled.

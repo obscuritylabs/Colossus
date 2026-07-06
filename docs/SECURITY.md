@@ -79,9 +79,9 @@ Security-sensitive defaults:
 | `task.*` | None | Denied | No | Enabled, session-persisted |
 | `decision.*` | None | Denied | Mutations | Enabled, session-persisted |
 | `memory.*` | None | Denied | No | Enabled, global/repo/session persisted |
+| `goal.show/update` | None | Denied | No | Enabled only inside active goal-mode provider turns |
 | `plan.create/show` | None | Denied | No | Enabled, runtime-local |
 | `plan.approve_request` | None | Denied | Yes | Enabled, runtime-local |
-| `test.run/lint.run/typecheck.run/build.run/eval.run` | Read | Denied | Yes | Enabled |
 | `patch.preview` | Read | Denied | No | Enabled |
 | `patch.apply/reverse` | Write | Denied | Yes | Enabled |
 | `repo.*` | Read | Denied | No | Enabled |
@@ -110,14 +110,15 @@ tool arguments against the tool schema before requesting approval.
 ## Approval Modes
 
 `deny` blocks approval-required tools, `ask` prompts interactively, and `risk-auto` may
-auto-approve low-risk `shell.run` calls after model-assisted risk review. `full-access`
-auto-approves approval-required tools without prompting and records
-`tool.auto_approved` audit entries plus `ApprovalAutoGrantedEvent` events.
+auto-approve low-risk `shell.run` calls after model-assisted risk review. In `risk-auto`,
+risk-review `deny` results become approval prompts rather than unconditional hard stops.
+`full-access` auto-approves approval-required tools without prompting, skips
+model-assisted `shell.run` risk review, and records `tool.auto_approved` audit entries
+plus `ApprovalAutoGrantedEvent` events.
 
 `full-access` is a no-prompt approval policy, not a broader sandbox profile. It does not
 expand filesystem roots, network implementations, tool schemas, or deterministic policy
-denies. Unknown tools, invalid arguments, policy `deny`, and risk-review `deny` still
-stop before execution.
+denies. Unknown tools, invalid arguments, and policy `deny` still stop before execution.
 
 ## Subagents
 
@@ -133,14 +134,16 @@ with a configured subagent runner starts.
 
 ## Model-Assisted Risk Review
 
-`shell.run` is reviewed by the `risk_evaluator` model role when configured. Review happens
-after deterministic schema and policy checks, before approval prompts. The evaluator sees
-redacted structured metadata and runs with tools disabled. It may add risk explanation,
-require approval, deny a call, or auto-approve only when `--approval-mode risk-auto` is
-explicitly enabled and the review returns `risk_level=low` with
-`recommended_decision=allow`. It cannot make deterministic denies executable. If risk
-review is unavailable or returns invalid JSON, Colossus records `risk.review_unavailable`
-and continues with deterministic policy.
+`shell.run` is reviewed by the `risk_evaluator` model role when configured and approval
+mode is not `full-access`. Review happens after deterministic schema and policy checks,
+before approval prompts. The evaluator sees redacted structured metadata and runs with
+tools disabled. It may add risk explanation, require approval, deny a call, or
+auto-approve only when `--approval-mode risk-auto` is explicitly enabled and the review
+returns `risk_level=low` with `recommended_decision=allow`. In `risk-auto`, model-risk
+denies are escalated to explicit approval prompts; outside `risk-auto`, they stop before
+execution. It cannot make deterministic denies executable. If risk review is unavailable
+or returns invalid JSON, Colossus records `risk.review_unavailable` and continues with
+deterministic policy.
 
 ## Context Compaction
 
