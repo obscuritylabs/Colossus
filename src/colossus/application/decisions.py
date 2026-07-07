@@ -27,7 +27,10 @@ class DecisionService:
         decision: str,
         source: DecisionSource = "agent",
         priority: DecisionPriority = "normal",
+        intent: str = "",
+        applies_when: str = "",
         rationale: str = "",
+        source_excerpt: str = "",
         goal_id: str | None = None,
         plan_id: str | None = None,
         supersedes: str | None = None,
@@ -53,7 +56,10 @@ class DecisionService:
             priority=priority,
             title=title,
             decision=decision,
+            intent=intent,
+            applies_when=applies_when,
             rationale=rationale,
+            source_excerpt=source_excerpt,
             supersedes=supersedes,
             created_at=now,
             updated_at=now,
@@ -79,7 +85,10 @@ class DecisionService:
         title: str | None = None,
         decision: str | None = None,
         priority: DecisionPriority | None = None,
+        intent: str | None = None,
+        applies_when: str | None = None,
         rationale: str | None = None,
+        source_excerpt: str | None = None,
         status: DecisionStatus | None = None,
         goal_id: str | None = None,
         plan_id: str | None = None,
@@ -98,8 +107,14 @@ class DecisionService:
             changes["decision"] = decision
         if priority is not None:
             changes["priority"] = priority
+        if intent is not None:
+            changes["intent"] = intent
+        if applies_when is not None:
+            changes["applies_when"] = applies_when
         if rationale is not None:
             changes["rationale"] = rationale
+        if source_excerpt is not None:
+            changes["source_excerpt"] = source_excerpt
         if status is not None:
             changes["status"] = status
         if goal_id is not None:
@@ -147,7 +162,10 @@ class DecisionService:
         decision: str,
         source: DecisionSource = "agent",
         priority: DecisionPriority = "normal",
+        intent: str = "",
+        applies_when: str = "",
         rationale: str = "",
+        source_excerpt: str = "",
         goal_id: str | None = None,
         plan_id: str | None = None,
     ) -> KeyDecision:
@@ -161,7 +179,10 @@ class DecisionService:
             decision=decision,
             source=source,
             priority=priority,
+            intent=intent,
+            applies_when=applies_when,
             rationale=rationale,
+            source_excerpt=source_excerpt,
             goal_id=goal_id or old.goal_id,
             plan_id=plan_id or old.plan_id,
             supersedes=old.id,

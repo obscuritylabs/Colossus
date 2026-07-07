@@ -778,7 +778,17 @@ async def test_orchestrator_captures_standalone_key_decision_before_provider(
     assert result.final_output == f"Noted as key decision {decisions[0].id}."
     assert decisions[0].source == "user"
     assert decisions[0].priority == "high"
-    assert decisions[0].decision == "Mvoing forward I want to make sure run tests and lint"
+    assert decisions[0].title == "Run tests and lint"
+    assert decisions[0].decision == "Run tests and lint."
+    assert (
+        decisions[0].intent
+        == "The user wants this explicit instruction treated as a durable commitment."
+    )
+    assert (
+        decisions[0].applies_when
+        == "Future turns in this session when the commitment is relevant."
+    )
+    assert decisions[0].source_excerpt == "Mvoing forward I want to make sure run tests and lint"
     assert "decision.created" in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
 
 
@@ -820,6 +830,38 @@ async def test_orchestrator_does_not_duplicate_captured_key_decision(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_does_not_auto_capture_non_standalone_key_decision_prompt(
+    tmp_path,
+) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    audit = JsonlAuditSink(tmp_path / "audit.jsonl")
+    decision_service = DecisionService(state, audit)
+    provider = CapturingFinalProvider()
+    registry = InMemoryToolRegistry(())
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=audit,
+        run_id_factory=lambda: "run-1",
+        decision_service=decision_service,
+    )
+
+    result = await orchestrator.run(
+        AgentRunRequest(
+            prompt="Can you make sure the provider tests still pass?",
+            agent=default_agent(),
+            session_id="session-1",
+        )
+    )
+
+    assert result.final_output == "done"
+    assert await decision_service.list_decisions(session_id="session-1") == ()
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_injects_subagent_context_after_validation(tmp_path) -> None:
     observed_arguments: dict[str, object] = {}

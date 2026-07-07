@@ -153,10 +153,12 @@ raw message history. `context.restore` is approval-required because it changes w
 snapshot is active for future model requests. Model-assisted compaction is best-effort;
 deterministic offline compaction remains the fallback.
 
-Key decisions are durable commitments, not memories. Active key decisions are stored as
-session state and injected before compacted snapshot content so summarization cannot
-erase them. Archived and superseded decisions remain in state for auditability but are
-not injected into future model context.
+Key decisions are durable commitments, not memories. They should store the interpreted
+future-facing decision, user intent, applicability, and a short source excerpt rather
+than raw prompt text as the decision itself. Active key decisions are stored as session
+state and injected before compacted snapshot content as binding guidance so summarization
+cannot erase them. Archived and superseded decisions remain in state for auditability but
+are not injected into future model context.
 
 Memories are durable context, not instructions. Active relevant memories are injected
 after key decisions and before compacted snapshot content. Global memories are only

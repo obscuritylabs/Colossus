@@ -3,6 +3,7 @@
 import json
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from time import perf_counter
 from uuid import uuid4
 
@@ -184,8 +185,13 @@ class AgentOrchestrator:
         messages.append(user_message)
         if request.session_id is not None:
             await self._state_store.append_message(request.session_id, run_id, user_message)
-            captured = await self._capture_user_key_decision(request.prompt, request.session_id)
-            if captured is not None and _is_standalone_key_decision_prompt(request.prompt):
+            captured = None
+            if _is_standalone_key_decision_prompt(request.prompt):
+                captured = await self._capture_user_key_decision(
+                    request.prompt,
+                    request.session_id,
+                )
+            if captured is not None:
                 final_text = f"Noted as key decision {captured}."
                 assistant_message = AssistantMessage(content=final_text)
                 await self._state_store.append_message(
@@ -596,17 +602,23 @@ class AgentOrchestrator:
         if self._decision_service is None or not _looks_like_key_decision_prompt(prompt):
             return None
         text = prompt.strip()
+        captured = _captured_key_decision_from_prompt(text)
+        if captured is None:
+            return None
         active = await self._decision_service.list_decisions(session_id=session_id)
         for decision in active:
-            if decision.decision == text:
+            if _decision_matches_capture(decision, captured, text):
                 return decision.id
         decision = await self._decision_service.create_decision(
             session_id=session_id,
-            title=_decision_title(text),
-            decision=text,
+            title=_decision_title(captured.decision),
+            decision=captured.decision,
             source="user",
             priority="high",
-            rationale="Captured from a durable user preference before provider execution.",
+            intent=captured.intent,
+            applies_when=captured.applies_when,
+            rationale="Captured from explicit durable user wording before provider execution.",
+            source_excerpt=text,
         )
         return decision.id
 
@@ -836,6 +848,24 @@ _KEY_DECISION_PROMPT_PATTERN = re.compile(
     r"please remember|make sure)\b",
     re.IGNORECASE,
 )
+_KEY_DECISION_PREFIX_PATTERNS = (
+    re.compile(r"^\s*(?:moving|mvoing)\s+forward[:,]?\s*", re.IGNORECASE),
+    re.compile(r"^\s*going\s+forward[:,]?\s*", re.IGNORECASE),
+    re.compile(r"^\s*from\s+now\s+on[:,]?\s*", re.IGNORECASE),
+    re.compile(r"^\s*(?:please\s+)?remember(?:\s+this)?[:,]?\s*", re.IGNORECASE),
+    re.compile(r"^\s*make\s+sure(?:\s+that)?\s*", re.IGNORECASE),
+)
+_KEY_DECISION_INTENT_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:i\s+want\s+to\s+)?(?:make\s+sure(?:\s+that)?\s+|ensure(?:\s+that)?\s+)?",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class _CapturedKeyDecision:
+    decision: str
+    intent: str
+    applies_when: str
 
 
 def _looks_like_key_decision_prompt(prompt: str) -> bool:
@@ -851,10 +881,54 @@ def _is_standalone_key_decision_prompt(prompt: str) -> bool:
     return len(text) <= 220
 
 
+def _captured_key_decision_from_prompt(prompt: str) -> _CapturedKeyDecision | None:
+    commitment = _interpreted_key_decision_text(prompt)
+    if not commitment:
+        return None
+    return _CapturedKeyDecision(
+        decision=commitment,
+        intent="The user wants this explicit instruction treated as a durable commitment.",
+        applies_when="Future turns in this session when the commitment is relevant.",
+    )
+
+
+def _interpreted_key_decision_text(prompt: str) -> str:
+    text = prompt.strip()
+    for pattern in _KEY_DECISION_PREFIX_PATTERNS:
+        text = pattern.sub("", text, count=1).strip()
+    text = _KEY_DECISION_INTENT_PREFIX_PATTERN.sub("", text, count=1).strip()
+    text = text.strip(" :;,-")
+    return _as_sentence(text)
+
+
+def _as_sentence(text: str) -> str:
+    if not text:
+        return ""
+    if text[0].islower():
+        text = text[0].upper() + text[1:]
+    if text[-1] not in ".!?":
+        text = f"{text}."
+    return text
+
+
+def _decision_matches_capture(
+    decision: object,
+    captured: _CapturedKeyDecision,
+    source_text: str,
+) -> bool:
+    existing_decision = getattr(decision, "decision", "").strip()
+    source_excerpt = getattr(decision, "source_excerpt", "").strip()
+    return (
+        existing_decision == captured.decision
+        or existing_decision == source_text
+        or source_excerpt == source_text
+    )
+
+
 def _has_visible_text(chunks: list[str], final_text: str) -> bool:
     return bool(final_text.strip() or "".join(chunks).strip())
 
 
 def _decision_title(prompt: str) -> str:
-    title = prompt.strip().replace("\n", " ")
+    title = prompt.strip().replace("\n", " ").rstrip(".!?")
     return title[:80] or "Key decision"

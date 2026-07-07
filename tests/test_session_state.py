@@ -194,6 +194,9 @@ async def test_decision_service_lifecycle_and_audit(tmp_path) -> None:
         session_id="session-1",
         title="Never forget",
         decision="Preserve key decisions across compaction.",
+        intent="Protect durable commitments from summarization loss.",
+        applies_when="Context compaction prepares future turns.",
+        source_excerpt="Never forget to preserve key decisions.",
         source="agent",
         priority="critical",
     )
@@ -209,6 +212,9 @@ async def test_decision_service_lifecycle_and_audit(tmp_path) -> None:
         session_id="session-1",
         title="Replacement",
         decision="Inject active key decisions before snapshots.",
+        intent="Make key decisions stronger than context snapshots.",
+        applies_when="Preparing provider input.",
+        source_excerpt="Active key decisions are injected before snapshots.",
         source="user",
         priority="high",
     )
@@ -217,7 +223,12 @@ async def test_decision_service_lifecycle_and_audit(tmp_path) -> None:
     active = await service.list_decisions(session_id="session-1")
 
     assert archived.status == "archived"
+    assert created.intent == "Protect durable commitments from summarization loss."
+    assert created.applies_when == "Context compaction prepares future turns."
+    assert created.source_excerpt == "Never forget to preserve key decisions."
     assert replacement.supersedes == created.id
+    assert replacement.intent == "Make key decisions stronger than context snapshots."
+    assert replacement.applies_when == "Preparing provider input."
     assert [decision.id for decision in active] == [replacement.id]
     assert {decision.status for decision in session_decisions} == {"superseded", "active"}
     audit_text = audit_path.read_text(encoding="utf-8")

@@ -303,7 +303,10 @@ class RoadmapToolHandlers:
                     decision=_required_string_arg(arguments, "decision"),
                     source=source,
                     priority=priority,
+                    intent=_string_arg(arguments, "intent", ""),
+                    applies_when=_string_arg(arguments, "applies_when", ""),
                     rationale=_string_arg(arguments, "rationale", ""),
+                    source_excerpt=_string_arg(arguments, "source_excerpt", ""),
                     goal_id=_optional_non_empty_string(arguments, "goal_id"),
                     plan_id=_optional_non_empty_string(arguments, "plan_id"),
                     supersedes=_optional_non_empty_string(arguments, "supersedes"),
@@ -322,7 +325,10 @@ class RoadmapToolHandlers:
             "priority": priority,
             "title": _required_string_arg(arguments, "title"),
             "decision": _required_string_arg(arguments, "decision"),
+            "intent": _string_arg(arguments, "intent", ""),
+            "applies_when": _string_arg(arguments, "applies_when", ""),
             "rationale": _string_arg(arguments, "rationale", ""),
+            "source_excerpt": _string_arg(arguments, "source_excerpt", ""),
             "supersedes": _optional_non_empty_string(arguments, "supersedes"),
             "created_at": now,
             "updated_at": now,
@@ -346,7 +352,10 @@ class RoadmapToolHandlers:
                         if raw_priority is not None
                         else None
                     ),
+                    intent=_optional_string(arguments, "intent"),
+                    applies_when=_optional_string(arguments, "applies_when"),
                     rationale=_optional_string(arguments, "rationale"),
+                    source_excerpt=_optional_string(arguments, "source_excerpt"),
                     status=(
                         _validated_decision_status(raw_status) if raw_status is not None else None
                     ),
@@ -357,7 +366,16 @@ class RoadmapToolHandlers:
                 raise ToolExecutionError(str(exc)) from exc
             return _json({"decision": _decision_payload(decision)})
         record = _find_record(self._decisions, decision_id, "decision")
-        for field in ("title", "decision", "rationale", "goal_id", "plan_id"):
+        for field in (
+            "title",
+            "decision",
+            "intent",
+            "applies_when",
+            "rationale",
+            "source_excerpt",
+            "goal_id",
+            "plan_id",
+        ):
             value = arguments.get(field)
             if isinstance(value, str):
                 record[field] = value
@@ -418,7 +436,10 @@ class RoadmapToolHandlers:
                     decision=_required_string_arg(arguments, "decision"),
                     source=source,
                     priority=priority,
+                    intent=_string_arg(arguments, "intent", ""),
+                    applies_when=_string_arg(arguments, "applies_when", ""),
                     rationale=_string_arg(arguments, "rationale", ""),
+                    source_excerpt=_string_arg(arguments, "source_excerpt", ""),
                     goal_id=_optional_non_empty_string(arguments, "goal_id"),
                     plan_id=_optional_non_empty_string(arguments, "plan_id"),
                 )
@@ -439,7 +460,10 @@ class RoadmapToolHandlers:
             "priority": priority,
             "title": _required_string_arg(arguments, "title"),
             "decision": _required_string_arg(arguments, "decision"),
+            "intent": _string_arg(arguments, "intent", ""),
+            "applies_when": _string_arg(arguments, "applies_when", ""),
             "rationale": _string_arg(arguments, "rationale", ""),
+            "source_excerpt": _string_arg(arguments, "source_excerpt", ""),
             "supersedes": decision_id,
             "created_at": now,
             "updated_at": now,
@@ -1524,18 +1548,64 @@ def _decision_permission() -> ToolPermission:
 def _decision_create_spec() -> ToolSpec:
     return ToolSpec(
         name="decision.create",
-        description="Create an active durable key decision for this session.",
+        description=(
+            "Create an active durable key decision: a binding future-facing commitment, "
+            "constraint, explicit user preference, or architecture choice for this session. "
+            "Do not use for ordinary facts, progress notes, observations, or background "
+            "context; use memory.* for those. Interpret the user's intent instead of "
+            "copying their sentence verbatim into decision."
+        ),
         input_schema=_object_schema(
             {
                 "id": {"type": "string"},
                 "session_id": injected_argument_schema({"type": "string"}),
                 "goal_id": {"type": "string"},
                 "plan_id": {"type": "string"},
-                "source": {"type": "string", "enum": sorted(_decision_sources())},
+                "source": {
+                    "type": "string",
+                    "enum": sorted(_decision_sources()),
+                    "description": (
+                        "Use user only when recording an explicit user-stated durable "
+                        "commitment; otherwise use agent."
+                    ),
+                },
                 "priority": {"type": "string", "enum": sorted(_decision_priorities())},
-                "title": {"type": "string", "minLength": 1},
-                "decision": {"type": "string", "minLength": 1},
-                "rationale": {"type": "string"},
+                "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Short label for the commitment, not a copied prompt.",
+                },
+                "decision": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "Interpreted durable rule phrased for future behavior. Prefer "
+                        "imperative wording such as 'Run pytest and ruff before final "
+                        "handoff.' Do not paste the raw user message here."
+                    ),
+                },
+                "intent": {
+                    "type": "string",
+                    "description": (
+                        "Why this commitment exists; summarize the user's intent in your "
+                        "own words."
+                    ),
+                },
+                "applies_when": {
+                    "type": "string",
+                    "description": (
+                        "Condition or work area where this decision should steer future "
+                        "turns, for example 'when changing provider request payloads'."
+                    ),
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": "Concise reason this is a binding decision.",
+                },
+                "source_excerpt": {
+                    "type": "string",
+                    "description": "Short exact user quote that triggered this decision.",
+                },
                 "supersedes": {"type": "string"},
             },
             ["title", "decision"],
@@ -1548,7 +1618,10 @@ def _decision_create_spec() -> ToolSpec:
 def _decision_update_spec() -> ToolSpec:
     return ToolSpec(
         name="decision.update",
-        description="Update an existing durable key decision.",
+        description=(
+            "Update an existing durable key decision. Prefer updating or superseding a "
+            "related active decision instead of creating a duplicate."
+        ),
         input_schema=_object_schema(
             {
                 "id": {"type": "string", "minLength": 1},
@@ -1558,8 +1631,14 @@ def _decision_update_spec() -> ToolSpec:
                 "status": {"type": "string", "enum": sorted(_decision_statuses())},
                 "priority": {"type": "string", "enum": sorted(_decision_priorities())},
                 "title": {"type": "string"},
-                "decision": {"type": "string"},
+                "decision": {
+                    "type": "string",
+                    "description": "Interpreted future-facing commitment, not raw user text.",
+                },
+                "intent": {"type": "string"},
+                "applies_when": {"type": "string"},
                 "rationale": {"type": "string"},
+                "source_excerpt": {"type": "string"},
             },
             ["id"],
         ),
@@ -1602,7 +1681,11 @@ def _decision_archive_spec() -> ToolSpec:
 def _decision_supersede_spec() -> ToolSpec:
     return ToolSpec(
         name="decision.supersede",
-        description="Supersede a durable key decision with a new active decision.",
+        description=(
+            "Replace an outdated durable key decision with a new active interpreted "
+            "commitment. Use this when the user's latest instruction changes or narrows "
+            "an existing decision."
+        ),
         input_schema=_object_schema(
             {
                 "id": {"type": "string", "minLength": 1},
@@ -1612,8 +1695,15 @@ def _decision_supersede_spec() -> ToolSpec:
                 "source": {"type": "string", "enum": sorted(_decision_sources())},
                 "priority": {"type": "string", "enum": sorted(_decision_priorities())},
                 "title": {"type": "string", "minLength": 1},
-                "decision": {"type": "string", "minLength": 1},
+                "decision": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Replacement future-facing commitment, not raw user text.",
+                },
+                "intent": {"type": "string"},
+                "applies_when": {"type": "string"},
                 "rationale": {"type": "string"},
+                "source_excerpt": {"type": "string"},
             },
             ["id", "title", "decision"],
         ),

@@ -317,6 +317,8 @@ async def test_context_injects_active_key_decisions_before_snapshot(tmp_path: Pa
             priority="critical",
             title="Durable commitments",
             decision="Key decisions are durable commitments, not memories.",
+            intent="Keep commitments stronger than memory context.",
+            applies_when="Preparing model context.",
         )
     )
     await state.save_decision(
@@ -345,8 +347,15 @@ async def test_context_injects_active_key_decisions_before_snapshot(tmp_path: Pa
 
     assert isinstance(result.messages[0], UserMessage)
     content = result.messages[0].content
-    assert content.index("[Active key decisions]") < content.index("[Colossus context snapshot]")
-    assert "CRITICAL kd_1: Key decisions are durable commitments, not memories." in content
+    assert content.index("[Binding active key decisions]") < content.index(
+        "[Colossus context snapshot]"
+    )
+    assert (
+        "CRITICAL kd_1 (Durable commitments): "
+        "Key decisions are durable commitments, not memories."
+    ) in content
+    assert "applies_when: Preparing model context." in content
+    assert "intent: Keep commitments stronger than memory context." in content
     assert "kd_2" not in content
     assert "new tail" in content
 
@@ -411,7 +420,7 @@ async def test_context_injects_relevant_memories_after_decisions_before_snapshot
     )
 
     content = result.messages[0].content
-    assert content.index("[Active key decisions]") < content.index("[Relevant memories]")
+    assert content.index("[Binding active key decisions]") < content.index("[Relevant memories]")
     assert content.index("[Relevant memories]") < content.index("[Colossus context snapshot]")
     assert "REPO/PREFERENCE mem_repo" in content
     assert "mem_global" not in content
@@ -439,7 +448,7 @@ async def test_context_injects_active_key_decisions_without_compaction(tmp_path:
     )
 
     assert isinstance(result.messages[0], UserMessage)
-    assert "[Active key decisions]" in result.messages[0].content
+    assert "[Binding active key decisions]" in result.messages[0].content
     assert result.messages[1].content == "short prompt"
 
 

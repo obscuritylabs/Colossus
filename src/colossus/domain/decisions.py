@@ -26,7 +26,10 @@ class KeyDecision(BaseModel):
     priority: DecisionPriority = "normal"
     title: str
     decision: str
+    intent: str = ""
+    applies_when: str = ""
     rationale: str = ""
+    source_excerpt: str = ""
     supersedes: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)

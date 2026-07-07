@@ -505,9 +505,21 @@ def _context_header(
 
 
 def _active_decisions_message(decisions: tuple[KeyDecision, ...]) -> str:
-    lines = ["[Active key decisions]"]
+    lines = [
+        "[Binding active key decisions]",
+        (
+            "Apply these durable commitments unless the current user explicitly "
+            "supersedes them. They are stronger than memories; memories are "
+            "background context only."
+        ),
+    ]
     for decision in decisions:
-        lines.append(f"- {decision.priority.upper()} {decision.id}: {decision.decision}")
+        title = f" ({decision.title})" if decision.title else ""
+        lines.append(f"- {decision.priority.upper()} {decision.id}{title}: {decision.decision}")
+        if decision.applies_when:
+            lines.append(f"  applies_when: {decision.applies_when}")
+        if decision.intent:
+            lines.append(f"  intent: {decision.intent}")
     return "\n".join(lines)
 
 

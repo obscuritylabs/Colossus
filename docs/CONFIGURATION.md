@@ -594,9 +594,11 @@ network access exists; `web.search` and `mcp.call` remain adapter extension poin
 
 ## Context compaction
 
-Key decisions are durable commitments, not memories. Active key decisions are injected
-into prepared model context before compacted snapshots, while archived and superseded
-decisions remain historical state only.
+Key decisions are durable commitments, not memories. They store an interpreted
+future-facing decision plus intent and applicability, with any exact user wording kept as
+a source excerpt. Active key decisions are injected into prepared model context before
+compacted snapshots as binding guidance, while archived and superseded decisions remain
+historical state only.
 
 Memories are durable context, not instructions. Active memories can be global,
 repo-scoped, or session-scoped, are stored in SQLite, and are retrieved with the

@@ -679,6 +679,9 @@ async def test_decision_tools_persist_session_state_when_service_is_available(
                 "session_id": "session-1",
                 "title": "Durable commitments",
                 "decision": "Key decisions are durable commitments, not memories.",
+                "intent": "Keep durable commitments separate from context notes.",
+                "applies_when": "Preparing context for future model turns.",
+                "source_excerpt": "key decisions are not memories",
                 "priority": "critical",
             },
         )
@@ -699,6 +702,8 @@ async def test_decision_tools_persist_session_state_when_service_is_available(
                 "session_id": "session-1",
                 "title": "Injected commitments",
                 "decision": "Active key decisions are injected before snapshots.",
+                "intent": "Ensure summarization cannot erase durable commitments.",
+                "applies_when": "Before compacted snapshots are sent to a provider.",
                 "priority": "high",
             },
         )
@@ -714,9 +719,15 @@ async def test_decision_tools_persist_session_state_when_service_is_available(
         )
     )
 
-    assert json.loads(created.output)["decision"]["priority"] == "critical"
+    created_payload = json.loads(created.output)["decision"]
+    assert created_payload["priority"] == "critical"
+    assert created_payload["intent"] == "Keep durable commitments separate from context notes."
+    assert created_payload["applies_when"] == "Preparing context for future model turns."
+    assert created_payload["source_excerpt"] == "key decisions are not memories"
     assert json.loads(listed.output)["decisions"][0]["id"] == "kd_1"
-    assert json.loads(superseded.output)["decision"]["supersedes"] == "kd_1"
+    superseded_payload = json.loads(superseded.output)["decision"]
+    assert superseded_payload["supersedes"] == "kd_1"
+    assert superseded_payload["intent"] == "Ensure summarization cannot erase durable commitments."
     assert json.loads(archived.output)["decision"]["status"] == "archived"
     all_decisions = await state.list_decisions(session_id="session-1", status=None)
     assert {decision.status for decision in all_decisions} == {"superseded", "archived"}

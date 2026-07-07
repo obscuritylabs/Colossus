@@ -131,8 +131,9 @@ Every tool input schema uses `additionalProperties: false`. Important shapes:
   `colossus memories list/search`. Subagent jobs are durable queued records visible
   with `/agents` in the REPL or `colossus agents list/status/show/drain/cancel/resume`.
 - Context snapshots are durable SQLite records, but raw session messages remain the
-  source of truth. Active key decisions are injected before snapshot summaries; archived
-  and superseded decisions remain persisted but do not steer future context.
+  source of truth. Active key decisions are interpreted durable commitments with intent
+  and applicability; they are injected before snapshot summaries as binding guidance.
+  Archived and superseded decisions remain persisted but do not steer future context.
 - Memories are context, not instructions. Relevant active memories are injected after
   active key decisions and before snapshot summaries; archived and superseded memories
   remain persisted for history only.
