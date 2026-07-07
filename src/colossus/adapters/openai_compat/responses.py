@@ -5,11 +5,11 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from colossus.adapters.model_catalog import extract_model_infos
+from colossus.adapters.openai_compat import common as openai_common
 from colossus.adapters.tool_name_codec import ToolNameCodec
 from colossus.adapters.tool_schema import provider_input_schema
 from colossus.domain.errors import ProviderError
@@ -30,7 +30,7 @@ from colossus.domain.requests import ModelRequest
 from colossus.domain.tools import ToolSpec
 from colossus.infrastructure.http_client import HttpClientConfig
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("colossus.adapters.openai_responses")
 
 
 class OpenAIResponsesProvider:
@@ -129,7 +129,10 @@ class OpenAIResponsesProvider:
                     ProviderReadinessCheck(
                         name="models_endpoint",
                         status="fail",
-                        detail=_transport_error_detail(exc, f"{self._base_url}/models"),
+                        detail=openai_common.transport_error_detail(
+                            exc,
+                            f"{self._base_url}/models",
+                        ),
                     ),
                 ),
             )
@@ -156,11 +159,13 @@ class OpenAIResponsesProvider:
             "model": request.model,
             "instructions": request.instructions,
             "input": _messages_to_responses_input(request.messages, tool_name_codec),
-            "tools": [
-                _tool_to_responses_tool(tool, tool_name_codec) for tool in request.tools
-            ],
             "store": False,
         }
+        if request.tools:
+            payload["tools"] = [
+                _tool_to_responses_tool(tool, tool_name_codec) for tool in request.tools
+            ]
+        request_body_bytes = openai_common.json_body_size(payload)
         async with httpx.AsyncClient(
             **self._http_client_config.async_client_kwargs(
                 timeout=self._timeout_seconds,
@@ -170,7 +175,11 @@ class OpenAIResponsesProvider:
             endpoint = f"{self._base_url}/responses"
             _debug_http(
                 "provider.responses.request",
-                {"url": _safe_url(endpoint), **_responses_request_debug_shape(payload)},
+                {
+                    "url": openai_common.safe_url(endpoint),
+                    "request_body_bytes": request_body_bytes,
+                    **_responses_request_debug_shape(payload),
+                },
             )
             try:
                 response = await self._post_responses_with_retries(
@@ -178,16 +187,24 @@ class OpenAIResponsesProvider:
                     endpoint,
                     payload,
                 )
-                _debug_http("provider.responses.response", _http_response_debug_shape(response))
+                _debug_http(
+                    "provider.responses.response",
+                    openai_common.http_response_debug_shape(response),
+                )
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 _debug_http(
                     "provider.responses.status_error",
-                    _http_response_debug_shape(exc.response),
+                    openai_common.http_response_debug_shape(exc.response),
                 )
-                raise ProviderError(_http_error_detail(exc)) from exc
+                raise ProviderError(
+                    openai_common.http_error_detail(
+                        exc,
+                        request_body_bytes=request_body_bytes,
+                    )
+                ) from exc
             except (httpx.RequestError, OSError) as exc:
-                detail = _transport_error_detail(exc, endpoint)
+                detail = openai_common.transport_error_detail(exc, endpoint)
                 _debug_http("provider.responses.request_error", {"detail": detail})
                 raise ProviderError(detail) from exc
             data = response.json()
@@ -219,7 +236,7 @@ class OpenAIResponsesProvider:
                 yield ToolCallRequestedEvent(
                     call_id=str(item.get("call_id", "")),
                     name=tool_name_codec.decode(str(item.get("name", ""))),
-                    arguments=_parse_tool_arguments(
+                    arguments=openai_common.parse_tool_arguments(
                         str(item.get("arguments") or "{}"),
                         call_id=str(item.get("call_id", "")),
                         tool_name=str(item.get("name", "")),
@@ -277,22 +294,27 @@ class OpenAIResponsesProvider:
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     json=payload,
                 )
-                if _should_retry_status(response.status_code) and attempt < self._retry_attempts:
+                if (
+                    openai_common.should_retry_status(response.status_code)
+                    and attempt < self._retry_attempts
+                ):
                     _debug_http(
                         "provider.responses.status_retry",
                         {
                             "attempt": attempt,
                             "max_attempts": self._retry_attempts,
                             "status_code": response.status_code,
-                            "url": _safe_url(str(response.request.url)),
+                            "url": openai_common.safe_url(str(response.request.url)),
                         },
                     )
-                    await asyncio.sleep(_retry_delay(self._retry_delay_seconds, attempt))
+                    await asyncio.sleep(
+                        openai_common.retry_delay(self._retry_delay_seconds, attempt)
+                    )
                     continue
                 return response
             except (httpx.RequestError, OSError) as exc:
                 last_exc = exc
-                detail = _transport_error_detail(exc, endpoint)
+                detail = openai_common.transport_error_detail(exc, endpoint)
                 if attempt >= self._retry_attempts:
                     raise
                 _debug_http(
@@ -303,7 +325,9 @@ class OpenAIResponsesProvider:
                         "detail": detail,
                     },
                 )
-                await asyncio.sleep(_retry_delay(self._retry_delay_seconds, attempt))
+                await asyncio.sleep(
+                    openai_common.retry_delay(self._retry_delay_seconds, attempt)
+                )
         if last_exc is not None:
             raise last_exc
         raise RuntimeError("responses transport retry loop exited without a response")
@@ -379,9 +403,7 @@ def _extract_message_text(item: dict[str, object]) -> str:
 
 
 def _debug_http(event: str, details: dict[str, object]) -> None:
-    if not logger.isEnabledFor(logging.DEBUG):
-        return
-    logger.debug("%s %s", event, json.dumps(details, sort_keys=True))
+    openai_common.debug_http(logger, event, details)
 
 
 def _responses_request_debug_shape(payload: dict[str, object]) -> dict[str, object]:
@@ -488,28 +510,6 @@ def _responses_output_item_shape(item: object) -> dict[str, object]:
     return shape
 
 
-def _parse_tool_arguments(
-    arguments_text: str,
-    *,
-    call_id: str,
-    tool_name: str,
-) -> dict[str, object]:
-    try:
-        parsed = json.loads(arguments_text or "{}")
-    except json.JSONDecodeError as exc:
-        raise ProviderError(
-            "Provider returned invalid JSON for tool call arguments. "
-            f"tool={tool_name or '<unknown>'} call_id={call_id or '<unknown>'} "
-            f"size={len(arguments_text)} position={exc.pos}"
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise ProviderError(
-            "Provider returned non-object JSON for tool call arguments. "
-            f"tool={tool_name or '<unknown>'} call_id={call_id or '<unknown>'}"
-        )
-    return parsed
-
-
 def _typed_item_shape(item: object) -> dict[str, object]:
     if not isinstance(item, dict):
         return {"type": type(item).__name__}
@@ -521,60 +521,3 @@ def _typed_item_shape(item: object) -> dict[str, object]:
     if isinstance(text, str):
         shape["text_chars"] = len(text)
     return shape
-
-
-def _http_response_debug_shape(response: httpx.Response) -> dict[str, object]:
-    content_length = response.headers.get("content-length")
-    return {
-        "status_code": response.status_code,
-        "content_type": response.headers.get("content-type", ""),
-        "content_length": content_length if content_length is not None else "",
-        "url": _safe_url(str(response.request.url)),
-    }
-
-
-def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
-    response_text = exc.response.text.strip()
-    suffix = f": {response_text[:500]}" if response_text else ""
-    return f"{exc.response.status_code} from {_safe_url(str(exc.request.url))}{suffix}"
-
-
-def _should_retry_status(status_code: int) -> bool:
-    return status_code in {408, 409, 429} or status_code >= 500
-
-
-def _retry_delay(base_delay_seconds: float, attempt: int) -> float:
-    multiplier = 1.0
-    for _ in range(max(attempt - 1, 0)):
-        multiplier *= 2.0
-    return base_delay_seconds * multiplier
-
-
-def _transport_error_detail(
-    exc: httpx.RequestError | OSError,
-    url: str | None = None,
-) -> str:
-    request = exc.request if isinstance(exc, httpx.RequestError) else None
-    location_url = str(request.url) if request is not None else url
-    location = f" from {_safe_url(location_url)}" if location_url else ""
-    suffix = f": {exc}" if str(exc) else ""
-    return f"{type(exc).__name__}{location}{suffix}"
-
-
-def _safe_url(value: object) -> str:
-    text = str(value)
-    try:
-        parts = urlsplit(text)
-    except ValueError:
-        return text.split("?", 1)[0]
-    host = parts.hostname or ""
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    netloc = host
-    try:
-        port = parts.port
-    except ValueError:
-        port = None
-    if port is not None:
-        netloc = f"{netloc}:{port}"
-    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))

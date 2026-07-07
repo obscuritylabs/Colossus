@@ -7,8 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
-from colossus.adapters.openai_responses import OpenAIResponsesProvider
+from colossus.adapters.openai_compat import LocalOpenAIChatProvider, OpenAIResponsesProvider
 from colossus.domain.errors import ProviderError
 from colossus.domain.events import (
     FinalOutputEvent,
@@ -156,6 +155,50 @@ async def test_openai_responses_provider_maps_payload_and_events() -> None:
             arguments={"input": "README.md"},
         ),
         ModelDeltaEvent(text="there"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_omits_tools_when_none_are_available() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "done"}],
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = [
+        event
+        async for event in provider.stream(
+            ModelRequest(
+                model="model-a",
+                instructions="Be terse.",
+                messages=(UserMessage(content="hello"),),
+                tools=(),
+            )
+        )
+    ]
+
+    assert "tools" not in captured["payload"]
+    assert events == [
+        ModelDeltaEvent(text="done"),
+        FinalOutputEvent(text="done"),
     ]
 
 
@@ -333,6 +376,43 @@ async def test_local_openai_chat_provider_maps_payload_and_events() -> None:
             arguments={"path": "README.md"},
         ),
         ModelDeltaEvent(text="done"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_openai_chat_provider_omits_tools_when_none_are_available() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "done"}}]},
+            request=request,
+        )
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = [
+        event
+        async for event in provider.stream(
+            ModelRequest(
+                model="model-b",
+                instructions="System text.",
+                messages=(UserMessage(content="question"),),
+                tools=(),
+            )
+        )
+    ]
+
+    assert "tools" not in captured["payload"]
+    assert events == [
+        ModelDeltaEvent(text="done"),
+        FinalOutputEvent(text="done"),
     ]
 
 
@@ -1035,6 +1115,30 @@ async def test_local_openai_chat_provider_wraps_http_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_openai_chat_provider_reports_413_request_body_bytes() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(413, text="payload too large", request=request)
+
+    provider = LocalOpenAIChatProvider(
+        api_key="local-key",
+        base_url="http://localhost:11434/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    request = ModelRequest(
+        model="model-b",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(),
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match=r"413.*request_body_bytes=.*serialized HTTP request body",
+    ):
+        _ = [event async for event in provider.stream(request)]
+
+
+@pytest.mark.asyncio
 async def test_local_openai_chat_provider_retries_transient_non_stream_status() -> None:
     stream_attempts = 0
     non_stream_attempts = 0
@@ -1100,6 +1204,30 @@ async def test_openai_responses_provider_wraps_http_errors() -> None:
     )
 
     with pytest.raises(ProviderError, match=r"403.*forbidden"):
+        _ = [event async for event in provider.stream(request)]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_provider_reports_413_request_body_bytes() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(413, text="payload too large", request=request)
+
+    provider = OpenAIResponsesProvider(
+        api_key="test-key",
+        base_url="https://provider.test/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    request = ModelRequest(
+        model="model-a",
+        instructions="System text.",
+        messages=(UserMessage(content="question"),),
+        tools=(),
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match=r"413.*request_body_bytes=.*serialized HTTP request body",
+    ):
         _ = [event async for event in provider.stream(request)]
 
 

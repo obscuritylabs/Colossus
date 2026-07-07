@@ -6,11 +6,11 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from colossus.adapters.model_catalog import extract_model_infos
+from colossus.adapters.openai_compat import common as openai_common
 from colossus.adapters.tool_name_codec import ToolNameCodec
 from colossus.adapters.tool_schema import provider_input_schema
 from colossus.domain.errors import ProviderError
@@ -32,7 +32,7 @@ from colossus.domain.requests import ModelRequest
 from colossus.domain.tools import ToolSpec
 from colossus.infrastructure.http_client import HttpClientConfig
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("colossus.adapters.local_openai_chat")
 
 
 class LocalOpenAIChatProvider:
@@ -143,8 +143,11 @@ class LocalOpenAIChatProvider:
         payload: dict[str, object] = {
             "model": request.model,
             "messages": messages,
-            "tools": [_tool_to_chat_tool(tool, tool_name_codec) for tool in request.tools],
         }
+        if request.tools:
+            payload["tools"] = [
+                _tool_to_chat_tool(tool, tool_name_codec) for tool in request.tools
+            ]
         async with httpx.AsyncClient(
             **self._http_client_config.async_client_kwargs(
                 timeout=self._timeout_seconds,
@@ -191,10 +194,15 @@ class LocalOpenAIChatProvider:
         tool_name_codec: ToolNameCodec,
     ) -> AsyncIterator[RunEvent]:
         streamed_payload = {**payload, "stream": True}
+        streamed_body_bytes = openai_common.json_body_size(streamed_payload)
         endpoint = f"{self._base_url}/chat/completions"
         _debug_http(
             "provider.chat.stream.request",
-            {"url": _safe_url(endpoint), **_chat_request_debug_shape(streamed_payload)},
+            {
+                "url": openai_common.safe_url(endpoint),
+                "request_body_bytes": streamed_body_bytes,
+                **_chat_request_debug_shape(streamed_payload),
+            },
         )
         try:
             stream_context = client.stream(
@@ -207,10 +215,11 @@ class LocalOpenAIChatProvider:
                 async for event in self._events_from_stream_response(
                     response,
                     tool_name_codec,
+                    request_body_bytes=streamed_body_bytes,
                 ):
                     yield event
         except (httpx.RequestError, OSError) as exc:
-            detail = _transport_error_detail(exc, endpoint)
+            detail = openai_common.transport_error_detail(exc, endpoint)
             _debug_http("provider.chat.stream.request_error", {"detail": detail})
             raise _StreamingFallbackRequired(
                 "Provider stream failed before yielding events. "
@@ -221,16 +230,23 @@ class LocalOpenAIChatProvider:
         self,
         response: httpx.Response,
         tool_name_codec: ToolNameCodec,
+        *,
+        request_body_bytes: int,
     ) -> AsyncIterator[RunEvent]:
-        _debug_http("provider.chat.stream.response", _http_response_debug_shape(response))
+        _debug_http(
+            "provider.chat.stream.response",
+            openai_common.http_response_debug_shape(response),
+        )
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             _debug_http(
                 "provider.chat.stream.status_error",
-                _http_response_debug_shape(exc.response),
+                openai_common.http_response_debug_shape(exc.response),
             )
-            raise _StreamingFallbackRequired(_http_status_detail(exc)) from None
+            raise _StreamingFallbackRequired(
+                _http_status_detail(exc, request_body_bytes=request_body_bytes)
+            ) from None
         content_type = response.headers.get("content-type", "")
         if "text/event-stream" not in content_type:
             body = await response.aread()
@@ -306,25 +322,38 @@ class LocalOpenAIChatProvider:
         tool_name_codec: ToolNameCodec,
     ) -> AsyncIterator[RunEvent]:
         endpoint = f"{self._base_url}/chat/completions"
+        request_body_bytes = openai_common.json_body_size(payload)
         _debug_http(
             "provider.chat.non_stream.request",
-            {"url": _safe_url(endpoint), **_chat_request_debug_shape(payload)},
+            {
+                "url": openai_common.safe_url(endpoint),
+                "request_body_bytes": request_body_bytes,
+                **_chat_request_debug_shape(payload),
+            },
         )
         try:
             response = await self._post_chat_with_retries(client, endpoint, payload)
         except (httpx.RequestError, OSError) as exc:
-            detail = _transport_error_detail(exc, endpoint)
+            detail = openai_common.transport_error_detail(exc, endpoint)
             _debug_http("provider.chat.non_stream.request_error", {"detail": detail})
             raise ProviderError(detail) from exc
-        _debug_http("provider.chat.non_stream.response", _http_response_debug_shape(response))
+        _debug_http(
+            "provider.chat.non_stream.response",
+            openai_common.http_response_debug_shape(response),
+        )
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             _debug_http(
                 "provider.chat.non_stream.status_error",
-                _http_response_debug_shape(exc.response),
+                openai_common.http_response_debug_shape(exc.response),
             )
-            raise ProviderError(_http_error_detail(exc)) from exc
+            raise ProviderError(
+                openai_common.http_error_detail(
+                    exc,
+                    request_body_bytes=request_body_bytes,
+                )
+            ) from exc
         data = response.json()
         response_shape = _chat_completion_shape(data)
         _debug_http(
@@ -358,22 +387,27 @@ class LocalOpenAIChatProvider:
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     json=payload,
                 )
-                if _should_retry_status(response.status_code) and attempt < self._retry_attempts:
+                if (
+                    openai_common.should_retry_status(response.status_code)
+                    and attempt < self._retry_attempts
+                ):
                     _debug_http(
                         "provider.chat.non_stream.status_retry",
                         {
                             "attempt": attempt,
                             "max_attempts": self._retry_attempts,
                             "status_code": response.status_code,
-                            "url": _safe_url(str(response.request.url)),
+                            "url": openai_common.safe_url(str(response.request.url)),
                         },
                     )
-                    await asyncio.sleep(_retry_delay(self._retry_delay_seconds, attempt))
+                    await asyncio.sleep(
+                        openai_common.retry_delay(self._retry_delay_seconds, attempt)
+                    )
                     continue
                 return response
             except (httpx.RequestError, OSError) as exc:
                 last_exc = exc
-                detail = _transport_error_detail(exc, endpoint)
+                detail = openai_common.transport_error_detail(exc, endpoint)
                 if attempt >= self._retry_attempts:
                     raise
                 _debug_http(
@@ -384,7 +418,9 @@ class LocalOpenAIChatProvider:
                         "detail": detail,
                     },
                 )
-                await asyncio.sleep(_retry_delay(self._retry_delay_seconds, attempt))
+                await asyncio.sleep(
+                    openai_common.retry_delay(self._retry_delay_seconds, attempt)
+                )
         if last_exc is not None:
             raise last_exc
         raise RuntimeError("chat completion retry loop exited without a response")
@@ -458,7 +494,7 @@ async def _events_from_chat_completion(
         yield ToolCallRequestedEvent(
             call_id=str(tool_call.get("id", "")),
             name=tool_name_codec.decode(str(function.get("name", ""))),
-            arguments=_parse_tool_arguments(
+            arguments=openai_common.parse_tool_arguments(
                 str(function.get("arguments") or "{}"),
                 call_id=str(tool_call.get("id", "")),
                 tool_name=str(function.get("name", "")),
@@ -560,7 +596,7 @@ def _tool_call_events(
             ToolCallRequestedEvent(
                 call_id=call.call_id,
                 name=tool_name_codec.decode(call.name),
-                arguments=_parse_tool_arguments(
+                arguments=openai_common.parse_tool_arguments(
                     arguments_text,
                     call_id=call.call_id,
                     tool_name=call.name,
@@ -568,28 +604,6 @@ def _tool_call_events(
             )
         )
     return tuple(events)
-
-
-def _parse_tool_arguments(
-    arguments_text: str,
-    *,
-    call_id: str,
-    tool_name: str,
-) -> dict[str, object]:
-    try:
-        parsed = json.loads(arguments_text or "{}")
-    except json.JSONDecodeError as exc:
-        raise ProviderError(
-            "Provider returned invalid JSON for tool call arguments. "
-            f"tool={tool_name or '<unknown>'} call_id={call_id or '<unknown>'} "
-            f"size={len(arguments_text)} position={exc.pos}"
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise ProviderError(
-            "Provider returned non-object JSON for tool call arguments. "
-            f"tool={tool_name or '<unknown>'} call_id={call_id or '<unknown>'}"
-        )
-    return parsed
 
 
 def _extract_content_text(value: object) -> str:
@@ -718,9 +732,7 @@ def _typed_item_shape(item: object) -> dict[str, object]:
 
 
 def _debug_http(event: str, details: dict[str, object]) -> None:
-    if not logger.isEnabledFor(logging.DEBUG):
-        return
-    logger.debug("%s %s", event, json.dumps(details, sort_keys=True))
+    openai_common.debug_http(logger, event, details)
 
 
 def _chat_request_debug_shape(payload: dict[str, object]) -> dict[str, object]:
@@ -793,35 +805,6 @@ def _chat_tool_names(tools: list[object]) -> list[str]:
     return names
 
 
-def _http_response_debug_shape(response: httpx.Response) -> dict[str, object]:
-    content_length = response.headers.get("content-length")
-    return {
-        "status_code": response.status_code,
-        "content_type": response.headers.get("content-type", ""),
-        "content_length": content_length if content_length is not None else "",
-        "url": _safe_url(str(response.request.url)),
-    }
-
-
-def _safe_url(value: object) -> str:
-    text = str(value)
-    try:
-        parts = urlsplit(text)
-    except ValueError:
-        return text.split("?", 1)[0]
-    host = parts.hostname or ""
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    netloc = host
-    try:
-        port = parts.port
-    except ValueError:
-        port = None
-    if port is not None:
-        netloc = f"{netloc}:{port}"
-    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-
-
 @dataclass
 class _StreamToolCall:
     call_id: str = ""
@@ -833,45 +816,28 @@ class _StreamingFallbackRequired(Exception):
     """Raised when a streaming attempt should be retried without streaming."""
 
 
-def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
-    response_text = exc.response.text.strip()
-    suffix = f": {response_text[:500]}" if response_text else ""
-    return (
-        f"{exc.response.status_code} from "
-        f"{_safe_url(str(exc.request.url))}{suffix}"
-    )
-
-
-def _http_status_detail(exc: httpx.HTTPStatusError) -> str:
+def _http_status_detail(
+    exc: httpx.HTTPStatusError,
+    *,
+    request_body_bytes: int,
+) -> str:
     content_type = exc.response.headers.get("content-type", "")
     suffix = f" content_type={content_type}" if content_type else ""
-    return f"HTTP {exc.response.status_code} from {_safe_url(str(exc.request.url))}{suffix}"
-
-
-def _should_retry_status(status_code: int) -> bool:
-    return status_code in {408, 409, 429} or status_code >= 500
-
-
-def _retry_delay(base_delay_seconds: float, attempt: int) -> float:
-    multiplier = 1.0
-    for _ in range(max(attempt - 1, 0)):
-        multiplier *= 2.0
-    return base_delay_seconds * multiplier
-
-
-def _transport_error_detail(
-    exc: httpx.RequestError | OSError,
-    url: str | None = None,
-) -> str:
-    request = exc.request if isinstance(exc, httpx.RequestError) else None
-    location_url = str(request.url) if request is not None else url
-    location = f" from {_safe_url(location_url)}" if location_url else ""
-    suffix = f": {exc}" if str(exc) else ""
-    return f"{type(exc).__name__}{location}{suffix}"
+    detail = (
+        f"HTTP {exc.response.status_code} from "
+        f"{openai_common.safe_url(str(exc.request.url))}{suffix}"
+    )
+    if request_body_bytes:
+        detail = f"{detail} request_body_bytes={request_body_bytes}"
+    return detail
 
 
 def _stream_error_detail(exc: httpx.HTTPError) -> str:
     request = getattr(exc, "request", None)
-    location = f" from {_safe_url(str(request.url))}" if request is not None else ""
+    location = (
+        f" from {openai_common.safe_url(str(request.url))}"
+        if request is not None
+        else ""
+    )
     suffix = f": {exc}" if str(exc) else ""
     return f"{type(exc).__name__}{location}{suffix}"

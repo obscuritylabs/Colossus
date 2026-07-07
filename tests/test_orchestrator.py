@@ -9,12 +9,14 @@ from colossus.adapters.skills_filesystem import FilesystemSkillRepository
 from colossus.adapters.sqlite_state import SQLiteStateStore
 from colossus.adapters.workspace import Workspace
 from colossus.application.approvals import AllowAllApprovalHandler, DenyByDefaultApprovalHandler
+from colossus.application.context import ContextService
 from colossus.application.decisions import DecisionService
 from colossus.application.defaults import default_agent
 from colossus.application.orchestrator import AgentOrchestrator
 from colossus.application.policy import DefaultPolicyEngine
 from colossus.application.skills import SkillComposer, SkillResolver
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
+from colossus.domain.context import ContextConfig
 from colossus.domain.errors import ColossusError, ProviderError
 from colossus.domain.events import (
     FinalOutputEvent,
@@ -25,7 +27,7 @@ from colossus.domain.events import (
     ToolCallCompletedEvent,
     ToolCallRequestedEvent,
 )
-from colossus.domain.messages import AssistantMessage, ToolResultMessage
+from colossus.domain.messages import AssistantMessage, ToolResultMessage, UserMessage
 from colossus.domain.requests import AgentRunRequest, ModelRequest
 from colossus.domain.tools import ToolSpec
 
@@ -162,6 +164,31 @@ class CapturingFinalProvider:
     async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
         self.requests.append(request)
         yield FinalOutputEvent(text="done")
+
+
+class ToolSearchThenEchoProvider:
+    name = "tool-search-then-echo"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        self.requests.append(request)
+        tool_results = [message for message in request.messages if message.role == "tool"]
+        if any(message.name == "echo" for message in tool_results):
+            yield FinalOutputEvent(text="done")
+        elif any(message.name == "tool.search" for message in tool_results):
+            yield ToolCallRequestedEvent(
+                call_id="call-2",
+                name="echo",
+                arguments={"text": "after search"},
+            )
+        else:
+            yield ToolCallRequestedEvent(
+                call_id="call-1",
+                name="tool.search",
+                arguments={"query": "echo"},
+            )
 
 
 class TextToolThenEmptyProvider:
@@ -353,6 +380,181 @@ async def test_orchestrator_emits_prepared_model_request_without_persisting_it(
     )
     persisted = await state.list_events("run-1")
     assert all(not isinstance(event, ModelRequestPreparedEvent) for event in persisted)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_trims_oldest_turns_to_request_byte_budget(tmp_path) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    provider = CapturingFinalProvider()
+    registry = InMemoryToolRegistry(())
+    await state.append_message("session-1", "run-0", UserMessage(content="x" * 5_000))
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        context_service=ContextService(
+            state,
+            JsonlAuditSink(tmp_path / "context-audit.jsonl"),
+            config=ContextConfig(auto_compaction=False, max_request_bytes=1_500),
+        ),
+    )
+
+    await orchestrator.run(
+        AgentRunRequest(
+            prompt="current prompt",
+            agent=default_agent("model-a"),
+            session_id="session-1",
+        )
+    )
+
+    assert len(provider.requests) == 1
+    assert provider.requests[0].messages == (UserMessage(content="current prompt"),)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_limits_default_agent_tool_schemas_to_request_budget(
+    tmp_path,
+) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    huge_spec = ToolSpec(
+        name="huge",
+        description="x" * 10_000,
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    )
+    search_spec = ToolSpec(
+        name="tool.search",
+        description="Find relevant tools by keyword.",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    )
+    registry = InMemoryToolRegistry((huge_spec, search_spec))
+    provider = CapturingFinalProvider()
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        context_service=ContextService(
+            state,
+            JsonlAuditSink(tmp_path / "context-audit.jsonl"),
+            config=ContextConfig(auto_compaction=False, max_request_bytes=100_000),
+        ),
+    )
+
+    await orchestrator.run(AgentRunRequest(prompt="hello", agent=default_agent("model-a")))
+
+    assert len(provider.requests) == 1
+    assert provider.requests[0].tools == (search_spec,)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_expands_tool_schemas_after_tool_search(tmp_path) -> None:
+    async def tool_search_handler(_arguments: dict[str, object]) -> str:
+        return json.dumps({"tools": [{"name": "echo", "description": "Echo text."}]})
+
+    async def echo_handler(arguments: dict[str, object]) -> str:
+        return str(arguments["text"])
+
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    echo_spec = ToolSpec(
+        name="echo",
+        description="x" * 5_000,
+        input_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    )
+    search_spec = ToolSpec(
+        name="tool.search",
+        description="Find relevant tools by keyword.",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    )
+    registry = InMemoryToolRegistry((echo_spec, search_spec))
+    provider = ToolSearchThenEchoProvider()
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor(
+            {"tool.search": tool_search_handler, "echo": echo_handler},
+            registry,
+        ),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        context_service=ContextService(
+            state,
+            JsonlAuditSink(tmp_path / "context-audit.jsonl"),
+            config=ContextConfig(auto_compaction=False, max_request_bytes=100_000),
+        ),
+    )
+
+    result = await orchestrator.run(
+        AgentRunRequest(prompt="hello", agent=default_agent("model-a"))
+    )
+
+    assert result.final_output == "done"
+    assert tuple(tool.name for tool in provider.requests[0].tools) == ("tool.search",)
+    assert tuple(tool.name for tool in provider.requests[1].tools) == (
+        "tool.search",
+        "echo",
+    )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_fails_fast_when_explicit_tools_exceed_request_byte_budget(
+    tmp_path,
+) -> None:
+    state = SQLiteStateStore(tmp_path / "state.sqlite3")
+    spec = ToolSpec(
+        name="huge",
+        description="x" * 2_000,
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    )
+    registry = InMemoryToolRegistry((spec,))
+    provider = CapturingFinalProvider()
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        context_service=ContextService(
+            state,
+            JsonlAuditSink(tmp_path / "context-audit.jsonl"),
+            config=ContextConfig(auto_compaction=False, max_request_bytes=1_024),
+        ),
+    )
+
+    with pytest.raises(ProviderError, match=r"fixed_bytes=.*tool_count=1"):
+        await orchestrator.run(
+            AgentRunRequest(
+                prompt="hello",
+                agent=default_agent("model-a").model_copy(update={"tools": ("huge",)}),
+            )
+        )
+
+    assert provider.requests == []
 
 
 @pytest.mark.asyncio

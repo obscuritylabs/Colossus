@@ -48,7 +48,9 @@ The current config is strict: unknown fields are rejected.
     "compact_at_percent": 0.7,
     "target_percent": 0.45,
     "recent_tail_messages": 8,
-    "model_assisted": true
+    "model_assisted": true,
+    "max_request_bytes": null,
+    "tool_schema_budget_percent": 0.02
   },
   "agent": {
     "max_turns": 24
@@ -624,7 +626,9 @@ there.
   },
   "context": {
     "compact_at_percent": 0.7,
-    "target_percent": 0.45
+    "target_percent": 0.45,
+    "max_request_bytes": 900000,
+    "tool_schema_budget_percent": 0.02
   }
 }
 ```

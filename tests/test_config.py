@@ -4,8 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
-from colossus.adapters.openai_responses import OpenAIResponsesProvider
+from colossus.adapters.openai_compat import LocalOpenAIChatProvider, OpenAIResponsesProvider
 from colossus.domain.models import ModelProfile, ModelRoutingConfig
 from colossus.infrastructure.config import (
     AgentConfig,

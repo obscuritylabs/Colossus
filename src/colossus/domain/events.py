@@ -30,6 +30,7 @@ class ModelRequestPreparedEvent(BaseModel):
     instructions: str
     messages: tuple[dict[str, object], ...] = Field(default_factory=tuple)
     tools: tuple[dict[str, object], ...] = Field(default_factory=tuple)
+    request_byte_estimate: int | None = None
 
 
 class ContextPreparedEvent(BaseModel):

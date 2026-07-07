@@ -55,6 +55,26 @@ SESSION_CONTEXT_TOOLS = frozenset(
 RUN_CONTEXT_TOOLS = frozenset({"agent.delegate"})
 ACTIVE_SKILL_CONTEXT_TOOLS = frozenset({"skill.resource.list", "skill.resource.read"})
 GOAL_CONTEXT_TOOLS = frozenset({"goal.show", "goal.update"})
+TOOL_SCHEMA_BUDGET_PRIORITY = (
+    "tool.search",
+    "filesystem.search",
+    "filesystem.read",
+    "filesystem.list",
+    "git.status",
+    "git.diff",
+    "shell.run",
+    "web.fetch",
+    "docs.fetch",
+    "mcp.tools",
+    "skill.resource.list",
+    "skill.resource.read",
+    "context.show",
+    "memory.search",
+    "task.list",
+    "decision.list",
+    "goal.show",
+    "user.ask",
+)
 
 
 class AgentOrchestrator:
@@ -109,9 +129,25 @@ class AgentOrchestrator:
     async def run(self, request: AgentRunRequest) -> AgentRunResult:
         started = perf_counter()
         run_id = self._run_id_factory()
-        tool_specs = self._tool_specs_for_agent(request.agent.tools)
+        all_tool_specs = self._tool_specs_for_agent(request.agent.tools)
         if request.goal_id is None:
-            tool_specs = tuple(spec for spec in tool_specs if spec.name not in GOAL_CONTEXT_TOOLS)
+            all_tool_specs = tuple(
+                spec for spec in all_tool_specs if spec.name not in GOAL_CONTEXT_TOOLS
+            )
+        tool_specs = all_tool_specs
+        dynamic_tool_expansion = not request.agent.tools
+        if (
+            dynamic_tool_expansion
+            and self._context_service is not None
+            and self._context_service.config.max_request_bytes is not None
+        ):
+            tool_specs = _enforce_tool_schema_budget(
+                tool_specs,
+                max_request_bytes=self._context_service.config.max_request_bytes,
+                tool_schema_budget_percent=(
+                    self._context_service.config.tool_schema_budget_percent
+                ),
+            )
         instructions = request.agent.instructions
         skill_context = None
         if self._skill_composer is not None:
@@ -198,7 +234,22 @@ class AgentOrchestrator:
                 messages=prepared_messages,
                 tools=tool_specs,
             )
-            self._observe_event(_model_request_prepared_event(turn, model_request))
+            request_byte_estimate = _model_request_byte_estimate(model_request)
+            if (
+                self._context_service is not None
+                and self._context_service.config.max_request_bytes is not None
+            ):
+                model_request, request_byte_estimate = _enforce_model_request_byte_budget(
+                    model_request,
+                    self._context_service.config.max_request_bytes,
+                )
+            self._observe_event(
+                _model_request_prepared_event(
+                    turn,
+                    model_request,
+                    request_byte_estimate=request_byte_estimate,
+                )
+            )
             pending_tool_calls: list[ToolCall] = []
             collected_text: list[str] = []
             turn_final_text = ""
@@ -277,6 +328,12 @@ class AgentOrchestrator:
                     request.goal_id,
                     active_skill_names,
                 )
+                if dynamic_tool_expansion and call.name == "tool.search":
+                    tool_specs = _expand_tool_specs_from_tool_search(
+                        tool_specs,
+                        all_tool_specs,
+                        result.output,
+                    )
                 tool_message = ToolResultMessage(
                     call_id=result.call_id,
                     name=result.name,
@@ -588,14 +645,163 @@ def _with_execution_context(
     return call.model_copy(update={"arguments": arguments})
 
 
-def _model_request_prepared_event(turn: int, request: ModelRequest) -> ModelRequestPreparedEvent:
+def _model_request_prepared_event(
+    turn: int,
+    request: ModelRequest,
+    *,
+    request_byte_estimate: int,
+) -> ModelRequestPreparedEvent:
     return ModelRequestPreparedEvent(
         turn=turn,
         model=request.model,
         instructions=request.instructions,
         messages=tuple(message.model_dump(mode="json") for message in request.messages),
         tools=tuple(tool.model_dump(mode="json") for tool in request.tools),
+        request_byte_estimate=request_byte_estimate,
     )
+
+
+def _model_request_byte_estimate(request: ModelRequest) -> int:
+    payload = {
+        "model": request.model,
+        "instructions": request.instructions,
+        "messages": tuple(message.model_dump(mode="json") for message in request.messages),
+        "tools": tuple(tool.model_dump(mode="json") for tool in request.tools),
+    }
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _enforce_tool_schema_budget(
+    tools: tuple[ToolSpec, ...],
+    *,
+    max_request_bytes: int,
+    tool_schema_budget_percent: float | None,
+) -> tuple[ToolSpec, ...]:
+    if not tools or tool_schema_budget_percent is None:
+        return tools
+    max_tool_schema_bytes = int(max_request_bytes * tool_schema_budget_percent)
+    if max_tool_schema_bytes <= 0:
+        return ()
+    if _tool_schema_byte_estimate(tools) <= max_tool_schema_bytes:
+        return tools
+
+    selected: list[ToolSpec] = []
+    for spec in _prioritized_tool_specs(tools):
+        candidate = (*selected, spec)
+        if _tool_schema_byte_estimate(candidate) <= max_tool_schema_bytes:
+            selected.append(spec)
+    return tuple(selected)
+
+
+def _tool_schema_byte_estimate(tools: tuple[ToolSpec, ...]) -> int:
+    payload = tuple(tool.model_dump(mode="json") for tool in tools)
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _prioritized_tool_specs(tools: tuple[ToolSpec, ...]) -> tuple[ToolSpec, ...]:
+    tools_by_name = {tool.name: tool for tool in tools}
+    prioritized: list[ToolSpec] = []
+    seen: set[str] = set()
+    for name in TOOL_SCHEMA_BUDGET_PRIORITY:
+        spec = tools_by_name.get(name)
+        if spec is None:
+            continue
+        prioritized.append(spec)
+        seen.add(name)
+    prioritized.extend(tool for tool in tools if tool.name not in seen)
+    return tuple(prioritized)
+
+
+def _expand_tool_specs_from_tool_search(
+    current_tools: tuple[ToolSpec, ...],
+    available_tools: tuple[ToolSpec, ...],
+    output: str,
+) -> tuple[ToolSpec, ...]:
+    requested_names = _tool_search_result_names(output)
+    if not requested_names:
+        return current_tools
+    current_names = {tool.name for tool in current_tools}
+    available_by_name = {tool.name: tool for tool in available_tools}
+    expanded = list(current_tools)
+    for name in requested_names:
+        if name in current_names:
+            continue
+        spec = available_by_name.get(name)
+        if spec is None:
+            continue
+        expanded.append(spec)
+        current_names.add(name)
+    return tuple(expanded)
+
+
+def _tool_search_result_names(output: str) -> tuple[str, ...]:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(payload, dict):
+        return ()
+    tools = payload.get("tools")
+    if not isinstance(tools, list):
+        return ()
+    names: list[str] = []
+    seen: set[str] = set()
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        name = tool.get("name")
+        if not isinstance(name, str) or not name or name in seen:
+            continue
+        names.append(name)
+        seen.add(name)
+    return tuple(names)
+
+
+def _enforce_model_request_byte_budget(
+    request: ModelRequest,
+    max_request_bytes: int,
+) -> tuple[ModelRequest, int]:
+    request_bytes = _model_request_byte_estimate(request)
+    if request_bytes <= max_request_bytes:
+        return request, request_bytes
+
+    fixed_request = request.model_copy(update={"messages": ()})
+    fixed_bytes = _model_request_byte_estimate(fixed_request)
+    if fixed_bytes > max_request_bytes:
+        raise ProviderError(
+            "Prepared model request exceeds the configured request body byte limit before "
+            "message history is included. "
+            f"request_bytes={request_bytes} fixed_bytes={fixed_bytes} "
+            f"max_request_bytes={max_request_bytes} tool_count={len(request.tools)}. "
+            "Reduce the tool catalog for this agent or raise context.max_request_bytes."
+        )
+
+    messages = list(request.messages)
+    while len(messages) > 1 and request_bytes > max_request_bytes:
+        trim_to = _next_user_message_index(messages)
+        if trim_to is None:
+            break
+        messages = messages[trim_to:]
+        trimmed_request = request.model_copy(update={"messages": tuple(messages)})
+        request_bytes = _model_request_byte_estimate(trimmed_request)
+        request = trimmed_request
+
+    if request_bytes > max_request_bytes:
+        raise ProviderError(
+            "Prepared model request exceeds the configured request body byte limit after "
+            "older conversation turns were trimmed. "
+            f"request_bytes={request_bytes} max_request_bytes={max_request_bytes} "
+            f"message_count={len(request.messages)} tool_count={len(request.tools)}. "
+            "The latest user turn, instructions, or tool schemas are too large for this limit."
+        )
+    return request, request_bytes
+
+
+def _next_user_message_index(messages: list[Message]) -> int | None:
+    for index, message in enumerate(messages[1:], start=1):
+        if isinstance(message, UserMessage):
+            return index
+    return None
 
 
 def _context_prepared_event(

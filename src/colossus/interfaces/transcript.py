@@ -640,6 +640,7 @@ def _model_request_dump(event: ModelRequestPreparedEvent) -> str:
             "instructions": event.instructions,
             "messages": event.messages,
             "model": event.model,
+            "request_byte_estimate": event.request_byte_estimate,
             "tools": list(event.tools),
             "turn": event.turn,
         },

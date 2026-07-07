@@ -21,6 +21,8 @@ class ContextConfig(BaseModel):
     target_percent: float = 0.45
     recent_tail_messages: int = 8
     model_assisted: bool = True
+    max_request_bytes: int | None = None
+    tool_schema_budget_percent: float | None = 0.02
 
     @field_validator("default_context_window_tokens")
     @classmethod
@@ -41,6 +43,22 @@ class ContextConfig(BaseModel):
     def _non_negative_tail(cls, value: int) -> int:
         if value < 0:
             raise ValueError("recent_tail_messages must be non-negative.")
+        return value
+
+    @field_validator("max_request_bytes")
+    @classmethod
+    def _valid_max_request_bytes(cls, value: int | None) -> int | None:
+        if value is not None and value < 1024:
+            raise ValueError("max_request_bytes must be at least 1024 bytes.")
+        return value
+
+    @field_validator("tool_schema_budget_percent")
+    @classmethod
+    def _valid_tool_schema_budget_percent(cls, value: float | None) -> float | None:
+        if value is not None and (value <= 0 or value >= 1):
+            raise ValueError(
+                "tool_schema_budget_percent must be greater than 0 and less than 1."
+            )
         return value
 
     @model_validator(mode="after")
