@@ -1,5 +1,5 @@
 from colossus.adapters.echo_provider import EchoModelProvider
-from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
+from colossus.adapters.openai_compat import LocalOpenAIChatProvider
 from colossus.domain.models import ModelProfile, ModelRoutingConfig
 from colossus.infrastructure.config import ColossusConfig
 from colossus.infrastructure.container import create_model_router

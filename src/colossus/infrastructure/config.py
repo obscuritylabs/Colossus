@@ -8,8 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from colossus.adapters.echo_provider import EchoModelProvider
-from colossus.adapters.local_openai_chat import LocalOpenAIChatProvider
-from colossus.adapters.openai_responses import OpenAIResponsesProvider
+from colossus.adapters.openai_compat import LocalOpenAIChatProvider, OpenAIResponsesProvider
 from colossus.domain.agents import DEFAULT_AGENT_MAX_TURNS, MAX_AGENT_MAX_TURNS
 from colossus.domain.context import ContextConfig
 from colossus.domain.models import (

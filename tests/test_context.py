@@ -58,9 +58,12 @@ def _context_service(
 
 def test_context_config_validates_percentages() -> None:
     assert ContextConfig().compact_at_percent == 0.70
+    assert ContextConfig().tool_schema_budget_percent == 0.02
 
     with pytest.raises(ValidationError):
         ContextConfig(compact_at_percent=0.4, target_percent=0.5)
+    with pytest.raises(ValidationError):
+        ContextConfig(tool_schema_budget_percent=1.0)
 
 
 def test_context_budget_uses_model_window_override(tmp_path: Path) -> None:

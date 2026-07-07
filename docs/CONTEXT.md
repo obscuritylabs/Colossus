@@ -19,6 +19,11 @@ tool loops from paying for a new summarizer call after every small tool result.
 - The newest 8 messages are kept uncompressed by default.
 - Model-assisted summaries are best-effort; deterministic compaction always works
   offline.
+- `max_request_bytes` is disabled by default. Set it for local endpoints that reject
+  large HTTP request bodies before token context is exhausted.
+- When `max_request_bytes` is set, default all-tool agents advertise at most 2% of that
+  budget as initial tool schemas. Set `tool_schema_budget_percent` to `null` to disable
+  this startup cap.
 
 Configure model-specific windows:
 
@@ -40,11 +45,24 @@ Configure model-specific windows:
     "compact_at_percent": 0.7,
     "target_percent": 0.45,
     "recent_tail_messages": 8,
-    "model_assisted": true
+    "model_assisted": true,
+    "max_request_bytes": 900000,
+    "tool_schema_budget_percent": 0.02
   },
   "allow_user_skill_overrides": false
 }
 ```
+
+`max_request_bytes` is a serialized HTTP request-body guard, not a context-window token
+setting. It can trim older conversation turns before a provider call.
+`tool_schema_budget_percent` is a startup guard for the initial request: when an agent
+uses the default empty `tools` list, Colossus sends a prioritized subset of tool schemas
+within that share of `max_request_bytes`, preferring discovery tools such as
+`tool.search`. Tools returned by `tool.search` are advertised on following model turns.
+Explicit agent tool lists are not silently reduced. If
+explicit tool schemas and instructions alone exceed the cap, Colossus fails before
+calling the endpoint and reports the fixed request size so you can reduce that agent's
+tool catalog or raise the endpoint body limit.
 
 Colossus can also discover model windows from provider catalogs when they expose that
 metadata. Discovered values fill gaps only: explicit `models.profiles.*.context_window_tokens`,
