@@ -70,6 +70,7 @@ Start here:
 
 Capability docs:
 
+- [Product requirements](docs/FEATURE_INVENTORY.md)
 - [Built-in Tools](docs/TOOLS.md)
 - [Integrations](docs/INTEGRATIONS.md)
 - [Skills](docs/SKILLS.md)
@@ -91,7 +92,8 @@ Colossus ships an offline-first local coding tool loop:
 - Workspace file list/read/search/write/replace.
 - Git status/diff/show and structured `shell.run`.
 - Model-callable task, key decision, memory, plan, patch, repo context, subagent, trace,
-  eval, and verification tools.
+  context, and skill-authoring tools. Repository verification runs through structured
+  shell commands or explicitly installed pack tools.
 - Web/docs fetch tools plus opt-in web search and MCP calls when adapters are explicitly
   configured.
 - Connected integration tools for GitHub, SearXNG, OpenSearch, and imported OpenAPI
