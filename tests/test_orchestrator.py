@@ -19,6 +19,7 @@ from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistr
 from colossus.domain.context import ContextConfig
 from colossus.domain.errors import ColossusError, ProviderError
 from colossus.domain.events import (
+    ErrorEvent,
     FinalOutputEvent,
     ModelDeltaEvent,
     ModelRequestPreparedEvent,
@@ -146,6 +147,46 @@ class EmptyProvider:
     async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
         if False:
             yield FinalOutputEvent(text="")
+
+
+class MalformedToolArgumentsThenFinalProvider:
+    name = "malformed-tool-arguments-then-final"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            raise ProviderError(
+                "Provider returned invalid JSON for tool call arguments. "
+                "tool=shell_run call_id=call_bad size=935 position=25"
+            )
+        recovery_messages = [
+            message.content
+            for message in request.messages
+            if isinstance(message, UserMessage)
+            and "invalid tool-call arguments" in message.content
+        ]
+        assert recovery_messages
+        assert "tool=shell_run" in recovery_messages[-1]
+        yield FinalOutputEvent(text="recovered")
+
+
+class AlwaysMalformedToolArgumentsProvider:
+    name = "always-malformed-tool-arguments"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[RunEvent]:
+        self.requests.append(request)
+        if False:
+            yield FinalOutputEvent(text="")
+        raise ProviderError(
+            "Provider returned invalid JSON for tool call arguments. "
+            "tool=filesystem_write call_id=call_bad size=1709 position=84"
+        )
 
 
 class ReasoningOnlyProvider:
@@ -954,6 +995,94 @@ async def test_orchestrator_returns_invalid_tool_args_to_model(tmp_path) -> None
         "model.request.prepared",
         "final.output",
     ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_recovers_from_malformed_provider_tool_arguments(
+    tmp_path,
+) -> None:
+    spec = ToolSpec(
+        name="echo",
+        description="Echo",
+        input_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    )
+    registry = InMemoryToolRegistry((spec,))
+    provider = MalformedToolArgumentsThenFinalProvider()
+    observed: list[RunEvent] = []
+    state_store = SQLiteStateStore(tmp_path / "state.sqlite3")
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=state_store,
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+        event_observer=observed.append,
+    )
+
+    result = await orchestrator.run(
+        AgentRunRequest(prompt="use a tool", agent=default_agent(max_turns=3))
+    )
+
+    assert result.final_output == "recovered"
+    assert result.events_recorded == 2
+    assert len(provider.requests) == 2
+    recovery = next(event for event in observed if isinstance(event, ErrorEvent))
+    assert recovery.recoverable is True
+    assert "attempt=1/2" in recovery.message
+    assert [event.type for event in observed] == [
+        "model.request.prepared",
+        "error",
+        "model.request.prepared",
+        "final.output",
+    ]
+    persisted = await state_store.list_events("run-1")
+    assert any(isinstance(event, ErrorEvent) and event.recoverable for event in persisted)
+    audit_records = [
+        json.loads(line)
+        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["event"] for record in audit_records] == [
+        "provider.tool_call_recovery",
+        "run.completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_exhausts_malformed_tool_argument_retries(tmp_path) -> None:
+    provider = AlwaysMalformedToolArgumentsProvider()
+    registry = InMemoryToolRegistry(())
+    orchestrator = AgentOrchestrator(
+        provider=provider,
+        tool_registry=registry,
+        tool_executor=FunctionToolExecutor({}, registry),
+        policy_engine=DefaultPolicyEngine(),
+        approval_handler=AllowAllApprovalHandler(),
+        state_store=SQLiteStateStore(tmp_path / "state.sqlite3"),
+        audit_sink=JsonlAuditSink(tmp_path / "audit.jsonl"),
+        run_id_factory=lambda: "run-1",
+    )
+
+    with pytest.raises(ProviderError, match="invalid JSON for tool call arguments"):
+        await orchestrator.run(
+            AgentRunRequest(prompt="use a tool", agent=default_agent(max_turns=4))
+        )
+
+    assert len(provider.requests) == 3
+    audit_records = [
+        json.loads(line)
+        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    events = [record["event"] for record in audit_records]
+    assert events.count("provider.tool_call_recovery") == 2
+    assert events[-1] == "provider.tool_call_recovery_exhausted"
 
 
 @pytest.mark.asyncio

@@ -42,6 +42,12 @@ arguments before policy and approval handling, then records policy and completio
 events. CLI and REPL code may list or render tools, but must not implement model, tool,
 policy, or state behavior.
 
+Provider adapters remain strict about malformed tool-call argument payloads. When a
+provider raises the standard invalid tool-argument `ProviderError`, the orchestrator may
+perform a bounded recovery turn by emitting a recoverable `ErrorEvent`, appending a
+metadata-only correction prompt, and auditing the retry. No tool is executed until a
+later provider turn emits a valid typed `ToolCallRequestedEvent`.
+
 Shell tool calls can optionally pass through `RiskAssessmentService` after deterministic
 policy and before approval. The risk model receives redacted structured metadata with
 tools disabled and can only escalate risk or add audit/trace context.
@@ -112,6 +118,15 @@ The REPL composer state and built-in themes also live in the interface layer. Th
 render cached model, approval, session, prompt, and context status, but they must
 continue to call application services for orchestration and context data rather than
 owning those behaviors.
+
+## Telemetry And Observability
+
+`TelemetryService` is an application service that derives operational summaries from
+timestamped persisted run events. It reports run duration, event counts, tool
+calls/failures, approvals, risk assessments, research/subagent activity, compactions, and
+error totals without exposing raw prompts, hidden reasoning, or raw tool outputs by
+default. CLI and future TUI surfaces should call the service for run lists, timelines,
+and aggregate metrics rather than querying SQLite or parsing transcript text directly.
 
 Saved REPL preferences are modeled as typed domain data, exposed through the state port,
 and coordinated by an application service. The interface may load and save those

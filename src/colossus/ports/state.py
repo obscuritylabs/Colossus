@@ -16,6 +16,7 @@ from colossus.domain.research import ResearchClaim, ResearchRun, ResearchSource
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
+from colossus.domain.telemetry import RunEventRecord
 
 
 class StateStore(Protocol):
@@ -25,6 +26,15 @@ class StateStore(Protocol):
 
     async def list_events(self, run_id: str) -> tuple[RunEvent, ...]:
         """Load events for a run."""
+        ...
+
+    async def list_run_event_records(
+        self,
+        run_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 20,
+    ) -> tuple[RunEventRecord, ...]:
+        """Load timestamped run event records for telemetry queries."""
         ...
 
     async def ensure_session(self, session_id: str, title: str | None = None) -> None:

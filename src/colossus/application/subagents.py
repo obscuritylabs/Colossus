@@ -26,7 +26,7 @@ class SubagentService:
         state_store: StateStore,
         audit_sink: AuditSink,
         *,
-        max_concurrent: int = 4,
+        max_concurrent: int = 10,
     ) -> None:
         if max_concurrent < 1:
             raise ColossusError("subagents.max_concurrent must be at least 1.")

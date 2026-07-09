@@ -56,7 +56,7 @@ The current config is strict: unknown fields are rejected.
     "max_turns": 24
   },
   "subagents": {
-    "max_concurrent": 4
+    "max_concurrent": 10
   },
   "memory": {
     "index": {
@@ -355,7 +355,7 @@ The gateway uses the official MCP Python SDK when installed:
 ## Subagents
 
 `subagents.max_concurrent` controls how many queued child-agent jobs may run at the same
-time in a Colossus process. The default is `4`. Subagents use the `subagent_default`
+time in a Colossus process. The default is `10`. Subagents use the `subagent_default`
 model role unless a delegated job names another role.
 
 Inspect durable jobs with:
@@ -442,6 +442,26 @@ visible while the run is active, such as `Thinking...`, `Using filesystem.read..
 such as prompt size, session/context counters, the composed model request, completion
 markers, and larger tool details. Use `/transcript compact` for a tighter terminal
 stream, or `/transcript comfortable` for the default Pi-like spacing.
+
+## Agent telemetry
+
+Colossus persists timestamped run events in the local SQLite state database. The
+telemetry commands summarize those events into safe operational metadata without
+printing raw prompts, hidden reasoning, or raw tool outputs:
+
+```bash
+uv run colossus telemetry runs --limit 20
+uv run colossus telemetry show RUN_ID_OR_PREFIX
+uv run colossus telemetry metrics --limit 100
+```
+
+`telemetry runs` shows recent run-id prefixes, session prefixes, elapsed time, event
+counts, tool call/failure counts, error counts, research events, and subagent events.
+`telemetry show` accepts a full run id or a unique prefix and renders a bounded event
+timeline with tool names, exit codes, output byte counts, approval/risk summaries,
+research progress, and subagent status. `telemetry metrics` aggregates recent runs into
+run count, average/max elapsed time, event counts, tool failures, approvals, research
+activity, subagent activity, context compactions, and error totals.
 
 REPL preferences are stored in the local SQLite state database under the Colossus data
 directory. Saved preferences currently include theme, multiline mode, model output

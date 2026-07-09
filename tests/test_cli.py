@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -169,6 +170,31 @@ def test_cli_run_rejects_unknown_events_mode(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "Invalid events mode" in result.stdout
+
+
+def test_cli_telemetry_commands_show_run_observability(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    run_result = CliRunner().invoke(app, ["run", "hello"])
+
+    assert run_result.exit_code == 0
+    match = re.search(r"run_id=([0-9a-f-]+)", run_result.stdout)
+    assert match is not None
+    run_id = match.group(1)
+
+    runs_result = CliRunner().invoke(app, ["telemetry", "runs"])
+    show_result = CliRunner().invoke(app, ["telemetry", "show", run_id[:8]])
+    metrics_result = CliRunner().invoke(app, ["telemetry", "metrics"])
+
+    assert runs_result.exit_code == 0
+    assert run_id[:8] in runs_result.stdout
+    assert "events=2" in runs_result.stdout
+    assert show_result.exit_code == 0
+    assert "model.delta" in show_result.stdout
+    assert "final.output" in show_result.stdout
+    assert "chars=" in show_result.stdout
+    assert metrics_result.exit_code == 0
+    assert "average_elapsed" in metrics_result.stdout
 
 
 def test_cli_run_ask_approval_wires_interactive_handler(tmp_path, monkeypatch) -> None:
@@ -539,7 +565,7 @@ def test_cli_agents_list_renders_persisted_jobs(tmp_path, monkeypatch) -> None:
     assert "agent-1" in result.stdout
     assert "Tests" in result.stdout
     assert "Done." in result.stdout
-    assert service.max_concurrent == 4
+    assert service.max_concurrent == 10
 
 
 def test_cli_agents_status_and_resume(tmp_path, monkeypatch) -> None:

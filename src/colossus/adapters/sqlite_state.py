@@ -21,6 +21,7 @@ from colossus.domain.research import ResearchClaim, ResearchRun, ResearchSource
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentStatus
 from colossus.domain.tasks import Task, TaskStatus
+from colossus.domain.telemetry import RunEventRecord
 
 _RUN_EVENT_ADAPTER: TypeAdapter[RunEvent] = TypeAdapter(RunEvent)
 _MESSAGE_ADAPTER: TypeAdapter[Message] = TypeAdapter(Message)
@@ -71,6 +72,99 @@ class SQLiteStateStore:
                 (run_id,),
             ).fetchall()
         return tuple(_RUN_EVENT_ADAPTER.validate_json(row[0]) for row in rows)
+
+    async def list_run_event_records(
+        self,
+        run_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 20,
+    ) -> tuple[RunEventRecord, ...]:
+        safe_limit = min(max(limit, 1), 10_000)
+        with closing(sqlite3.connect(self._path)) as conn:
+            if run_id is not None:
+                rows = conn.execute(
+                    """
+                    with run_sessions as (
+                        select run_id, min(session_id) as session_id
+                        from messages
+                        group by run_id
+                    )
+                    select
+                        e.id,
+                        e.run_id,
+                        rs.session_id,
+                        e.event_type,
+                        e.created_at,
+                        e.payload
+                    from run_events e
+                    left join run_sessions rs on rs.run_id = e.run_id
+                    where e.run_id = ?
+                    order by e.id
+                    limit ?
+                    """,
+                    (run_id, safe_limit),
+                ).fetchall()
+            elif session_id is not None:
+                rows = conn.execute(
+                    """
+                    with run_sessions as (
+                        select run_id, min(session_id) as session_id
+                        from messages
+                        group by run_id
+                    ),
+                    recent_runs as (
+                        select e.run_id, max(e.id) as max_event_id
+                        from run_events e
+                        join run_sessions rs on rs.run_id = e.run_id
+                        where rs.session_id = ?
+                        group by e.run_id
+                        order by max_event_id desc
+                        limit ?
+                    )
+                    select
+                        e.id,
+                        e.run_id,
+                        rs.session_id,
+                        e.event_type,
+                        e.created_at,
+                        e.payload
+                    from recent_runs rr
+                    join run_events e on e.run_id = rr.run_id
+                    left join run_sessions rs on rs.run_id = e.run_id
+                    order by rr.max_event_id desc, e.id
+                    """,
+                    (session_id, safe_limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    with run_sessions as (
+                        select run_id, min(session_id) as session_id
+                        from messages
+                        group by run_id
+                    ),
+                    recent_runs as (
+                        select e.run_id, max(e.id) as max_event_id
+                        from run_events e
+                        group by e.run_id
+                        order by max_event_id desc
+                        limit ?
+                    )
+                    select
+                        e.id,
+                        e.run_id,
+                        rs.session_id,
+                        e.event_type,
+                        e.created_at,
+                        e.payload
+                    from recent_runs rr
+                    join run_events e on e.run_id = rr.run_id
+                    left join run_sessions rs on rs.run_id = e.run_id
+                    order by rr.max_event_id desc, e.id
+                    """,
+                    (safe_limit,),
+                ).fetchall()
+        return tuple(_run_event_record_from_row(row) for row in rows)
 
     async def ensure_session(self, session_id: str, title: str | None = None) -> None:
         with closing(sqlite3.connect(self._path)) as conn:
@@ -1100,6 +1194,19 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     if column in {row[1] for row in rows}:
         return
     conn.execute(f"alter table {table} add column {column} {definition}")
+
+
+def _run_event_record_from_row(row: tuple[object, ...]) -> RunEventRecord:
+    raw_sequence = row[0]
+    session_id = row[2] if isinstance(row[2], str) else None
+    return RunEventRecord(
+        sequence=raw_sequence if isinstance(raw_sequence, int) else int(str(raw_sequence)),
+        run_id=str(row[1]),
+        session_id=session_id,
+        event_type=str(row[3]),
+        created_at=str(row[4]),
+        event=_RUN_EVENT_ADAPTER.validate_json(str(row[5])),
+    )
 
 
 def _session_summary_from_row(row: sqlite3.Row | tuple[object, ...]) -> SessionSummary:

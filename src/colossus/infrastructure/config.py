@@ -46,7 +46,7 @@ class ProviderConfig(BaseModel):
 class SubagentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    max_concurrent: int = Field(default=4, ge=1)
+    max_concurrent: int = Field(default=10, ge=1)
 
 
 class AgentConfig(BaseModel):

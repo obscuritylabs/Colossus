@@ -19,6 +19,7 @@ from colossus.domain.events import (
     ApprovalAutoGrantedEvent,
     ApprovalRequestedEvent,
     ContextPreparedEvent,
+    ErrorEvent,
     FinalOutputEvent,
     ModelDeltaEvent,
     ModelRequestPreparedEvent,
@@ -76,6 +77,7 @@ TOOL_SCHEMA_BUDGET_PRIORITY = (
     "goal.show",
     "user.ask",
 )
+TOOL_ARGUMENT_RECOVERY_LIMIT = 2
 
 
 class AgentOrchestrator:
@@ -218,6 +220,7 @@ class AgentOrchestrator:
                 )
         final_text = ""
         events_recorded = 0
+        tool_argument_recovery_attempts = 0
 
         for turn in range(request.agent.max_turns):
             prepared_messages = tuple(messages)
@@ -260,22 +263,73 @@ class AgentOrchestrator:
             collected_text: list[str] = []
             turn_final_text = ""
 
-            async for event in self._provider.stream(model_request):
-                events_recorded += 1
-                await self._state_store.append_event(run_id, event)
-                self._observe_event(event)
-                if isinstance(event, ModelDeltaEvent):
-                    collected_text.append(event.text)
-                elif isinstance(event, ToolCallRequestedEvent):
-                    pending_tool_calls.append(
-                        ToolCall(
-                            call_id=event.call_id,
-                            name=event.name,
-                            arguments=event.arguments,
+            try:
+                async for event in self._provider.stream(model_request):
+                    events_recorded += 1
+                    await self._state_store.append_event(run_id, event)
+                    self._observe_event(event)
+                    if isinstance(event, ModelDeltaEvent):
+                        collected_text.append(event.text)
+                    elif isinstance(event, ToolCallRequestedEvent):
+                        pending_tool_calls.append(
+                            ToolCall(
+                                call_id=event.call_id,
+                                name=event.name,
+                                arguments=event.arguments,
+                            )
+                        )
+                    elif isinstance(event, FinalOutputEvent):
+                        turn_final_text = event.text
+            except ProviderError as exc:
+                if _can_retry_tool_argument_error(
+                    exc,
+                    attempts=tool_argument_recovery_attempts,
+                    turn=turn,
+                    max_turns=request.agent.max_turns,
+                ):
+                    tool_argument_recovery_attempts += 1
+                    recovery_event = ErrorEvent(
+                        message=(
+                            "Recovering from malformed provider tool-call arguments. "
+                            f"attempt={tool_argument_recovery_attempts}/"
+                            f"{TOOL_ARGUMENT_RECOVERY_LIMIT} {_short_error(str(exc))}"
+                        ),
+                        recoverable=True,
+                    )
+                    events_recorded += 1
+                    await self._state_store.append_event(run_id, recovery_event)
+                    self._observe_event(recovery_event)
+                    await self._audit_sink.record(
+                        "agent",
+                        "provider.tool_call_recovery",
+                        {
+                            "run_id": run_id,
+                            "attempt": tool_argument_recovery_attempts,
+                            "max_attempts": TOOL_ARGUMENT_RECOVERY_LIMIT,
+                            "error": _short_error(str(exc)),
+                        },
+                    )
+                    messages.append(
+                        UserMessage(
+                            content=_tool_argument_recovery_prompt(
+                                str(exc),
+                                tool_specs,
+                                tool_argument_recovery_attempts,
+                            )
                         )
                     )
-                elif isinstance(event, FinalOutputEvent):
-                    turn_final_text = event.text
+                    continue
+                if _is_tool_argument_provider_error(exc):
+                    await self._audit_sink.record(
+                        "agent",
+                        "provider.tool_call_recovery_exhausted",
+                        {
+                            "run_id": run_id,
+                            "attempts": tool_argument_recovery_attempts,
+                            "error": _short_error(str(exc)),
+                        },
+                    )
+                raise
 
             if not pending_tool_calls and not _has_visible_text(collected_text, turn_final_text):
                 await self._audit_sink.record(
@@ -767,6 +821,59 @@ def _tool_search_result_names(output: str) -> tuple[str, ...]:
         names.append(name)
         seen.add(name)
     return tuple(names)
+
+
+def _can_retry_tool_argument_error(
+    exc: ProviderError,
+    *,
+    attempts: int,
+    turn: int,
+    max_turns: int,
+) -> bool:
+    return (
+        _is_tool_argument_provider_error(exc)
+        and attempts < TOOL_ARGUMENT_RECOVERY_LIMIT
+        and turn + 1 < max_turns
+    )
+
+
+def _is_tool_argument_provider_error(exc: ProviderError) -> bool:
+    message = str(exc)
+    return (
+        "Provider returned invalid JSON for tool call arguments" in message
+        or "Provider returned non-object JSON for tool call arguments" in message
+    )
+
+
+def _tool_argument_recovery_prompt(
+    error: str,
+    tool_specs: tuple[ToolSpec, ...],
+    attempt: int,
+) -> str:
+    return (
+        "The previous assistant response attempted a tool call, but the provider "
+        "emitted invalid tool-call arguments, so Colossus did not execute any tool.\n\n"
+        f"Recovery attempt: {attempt}/{TOOL_ARGUMENT_RECOVERY_LIMIT}\n"
+        f"Provider error: {_short_error(error)}\n"
+        f"Available tools: {_tool_name_summary(tool_specs)}\n\n"
+        "Retry the intended step. If you call a tool, emit exactly one valid tool call "
+        "with arguments as a JSON object matching that tool schema. Use double-quoted "
+        "property names and string values where required. Do not include markdown fences, "
+        "comments, trailing commas, or explanatory prose inside the tool arguments."
+    )
+
+
+def _tool_name_summary(tool_specs: tuple[ToolSpec, ...], limit: int = 24) -> str:
+    names = [tool.name for tool in tool_specs[:limit]]
+    suffix = f", ... {len(tool_specs) - limit} more" if len(tool_specs) > limit else ""
+    return ", ".join(names) + suffix if names else "none"
+
+
+def _short_error(value: str, limit: int = 240) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
 
 
 def _enforce_model_request_byte_budget(

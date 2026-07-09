@@ -61,6 +61,12 @@ Tools are expected to declare their execution permissions up front. Policy can a
 deny, or require approval before execution. The broker validates tool inputs and runs
 commands without a shell so arguments are passed explicitly.
 
+Malformed provider tool-call argument payloads are never repaired into executable tool
+calls locally. Colossus may ask the provider to retry a bounded number of times with a
+metadata-only correction prompt, emits a recoverable error event, and audits recovery or
+exhaustion. Policy, approval, and execution only receive later provider turns that
+normalize into valid typed tool-call events.
+
 Security-sensitive defaults:
 
 - Keep environment allowlists narrow.
@@ -217,6 +223,15 @@ Audit records are append-only JSONL and hash chained. They are intended to suppo
 debugging, release review, and incident response. Redaction is enabled by default for
 command inputs and environment values, but operators should still treat audit logs as
 sensitive operational records.
+
+## Telemetry
+
+Telemetry summaries are derived from persisted typed run events and should remain
+metadata-first by default. Run timelines may show event types, timestamps, tool names,
+exit codes, byte counts, approval/risk summaries, research progress, subagent status,
+and aggregate counts, but they must not expose hidden reasoning, raw provider chunks,
+raw prompts, raw credentials, or raw tool outputs unless a future explicit debug mode
+adds separate controls and redaction.
 
 ## Offline Bundles
 

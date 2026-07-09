@@ -50,6 +50,7 @@ from colossus.application.skill_authoring import SkillAuthoringService
 from colossus.application.skills import SkillComposer, SkillResolver, SkillResourceService
 from colossus.application.subagents import SubagentService
 from colossus.application.tasks import TaskService
+from colossus.application.telemetry import TelemetryService
 from colossus.application.tools import FunctionToolExecutor, InMemoryToolRegistry
 from colossus.domain.agents import DEFAULT_AGENT_MAX_TURNS
 from colossus.domain.context import ContextConfig
@@ -236,7 +237,7 @@ def create_subagent_service(
     *,
     state_store: SQLiteStateStore | None = None,
     audit_sink: JsonlAuditSink | None = None,
-    max_concurrent: int = 4,
+    max_concurrent: int = 10,
 ) -> SubagentService:
     data_dir.mkdir(parents=True, exist_ok=True)
     return SubagentService(
@@ -244,6 +245,15 @@ def create_subagent_service(
         audit_sink or create_audit_sink(data_dir),
         max_concurrent=max_concurrent,
     )
+
+
+def create_telemetry_service(
+    data_dir: Path,
+    *,
+    state_store: SQLiteStateStore | None = None,
+) -> TelemetryService:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return TelemetryService(state_store or create_state_store(data_dir))
 
 
 def create_integration_service(

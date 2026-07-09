@@ -36,6 +36,21 @@ from colossus.application.subagents import SubagentService
 from colossus.domain.agents import MAX_AGENT_MAX_TURNS
 from colossus.domain.decisions import DecisionStatus, KeyDecision
 from colossus.domain.errors import BundleVerificationError, ColossusError
+from colossus.domain.events import (
+    ApprovalAutoGrantedEvent,
+    ApprovalRequestedEvent,
+    ContextPreparedEvent,
+    ErrorEvent,
+    FinalOutputEvent,
+    ModelDeltaEvent,
+    ReasoningSummaryEvent,
+    ResearchProgressEvent,
+    ResearchStatusEvent,
+    RiskAssessmentEvent,
+    SubagentStatusEvent,
+    ToolCallCompletedEvent,
+    ToolCallRequestedEvent,
+)
 from colossus.domain.goals import Goal, GoalStatus
 from colossus.domain.integrations import IntegrationAuthType, IntegrationStatusView
 from colossus.domain.memories import MemoryItem, MemoryKind, MemoryScope, MemoryStatus
@@ -53,6 +68,12 @@ from colossus.domain.research import ResearchDepth, ResearchSourceKind
 from colossus.domain.sessions import SessionSummary
 from colossus.domain.subagents import SubagentJob, SubagentQueueStatus, SubagentStatus
 from colossus.domain.tasks import Task
+from colossus.domain.telemetry import (
+    RunEventRecord,
+    RunTelemetryDetail,
+    RunTelemetrySummary,
+    TelemetryMetrics,
+)
 from colossus.infrastructure.config import (
     ColossusConfig,
     HttpOverrides,
@@ -86,6 +107,7 @@ from colossus.infrastructure.container import (
     create_state_store,
     create_subagent_service,
     create_task_service,
+    create_telemetry_service,
 )
 from colossus.infrastructure.http_client import HttpClientConfig
 from colossus.infrastructure.logging import configure_logging
@@ -126,6 +148,7 @@ decisions_app = typer.Typer(help="Inspect and manage key decisions.")
 memories_app = typer.Typer(help="Inspect and manage durable memories.")
 context_app = typer.Typer(help="Inspect and manage context compaction.")
 sessions_app = typer.Typer(help="Discover and resume persisted sessions.")
+telemetry_app = typer.Typer(help="Inspect agent telemetry and observability.")
 integrations_app = typer.Typer(help="Manage app and service integrations.")
 packs_app = typer.Typer(help="Manage capability packs.")
 packs_trust_app = typer.Typer(help="Manage trusted pack publishers and keys.")
@@ -143,6 +166,7 @@ app.add_typer(decisions_app, name="decisions")
 app.add_typer(memories_app, name="memories")
 app.add_typer(context_app, name="context")
 app.add_typer(sessions_app, name="sessions")
+app.add_typer(telemetry_app, name="telemetry")
 app.add_typer(integrations_app, name="integrations")
 app.add_typer(packs_app, name="packs")
 packs_app.add_typer(packs_trust_app, name="trust")
@@ -2266,6 +2290,48 @@ def sessions_show(
     _print_session_messages(messages)
 
 
+@telemetry_app.command("runs")
+def telemetry_runs(
+    session: Annotated[str | None, typer.Option("--session")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=200)] = 20,
+) -> None:
+    """List recent run telemetry summaries."""
+    summaries = asyncio.run(
+        create_telemetry_service(data_dir()).list_runs(session_id=session, limit=limit)
+    )
+    _print_telemetry_runs(summaries)
+
+
+@telemetry_app.command("show")
+def telemetry_show(
+    run_id: Annotated[str, typer.Argument(help="Run id.")],
+    limit: Annotated[int, typer.Option("--limit", min=1, max=500)] = 80,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", help="Show bounded event details in the timeline."),
+    ] = False,
+) -> None:
+    """Show a telemetry timeline for one run."""
+    try:
+        detail = asyncio.run(create_telemetry_service(data_dir()).get_run(run_id))
+    except ColossusError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    _print_telemetry_detail(detail, limit=limit, verbose=verbose)
+
+
+@telemetry_app.command("metrics")
+def telemetry_metrics(
+    session: Annotated[str | None, typer.Option("--session")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=500)] = 100,
+) -> None:
+    """Show aggregate telemetry metrics over recent runs."""
+    metrics = asyncio.run(
+        create_telemetry_service(data_dir()).metrics(session_id=session, limit=limit)
+    )
+    _print_telemetry_metrics(metrics)
+
+
 @goals_app.command("list")
 def goals_list(
     session: Annotated[str | None, typer.Option("--session")] = None,
@@ -2637,6 +2703,199 @@ def _message_preview(message: Message, limit: int = 120) -> str:
         value = message.content
     else:
         value = ""
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
+
+def _print_telemetry_runs(summaries: tuple[RunTelemetrySummary, ...]) -> None:
+    if not summaries:
+        console.print("No telemetry runs.")
+        return
+    for summary in summaries:
+        console.print(
+            (
+                f"{_short_id(summary.run_id)} "
+                f"session={_short_id(summary.session_id or '-')} "
+                f"last={summary.last_event_at} "
+                f"elapsed={format_elapsed(summary.duration_seconds)} "
+                f"events={summary.events} "
+                f"tools={_count_with_errors(summary.tool_calls, summary.tool_errors)} "
+                f"errors={summary.error_events} "
+                f"research={summary.research_events} "
+                f"subagents={summary.subagent_events}"
+            ),
+            markup=False,
+        )
+
+
+def _print_telemetry_detail(
+    detail: RunTelemetryDetail,
+    *,
+    limit: int,
+    verbose: bool,
+) -> None:
+    summary = detail.summary
+    table = Table("Field", "Value")
+    table.add_row("run_id", summary.run_id)
+    table.add_row("session_id", summary.session_id or "")
+    table.add_row("started_at", summary.started_at)
+    table.add_row("last_event_at", summary.last_event_at)
+    table.add_row("elapsed", format_elapsed(summary.duration_seconds))
+    table.add_row("events", str(summary.events))
+    table.add_row("tool_calls", str(summary.tool_calls))
+    table.add_row("tool_errors", str(summary.tool_errors))
+    table.add_row("approval_requests", str(summary.approval_requests))
+    table.add_row("auto_approvals", str(summary.auto_approvals))
+    table.add_row("risk_assessments", str(summary.risk_assessments))
+    table.add_row("research_events", str(summary.research_events))
+    table.add_row("subagent_events", str(summary.subagent_events))
+    table.add_row("context_compactions", str(summary.context_compactions))
+    table.add_row("error_events", str(summary.error_events))
+    table.add_row("model_output_chars", str(summary.model_output_chars))
+    console.print(table)
+
+    counts = Table("Event Type", "Count")
+    for event_type, count in summary.event_types.items():
+        counts.add_row(event_type, str(count))
+    console.print(counts)
+
+    records = detail.records[:limit]
+    timeline = Table("Seq", "Time", "Event", "Detail")
+    for record in records:
+        timeline.add_row(
+            str(record.sequence),
+            record.created_at,
+            record.event_type,
+            _telemetry_event_detail(record, verbose=verbose),
+        )
+    console.print(timeline)
+    if len(detail.records) > limit:
+        console.print(f"[dim]... {len(detail.records) - limit} more event(s)[/dim]")
+
+
+def _print_telemetry_metrics(metrics: TelemetryMetrics) -> None:
+    if metrics.run_count == 0:
+        console.print("No telemetry metrics.")
+        return
+    table = Table("Metric", "Value")
+    table.add_row("runs", str(metrics.run_count))
+    table.add_row("events", str(metrics.event_count))
+    table.add_row("average_elapsed", format_elapsed(metrics.average_duration_seconds))
+    table.add_row("max_elapsed", format_elapsed(metrics.max_duration_seconds))
+    table.add_row("model_output_chars", str(metrics.model_output_chars))
+    table.add_row("tool_calls", str(metrics.tool_calls))
+    table.add_row("tool_errors", str(metrics.tool_errors))
+    table.add_row("approval_requests", str(metrics.approval_requests))
+    table.add_row("auto_approvals", str(metrics.auto_approvals))
+    table.add_row("risk_assessments", str(metrics.risk_assessments))
+    table.add_row("research_events", str(metrics.research_events))
+    table.add_row("subagent_events", str(metrics.subagent_events))
+    table.add_row("context_compactions", str(metrics.context_compactions))
+    table.add_row("error_events", str(metrics.error_events))
+    table.add_row("final_outputs", str(metrics.final_outputs))
+    console.print(table)
+
+    counts = Table("Event Type", "Count")
+    for event_type, count in metrics.event_types.items():
+        counts.add_row(event_type, str(count))
+    console.print(counts)
+
+
+def _telemetry_event_detail(record: RunEventRecord, *, verbose: bool) -> str:
+    event = record.event
+    if isinstance(event, ModelDeltaEvent):
+        return f"chars={len(event.text)}"
+    if isinstance(event, ReasoningSummaryEvent):
+        return _join_non_empty(
+            ("provider", event.provider_format),
+            ("detail", event.detail_id),
+            ("chars", str(len(event.summary))),
+        )
+    if isinstance(event, ToolCallRequestedEvent):
+        detail = f"{event.name} call={event.call_id}"
+        if verbose:
+            detail += f" args={len(event.arguments)}"
+        return detail
+    if isinstance(event, ToolCallCompletedEvent):
+        return f"{event.name} exit={event.exit_code} bytes={len(event.output)}"
+    if isinstance(event, ApprovalRequestedEvent):
+        return f"call={event.call_id} reason={_short_text(event.reason, 96)}"
+    if isinstance(event, ApprovalAutoGrantedEvent):
+        return f"call={event.call_id} reason={_short_text(event.reason, 96)}"
+    if isinstance(event, RiskAssessmentEvent):
+        return (
+            f"{event.tool} risk={event.risk_level} decision={event.recommended_decision} "
+            f"summary={_short_text(event.summary, 96)}"
+        )
+    if isinstance(event, ResearchStatusEvent):
+        return (
+            f"{event.research_id} {event.status} phase={event.phase} "
+            f"sources={event.sources_collected} {_short_text(event.message, 96)}"
+        ).strip()
+    if isinstance(event, ResearchProgressEvent):
+        return _join_non_empty(
+            ("research", event.research_id),
+            ("phase", event.phase),
+            ("action", event.action),
+            ("status", event.status),
+            ("source", event.source_kind),
+            ("progress", _progress_text(event.current, event.total)),
+            ("sources", str(event.sources_collected) if event.sources_collected else None),
+            ("claims", str(event.claims_collected) if event.claims_collected else None),
+            ("query", _quote_short(event.query)),
+            ("message", _short_text(event.message, 96) if event.message else None),
+        )
+    if isinstance(event, SubagentStatusEvent):
+        return (
+            f"{event.job_id} {event.status} role={event.role} "
+            f"task={_short_text(event.task, 96)}"
+        )
+    if isinstance(event, ContextPreparedEvent):
+        return (
+            f"model={event.model} tokens={event.token_estimate}/"
+            f"{event.context_window_tokens} compacted={str(event.compacted).lower()} "
+            f"snapshot={event.snapshot_id or '-'}"
+        )
+    if isinstance(event, ErrorEvent):
+        return f"recoverable={str(event.recoverable).lower()} {_short_text(event.message, 120)}"
+    if isinstance(event, FinalOutputEvent):
+        return f"chars={len(event.text)}"
+    return record.event_type
+
+
+def _count_with_errors(count: int, errors: int) -> str:
+    if errors:
+        return f"{count} ({errors} failed)"
+    return str(count)
+
+
+def _join_non_empty(*items: tuple[str, str | None]) -> str:
+    return " ".join(f"{key}={value}" for key, value in items if value)
+
+
+def _progress_text(current: int, total: int) -> str | None:
+    if current <= 0 and total <= 0:
+        return None
+    if total <= 0:
+        return str(current)
+    return f"{current}/{total}"
+
+
+def _quote_short(value: str | None, limit: int = 72) -> str | None:
+    if not value:
+        return None
+    return f'"{_short_text(value, limit)}"'
+
+
+def _short_id(value: str, length: int = 8) -> str:
+    if not value:
+        return ""
+    return value[:length]
+
+
+def _short_text(value: str, limit: int = 120) -> str:
     normalized = " ".join(value.split())
     if len(normalized) <= limit:
         return normalized
