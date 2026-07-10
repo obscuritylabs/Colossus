@@ -41,6 +41,11 @@ obsolete Go launcher.
   ownership; exact-origin network policy; a loopback allowlist proxy; bounded output and
   resources; post-effect HTTP/file quarantine; and hardened network-off OCI command
   construction. Broker downgrades require an explicit configuration and policy grant.
+- Live Docker acceptance for bind mounts, immutable/preloaded images, environment
+  clearing, read-only roots, network denial, timeouts, cancellation cleanup, and audited
+  unknown outcomes. Live OPA acceptance covers readiness, allow/deny, approval proof
+  re-evaluation, post-effect denial, invalid decisions, outages, decision-log warnings,
+  pinned CA trust, and mutual TLS client identity.
 - Strict, hash-pinned YAML workflow definitions; non-executable conditions; all planned
   typed step schemas; bounded step and concurrency budgets; direct-cycle rejection;
   durable run reconstruction; wait/input, resume, cancellation, interruption, `foreach`,
@@ -88,10 +93,11 @@ cutover. The following planned work remains:
 - Research and extension repositories plus their shared conformance suites.
 - Chroma semantic candidates, embedding providers, queued index lag operations, and
   application-layer policy re-filtering of canonical memory records.
-- Windows filesystem/network isolation and live OCI execution/recovery suites; native
-  macOS/Linux isolation, OCI command hardening, the allowlist proxy, authenticated helper,
-  explicit broker downgrade rules, resource supervision, and native escape tests are
-  implemented.
+- Windows filesystem/network runtime acceptance and OCI allowlist-proxy injection. Native
+  macOS/Linux isolation, live network-off OCI execution/recovery, OCI command hardening,
+  the native allowlist proxy, authenticated helper, explicit broker downgrade rules,
+  resource supervision, and native/OCI escape tests are implemented. CI compiles every
+  Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
 - OpenAI Responses and OpenAI-compatible providers, the core tool catalog, provider
   diagnostics/routing, sessions, streaming, and context compaction.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
@@ -99,7 +105,7 @@ cutover. The following planned work remains:
 - Goals, durable subagents, research/citations, skills/resources, telemetry, packs,
   integrations, offline bundles, and the rest of P1/P2.
 - Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
-  matrix, and
+  runtime matrix, and
   six-target release smoke tests.
 
 Rust is promoted to the repository root only after those P0+P1 acceptance checks pass.

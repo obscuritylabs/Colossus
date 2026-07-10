@@ -60,16 +60,32 @@ rules and remain quarantined until post-effect authorization.
 
 The OCI backend constructs Docker/Podman invocations with no network, a read-only root,
 all capabilities dropped, `no-new-privileges`, bounded PIDs/memory, and only explicit
-bind mounts and environment names. OCI subprocess networking fails closed until a
-broker proxy can be injected into the container. OCI images must use an immutable digest.
+bind mounts and environment names. The target starts through a fixed `env -i` bootstrap,
+so image-defined environment variables do not cross into the executable. OCI execution
+uses `--pull=never`; images must be preloaded and referenced by a complete immutable
+SHA-256 digest so the Docker/Podman daemon cannot perform an unapproved registry request.
+OCI subprocess networking fails closed until a broker proxy can be injected into the
+container.
+
+Every OCI job has an unpredictable authenticated container name. The helper reserves
+time within the policy timeout to force removal and verify that no matching container
+remains. A cancellation guard starts cleanup if the gateway drops a stalled helper. OCI
+timeouts below five seconds fail before execution because they cannot reserve enough
+cleanup time. If absence cannot be confirmed, the gateway records `outcome_unknown`
+rather than claiming failure or retrying.
+
 The `windows_job` backend is reserved and currently fails closed because a Job Object
-alone does not isolate filesystem or network access; use the OCI backend on Windows.
+alone does not isolate filesystem or network access. Windows execution remains disabled
+until OCI path mapping and its live platform suite pass; compilation alone does not
+constitute sandbox acceptance.
 The plain broker is available only when configuration and the policy decision both
 explicitly authorize a downgrade.
 
 The native process-count and memory ceilings are supervisor-enforced; OCI supplies hard
 kernel/container ceilings. `sandbox doctor` reports the selected backend and available
 isolation mechanism so operators can reject an unsuitable deployment before effects run.
+The opt-in live security suites exercise Docker and a real OPA process, including mTLS;
+normal workspace tests remain credential-free and network-free.
 
 The sections below describe the frozen Python 0.5 implementation. They remain relevant
 to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.

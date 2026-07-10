@@ -7,8 +7,8 @@ at the `python-v0.5.0` tag and `python-legacy` branch.
 The initial alpha implements the contracts, encrypted redb journal, exclusive writer
 lease, restartable redb projections and projected repositories, policy gateway, durable
 workflow core, and permit-bound filesystem/process/HTTP adapters. macOS and Linux use a
-one-shot authenticated Seatbelt/Landlock helper; Windows requires the OCI backend until
-native filesystem and network isolation are complete.
+one-shot authenticated Seatbelt/Landlock helper. Windows process execution remains
+fail-closed until OCI path mapping and the live Windows acceptance suite are complete.
 
 Inspect sandbox readiness or run an explicitly configured exact executable:
 
@@ -21,8 +21,23 @@ Process and network actions are deny-by-default. Add the exact action, executabl
 filesystem grants, environment names, and canonical HTTP(S) origins to the fresh YAML
 configuration before invoking them.
 
+The external-runtime acceptance suites are ignored during ordinary offline tests. Run
+them explicitly with a preloaded immutable image and local OPA/OpenSSL binaries:
+
 ```sh
-cargo fmt --all --check
+COLOSSUS_OCI_RUNTIME=/absolute/path/to/docker \
+COLOSSUS_OCI_IMAGE='python:3.13-slim@sha256:...' \
+cargo test -p colossus-cli --test oci_sandbox -- --ignored
+
+COLOSSUS_OPA_BIN=/absolute/path/to/opa \
+COLOSSUS_OPENSSL_BIN=/absolute/path/to/openssl \
+cargo test -p colossus-policy --test opa_live -- --ignored
+```
+
+CI runs these live suites separately and compiles all targets on macOS and Windows.
+
+```sh
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```

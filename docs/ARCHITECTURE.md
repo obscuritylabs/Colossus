@@ -30,8 +30,8 @@ Native macOS/Linux isolation uses Seatbelt/Landlock, process groups contain desc
 and networked subprocesses receive only a loopback allowlist proxy. The direct HTTP
 adapter pins an allowed origin through DNS resolution and keeps the bounded response in
 the gateway quarantine until post-effect policy allows release. Windows native
-filesystem/network isolation remains fail-closed; the configured OCI backend is the
-portable fallback.
+filesystem/network isolation remains fail-closed. OCI is the planned portable fallback,
+but Windows path mapping remains disabled until its live platform suite passes.
 
 The journal is authoritative. Application state is reconstructed by replay, and redb
 atomically appends events, advances stream/global versions, and queues projection work.

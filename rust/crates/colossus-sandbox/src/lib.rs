@@ -7,7 +7,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     EffectRequest, FilesystemGrant, PolicyObligations, QuarantinedEffectResult,
 };
-use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
+use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit, MIN_OCI_EFFECT_TIMEOUT_MS};
 use command_group::CommandGroup as _;
 use futures::StreamExt as _;
 use hmac::{Hmac, Mac};
@@ -45,6 +45,8 @@ type HmacSha256 = Hmac<Sha256>;
 const HELPER_KEY_VARIABLE: &str = "COLOSSUS_SANDBOX_JOB_KEY";
 const MAX_JOB_BYTES: usize = 1024 * 1024;
 const MAX_PROXY_HEADER_BYTES: usize = 16 * 1024;
+const OCI_CLEANUP_RESERVE_MS: u64 = 2_000;
+const OCI_CONTROL_COMMAND_TIMEOUT_MS: u64 = 750;
 
 fn adapter_failure(error: impl std::fmt::Display) -> ExecutionError {
     ExecutionError::Failed(error.to_string())
@@ -311,6 +313,50 @@ pub struct SandboxProcessExecutor {
     job_key: [u8; 32],
 }
 
+struct OciCancellationGuard {
+    runtime: Option<PathBuf>,
+    container_name: String,
+    armed: bool,
+}
+
+impl OciCancellationGuard {
+    fn new(runtime: Option<PathBuf>, container_name: String, armed: bool) -> Self {
+        Self {
+            runtime,
+            container_name,
+            armed,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for OciCancellationGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Some(runtime) = self.runtime.clone() else {
+            return;
+        };
+        let container_name = self.container_name.clone();
+        let mut command = Command::new(runtime);
+        command
+            .env_clear()
+            .args(["container", "rm", "--force", &container_name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Ok(mut child) = command.spawn() {
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+    }
+}
+
 impl SandboxProcessExecutor {
     /// Construct a process executor with a private IPC authentication key.
     pub fn new(config: SandboxExecutorConfig, job_key: [u8; 32]) -> Self {
@@ -332,6 +378,13 @@ impl EffectExecutor for SandboxProcessExecutor {
             .map_err(|error| adapter_failure(format!("invalid process request: {error}")))?;
         validate_process_spec(&spec, &request.resource, permit.obligations())?;
         normalize_path_arguments(&mut spec, permit.obligations())?;
+        if permit.obligations().sandbox_backend == "oci"
+            && permit.obligations().timeout_ms < MIN_OCI_EFFECT_TIMEOUT_MS
+        {
+            return Err(adapter_failure(format!(
+                "OCI process execution requires at least {MIN_OCI_EFFECT_TIMEOUT_MS}ms"
+            )));
+        }
         let proxy = if permit.obligations().network_destinations.is_empty() {
             None
         } else if permit.obligations().sandbox_backend == "native" {
@@ -341,7 +394,16 @@ impl EffectExecutor for SandboxProcessExecutor {
                 "networked process execution currently requires the native proxy-only backend",
             ));
         };
-        let helper_budget = permit.obligations().timeout_ms.saturating_sub(250).max(1);
+        let helper_reserve = if permit.obligations().sandbox_backend == "oci" {
+            OCI_CLEANUP_RESERVE_MS
+        } else {
+            250
+        };
+        let helper_budget = permit
+            .obligations()
+            .timeout_ms
+            .saturating_sub(helper_reserve)
+            .max(1);
         let job = SandboxJob {
             schema_version: 1,
             job_id: Uuid::now_v7().to_string(),
@@ -358,6 +420,13 @@ impl EffectExecutor for SandboxProcessExecutor {
             oci_runtime: self.config.oci_runtime.clone(),
             oci_image: self.config.oci_image.clone(),
         };
+        let container_name = oci_container_name(&job.job_id);
+        let is_oci = job.obligations.sandbox_backend == "oci";
+        let mut cleanup_guard = OciCancellationGuard::new(
+            self.config.oci_runtime.clone(),
+            container_name.clone(),
+            is_oci,
+        );
         let signed = SignedSandboxJob::sign(job, &self.job_key)?;
         let encoded = serde_json::to_vec(&signed).map_err(adapter_failure)?;
         if encoded.len() > MAX_JOB_BYTES {
@@ -379,16 +448,62 @@ impl EffectExecutor for SandboxProcessExecutor {
             .ok_or_else(|| adapter_failure("sandbox helper stdin is absent"))?;
         stdin.write_all(&encoded).await.map_err(adapter_failure)?;
         drop(stdin);
-        let output = child.wait_with_output().await.map_err(adapter_failure)?;
+        let output = match child.wait_with_output().await {
+            Ok(output) => output,
+            Err(error) => {
+                if is_oci
+                    && !ensure_oci_container_absent_async(
+                        self.config.oci_runtime.as_deref(),
+                        &container_name,
+                    )
+                    .await
+                {
+                    return Err(ExecutionError::OutcomeUnknown(format!(
+                        "sandbox helper failed and OCI cleanup could not be confirmed: {error}"
+                    )));
+                }
+                cleanup_guard.disarm();
+                return Err(adapter_failure(error));
+            }
+        };
         drop(proxy);
         if !output.status.success() {
+            if is_oci
+                && !ensure_oci_container_absent_async(
+                    self.config.oci_runtime.as_deref(),
+                    &container_name,
+                )
+                .await
+            {
+                return Err(ExecutionError::OutcomeUnknown(
+                    "sandbox helper failed and OCI cleanup could not be confirmed".into(),
+                ));
+            }
+            cleanup_guard.disarm();
             return Err(adapter_failure(format!(
                 "sandbox helper failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             )));
         }
-        let result: SandboxJobResult =
-            serde_json::from_slice(&output.stdout).map_err(adapter_failure)?;
+        let result: SandboxJobResult = match serde_json::from_slice(&output.stdout) {
+            Ok(result) => result,
+            Err(error) => {
+                if is_oci
+                    && !ensure_oci_container_absent_async(
+                        self.config.oci_runtime.as_deref(),
+                        &container_name,
+                    )
+                    .await
+                {
+                    return Err(ExecutionError::OutcomeUnknown(format!(
+                        "sandbox result was invalid and OCI cleanup could not be confirmed: {error}"
+                    )));
+                }
+                cleanup_guard.disarm();
+                return Err(adapter_failure(error));
+            }
+        };
+        cleanup_guard.disarm();
         if result.timed_out {
             return Err(adapter_failure("sandboxed process exceeded its timeout"));
         }
@@ -450,8 +565,7 @@ fn validate_process_spec(
     }
     for (name, value) in &spec.environment {
         if !obligations.allowed_environment.contains(name)
-            || name.is_empty()
-            || name.contains(['=', '\0'])
+            || !valid_environment_name(name)
             || value.len() > 64 * 1024
             || value.contains('\0')
         {
@@ -467,6 +581,14 @@ fn validate_process_spec(
         }
     }
     Ok(())
+}
+
+fn valid_environment_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 fn normalize_path_arguments(
@@ -569,6 +691,7 @@ impl SignedSandboxJob {
         mac.verify_slice(&tag)
             .map_err(|_| SandboxHelperError::InvalidJob("job authentication failed".into()))?;
         if self.job.schema_version != 1
+            || Uuid::parse_str(&self.job.job_id).is_err()
             || self.job.request_id.is_empty()
             || self.job.request_hash.is_empty()
             || self.job.decision_id.is_empty()
@@ -648,6 +771,12 @@ struct SandboxJobResult {
 
 fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelperError> {
     let backend = job.obligations.sandbox_backend.clone();
+    #[cfg(target_os = "windows")]
+    if backend == "oci" {
+        return Err(SandboxHelperError::Setup(
+            "OCI execution is disabled on Windows until path mapping passes live acceptance".into(),
+        ));
+    }
     let mut command = match backend.as_str() {
         "native" => native_command(&job)?,
         "oci" => oci_command(&job)?,
@@ -668,7 +797,13 @@ fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelpe
             )));
         }
     };
-    supervise(&mut command, &job, backend)
+    let result = supervise(&mut command, &job, backend.clone());
+    if backend == "oci" && !ensure_oci_container_absent(&job) {
+        return Err(SandboxHelperError::Execution(
+            "OCI container cleanup could not be confirmed".into(),
+        ));
+    }
+    result
 }
 
 fn direct_command(job: &SandboxJob) -> Command {
@@ -773,32 +908,76 @@ fn oci_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
         .oci_image
         .as_ref()
         .ok_or_else(|| SandboxHelperError::Setup("OCI image is not configured".into()))?;
+    if !valid_oci_image_reference(image) {
+        return Err(SandboxHelperError::Setup(
+            "OCI image must use a complete immutable sha256 digest".into(),
+        ));
+    }
     let mut command = Command::new(runtime);
     command.env_clear().args([
         "run",
         "--rm",
+        "--pull=never",
         "--network=none",
         "--read-only",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
     ]);
+    command.arg("--name").arg(oci_container_name(&job.job_id));
     command.arg(format!("--pids-limit={}", job.obligations.max_processes));
     command.arg(format!("--memory={}", job.obligations.max_memory_bytes));
+    let mut mounts = BTreeMap::<PathBuf, bool>::new();
     for grant in &job.obligations.filesystem {
+        if grant.mode == "execute" {
+            continue;
+        }
         let root = fs::canonicalize(&grant.root)
             .map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
-        let mode = if grant.mode == "write" { "rw" } else { "ro" };
-        command
-            .arg("--volume")
-            .arg(format!("{}:{}:{mode}", root.display(), root.display()));
+        if root.to_string_lossy().contains([',', '\0']) {
+            return Err(SandboxHelperError::Setup(
+                "OCI bind mount paths may not contain commas or NUL".into(),
+            ));
+        }
+        mounts
+            .entry(root)
+            .and_modify(|writable| *writable |= grant.mode == "write")
+            .or_insert(grant.mode == "write");
+    }
+    for (root, writable) in mounts {
+        let readonly = if writable { "" } else { ",readonly" };
+        command.arg("--mount").arg(format!(
+            "type=bind,source={},target={}{}",
+            root.display(),
+            root.display(),
+            readonly
+        ));
     }
     for (name, value) in &job.process.environment {
         command.env(name, value).arg("--env").arg(name);
     }
+    let mut bootstrap = "exec /usr/bin/env -i --".to_owned();
+    for name in job.process.environment.keys() {
+        if !valid_environment_name(name) {
+            return Err(SandboxHelperError::Setup(format!(
+                "invalid OCI environment name {name}"
+            )));
+        }
+        bootstrap.push(' ');
+        bootstrap.push_str(name);
+        bootstrap.push_str("=\"${");
+        bootstrap.push_str(name);
+        bootstrap.push_str("}\"");
+    }
+    bootstrap.push_str(" \"$@\"");
     command
         .arg("--workdir")
         .arg(&job.process.cwd)
+        .arg("--entrypoint")
+        .arg("/bin/sh")
         .arg(image)
+        .arg("-c")
+        .arg(bootstrap)
+        .arg("colossus-bootstrap")
         .arg(&job.executable)
         .args(&job.process.args);
     command
@@ -806,6 +985,112 @@ fn oci_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     Ok(command)
+}
+
+fn valid_oci_image_reference(image: &str) -> bool {
+    let Some((repository, digest)) = image.rsplit_once("@sha256:") else {
+        return false;
+    };
+    !repository.is_empty()
+        && digest.len() == 64
+        && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn oci_container_name(job_id: &str) -> String {
+    let sanitized = job_id
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>();
+    format!("colossus-{sanitized}")
+}
+
+fn bounded_control_command(mut command: Command) -> Option<(std::process::ExitStatus, Vec<u8>)> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().ok()?;
+    let deadline = Instant::now() + Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS);
+    loop {
+        if let Some(status) = child.try_wait().ok()? {
+            let mut stdout = Vec::new();
+            child.stdout.take()?.read_to_end(&mut stdout).ok()?;
+            return Some((status, stdout));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn ensure_oci_container_absent(job: &SandboxJob) -> bool {
+    let Some(runtime) = job.oci_runtime.as_ref() else {
+        return false;
+    };
+    let name = oci_container_name(&job.job_id);
+    let mut remove = Command::new(runtime);
+    remove
+        .env_clear()
+        .args(["container", "rm", "--force", &name]);
+    let _ = bounded_control_command(remove);
+    let mut list = Command::new(runtime);
+    list.env_clear().args([
+        "container",
+        "ls",
+        "--all",
+        "--filter",
+        &format!("name=^/{name}$"),
+        "--format",
+        "{{.ID}}",
+    ]);
+    bounded_control_command(list).is_some_and(|(status, stdout)| {
+        status.success() && stdout.iter().all(u8::is_ascii_whitespace)
+    })
+}
+
+async fn ensure_oci_container_absent_async(runtime: Option<&Path>, name: &str) -> bool {
+    let Some(runtime) = runtime else {
+        return false;
+    };
+    let mut remove = TokioCommand::new(runtime);
+    remove
+        .env_clear()
+        .args(["container", "rm", "--force", name])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let _ = tokio::time::timeout(
+        Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS),
+        remove.status(),
+    )
+    .await;
+    let mut list = TokioCommand::new(runtime);
+    list.env_clear()
+        .args([
+            "container",
+            "ls",
+            "--all",
+            "--filter",
+            &format!("name=^/{name}$"),
+            "--format",
+            "{{.ID}}",
+        ])
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    tokio::time::timeout(
+        Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS),
+        list.output(),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .is_some_and(|output| {
+        output.status.success() && output.stdout.iter().all(u8::is_ascii_whitespace)
+    })
 }
 
 fn configure_command(command: &mut Command, job: &SandboxJob) {
@@ -1334,7 +1619,7 @@ mod tests {
     fn authenticated_helper_job_rejects_tampering_and_expiry() {
         let job = SandboxJob {
             schema_version: 1,
-            job_id: "job".into(),
+            job_id: "018f0f9b-7b6e-7cc0-8000-000000000001".into(),
             request_id: "request".into(),
             request_hash: "hash".into(),
             decision_id: "decision".into(),
@@ -1391,7 +1676,7 @@ mod tests {
             });
         let job = SandboxJob {
             schema_version: 1,
-            job_id: "job".into(),
+            job_id: "018f0f9b-7b6e-7cc0-8000-000000000002".into(),
             request_id: "request".into(),
             request_hash: "hash".into(),
             decision_id: "decision".into(),
@@ -1408,7 +1693,7 @@ mod tests {
             timeout_ms: 1000,
             proxy_port: None,
             oci_runtime: Some(PathBuf::from("/usr/bin/docker")),
-            oci_image: Some("example@sha256:abc".into()),
+            oci_image: Some(format!("example@sha256:{}", "a".repeat(64))),
         };
         let command = oci_command(&job).expect("OCI command");
         let args = command
@@ -1416,10 +1701,13 @@ mod tests {
             .map(|value| value.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(args.contains(&"--network=none".into()));
+        assert!(args.contains(&"--pull=never".into()));
         assert!(args.contains(&"--read-only".into()));
         assert!(args.contains(&"--cap-drop=ALL".into()));
         assert!(args.contains(&"--pids-limit=2".into()));
         assert!(args.contains(&format!("--memory={}", 64 * 1024 * 1024)));
+        assert!(args.contains(&"--entrypoint".into()));
+        assert!(args.contains(&"colossus-018f0f9b7b6e7cc08000000000000002".into()));
         assert!(
             !args
                 .iter()

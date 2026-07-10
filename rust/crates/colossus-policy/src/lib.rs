@@ -31,6 +31,9 @@ use uuid::Uuid;
 const DEFAULT_POLICY_INPUT_LIMIT: usize = 1024 * 1024;
 const PERMIT_LIFETIME_MS: i128 = 30_000;
 
+/// Minimum timeout that leaves the OCI helper enough time to confirm container cleanup.
+pub const MIN_OCI_EFFECT_TIMEOUT_MS: u64 = 5_000;
+
 type HmacSha256 = Hmac<Sha256>;
 
 fn canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, GatewayError> {
@@ -261,11 +264,33 @@ impl SafetyKernel {
                     .into(),
             ));
         }
+        if obligations.sandbox_backend == "windows_job" && request.action == "process.spawn" {
+            return Err(GatewayError::Safety(
+                "windows_job process execution is reserved and currently fail-closed".into(),
+            ));
+        }
+        if cfg!(target_os = "windows")
+            && obligations.sandbox_backend == "oci"
+            && request.action == "process.spawn"
+        {
+            return Err(GatewayError::Safety(
+                "OCI process execution is disabled on Windows until path mapping passes live acceptance"
+                    .into(),
+            ));
+        }
+        if obligations.sandbox_backend == "oci"
+            && request.action == "process.spawn"
+            && obligations.timeout_ms < MIN_OCI_EFFECT_TIMEOUT_MS
+        {
+            return Err(GatewayError::Safety(format!(
+                "OCI process execution requires timeout_ms >= {MIN_OCI_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
+            )));
+        }
         let mut environment = BTreeSet::new();
         for name in &obligations.allowed_environment {
-            if name.is_empty() || name.contains(['=', '\0']) || !environment.insert(name.as_str()) {
+            if !valid_environment_name(name) || !environment.insert(name.as_str()) {
                 return Err(GatewayError::Safety(
-                    "environment obligations must be unique, nonempty names".into(),
+                    "environment obligations must be unique POSIX-style names".into(),
                 ));
             }
         }
@@ -308,6 +333,14 @@ impl SafetyKernel {
         }
         Ok(())
     }
+}
+
+fn valid_environment_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 fn canonical_network_origin(resource: &str) -> Result<String, GatewayError> {
@@ -1355,6 +1388,50 @@ mod tests {
             .await
             .expect_err("environment denied");
         assert!(matches!(error, GatewayError::Safety(_)));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn oci_process_timeout_must_reserve_confirmed_cleanup_time() {
+        let directory = tempfile::tempdir().expect("directory");
+        let executable = std::env::current_exe()
+            .expect("executable")
+            .canonicalize()
+            .expect("canonical executable");
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox("oci", "test", false)
+            .with_limits(1_000, 1024, 2, 64 * 1024 * 1024, 1)
+            .with_filesystem_root(executable.display().to_string(), "execute")
+            .with_filesystem_read_root(directory.path().display().to_string());
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()]),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "process.spawn",
+            executable.display().to_string(),
+            serde_json::json!({
+                "cwd": directory.path(),
+                "args": [],
+                "environment": {},
+                "stdin_base64": null,
+            }),
+        );
+        request.capabilities = vec!["process.spawn".into()];
+        assert!(matches!(
+            gateway.execute(request, &executor).await,
+            Err(GatewayError::Safety(_))
+        ));
         assert_eq!(executor.calls.load(Ordering::Acquire), 0);
     }
 

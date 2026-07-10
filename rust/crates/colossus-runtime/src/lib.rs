@@ -12,8 +12,8 @@ use colossus_journal_redb::{
 };
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
-    GatewayError, OpaConfig, OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request,
-    system_actor,
+    GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, OpaConfig, OpaPolicy, ReleasedEffectResult,
+    SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
     EventJournal, KeyProvider, PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError,
@@ -102,7 +102,9 @@ pub struct SandboxConfig {
 impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
-            backend: if cfg!(any(target_os = "linux", target_os = "macos")) {
+            backend: if cfg!(target_os = "windows") {
+                "windows_job".into()
+            } else if cfg!(any(target_os = "linux", target_os = "macos")) {
                 "native".into()
             } else {
                 "oci".into()
@@ -241,6 +243,19 @@ impl RuntimeConfig {
                 "sandbox profile and resource limits must be nonempty/nonzero".into(),
             ));
         }
+        #[cfg(target_os = "windows")]
+        if config.sandbox.backend == "oci" {
+            return Err(RuntimeError::Config(
+                "OCI process execution is disabled on Windows until path mapping passes live acceptance"
+                    .into(),
+            ));
+        }
+        if config.sandbox.backend == "oci" && config.sandbox.timeout_ms < MIN_OCI_EFFECT_TIMEOUT_MS
+        {
+            return Err(RuntimeError::Config(format!(
+                "OCI sandbox timeoutMs must be at least {MIN_OCI_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
+            )));
+        }
         if config
             .sandbox
             .executables
@@ -268,9 +283,19 @@ impl RuntimeConfig {
         }
         if config
             .sandbox
+            .environment
+            .iter()
+            .any(|name| !valid_environment_name(name))
+        {
+            return Err(RuntimeError::Config(
+                "sandbox environment entries must be POSIX-style variable names".into(),
+            ));
+        }
+        if config
+            .sandbox
             .oci_image
             .as_deref()
-            .is_some_and(|image| !image.contains("@sha256:"))
+            .is_some_and(|image| !valid_oci_image_reference(image))
         {
             return Err(RuntimeError::Config(
                 "OCI images must use an immutable @sha256: digest".into(),
@@ -314,6 +339,23 @@ impl RuntimeConfig {
     pub fn to_yaml(&self) -> Result<String, RuntimeError> {
         serde_saphyr::to_string(self).map_err(|error| RuntimeError::Config(error.to_string()))
     }
+}
+
+fn valid_oci_image_reference(image: &str) -> bool {
+    let Some((repository, digest)) = image.rsplit_once("@sha256:") else {
+        return false;
+    };
+    !repository.is_empty()
+        && digest.len() == 64
+        && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_environment_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 /// Runtime construction or application failure.
@@ -985,6 +1027,32 @@ workflows:
 surprise: true
 "#;
         assert!(RuntimeConfig::from_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn oci_config_requires_cleanup_budget_digest_and_safe_environment_names() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        config.sandbox.backend = "oci".into();
+        config.sandbox.timeout_ms = 4_999;
+        config.sandbox.oci_image = Some(format!("python@sha256:{}", "a".repeat(64)));
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "short OCI cleanup budget was accepted"
+        );
+
+        config.sandbox.timeout_ms = 5_000;
+        config.sandbox.oci_image = Some("python:latest".into());
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "mutable OCI image was accepted"
+        );
+
+        config.sandbox.oci_image = Some(format!("python@sha256:{}", "a".repeat(64)));
+        config.sandbox.environment = vec!["BAD-NAME".into()];
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "unsafe environment name was accepted"
+        );
     }
 
     #[test]
