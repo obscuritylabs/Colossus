@@ -21,6 +21,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- c
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- echo hello
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sandbox doctor
 ```
 
 The current Python 0.5 surface remains available during reconstruction:

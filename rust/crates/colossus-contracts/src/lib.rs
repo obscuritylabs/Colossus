@@ -350,6 +350,10 @@ pub struct PolicyObligations {
     pub filesystem: Vec<FilesystemGrant>,
     /// Allowed network destination patterns.
     pub network_destinations: Vec<String>,
+    /// Exact environment variable names visible to a sandboxed process.
+    pub allowed_environment: Vec<String>,
+    /// Whether an unavailable isolation backend may downgrade to the broker.
+    pub allow_sandbox_downgrade: bool,
     /// Maximum wall-clock time in milliseconds.
     pub timeout_ms: u64,
     /// Maximum released output bytes.
@@ -376,7 +380,7 @@ pub struct PolicyObligations {
 pub struct FilesystemGrant {
     /// Canonical absolute root.
     pub root: String,
-    /// `read`, `write`, or `metadata`.
+    /// `read`, `write`, `metadata`, or `execute`.
     pub mode: String,
 }
 
@@ -621,6 +625,7 @@ mod tests {
             "decision_id":"d1","policy_revision":"r1","outcome":"deny",
             "reason":"no","obligations":{"sandbox_backend":"none",
             "sandbox_profile":"none","filesystem":[],"network_destinations":[],
+            "allowed_environment":[],"allow_sandbox_downgrade":false,
             "timeout_ms":1,"max_output_bytes":1,"max_processes":0,
             "max_memory_bytes":1,"max_concurrency":1,"required_redactions":[],
             "require_post_effect":false,"audit_labels":{},"retention":"standard"},

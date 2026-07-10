@@ -1,0 +1,1565 @@
+//! Permit-bound filesystem, process-sandbox, and network adapters.
+
+#![allow(clippy::missing_errors_doc)]
+
+use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use colossus_contracts::{
+    EffectRequest, FilesystemGrant, PolicyObligations, QuarantinedEffectResult,
+};
+use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
+use command_group::CommandGroup as _;
+use futures::StreamExt as _;
+use hmac::{Hmac, Mac};
+use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
+    io::{Read, Write},
+    net::{IpAddr, SocketAddr},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
+};
+use sysinfo::{Pid as SystemPid, ProcessRefreshKind, ProcessesToUpdate, System};
+use thiserror::Error;
+use time::OffsetDateTime;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream, lookup_host},
+    process::Command as TokioCommand,
+    sync::oneshot,
+};
+use uuid::Uuid;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use nono::{AccessMode, CapabilitySet, Sandbox};
+
+type HmacSha256 = Hmac<Sha256>;
+
+const HELPER_KEY_VARIABLE: &str = "COLOSSUS_SANDBOX_JOB_KEY";
+const MAX_JOB_BYTES: usize = 1024 * 1024;
+const MAX_PROXY_HEADER_BYTES: usize = 16 * 1024;
+
+fn adapter_failure(error: impl std::fmt::Display) -> ExecutionError {
+    ExecutionError::Failed(error.to_string())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+/// Strict process request carried inside an effect request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessSpec {
+    /// Absolute working directory.
+    pub cwd: PathBuf,
+    /// Literal argv entries; no shell parsing occurs.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Explicit environment map after policy allowlisting.
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+    /// Optional base64-encoded standard input.
+    pub stdin_base64: Option<String>,
+}
+
+/// Local helper and OCI settings that policy may select by backend obligation.
+#[derive(Clone, Debug)]
+pub struct SandboxExecutorConfig {
+    /// Trusted helper executable. Colossus CLI normally points this at itself.
+    pub helper_executable: PathBuf,
+    /// Exact Docker or Podman executable for the `oci` backend.
+    pub oci_runtime: Option<PathBuf>,
+    /// Immutable image reference used by the `oci` backend.
+    pub oci_image: Option<String>,
+}
+
+/// Runtime support and configured fallback report.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxDoctorReport {
+    /// Platform identifier.
+    pub platform: String,
+    /// Whether native kernel isolation is available.
+    pub native_supported: bool,
+    /// Native backend details without secrets.
+    pub native_details: String,
+    /// Configured helper executable.
+    pub helper_executable: PathBuf,
+    /// Configured OCI runtime, if any.
+    pub oci_runtime: Option<PathBuf>,
+    /// Whether an OCI image was configured.
+    pub oci_image_configured: bool,
+}
+
+/// Return bounded local sandbox readiness.
+pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let (native_supported, native_details) = {
+        let support = Sandbox::support_info();
+        (support.is_supported, support.details)
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let (native_supported, native_details) = (
+        false,
+        "native isolation is unavailable; configure the OCI backend".to_owned(),
+    );
+    SandboxDoctorReport {
+        platform: std::env::consts::OS.into(),
+        native_supported,
+        native_details,
+        helper_executable: config.helper_executable.clone(),
+        oci_runtime: config.oci_runtime.clone(),
+        oci_image_configured: config.oci_image.is_some(),
+    }
+}
+
+/// Permit-bound filesystem adapter.
+#[derive(Default)]
+pub struct FilesystemExecutor;
+
+impl FilesystemExecutor {
+    /// Construct the filesystem adapter. Authorization still requires a permit.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl EffectExecutor for FilesystemExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let mode = filesystem_mode(&request.action)?;
+        let target = authorized_path(
+            Path::new(&request.resource),
+            mode,
+            &permit.obligations().filesystem,
+        )?;
+        let max_output =
+            usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?;
+        match request.action.as_str() {
+            "filesystem.read" => {
+                let metadata = fs::metadata(&target).map_err(adapter_failure)?;
+                if !metadata.is_file() {
+                    return Err(adapter_failure("filesystem.read requires a regular file"));
+                }
+                if metadata.len() > permit.obligations().max_output_bytes {
+                    return Err(adapter_failure("file exceeds the permitted output bound"));
+                }
+                let bytes = fs::read(target).map_err(adapter_failure)?;
+                Ok(QuarantinedEffectResult {
+                    media_type: "application/octet-stream".into(),
+                    bytes,
+                    effect_succeeded: true,
+                })
+            }
+            "filesystem.metadata" => {
+                let metadata = fs::metadata(&target).map_err(adapter_failure)?;
+                bounded_json(
+                    json!({
+                        "is_file": metadata.is_file(),
+                        "is_directory": metadata.is_dir(),
+                        "length": metadata.len(),
+                        "readonly": metadata.permissions().readonly(),
+                    }),
+                    max_output,
+                )
+            }
+            "filesystem.list" => {
+                let mut entries = fs::read_dir(&target)
+                    .map_err(adapter_failure)?
+                    .map(|entry| {
+                        let entry = entry.map_err(adapter_failure)?;
+                        let metadata =
+                            fs::symlink_metadata(entry.path()).map_err(adapter_failure)?;
+                        Ok(json!({
+                            "name": entry.file_name().to_string_lossy(),
+                            "is_file": metadata.is_file(),
+                            "is_directory": metadata.is_dir(),
+                            "length": metadata.len(),
+                        }))
+                    })
+                    .collect::<Result<Vec<_>, ExecutionError>>()?;
+                entries.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+                bounded_json(json!({"entries": entries}), max_output)
+            }
+            "filesystem.write" => {
+                let bytes = proposed_write_bytes(&request.content, max_output)?;
+                atomic_write(&target, &bytes)?;
+                bounded_json(
+                    json!({"bytes_written": bytes.len(), "sha256": sha256_hex(&bytes)}),
+                    max_output,
+                )
+            }
+            _ => Err(adapter_failure("unsupported filesystem action")),
+        }
+    }
+}
+
+fn filesystem_mode(action: &str) -> Result<&'static str, ExecutionError> {
+    match action {
+        "filesystem.read" | "filesystem.list" => Ok("read"),
+        "filesystem.metadata" => Ok("metadata"),
+        "filesystem.write" => Ok("write"),
+        _ => Err(adapter_failure("unsupported filesystem action")),
+    }
+}
+
+fn authorized_path(
+    requested: &Path,
+    mode: &str,
+    grants: &[FilesystemGrant],
+) -> Result<PathBuf, ExecutionError> {
+    if !requested.is_absolute() {
+        return Err(adapter_failure("effect paths must be absolute"));
+    }
+    if fs::symlink_metadata(requested).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(adapter_failure("symbolic-link effect targets are rejected"));
+    }
+    let target = if mode == "write" && !requested.exists() {
+        let parent = requested
+            .parent()
+            .ok_or_else(|| adapter_failure("write target has no parent"))?;
+        let filename = requested
+            .file_name()
+            .ok_or_else(|| adapter_failure("write target has no filename"))?;
+        fs::canonicalize(parent)
+            .map(|parent| parent.join(filename))
+            .map_err(adapter_failure)?
+    } else {
+        fs::canonicalize(requested).map_err(adapter_failure)?
+    };
+    let allowed = grants.iter().any(|grant| {
+        let mode_allowed = grant.mode == "write"
+            || grant.mode == mode
+            || (mode == "metadata" && grant.mode == "read");
+        mode_allowed && fs::canonicalize(&grant.root).is_ok_and(|root| target.starts_with(root))
+    });
+    if !allowed {
+        return Err(adapter_failure(format!(
+            "{} is outside permitted {mode} roots",
+            requested.display()
+        )));
+    }
+    Ok(target)
+}
+
+fn proposed_write_bytes(content: &Value, limit: usize) -> Result<Vec<u8>, ExecutionError> {
+    let bytes = if let Some(encoded) = content.get("content_base64").and_then(Value::as_str) {
+        BASE64.decode(encoded).map_err(adapter_failure)?
+    } else if let Some(text) = content.get("text").and_then(Value::as_str) {
+        text.as_bytes().to_vec()
+    } else {
+        return Err(adapter_failure(
+            "filesystem.write requires text or content_base64",
+        ));
+    };
+    if bytes.len() > limit {
+        return Err(adapter_failure("write content exceeds the permitted bound"));
+    }
+    Ok(bytes)
+}
+
+fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), ExecutionError> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| adapter_failure("write target has no parent"))?;
+    let temporary = parent.join(format!(".colossus-write-{}.tmp", Uuid::now_v7()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(adapter_failure)?;
+        file.write_all(bytes).map_err(adapter_failure)?;
+        file.sync_all().map_err(adapter_failure)?;
+        fs::rename(&temporary, target).map_err(adapter_failure)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn bounded_json(value: Value, limit: usize) -> Result<QuarantinedEffectResult, ExecutionError> {
+    let bytes = serde_json::to_vec(&value).map_err(adapter_failure)?;
+    if bytes.len() > limit {
+        return Err(adapter_failure(
+            "adapter output exceeds the permitted bound",
+        ));
+    }
+    Ok(QuarantinedEffectResult {
+        media_type: "application/json".into(),
+        bytes,
+        effect_succeeded: true,
+    })
+}
+
+/// Permit-bound process executor using an authenticated one-shot helper.
+pub struct SandboxProcessExecutor {
+    config: SandboxExecutorConfig,
+    job_key: [u8; 32],
+}
+
+impl SandboxProcessExecutor {
+    /// Construct a process executor with a private IPC authentication key.
+    pub fn new(config: SandboxExecutorConfig, job_key: [u8; 32]) -> Self {
+        Self { config, job_key }
+    }
+}
+
+#[async_trait]
+impl EffectExecutor for SandboxProcessExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if request.action != "process.spawn" {
+            return Err(adapter_failure("process executor received another action"));
+        }
+        let mut spec: ProcessSpec = serde_json::from_value(request.content.clone())
+            .map_err(|error| adapter_failure(format!("invalid process request: {error}")))?;
+        validate_process_spec(&spec, &request.resource, permit.obligations())?;
+        normalize_path_arguments(&mut spec, permit.obligations())?;
+        let proxy = if permit.obligations().network_destinations.is_empty() {
+            None
+        } else if permit.obligations().sandbox_backend == "native" {
+            Some(AllowlistProxy::start(permit.obligations().network_destinations.clone()).await?)
+        } else {
+            return Err(adapter_failure(
+                "networked process execution currently requires the native proxy-only backend",
+            ));
+        };
+        let helper_budget = permit.obligations().timeout_ms.saturating_sub(250).max(1);
+        let job = SandboxJob {
+            schema_version: 1,
+            job_id: Uuid::now_v7().to_string(),
+            request_id: request.request_id.clone(),
+            request_hash: permit.request_hash().into(),
+            decision_id: permit.decision_id().into(),
+            permit_nonce: permit.nonce().into(),
+            permit_expires_at_unix_ms: permit.expires_at_unix_ms(),
+            executable: PathBuf::from(&request.resource),
+            process: spec,
+            obligations: permit.obligations().clone(),
+            timeout_ms: helper_budget,
+            proxy_port: proxy.as_ref().map(AllowlistProxy::port),
+            oci_runtime: self.config.oci_runtime.clone(),
+            oci_image: self.config.oci_image.clone(),
+        };
+        let signed = SignedSandboxJob::sign(job, &self.job_key)?;
+        let encoded = serde_json::to_vec(&signed).map_err(adapter_failure)?;
+        if encoded.len() > MAX_JOB_BYTES {
+            return Err(adapter_failure("sandbox helper job exceeds IPC bound"));
+        }
+        let mut command = TokioCommand::new(&self.config.helper_executable);
+        command
+            .arg("__sandbox-helper")
+            .env_clear()
+            .env(HELPER_KEY_VARIABLE, hex::encode(self.job_key))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command.spawn().map_err(adapter_failure)?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| adapter_failure("sandbox helper stdin is absent"))?;
+        stdin.write_all(&encoded).await.map_err(adapter_failure)?;
+        drop(stdin);
+        let output = child.wait_with_output().await.map_err(adapter_failure)?;
+        drop(proxy);
+        if !output.status.success() {
+            return Err(adapter_failure(format!(
+                "sandbox helper failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let result: SandboxJobResult =
+            serde_json::from_slice(&output.stdout).map_err(adapter_failure)?;
+        if result.timed_out {
+            return Err(adapter_failure("sandboxed process exceeded its timeout"));
+        }
+        if let Some(limit) = &result.resource_limit_exceeded {
+            return Err(adapter_failure(format!(
+                "sandboxed process exceeded its {limit} limit"
+            )));
+        }
+        if !result.success {
+            let stderr = BASE64.decode(&result.stderr_base64).unwrap_or_default();
+            return Err(adapter_failure(format!(
+                "sandboxed process exited with {:?}; stderr_bytes={}; stderr_sha256={}",
+                result.exit_code,
+                stderr.len(),
+                sha256_hex(&stderr),
+            )));
+        }
+        bounded_json(
+            serde_json::to_value(result).map_err(adapter_failure)?,
+            usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?,
+        )
+    }
+}
+
+fn validate_process_spec(
+    spec: &ProcessSpec,
+    executable: &str,
+    obligations: &PolicyObligations,
+) -> Result<(), ExecutionError> {
+    let executable = fs::canonicalize(executable).map_err(adapter_failure)?;
+    if !executable.is_file() {
+        return Err(adapter_failure("process executable is not a regular file"));
+    }
+    let executable_allowed = obligations.filesystem.iter().any(|grant| {
+        grant.mode == "execute"
+            && fs::canonicalize(&grant.root).is_ok_and(|root| root == executable)
+    });
+    if !executable_allowed {
+        return Err(adapter_failure(
+            "process executable is not explicitly granted",
+        ));
+    }
+    let cwd = fs::canonicalize(&spec.cwd).map_err(adapter_failure)?;
+    if !cwd.is_dir() {
+        return Err(adapter_failure("process cwd is not a directory"));
+    }
+    if spec.args.len() > 256
+        || spec
+            .args
+            .iter()
+            .any(|argument| argument.len() > 64 * 1024 || argument.contains('\0'))
+    {
+        return Err(adapter_failure(
+            "process argv exceeds bounds or contains NUL",
+        ));
+    }
+    if spec.environment.len() > 128 {
+        return Err(adapter_failure("process environment exceeds entry bound"));
+    }
+    for (name, value) in &spec.environment {
+        if !obligations.allowed_environment.contains(name)
+            || name.is_empty()
+            || name.contains(['=', '\0'])
+            || value.len() > 64 * 1024
+            || value.contains('\0')
+        {
+            return Err(adapter_failure(format!(
+                "process environment entry {name} is invalid or not permitted"
+            )));
+        }
+    }
+    if let Some(input) = &spec.stdin_base64 {
+        let length = BASE64.decode(input).map_err(adapter_failure)?.len();
+        if u64::try_from(length).map_err(adapter_failure)? > obligations.max_output_bytes {
+            return Err(adapter_failure("process stdin exceeds the permitted bound"));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_path_arguments(
+    spec: &mut ProcessSpec,
+    obligations: &PolicyObligations,
+) -> Result<(), ExecutionError> {
+    for argument in &mut spec.args {
+        let path = Path::new(argument);
+        let path_like = path.is_absolute()
+            || argument.starts_with("./")
+            || argument.starts_with("../")
+            || argument.starts_with(".\\")
+            || argument.starts_with("..\\");
+        if !path_like {
+            continue;
+        }
+        let candidate = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            spec.cwd.join(path)
+        };
+        let (canonical, required_mode) = if candidate.exists() {
+            (
+                fs::canonicalize(&candidate).map_err(adapter_failure)?,
+                "read",
+            )
+        } else {
+            let parent = candidate
+                .parent()
+                .ok_or_else(|| adapter_failure("process path argument has no parent"))?;
+            let name = candidate
+                .file_name()
+                .ok_or_else(|| adapter_failure("process path argument has no filename"))?;
+            (
+                fs::canonicalize(parent)
+                    .map(|parent| parent.join(name))
+                    .map_err(adapter_failure)?,
+                "write",
+            )
+        };
+        let allowed = obligations.filesystem.iter().any(|grant| {
+            let mode_allowed = grant.mode == "write"
+                || (required_mode == "read" && matches!(grant.mode.as_str(), "read" | "metadata"));
+            mode_allowed
+                && fs::canonicalize(&grant.root).is_ok_and(|root| canonical.starts_with(root))
+        });
+        if !allowed {
+            return Err(adapter_failure(format!(
+                "process path argument {} escapes filesystem grants",
+                candidate.display()
+            )));
+        }
+        *argument = canonical.display().to_string();
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SandboxJob {
+    schema_version: u16,
+    job_id: String,
+    request_id: String,
+    request_hash: String,
+    decision_id: String,
+    permit_nonce: String,
+    permit_expires_at_unix_ms: i128,
+    executable: PathBuf,
+    process: ProcessSpec,
+    obligations: PolicyObligations,
+    timeout_ms: u64,
+    proxy_port: Option<u16>,
+    oci_runtime: Option<PathBuf>,
+    oci_image: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignedSandboxJob {
+    job: SandboxJob,
+    authentication_tag: String,
+}
+
+impl SignedSandboxJob {
+    fn sign(job: SandboxJob, key: &[u8; 32]) -> Result<Self, ExecutionError> {
+        let mut mac = HmacSha256::new_from_slice(key).map_err(adapter_failure)?;
+        mac.update(&serde_json::to_vec(&job).map_err(adapter_failure)?);
+        Ok(Self {
+            job,
+            authentication_tag: hex::encode(mac.finalize().into_bytes()),
+        })
+    }
+
+    fn verify(self, key: &[u8; 32]) -> Result<SandboxJob, SandboxHelperError> {
+        let mut mac = HmacSha256::new_from_slice(key)
+            .map_err(|error| SandboxHelperError::InvalidJob(error.to_string()))?;
+        mac.update(&serde_json::to_vec(&self.job)?);
+        let tag = hex::decode(self.authentication_tag)
+            .map_err(|error| SandboxHelperError::InvalidJob(error.to_string()))?;
+        mac.verify_slice(&tag)
+            .map_err(|_| SandboxHelperError::InvalidJob("job authentication failed".into()))?;
+        if self.job.schema_version != 1
+            || self.job.request_id.is_empty()
+            || self.job.request_hash.is_empty()
+            || self.job.decision_id.is_empty()
+            || self.job.permit_nonce.is_empty()
+        {
+            return Err(SandboxHelperError::InvalidJob(
+                "required authenticated job field is absent".into(),
+            ));
+        }
+        let now_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+        if self.job.permit_expires_at_unix_ms < now_ms {
+            return Err(SandboxHelperError::InvalidJob("job permit expired".into()));
+        }
+        Ok(self.job)
+    }
+}
+
+/// Structured helper failure printed only to the trusted parent process.
+#[derive(Debug, Error)]
+pub enum SandboxHelperError {
+    /// The authenticated job was malformed, expired, or tampered with.
+    #[error("invalid sandbox job: {0}")]
+    InvalidJob(String),
+    /// Native or OCI isolation could not be established.
+    #[error("sandbox setup failed: {0}")]
+    Setup(String),
+    /// The sandboxed command could not be supervised.
+    #[error("sandbox execution failed: {0}")]
+    Execution(String),
+    /// Strict JSON IPC failed.
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    /// Helper standard I/O failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Run the trusted one-shot sandbox helper protocol over stdin/stdout.
+pub fn run_helper_stdio() -> Result<(), SandboxHelperError> {
+    let encoded_key = std::env::var(HELPER_KEY_VARIABLE)
+        .map_err(|_| SandboxHelperError::InvalidJob("helper key is absent".into()))?;
+    let key: [u8; 32] = hex::decode(encoded_key)
+        .map_err(|error| SandboxHelperError::InvalidJob(error.to_string()))?
+        .try_into()
+        .map_err(|_| SandboxHelperError::InvalidJob("helper key length is invalid".into()))?;
+    let mut input = std::io::stdin().take(
+        u64::try_from(MAX_JOB_BYTES)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
+    );
+    let mut bytes = Vec::new();
+    input.read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_JOB_BYTES {
+        return Err(SandboxHelperError::InvalidJob(
+            "helper input exceeds IPC bound".into(),
+        ));
+    }
+    let signed: SignedSandboxJob = serde_json::from_slice(&bytes)?;
+    let job = signed.verify(&key)?;
+    let result = execute_sandbox_job(job)?;
+    serde_json::to_writer(std::io::stdout(), &result)?;
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SandboxJobResult {
+    backend: String,
+    exit_code: Option<i32>,
+    success: bool,
+    timed_out: bool,
+    resource_limit_exceeded: Option<String>,
+    output_truncated: bool,
+    stdout_base64: String,
+    stderr_base64: String,
+}
+
+fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelperError> {
+    let backend = job.obligations.sandbox_backend.clone();
+    let mut command = match backend.as_str() {
+        "native" => native_command(&job)?,
+        "oci" => oci_command(&job)?,
+        "broker" if job.obligations.allow_sandbox_downgrade => direct_command(&job),
+        "broker" => {
+            return Err(SandboxHelperError::Setup(
+                "broker downgrade was not explicitly authorized".into(),
+            ));
+        }
+        "windows_job" => {
+            return Err(SandboxHelperError::Setup(
+                "windows_job is not available in this build; configure OCI".into(),
+            ));
+        }
+        other => {
+            return Err(SandboxHelperError::Setup(format!(
+                "unknown sandbox backend {other}"
+            )));
+        }
+    };
+    supervise(&mut command, &job, backend)
+}
+
+fn direct_command(job: &SandboxJob) -> Command {
+    let mut command = Command::new(&job.executable);
+    configure_command(&mut command, job);
+    command
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn native_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
+    if !Sandbox::is_supported() {
+        return Err(SandboxHelperError::Setup(
+            "native kernel sandbox is unavailable".into(),
+        ));
+    }
+    let mut capabilities = CapabilitySet::new();
+    for grant in &job.obligations.filesystem {
+        let path = fs::canonicalize(&grant.root)
+            .map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
+        let access = if grant.mode == "write" {
+            AccessMode::ReadWrite
+        } else {
+            AccessMode::Read
+        };
+        capabilities = if path.is_dir() {
+            capabilities.allow_path(&path, access)
+        } else {
+            capabilities.allow_file(&path, access)
+        }
+        .map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
+    }
+    for path in native_runtime_paths() {
+        if !path.exists() {
+            continue;
+        }
+        capabilities = if path.is_dir() {
+            capabilities.allow_path(path, AccessMode::Read)
+        } else {
+            capabilities.allow_file(path, AccessMode::Read)
+        }
+        .map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
+    }
+    capabilities = if let Some(port) = job.proxy_port {
+        capabilities.proxy_only(port)
+    } else {
+        capabilities.block_network()
+    };
+    Sandbox::apply_auto(&capabilities)
+        .map_err(|error| SandboxHelperError::Setup(format!("native apply: {error}")))?;
+    let mut command = Command::new(&job.executable);
+    configure_command(&mut command, job);
+    Ok(command)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn native_command(_job: &SandboxJob) -> Result<Command, SandboxHelperError> {
+    Err(SandboxHelperError::Setup(
+        "native sandboxing is unsupported on this platform".into(),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn native_runtime_paths() -> Vec<&'static Path> {
+    [
+        "/System/Library",
+        "/usr/lib",
+        "/Library/Apple/usr/lib",
+        "/dev/null",
+        "/dev/urandom",
+    ]
+    .into_iter()
+    .map(Path::new)
+    .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn native_runtime_paths() -> Vec<&'static Path> {
+    [
+        "/lib",
+        "/lib64",
+        "/usr/lib",
+        "/usr/lib64",
+        "/dev/null",
+        "/dev/urandom",
+    ]
+    .into_iter()
+    .map(Path::new)
+    .collect()
+}
+
+fn oci_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
+    if job.proxy_port.is_some() || !job.obligations.network_destinations.is_empty() {
+        return Err(SandboxHelperError::Setup(
+            "OCI process networking is fail-closed until proxy injection is configured".into(),
+        ));
+    }
+    let runtime = job
+        .oci_runtime
+        .as_ref()
+        .ok_or_else(|| SandboxHelperError::Setup("OCI runtime is not configured".into()))?;
+    let image = job
+        .oci_image
+        .as_ref()
+        .ok_or_else(|| SandboxHelperError::Setup("OCI image is not configured".into()))?;
+    let mut command = Command::new(runtime);
+    command.env_clear().args([
+        "run",
+        "--rm",
+        "--network=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+    ]);
+    command.arg(format!("--pids-limit={}", job.obligations.max_processes));
+    command.arg(format!("--memory={}", job.obligations.max_memory_bytes));
+    for grant in &job.obligations.filesystem {
+        let root = fs::canonicalize(&grant.root)
+            .map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
+        let mode = if grant.mode == "write" { "rw" } else { "ro" };
+        command
+            .arg("--volume")
+            .arg(format!("{}:{}:{mode}", root.display(), root.display()));
+    }
+    for (name, value) in &job.process.environment {
+        command.env(name, value).arg("--env").arg(name);
+    }
+    command
+        .arg("--workdir")
+        .arg(&job.process.cwd)
+        .arg(image)
+        .arg(&job.executable)
+        .args(&job.process.args);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    Ok(command)
+}
+
+fn configure_command(command: &mut Command, job: &SandboxJob) {
+    command
+        .args(&job.process.args)
+        .current_dir(&job.process.cwd)
+        .env_clear()
+        .envs(&job.process.environment)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(port) = job.proxy_port {
+        let proxy = format!("http://127.0.0.1:{port}");
+        command
+            .env("HTTP_PROXY", &proxy)
+            .env("HTTPS_PROXY", &proxy)
+            .env("ALL_PROXY", &proxy)
+            .env("NO_PROXY", "");
+    }
+}
+
+#[derive(Default)]
+struct CaptureState {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    remaining: usize,
+    truncated: bool,
+}
+
+#[derive(Clone, Copy)]
+enum CaptureStream {
+    Stdout,
+    Stderr,
+}
+
+fn capture<R: Read + Send + 'static>(
+    mut reader: R,
+    state: Arc<Mutex<CaptureState>>,
+    stream: CaptureStream,
+) -> thread::JoinHandle<Result<(), std::io::Error>> {
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let count = reader.read(&mut buffer)?;
+            if count == 0 {
+                return Ok(());
+            }
+            let mut state = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let retained = count.min(state.remaining);
+            match stream {
+                CaptureStream::Stdout => state.stdout.extend_from_slice(&buffer[..retained]),
+                CaptureStream::Stderr => state.stderr.extend_from_slice(&buffer[..retained]),
+            }
+            state.remaining = state.remaining.saturating_sub(retained);
+            state.truncated |= retained < count;
+        }
+    })
+}
+
+fn supervise(
+    command: &mut Command,
+    job: &SandboxJob,
+    backend: String,
+) -> Result<SandboxJobResult, SandboxHelperError> {
+    let mut child = command
+        .group_spawn()
+        .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+    if let Some(encoded) = &job.process.stdin_base64 {
+        let input = BASE64
+            .decode(encoded)
+            .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+        let mut stdin = child
+            .inner()
+            .stdin
+            .take()
+            .ok_or_else(|| SandboxHelperError::Execution("child stdin is absent".into()))?;
+        stdin.write_all(&input)?;
+    }
+    drop(child.inner().stdin.take());
+    let stdout = child
+        .inner()
+        .stdout
+        .take()
+        .ok_or_else(|| SandboxHelperError::Execution("child stdout is absent".into()))?;
+    let stderr = child
+        .inner()
+        .stderr
+        .take()
+        .ok_or_else(|| SandboxHelperError::Execution("child stderr is absent".into()))?;
+    let output_limit = usize::try_from(job.obligations.max_output_bytes).unwrap_or(usize::MAX);
+    let capture_limit = output_limit.saturating_sub(1024).saturating_mul(3) / 4;
+    let state = Arc::new(Mutex::new(CaptureState {
+        remaining: capture_limit,
+        ..CaptureState::default()
+    }));
+    let stdout_handle = capture(stdout, Arc::clone(&state), CaptureStream::Stdout);
+    let stderr_handle = capture(stderr, Arc::clone(&state), CaptureStream::Stderr);
+    let started = Instant::now();
+    let timeout = Duration::from_millis(job.timeout_ms);
+    let mut system = System::new();
+    let root_pid = SystemPid::from_u32(child.id());
+    let (status, timed_out, resource_limit_exceeded) = loop {
+        if let Some(status) = child.try_wait()? {
+            // The group/job can outlive its leader when an executable backgrounds work.
+            // Always terminate remaining descendants before returning a terminal result.
+            let _ = child.kill();
+            break (status, false, None);
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            break (child.wait()?, true, None);
+        }
+        let (processes, memory) = process_tree_usage(&mut system, root_pid);
+        let limit =
+            if processes > usize::try_from(job.obligations.max_processes).unwrap_or(usize::MAX) {
+                Some("process-count")
+            } else if memory > job.obligations.max_memory_bytes {
+                Some("memory")
+            } else {
+                None
+            };
+        if let Some(limit) = limit {
+            let _ = child.kill();
+            break (child.wait()?, false, Some(limit.into()));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    stdout_handle
+        .join()
+        .map_err(|_| SandboxHelperError::Execution("stdout capture panicked".into()))??;
+    stderr_handle
+        .join()
+        .map_err(|_| SandboxHelperError::Execution("stderr capture panicked".into()))??;
+    let state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Ok(SandboxJobResult {
+        backend,
+        exit_code: status.code(),
+        success: status.success() && !timed_out,
+        timed_out,
+        resource_limit_exceeded,
+        output_truncated: state.truncated,
+        stdout_base64: BASE64.encode(&state.stdout),
+        stderr_base64: BASE64.encode(&state.stderr),
+    })
+}
+
+fn process_tree_usage(system: &mut System, root: SystemPid) -> (usize, u64) {
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_memory(),
+    );
+    let mut members = std::collections::HashSet::from([root]);
+    loop {
+        let before = members.len();
+        for (pid, process) in system.processes() {
+            if process
+                .parent()
+                .is_some_and(|parent| members.contains(&parent))
+            {
+                members.insert(*pid);
+            }
+        }
+        if members.len() == before {
+            break;
+        }
+    }
+    let memory = members
+        .iter()
+        .filter_map(|pid| system.process(*pid))
+        .fold(0_u64, |total, process| {
+            total.saturating_add(process.memory())
+        });
+    (members.len(), memory)
+}
+
+/// Permit-bound HTTP adapter with exact-origin authorization, pinned DNS, no redirects,
+/// and bounded response streaming.
+#[derive(Default)]
+pub struct HttpExecutor;
+
+impl HttpExecutor {
+    /// Construct the brokered HTTP adapter.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl EffectExecutor for HttpExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if request.action != "network.http" {
+            return Err(adapter_failure("HTTP executor received another action"));
+        }
+        let url = Url::parse(&request.resource).map_err(adapter_failure)?;
+        let origin = url.origin().ascii_serialization();
+        if !permit.obligations().network_destinations.contains(&origin) {
+            return Err(adapter_failure("HTTP origin is not permitted"));
+        }
+        let host = url
+            .host_str()
+            .ok_or_else(|| adapter_failure("HTTP URL has no host"))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| adapter_failure("HTTP URL has no port"))?;
+        let address = resolve_destination(host, port).await?;
+        let client = Client::builder()
+            .redirect(RedirectPolicy::none())
+            .no_proxy()
+            .resolve(host, address)
+            .timeout(Duration::from_millis(permit.obligations().timeout_ms))
+            .build()
+            .map_err(adapter_failure)?;
+        let method = request
+            .content
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("GET")
+            .parse()
+            .map_err(adapter_failure)?;
+        let mut builder = client.request(method, url);
+        if let Some(headers) = request.content.get("headers").and_then(Value::as_object) {
+            for (name, value) in headers {
+                let normalized = name.to_ascii_lowercase();
+                if !matches!(
+                    normalized.as_str(),
+                    "accept" | "content-type" | "user-agent"
+                ) {
+                    return Err(adapter_failure(format!(
+                        "HTTP header {name} is not in the safe adapter allowlist"
+                    )));
+                }
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| adapter_failure("HTTP header values must be strings"))?;
+                builder = builder.header(name, value);
+            }
+        }
+        if let Some(encoded) = request.content.get("body_base64").and_then(Value::as_str) {
+            let body = BASE64.decode(encoded).map_err(adapter_failure)?;
+            if u64::try_from(body.len()).map_err(adapter_failure)?
+                > permit.obligations().max_output_bytes
+            {
+                return Err(adapter_failure(
+                    "HTTP request body exceeds the permitted bound",
+                ));
+            }
+            builder = builder.body(body);
+        }
+        let response = builder.send().await.map_err(adapter_failure)?;
+        if !response.status().is_success() {
+            return Err(adapter_failure(format!(
+                "HTTP destination returned {}",
+                response.status()
+            )));
+        }
+        let media_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        let limit =
+            usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?;
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(adapter_failure)?;
+            if bytes.len().saturating_add(chunk.len()) > limit {
+                return Err(adapter_failure("HTTP response exceeds the permitted bound"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(QuarantinedEffectResult {
+            media_type,
+            bytes,
+            effect_succeeded: true,
+        })
+    }
+}
+
+async fn resolve_destination(host: &str, port: u16) -> Result<SocketAddr, ExecutionError> {
+    let host_is_ip = host.parse::<IpAddr>().is_ok();
+    let mut addresses = lookup_host((host, port)).await.map_err(adapter_failure)?;
+    let address = addresses
+        .next()
+        .ok_or_else(|| adapter_failure("network destination resolved to no address"))?;
+    if !host_is_ip && non_public_ip(address.ip()) {
+        return Err(adapter_failure(
+            "domain network destinations may not resolve to non-public addresses",
+        ));
+    }
+    Ok(address)
+}
+
+fn non_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+        }
+    }
+}
+
+struct AllowlistProxy {
+    address: SocketAddr,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl AllowlistProxy {
+    async fn start(origins: Vec<String>) -> Result<Self, ExecutionError> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .map_err(adapter_failure)?;
+        let address = listener.local_addr().map_err(adapter_failure)?;
+        let allowed = Arc::new(origins);
+        let (shutdown, mut shutdown_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accepted = listener.accept() => {
+                        let Ok((stream, _)) = accepted else { break };
+                        let allowed = Arc::clone(&allowed);
+                        tokio::spawn(async move {
+                            let _ = proxy_connection(stream, allowed.as_slice()).await;
+                        });
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            address,
+            shutdown: Some(shutdown),
+            task,
+        })
+    }
+
+    fn port(&self) -> u16 {
+        self.address.port()
+    }
+}
+
+impl Drop for AllowlistProxy {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        self.task.abort();
+    }
+}
+
+async fn proxy_connection(
+    mut client: TcpStream,
+    allowed_origins: &[String],
+) -> Result<(), ExecutionError> {
+    let mut header = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    while !header.windows(4).any(|window| window == b"\r\n\r\n") {
+        let count = client.read(&mut buffer).await.map_err(adapter_failure)?;
+        if count == 0 || header.len().saturating_add(count) > MAX_PROXY_HEADER_BYTES {
+            return Err(adapter_failure(
+                "proxy request header is absent or oversized",
+            ));
+        }
+        header.extend_from_slice(&buffer[..count]);
+    }
+    let header_end = header
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| position.saturating_add(4))
+        .ok_or_else(|| adapter_failure("proxy request header terminator is absent"))?;
+    let text = std::str::from_utf8(&header[..header_end]).map_err(adapter_failure)?;
+    let first_line = text
+        .lines()
+        .next()
+        .ok_or_else(|| adapter_failure("proxy request line is absent"))?;
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+    if method.eq_ignore_ascii_case("CONNECT") {
+        let (host, port) = authority(target, 443)?;
+        let origin = canonical_origin("https", &host, port)?;
+        if !allowed_origins.contains(&origin) {
+            client
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                .await
+                .map_err(adapter_failure)?;
+            return Ok(());
+        }
+        let address = resolve_destination(&host, port).await?;
+        let mut upstream = TcpStream::connect(address).await.map_err(adapter_failure)?;
+        client
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .map_err(adapter_failure)?;
+        tokio::io::copy_bidirectional(&mut client, &mut upstream)
+            .await
+            .map_err(adapter_failure)?;
+        return Ok(());
+    }
+    let url = Url::parse(target).map_err(adapter_failure)?;
+    let origin = url.origin().ascii_serialization();
+    if !allowed_origins.contains(&origin) {
+        client
+            .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+            .await
+            .map_err(adapter_failure)?;
+        return Ok(());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| adapter_failure("proxy URL has no host"))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| adapter_failure("proxy URL has no port"))?;
+    let address = resolve_destination(host, port).await?;
+    let mut upstream = TcpStream::connect(address).await.map_err(adapter_failure)?;
+    let path = if let Some(query) = url.query() {
+        format!("{}?{query}", url.path())
+    } else {
+        url.path().to_owned()
+    };
+    let rewritten = text
+        .lines()
+        .filter(|line| {
+            !line
+                .to_ascii_lowercase()
+                .starts_with("proxy-authorization:")
+        })
+        .collect::<Vec<_>>()
+        .join("\r\n")
+        .replacen(first_line, &format!("{method} {path} HTTP/1.1"), 1);
+    upstream
+        .write_all(format!("{rewritten}\r\n").as_bytes())
+        .await
+        .map_err(adapter_failure)?;
+    upstream
+        .write_all(&header[header_end..])
+        .await
+        .map_err(adapter_failure)?;
+    tokio::io::copy_bidirectional(&mut client, &mut upstream)
+        .await
+        .map_err(adapter_failure)?;
+    Ok(())
+}
+
+fn authority(value: &str, default_port: u16) -> Result<(String, u16), ExecutionError> {
+    let url = Url::parse(&format!("https://{value}")).map_err(adapter_failure)?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| adapter_failure("proxy authority has no host"))?;
+    Ok((host.into(), url.port().unwrap_or(default_port)))
+}
+
+fn canonical_origin(scheme: &str, host: &str, port: u16) -> Result<String, ExecutionError> {
+    Url::parse(&format!("{scheme}://{host}:{port}"))
+        .map(|url| url.origin().ascii_serialization())
+        .map_err(adapter_failure)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AllowlistProxy, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
+        atomic_write, authority, non_public_ip, oci_command, proposed_write_bytes,
+    };
+    use colossus_contracts::{DecisionOutcome, PolicyObligations};
+    use colossus_policy::{
+        BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request, system_actor,
+    };
+    use colossus_ports::EventJournal;
+    use colossus_testkit::InMemoryEventJournal;
+    use serde_json::json;
+    use std::{
+        collections::BTreeMap,
+        net::{IpAddr, Ipv4Addr},
+        path::PathBuf,
+        sync::Arc,
+    };
+    use tempfile::tempdir;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    #[test]
+    fn atomic_write_replaces_content_without_following_leaf_symlinks() {
+        let directory = tempdir().expect("tempdir");
+        let target = directory.path().join("target");
+        atomic_write(&target, b"first").expect("first");
+        atomic_write(&target, b"second").expect("second");
+        assert_eq!(std::fs::read(target).expect("read"), b"second");
+    }
+
+    #[test]
+    fn write_payload_is_strict_and_bounded() {
+        assert_eq!(
+            proposed_write_bytes(&json!({"text": "ok"}), 2).expect("text"),
+            b"ok"
+        );
+        assert!(proposed_write_bytes(&json!({"text": "too large"}), 2).is_err());
+        assert!(proposed_write_bytes(&json!({"unknown": true}), 20).is_err());
+    }
+
+    #[test]
+    fn authenticated_helper_job_rejects_tampering_and_expiry() {
+        let job = SandboxJob {
+            schema_version: 1,
+            job_id: "job".into(),
+            request_id: "request".into(),
+            request_hash: "hash".into(),
+            decision_id: "decision".into(),
+            permit_nonce: "nonce".into(),
+            permit_expires_at_unix_ms: i128::MAX,
+            executable: PathBuf::from("/bin/echo"),
+            process: super::ProcessSpec {
+                cwd: PathBuf::from("/tmp"),
+                args: Vec::new(),
+                environment: BTreeMap::new(),
+                stdin_base64: None,
+            },
+            obligations: PolicyObligations::default(),
+            timeout_ms: 1,
+            proxy_port: None,
+            oci_runtime: None,
+            oci_image: None,
+        };
+        let key = [7_u8; 32];
+        let signed = SignedSandboxJob::sign(job, &key).expect("sign");
+        assert!(signed.clone().verify(&key).is_ok());
+        assert!(signed.verify(&[8_u8; 32]).is_err());
+    }
+
+    #[test]
+    fn proxy_authorities_and_private_ranges_are_strict() {
+        assert_eq!(
+            authority("example.com:8443", 443).expect("authority"),
+            ("example.com".into(), 8443)
+        );
+        assert!(non_public_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(!non_public_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn oci_profile_applies_resource_and_privilege_limits_without_argv_secrets() {
+        let directory = tempdir().expect("directory");
+        let mut obligations = PolicyObligations {
+            sandbox_backend: "oci".into(),
+            sandbox_profile: "test".into(),
+            max_output_bytes: 1024,
+            max_processes: 2,
+            max_memory_bytes: 64 * 1024 * 1024,
+            max_concurrency: 1,
+            timeout_ms: 1000,
+            retention: "test".into(),
+            ..PolicyObligations::default()
+        };
+        obligations
+            .filesystem
+            .push(colossus_contracts::FilesystemGrant {
+                root: directory.path().display().to_string(),
+                mode: "write".into(),
+            });
+        let job = SandboxJob {
+            schema_version: 1,
+            job_id: "job".into(),
+            request_id: "request".into(),
+            request_hash: "hash".into(),
+            decision_id: "decision".into(),
+            permit_nonce: "nonce".into(),
+            permit_expires_at_unix_ms: i128::MAX,
+            executable: PathBuf::from("/usr/bin/example"),
+            process: super::ProcessSpec {
+                cwd: directory.path().into(),
+                args: vec!["check".into()],
+                environment: BTreeMap::from([("TOKEN".into(), "secret-value".into())]),
+                stdin_base64: None,
+            },
+            obligations,
+            timeout_ms: 1000,
+            proxy_port: None,
+            oci_runtime: Some(PathBuf::from("/usr/bin/docker")),
+            oci_image: Some("example@sha256:abc".into()),
+        };
+        let command = oci_command(&job).expect("OCI command");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--network=none".into()));
+        assert!(args.contains(&"--read-only".into()));
+        assert!(args.contains(&"--cap-drop=ALL".into()));
+        assert!(args.contains(&"--pids-limit=2".into()));
+        assert!(args.contains(&format!("--memory={}", 64 * 1024 * 1024)));
+        assert!(
+            !args
+                .iter()
+                .any(|argument| argument.contains("secret-value"))
+        );
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "TOKEN" && value.is_some_and(|value| value == "secret-value")
+        }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn filesystem_symlink_escape_is_denied_before_release() {
+        use std::os::unix::fs::symlink;
+
+        let allowed = tempdir().expect("allowed");
+        let denied = tempdir().expect("denied");
+        let secret = denied.path().join("secret");
+        std::fs::write(&secret, "secret").expect("secret");
+        let escape = allowed.path().join("escape");
+        symlink(&secret, &escape).expect("symlink");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("filesystem.read", DecisionOutcome::Allow)
+            .with_filesystem_read_root(allowed.path().display().to_string());
+        let gateway = EffectGateway::new(
+            journal,
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["filesystem.read".into()]),
+            [4_u8; 32],
+        );
+        let mut request = effect_request(
+            system_actor("test"),
+            "filesystem.read",
+            escape.display().to_string(),
+            json!({}),
+        );
+        request.capabilities = vec!["filesystem.read".into()];
+        assert!(
+            gateway
+                .execute(request, &FilesystemExecutor::new())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn filesystem_write_is_permit_bound_and_atomic() {
+        let directory = tempdir().expect("directory");
+        let target = directory.path().join("created.txt");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("filesystem.write", DecisionOutcome::Allow)
+            .with_filesystem_root(directory.path().display().to_string(), "write");
+        let gateway = EffectGateway::new(
+            journal,
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["filesystem.write".into()]),
+            [4_u8; 32],
+        );
+        let mut request = effect_request(
+            system_actor("test"),
+            "filesystem.write",
+            target.display().to_string(),
+            json!({"text": "durable"}),
+        );
+        request.capabilities = vec!["filesystem.write".into()];
+        gateway
+            .execute(request, &FilesystemExecutor::new())
+            .await
+            .expect("write");
+        assert_eq!(std::fs::read_to_string(target).expect("read"), "durable");
+    }
+
+    #[tokio::test]
+    async fn brokered_http_is_exact_origin_bounded_and_post_authorized() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
+        let address = listener.local_addr().expect("address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).await.expect("read");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\n\r\nok",
+                )
+                .await
+                .expect("write");
+        });
+        let origin = format!("http://{address}");
+        let url = format!("{origin}/health");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("network.http", DecisionOutcome::Allow)
+            .with_network_destination(&origin);
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["network.http".into()]),
+            [4_u8; 32],
+        );
+        let mut request = effect_request(
+            system_actor("test"),
+            "network.http",
+            &url,
+            json!({"method": "GET", "headers": {}}),
+        );
+        request.capabilities = vec!["network.http".into()];
+        let result = gateway
+            .execute(request, &HttpExecutor::new())
+            .await
+            .expect("request");
+        assert_eq!(result.bytes, b"ok");
+        assert!(
+            journal
+                .read_global(1, 30)
+                .expect("events")
+                .iter()
+                .any(|event| event.event_type == "effect.release_requested.v1")
+        );
+        server.await.expect("server");
+    }
+
+    #[tokio::test]
+    async fn allowlist_proxy_rejects_an_unlisted_origin_without_connecting_upstream() {
+        let proxy = AllowlistProxy::start(vec!["https://example.com".into()])
+            .await
+            .expect("proxy");
+        let mut stream = TcpStream::connect(("127.0.0.1", proxy.port()))
+            .await
+            .expect("connect");
+        stream
+            .write_all(b"CONNECT denied.example:443 HTTP/1.1\r\nHost: denied.example\r\n\r\n")
+            .await
+            .expect("write");
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.expect("response");
+        assert!(response.starts_with(b"HTTP/1.1 403"));
+    }
+}

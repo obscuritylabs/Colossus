@@ -1,5 +1,5 @@
 [package]
-name = "colossus-policy"
+name = "colossus-sandbox"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,19 +9,26 @@ license.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 colossus-contracts.workspace = true
-colossus-ports.workspace = true
+colossus-policy.workspace = true
+command-group.workspace = true
+futures.workspace = true
 hex.workspace = true
 hmac.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+sysinfo.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+nono.workspace = true
+
 [dev-dependencies]
+colossus-ports.workspace = true
 colossus-testkit = { path = "../colossus-testkit" }
 tempfile.workspace = true
 

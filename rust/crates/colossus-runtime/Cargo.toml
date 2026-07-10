@@ -13,6 +13,7 @@ colossus-journal-redb.workspace = true
 colossus-policy.workspace = true
 colossus-ports.workspace = true
 colossus-projection.workspace = true
+colossus-sandbox.workspace = true
 colossus-workflow.workspace = true
 hex.workspace = true
 serde.workspace = true

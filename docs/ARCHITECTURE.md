@@ -8,13 +8,13 @@ The new runtime is developed under `rust/` until P0+P1 cutover. Its dependency d
 is stricter than the legacy diagram below:
 
 ```text
-colossus-cli -> colossus-runtime -> colossus-policy / colossus-workflow
-                                      |                 |
-                                      v                 v
-                                  colossus-ports -> colossus-contracts -> colossus-domain
-                                      ^
-                                      |
-                              redb and future adapters
+colossus-cli -> colossus-runtime -> colossus-policy -> colossus-ports
+                    |                    ^                   |
+                    +-> colossus-workflow -------------------+
+                    |
+                    +-> colossus-sandbox -> colossus-policy
+
+redb and future adapters -> colossus-ports -> colossus-contracts -> colossus-domain
 ```
 
 `colossus-domain` has no dependencies. Interfaces construct requests, call runtime
@@ -22,6 +22,16 @@ services, and render results; they do not own policy, workflow, effect, or stora
 Effectful adapters require an opaque permit that only `EffectGateway` can mint. redb is
 the canonical event journal, while repositories, projections, memory indexes, and audit
 exports are replaceable ports.
+
+Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
+subprocess specifications are authenticated to a one-shot helper, which clears the
+environment and applies the selected native or OCI isolation profile before spawning.
+Native macOS/Linux isolation uses Seatbelt/Landlock, process groups contain descendants,
+and networked subprocesses receive only a loopback allowlist proxy. The direct HTTP
+adapter pins an allowed origin through DNS resolution and keeps the bounded response in
+the gateway quarantine until post-effect policy allows release. Windows native
+filesystem/network isolation remains fail-closed; the configured OCI backend is the
+portable fallback.
 
 The journal is authoritative. Application state is reconstructed by replay, and redb
 atomically appends events, advances stream/global versions, and queues projection work.

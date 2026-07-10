@@ -134,6 +134,11 @@ pub struct ExecutionPermit {
 }
 
 impl ExecutionPermit {
+    /// Canonical request hash authenticated by this permit.
+    pub fn request_hash(&self) -> &str {
+        &self.request_hash
+    }
+
     /// Decision that authorized this permit.
     pub fn decision_id(&self) -> &str {
         &self.decision_id
@@ -229,6 +234,7 @@ impl SafetyKernel {
             || obligations.sandbox_profile.is_empty()
             || obligations.timeout_ms == 0
             || obligations.max_output_bytes == 0
+            || obligations.max_processes == 0
             || obligations.max_memory_bytes == 0
             || obligations.max_concurrency == 0
             || obligations.retention.is_empty()
@@ -237,9 +243,45 @@ impl SafetyKernel {
                 "required decision field or obligation is absent/zero".into(),
             )));
         }
+        if !matches!(
+            obligations.sandbox_backend.as_str(),
+            "broker" | "native" | "oci" | "windows_job"
+        ) {
+            return Err(GatewayError::Safety(format!(
+                "unknown sandbox backend {}",
+                obligations.sandbox_backend
+            )));
+        }
+        if obligations.sandbox_backend == "broker"
+            && request.action == "process.spawn"
+            && !obligations.allow_sandbox_downgrade
+        {
+            return Err(GatewayError::Safety(
+                "process execution cannot downgrade to the broker without an explicit obligation"
+                    .into(),
+            ));
+        }
+        let mut environment = BTreeSet::new();
+        for name in &obligations.allowed_environment {
+            if name.is_empty() || name.contains(['=', '\0']) || !environment.insert(name.as_str()) {
+                return Err(GatewayError::Safety(
+                    "environment obligations must be unique, nonempty names".into(),
+                ));
+            }
+        }
+        for destination in &obligations.network_destinations {
+            if canonical_network_origin(destination)? != *destination {
+                return Err(GatewayError::Safety(format!(
+                    "network destination must be a canonical HTTP(S) origin: {destination}"
+                )));
+            }
+        }
         for grant in &obligations.filesystem {
             if !absolute_policy_root(&grant.root)
-                || !matches!(grant.mode.as_str(), "read" | "write" | "metadata")
+                || !matches!(
+                    grant.mode.as_str(),
+                    "read" | "write" | "metadata" | "execute"
+                )
             {
                 return Err(GatewayError::Safety(
                     "filesystem obligations require absolute roots and known modes".into(),
@@ -249,8 +291,87 @@ impl SafetyKernel {
         if decision.outcome == DecisionOutcome::Allow && request.action.starts_with("filesystem.") {
             validate_filesystem_containment(request, obligations)?;
         }
+        if decision.outcome == DecisionOutcome::Allow && request.action == "process.spawn" {
+            validate_process_obligations(request, obligations)?;
+        }
+        if decision.outcome == DecisionOutcome::Allow && request.action == "network.http" {
+            let origin = canonical_network_origin(&request.resource)?;
+            if !obligations
+                .network_destinations
+                .iter()
+                .any(|allowed| allowed == &origin)
+            {
+                return Err(GatewayError::Safety(format!(
+                    "network destination {origin} is not allowed"
+                )));
+            }
+        }
         Ok(())
     }
+}
+
+fn canonical_network_origin(resource: &str) -> Result<String, GatewayError> {
+    let url = Url::parse(resource)
+        .map_err(|error| GatewayError::Safety(format!("invalid network URL: {error}")))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(GatewayError::Safety(
+            "network URLs require HTTP(S), a host, and no embedded credentials".into(),
+        ));
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
+fn validate_process_obligations(
+    request: &EffectRequest,
+    obligations: &PolicyObligations,
+) -> Result<(), GatewayError> {
+    let executable = canonical_effect_path(&request.resource, false)?;
+    let executable_allowed = obligations.filesystem.iter().any(|grant| {
+        grant.mode == "execute"
+            && fs::canonicalize(&grant.root).is_ok_and(|root| executable == root)
+    });
+    if !executable_allowed {
+        return Err(GatewayError::Safety(format!(
+            "executable {} is not explicitly granted",
+            request.resource
+        )));
+    }
+    let cwd = request
+        .content
+        .get("cwd")
+        .and_then(Value::as_str)
+        .ok_or_else(|| GatewayError::Safety("process cwd is absent".into()))?;
+    let cwd = canonical_effect_path(cwd, false)?;
+    let cwd_allowed = obligations.filesystem.iter().any(|grant| {
+        matches!(grant.mode.as_str(), "read" | "write")
+            && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
+    });
+    if !cwd_allowed {
+        return Err(GatewayError::Safety(
+            "process cwd is outside allowed filesystem roots".into(),
+        ));
+    }
+    let environment = request
+        .content
+        .get("environment")
+        .and_then(Value::as_object)
+        .ok_or_else(|| GatewayError::Safety("process environment object is absent".into()))?;
+    for name in environment.keys() {
+        if !obligations
+            .allowed_environment
+            .iter()
+            .any(|allowed| allowed == name)
+        {
+            return Err(GatewayError::Safety(format!(
+                "environment variable {name} is not allowed"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_filesystem_containment(
@@ -741,6 +862,8 @@ fn default_obligations() -> PolicyObligations {
         sandbox_profile: "offline-default".into(),
         filesystem: Vec::new(),
         network_destinations: Vec::new(),
+        allowed_environment: Vec::new(),
+        allow_sandbox_downgrade: false,
         timeout_ms: 30_000,
         max_output_bytes: 1024 * 1024,
         max_processes: 1,
@@ -802,6 +925,48 @@ impl BuiltInPolicy {
             });
         self
     }
+
+    /// Select the sandbox backend/profile and explicit downgrade behavior.
+    pub fn with_sandbox(
+        mut self,
+        backend: impl Into<String>,
+        profile: impl Into<String>,
+        allow_downgrade: bool,
+    ) -> Self {
+        self.obligations.sandbox_backend = backend.into();
+        self.obligations.sandbox_profile = profile.into();
+        self.obligations.allow_sandbox_downgrade = allow_downgrade;
+        self
+    }
+
+    /// Allow one exact environment variable name inside sandboxed processes.
+    pub fn with_environment(mut self, name: impl Into<String>) -> Self {
+        self.obligations.allowed_environment.push(name.into());
+        self
+    }
+
+    /// Allow one canonical HTTP(S) origin for brokered network requests.
+    pub fn with_network_destination(mut self, origin: impl Into<String>) -> Self {
+        self.obligations.network_destinations.push(origin.into());
+        self
+    }
+
+    /// Apply bounded process, memory, output, timeout, and concurrency ceilings.
+    pub fn with_limits(
+        mut self,
+        timeout_ms: u64,
+        max_output_bytes: u64,
+        max_processes: u32,
+        max_memory_bytes: u64,
+        max_concurrency: u32,
+    ) -> Self {
+        self.obligations.timeout_ms = timeout_ms;
+        self.obligations.max_output_bytes = max_output_bytes;
+        self.obligations.max_processes = max_processes;
+        self.obligations.max_memory_bytes = max_memory_bytes;
+        self.obligations.max_concurrency = max_concurrency;
+        self
+    }
 }
 
 #[async_trait]
@@ -816,7 +981,9 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             outcome = DecisionOutcome::Allow;
         }
         let mut obligations = self.obligations.clone();
-        if request.action.starts_with("filesystem.") && request.action != "filesystem.write" {
+        if (request.action.starts_with("filesystem.") && request.action != "filesystem.write")
+            || request.action == "network.http"
+        {
             obligations.require_post_effect = true;
         }
         Ok(PolicyDecision {
@@ -1144,6 +1311,82 @@ mod tests {
             .map(|event| event.event_type)
             .collect::<Vec<_>>();
         assert!(names.contains(&"effect.denied.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn process_environment_and_executable_obligations_fail_closed() {
+        let directory = tempfile::tempdir().expect("directory");
+        let executable = std::env::current_exe()
+            .expect("executable")
+            .canonicalize()
+            .expect("canonical executable");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox("native", "test", false)
+            .with_filesystem_root(executable.display().to_string(), "execute")
+            .with_filesystem_read_root(directory.path().display().to_string());
+        let gateway = EffectGateway::new(
+            journal,
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()]),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "process.spawn",
+            executable.display().to_string(),
+            serde_json::json!({
+                "cwd": directory.path(),
+                "args": [],
+                "environment": {"SECRET": "not allowed"},
+                "stdin_base64": null,
+            }),
+        );
+        request.capabilities = vec!["process.spawn".into()];
+        let error = gateway
+            .execute(request, &executor)
+            .await
+            .expect_err("environment denied");
+        assert!(matches!(error, GatewayError::Safety(_)));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn network_origin_not_in_obligations_never_reaches_adapter() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy =
+            BuiltInPolicy::offline_default().with_action("network.http", DecisionOutcome::Allow);
+        let gateway = EffectGateway::new(
+            journal,
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["network.http".into()]),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "network.http",
+            "https://example.com/path",
+            serde_json::json!({"method": "GET", "headers": {}}),
+        );
+        request.capabilities = vec!["network.http".into()];
+        assert!(matches!(
+            gateway.execute(request, &executor).await,
+            Err(GatewayError::Safety(_))
+        ));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
     }
 
     #[tokio::test]

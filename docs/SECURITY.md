@@ -31,6 +31,46 @@ or unhealthy policy fails closed. Remote OPA requires HTTPS, mTLS, pinned CA tru
 fixed decision path, and explicit disclosure acknowledgement. Output can remain in a
 bounded quarantine until a post-effect allow decision.
 
+### Rust sandbox and broker
+
+The Rust filesystem, subprocess, and HTTP adapters can execute only with a valid permit
+whose request hash matches the complete proposed effect. Filesystem paths are
+canonicalized against explicit read/write/execute roots, symlink leaves are rejected for
+writes, reads are bounded, and writes use a same-directory temporary file plus atomic
+rename.
+
+Subprocesses never use a shell. The parent sends a signed, expiring, one-use job document
+to a hidden helper over stdin. The signature binds the executable, literal arguments,
+working directory, environment, policy decision, permit nonce, obligations, and request
+hash. The helper rejects malformed, expired, or tampered jobs, starts with a cleared
+environment, and passes only explicitly allowed variable names to the child. Output is
+bounded and base64 encoded; nonzero-exit audit records retain only output hashes and
+sizes. Process groups on Unix and Job Objects on Windows provide descendant ownership
+for timeout and resource-limit termination.
+
+On macOS and Linux, the native helper uses the Apache-2.0 `nono` crate to apply Seatbelt
+or Landlock filesystem rules before the child starts. Birdcage was not selected because
+its published GPL-3.0-only license is incompatible with Colossus's Apache-2.0
+distribution. Network is either denied or limited to a loopback proxy;
+the proxy canonicalizes and exactly matches HTTP(S) origins, resolves and pins the
+destination, rejects domain names resolving to non-public addresses, strips proxy
+credentials, and bounds relay lifetime. Explicit IP-literal origins may opt into private
+local addresses. Direct HTTP effects use the same exact-origin and pinned-resolution
+rules and remain quarantined until post-effect authorization.
+
+The OCI backend constructs Docker/Podman invocations with no network, a read-only root,
+all capabilities dropped, `no-new-privileges`, bounded PIDs/memory, and only explicit
+bind mounts and environment names. OCI subprocess networking fails closed until a
+broker proxy can be injected into the container. OCI images must use an immutable digest.
+The `windows_job` backend is reserved and currently fails closed because a Job Object
+alone does not isolate filesystem or network access; use the OCI backend on Windows.
+The plain broker is available only when configuration and the policy decision both
+explicitly authorize a downgrade.
+
+The native process-count and memory ceilings are supervisor-enforced; OCI supplies hard
+kernel/container ceilings. `sandbox doctor` reports the selected backend and available
+isolation mechanism so operators can reject an unsuitable deployment before effects run.
+
 The sections below describe the frozen Python 0.5 implementation. They remain relevant
 to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.
 

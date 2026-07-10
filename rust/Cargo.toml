@@ -6,6 +6,7 @@ members = [
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
     "crates/colossus-projection",
+    "crates/colossus-sandbox",
     "crates/colossus-policy",
     "crates/colossus-memory",
     "crates/colossus-workflow",
@@ -27,6 +28,7 @@ async-recursion = "1.1.1"
 base64 = "0.22.1"
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.6.1", features = ["derive"] }
+command-group = "=5.0.1"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
 getrandom = "0.4.3"
 hex = "0.4.3"
@@ -35,9 +37,11 @@ futures = "0.3.31"
 fs4 = "0.13.1"
 jsonschema = "0.33.0"
 keyring = "4.1.4"
+nono = { version = "=0.67.1", default-features = false }
 redb = "4.1.0"
-reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 reedline = "0.49.0"
+sysinfo = { version = "=0.39.5", default-features = false, features = ["system"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde-saphyr = "0.0.29"
@@ -46,7 +50,7 @@ tempfile = "3.25.0"
 tantivy = "0.26.1"
 thiserror = "2.0.18"
 time = { version = "0.3.53", features = ["formatting", "parsing", "serde"] }
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 uuid = { version = "1.23.4", features = ["serde", "v7"] }
 
 colossus-contracts = { path = "crates/colossus-contracts" }
@@ -56,6 +60,7 @@ colossus-memory = { path = "crates/colossus-memory" }
 colossus-policy = { path = "crates/colossus-policy" }
 colossus-ports = { path = "crates/colossus-ports" }
 colossus-projection = { path = "crates/colossus-projection" }
+colossus-sandbox = { path = "crates/colossus-sandbox" }
 colossus-runtime = { path = "crates/colossus-runtime" }
 colossus-workflow = { path = "crates/colossus-workflow" }
 

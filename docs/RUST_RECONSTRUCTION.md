@@ -36,6 +36,11 @@ obsolete Go launcher.
   a 1 MiB fail-closed policy-input cap, approval proof re-evaluation, authenticated
   short-lived one-use permits, bounded quarantine, and optional post-effect release
   authorization.
+- Permit-bound filesystem, subprocess, and HTTP adapters; an authenticated one-shot
+  sandbox helper; Seatbelt/Landlock native isolation; cross-platform process-tree
+  ownership; exact-origin network policy; a loopback allowlist proxy; bounded output and
+  resources; post-effect HTTP/file quarantine; and hardened network-off OCI command
+  construction. Broker downgrades require an explicit configuration and policy grant.
 - Strict, hash-pinned YAML workflow definitions; non-executable conditions; all planned
   typed step schemas; bounded step and concurrency budgets; direct-cycle rejection;
   durable run reconstruction; wait/input, resume, cancellation, interruption, `foreach`,
@@ -59,6 +64,8 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- e
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sandbox doctor
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- process run /bin/echo --cwd . -- hello
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- projection status
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- projection rebuild
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow validate .colossus/workflows/offline-echo.yaml
@@ -69,6 +76,9 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- r
 
 `config init` creates a unique platform credential-store identity for that fresh state
 file. It neither asks for an application credential nor performs a network request.
+`process run` remains deny-by-default: the example requires `process.spawn`, the exact
+executable, its execute grant, a working-directory grant, and any environment/network
+obligations to be present in the YAML configuration.
 
 ## Remaining Delivery Milestones
 
@@ -78,15 +88,18 @@ cutover. The following planned work remains:
 - Research and extension repositories plus their shared conformance suites.
 - Chroma semantic candidates, embedding providers, queued index lag operations, and
   application-layer policy re-filtering of canonical memory records.
-- Birdcage and Windows sandbox helpers, OCI fallback, the allowlist network proxy,
-  broker downgrade prompts, resource enforcement, and platform escape suites.
+- Windows filesystem/network isolation and live OCI execution/recovery suites; native
+  macOS/Linux isolation, OCI command hardening, the allowlist proxy, authenticated helper,
+  explicit broker downgrade rules, resource supervision, and native escape tests are
+  implemented.
 - OpenAI Responses and OpenAI-compatible providers, the core tool catalog, provider
   diagnostics/routing, sessions, streaming, and context compaction.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
 - Goals, durable subagents, research/citations, skills/resources, telemetry, packs,
   integrations, offline bundles, and the rest of P1/P2.
-- Fuzzing, dependency/license/vulnerability policy, cross-platform sandbox tests, and
+- Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
+  matrix, and
   six-target release smoke tests.
 
 Rust is promoted to the repository root only after those P0+P1 acceptance checks pass.

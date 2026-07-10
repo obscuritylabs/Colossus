@@ -5,6 +5,7 @@ use colossus_runtime::{Runtime, RuntimeConfig};
 use reedline::{DefaultPrompt, Reedline, Signal};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     error::Error,
     fs,
     path::{Path, PathBuf},
@@ -36,6 +37,12 @@ enum Command {
     Projection(ProjectionCommand),
     /// Diagnose canonical storage, lease, repositories, and projection readiness.
     State(StateCommand),
+    /// Diagnose the native/OCI sandbox helper.
+    Sandbox(SandboxCommand),
+    /// Execute exact programs without a shell through the effect gateway.
+    Process(ProcessCommand),
+    /// Perform policy-allowed brokered network requests.
+    Network(NetworkCommand),
     /// Validate and operate durable workflows.
     Workflow(WorkflowCommand),
     /// Run the credential-free, network-free echo smoke provider.
@@ -51,6 +58,9 @@ enum Command {
         #[arg(long, default_value_t = true)]
         once: bool,
     },
+    /// Internal authenticated one-shot sandbox helper.
+    #[command(name = "__sandbox-helper", hide = true)]
+    SandboxHelper,
 }
 
 #[derive(Args)]
@@ -140,6 +150,53 @@ enum StateAction {
 }
 
 #[derive(Args)]
+struct SandboxCommand {
+    #[command(subcommand)]
+    command: SandboxAction,
+}
+
+#[derive(Subcommand)]
+enum SandboxAction {
+    /// Report native kernel support and configured OCI fallback.
+    Doctor,
+}
+
+#[derive(Args)]
+struct ProcessCommand {
+    #[command(subcommand)]
+    command: ProcessAction,
+}
+
+#[derive(Subcommand)]
+enum ProcessAction {
+    /// Run one exact executable with literal arguments and an explicit environment.
+    Run {
+        executable: PathBuf,
+        /// Absolute or repository-relative working directory.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Explicit KEY=VALUE environment entry. Repeat as needed.
+        #[arg(long = "env")]
+        environment: Vec<String>,
+        /// Literal arguments passed after `--`; no shell interpretation occurs.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
+}
+
+#[derive(Args)]
+struct NetworkCommand {
+    #[command(subcommand)]
+    command: NetworkAction,
+}
+
+#[derive(Subcommand)]
+enum NetworkAction {
+    /// Fetch one exact HTTP(S) URL through destination enforcement and quarantine.
+    Get { url: String },
+}
+
+#[derive(Args)]
 struct WorkflowCommand {
     #[command(subcommand)]
     command: WorkflowAction,
@@ -202,6 +259,19 @@ fn init_config(path: &Path) -> Result<(), Box<dyn Error>> {
 fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Error>> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+fn parse_environment(entries: Vec<String>) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
+    let mut environment = BTreeMap::new();
+    for entry in entries {
+        let (name, value) = entry
+            .split_once('=')
+            .ok_or_else(|| format!("environment entry must be KEY=VALUE: {entry}"))?;
+        if name.is_empty() || environment.insert(name.into(), value.into()).is_some() {
+            return Err(format!("environment name is empty or duplicated: {name}").into());
+        }
+    }
+    Ok(environment)
 }
 
 async fn workflow_command(
@@ -341,6 +411,10 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
+    if matches!(cli.command, Command::SandboxHelper) {
+        colossus_sandbox::run_helper_stdio()?;
+        return Ok(());
+    }
     if let Command::Config(ConfigCommand {
         command: ConfigAction::Init,
     }) = &cli.command
@@ -386,6 +460,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::State(command) => match command.command {
             StateAction::Doctor => print_json(&runtime.state_doctor()?)?,
         },
+        Command::Sandbox(command) => match command.command {
+            SandboxAction::Doctor => print_json(&runtime.sandbox_doctor())?,
+        },
+        Command::Process(command) => match command.command {
+            ProcessAction::Run {
+                executable,
+                cwd,
+                environment,
+                args,
+            } => print_json(
+                &runtime
+                    .run_process(executable, cwd, args, parse_environment(environment)?)
+                    .await?,
+            )?,
+        },
+        Command::Network(command) => match command.command {
+            NetworkAction::Get { url } => {
+                let result = runtime.http_get(&url).await?;
+                println!("{}", String::from_utf8_lossy(&result.bytes));
+            }
+        },
         Command::Workflow(command) => workflow_command(&runtime, command.command).await?,
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;
@@ -403,6 +498,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 "drained": drained,
             }))?;
         }
+        Command::SandboxHelper => unreachable!("handled before runtime construction"),
     }
     runtime.checkpoint()?;
     Ok(())

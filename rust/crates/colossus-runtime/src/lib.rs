@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, ActorType, DecisionOutcome, EffectRequest, EventClassification, ExecutionContext,
-    NewEvent, ProjectionStatus, QuarantinedEffectResult,
+    FilesystemGrant, NewEvent, ProjectionStatus, QuarantinedEffectResult,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -22,6 +22,10 @@ use colossus_ports::{
 use colossus_projection::{
     ProjectedSessionRepository, ProjectedWorkRepository, ProjectionRunReport, ProjectionWorker,
     default_handlers,
+};
+use colossus_sandbox::{
+    FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig,
+    SandboxProcessExecutor, sandbox_doctor,
 };
 use colossus_workflow::{
     EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,
@@ -50,6 +54,75 @@ pub struct RuntimeConfig {
     pub policy: PolicyConfig,
     /// Workflow definition libraries.
     pub workflows: WorkflowLibraryConfig,
+    /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
+}
+
+/// Strict sandbox composition and built-in-policy defaults.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxConfig {
+    /// `native`, `oci`, `windows_job`, or explicitly downgraded `broker`.
+    pub backend: String,
+    /// Stable policy profile label.
+    pub profile: String,
+    /// Permit a policy-authorized native-to-broker downgrade.
+    pub allow_broker_fallback: bool,
+    /// Optional trusted helper executable for embedded applications.
+    pub helper_path: Option<PathBuf>,
+    /// Exact Docker or Podman executable for OCI fallback.
+    pub oci_runtime: Option<PathBuf>,
+    /// Immutable OCI image reference.
+    pub oci_image: Option<String>,
+    /// Built-in policy filesystem roots.
+    #[serde(default)]
+    pub filesystem: Vec<FilesystemGrant>,
+    /// Exact process executables granted by built-in policy.
+    #[serde(default)]
+    pub executables: Vec<PathBuf>,
+    /// Exact environment variable names visible to child processes.
+    #[serde(default)]
+    pub environment: Vec<String>,
+    /// Canonical HTTP(S) origins available to brokered networking.
+    #[serde(default)]
+    pub network_destinations: Vec<String>,
+    /// Maximum effect wall time.
+    pub timeout_ms: u64,
+    /// Maximum request/result bytes.
+    pub max_output_bytes: u64,
+    /// Maximum process-tree count where the selected backend supports it.
+    pub max_processes: u32,
+    /// Maximum process-tree memory where the selected backend supports it.
+    pub max_memory_bytes: u64,
+    /// Maximum concurrent effects per actor/run.
+    pub max_concurrency: u32,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            backend: if cfg!(any(target_os = "linux", target_os = "macos")) {
+                "native".into()
+            } else {
+                "oci".into()
+            },
+            profile: "offline-default".into(),
+            allow_broker_fallback: false,
+            helper_path: None,
+            oci_runtime: None,
+            oci_image: None,
+            filesystem: Vec::new(),
+            executables: Vec::new(),
+            environment: Vec::new(),
+            network_destinations: Vec::new(),
+            timeout_ms: 30_000,
+            max_output_bytes: 1024 * 1024,
+            max_processes: 16,
+            max_memory_bytes: 256 * 1024 * 1024,
+            max_concurrency: 1,
+        }
+    }
 }
 
 /// Canonical storage configuration.
@@ -143,6 +216,66 @@ impl RuntimeConfig {
                 "schemaVersion must be exactly 1".into(),
             ));
         }
+        if !matches!(
+            config.sandbox.backend.as_str(),
+            "native" | "oci" | "windows_job" | "broker"
+        ) {
+            return Err(RuntimeError::Config(format!(
+                "unknown sandbox backend {}",
+                config.sandbox.backend
+            )));
+        }
+        if config.sandbox.backend == "broker" && !config.sandbox.allow_broker_fallback {
+            return Err(RuntimeError::Config(
+                "broker sandbox backend requires allowBrokerFallback: true".into(),
+            ));
+        }
+        if config.sandbox.profile.is_empty()
+            || config.sandbox.timeout_ms == 0
+            || config.sandbox.max_output_bytes == 0
+            || config.sandbox.max_processes == 0
+            || config.sandbox.max_memory_bytes == 0
+            || config.sandbox.max_concurrency == 0
+        {
+            return Err(RuntimeError::Config(
+                "sandbox profile and resource limits must be nonempty/nonzero".into(),
+            ));
+        }
+        if config
+            .sandbox
+            .executables
+            .iter()
+            .any(|path| !path.is_absolute())
+            || config
+                .sandbox
+                .filesystem
+                .iter()
+                .any(|grant| !Path::new(&grant.root).is_absolute())
+        {
+            return Err(RuntimeError::Config(
+                "sandbox executables and filesystem roots must be absolute".into(),
+            ));
+        }
+        if config
+            .sandbox
+            .oci_runtime
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err(RuntimeError::Config(
+                "OCI runtime path must be absolute".into(),
+            ));
+        }
+        if config
+            .sandbox
+            .oci_image
+            .as_deref()
+            .is_some_and(|image| !image.contains("@sha256:"))
+        {
+            return Err(RuntimeError::Config(
+                "OCI images must use an immutable @sha256: digest".into(),
+            ));
+        }
         Ok(config)
     }
 
@@ -173,6 +306,7 @@ impl RuntimeConfig {
                 repository: PathBuf::from(".colossus/workflows"),
                 user: PathBuf::from("workflows"),
             },
+            sandbox: SandboxConfig::default(),
         }
     }
 
@@ -233,6 +367,10 @@ pub struct Runtime {
     work: Arc<dyn WorkRepository>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
+    filesystem_executor: Arc<FilesystemExecutor>,
+    process_executor: Arc<SandboxProcessExecutor>,
+    http_executor: Arc<HttpExecutor>,
+    sandbox_executor_config: SandboxExecutorConfig,
     workflow_repository: Arc<dyn WorkflowRepository>,
     workflows: Arc<WorkflowService>,
 }
@@ -294,13 +432,40 @@ impl Runtime {
                 approval_actions,
                 require_post_effect,
             } => {
-                let mut policy =
-                    BuiltInPolicy::offline_default().with_post_effect(*require_post_effect);
+                let mut policy = BuiltInPolicy::offline_default()
+                    .with_post_effect(*require_post_effect)
+                    .with_sandbox(
+                        &config.sandbox.backend,
+                        &config.sandbox.profile,
+                        config.sandbox.allow_broker_fallback,
+                    )
+                    .with_limits(
+                        config.sandbox.timeout_ms,
+                        config.sandbox.max_output_bytes,
+                        config.sandbox.max_processes,
+                        config.sandbox.max_memory_bytes,
+                        config.sandbox.max_concurrency,
+                    );
                 policy = policy.with_action("filesystem.read", DecisionOutcome::Allow);
                 for root in [&config.workflows.repository, &config.workflows.user] {
                     if let Ok(root) = absolute_path(root).and_then(fs::canonicalize) {
                         policy = policy.with_filesystem_read_root(root.display().to_string());
                     }
+                }
+                for grant in &config.sandbox.filesystem {
+                    let root = fs::canonicalize(&grant.root)?;
+                    policy = policy.with_filesystem_root(root.display().to_string(), &grant.mode);
+                }
+                for executable in &config.sandbox.executables {
+                    let executable = fs::canonicalize(executable)?;
+                    policy =
+                        policy.with_filesystem_root(executable.display().to_string(), "execute");
+                }
+                for environment in &config.sandbox.environment {
+                    policy = policy.with_environment(environment);
+                }
+                for destination in &config.sandbox.network_destinations {
+                    policy = policy.with_network_destination(destination);
                 }
                 for action in allow_actions {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
@@ -344,6 +509,29 @@ impl Runtime {
                 sha2_compat(&signing, b"colossus-permit-mac-v1")
             }
         };
+        let sandbox_job_key = sha2_compat(&permit_key, b"colossus-sandbox-job-v1");
+        let sandbox_executor_config = SandboxExecutorConfig {
+            helper_executable: config
+                .sandbox
+                .helper_path
+                .as_ref()
+                .map(fs::canonicalize)
+                .transpose()?
+                .unwrap_or(std::env::current_exe()?),
+            oci_runtime: config
+                .sandbox
+                .oci_runtime
+                .as_ref()
+                .map(fs::canonicalize)
+                .transpose()?,
+            oci_image: config.sandbox.oci_image.clone(),
+        };
+        let filesystem_executor = Arc::new(FilesystemExecutor::new());
+        let process_executor = Arc::new(SandboxProcessExecutor::new(
+            sandbox_executor_config.clone(),
+            sandbox_job_key,
+        ));
+        let http_executor = Arc::new(HttpExecutor::new());
         let gateway = Arc::new(EffectGateway::new(
             Arc::clone(&journal),
             Arc::clone(&policy),
@@ -352,6 +540,11 @@ impl Runtime {
                 "provider.echo".to_owned(),
                 "workflow.execute".to_owned(),
                 "filesystem.read".to_owned(),
+                "filesystem.list".to_owned(),
+                "filesystem.metadata".to_owned(),
+                "filesystem.write".to_owned(),
+                "process.spawn".to_owned(),
+                "network.http".to_owned(),
             ]),
             permit_key,
         ));
@@ -378,6 +571,10 @@ impl Runtime {
             work,
             policy,
             gateway,
+            filesystem_executor,
+            process_executor,
+            http_executor,
+            sandbox_executor_config,
             workflow_repository,
             workflows,
         })
@@ -464,6 +661,11 @@ impl Runtime {
             .map_err(Into::into)
     }
 
+    /// Native/OCI helper readiness and configured fallback status.
+    pub fn sandbox_doctor(&self) -> SandboxDoctorReport {
+        sandbox_doctor(&self.sandbox_executor_config)
+    }
+
     /// Credential-free, network-free smoke provider routed through policy and journal.
     pub async fn echo(&self, message: &str) -> Result<ReleasedEffectResult, RuntimeError> {
         let request = effect_request(
@@ -491,9 +693,89 @@ impl Runtime {
             json!({"path": path.display().to_string(), "encoding": "utf-8"}),
         );
         request.capabilities = vec!["filesystem.read".into()];
-        let result = self.gateway.execute(request, &FileReadExecutor).await?;
+        let result = self
+            .gateway
+            .execute(request, self.filesystem_executor.as_ref())
+            .await?;
         String::from_utf8(result.bytes)
             .map_err(|error| RuntimeError::Config(format!("file is not valid UTF-8: {error}")))
+    }
+
+    /// Write bounded UTF-8 text through policy, approval, and the filesystem adapter.
+    pub async fn write_text_file(
+        &self,
+        path: impl AsRef<Path>,
+        text: &str,
+    ) -> Result<Value, RuntimeError> {
+        let path = absolute_path(path.as_ref())?;
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            "filesystem.write",
+            path.display().to_string(),
+            json!({"text": text}),
+        );
+        request.capabilities = vec!["filesystem.write".into()];
+        let result = self
+            .gateway
+            .execute(request, self.filesystem_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Execute an exact program without a shell through the authenticated sandbox helper.
+    pub async fn run_process(
+        &self,
+        executable: impl AsRef<Path>,
+        cwd: impl AsRef<Path>,
+        args: Vec<String>,
+        environment: std::collections::BTreeMap<String, String>,
+    ) -> Result<Value, RuntimeError> {
+        let executable = fs::canonicalize(executable)?;
+        let cwd = fs::canonicalize(cwd)?;
+        let spec = ProcessSpec {
+            cwd,
+            args,
+            environment,
+            stdin_base64: None,
+        };
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            "process.spawn",
+            executable.display().to_string(),
+            serde_json::to_value(spec).map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec!["process.spawn".into()];
+        let result = self
+            .gateway
+            .execute(request, self.process_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Fetch one exact policy-allowed URL into quarantine and post-effect authorization.
+    pub async fn http_get(&self, url: &str) -> Result<ReleasedEffectResult, RuntimeError> {
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            "network.http",
+            url,
+            json!({"method": "GET", "headers": {"accept": "*/*"}}),
+        );
+        request.capabilities = vec!["network.http".into()];
+        self.gateway
+            .execute(request, self.http_executor.as_ref())
+            .await
+            .map_err(Into::into)
     }
 
     /// Read and validate a workflow path through policy and post-effect release.
@@ -603,47 +885,6 @@ impl EffectExecutor for EchoExecutor {
     }
 }
 
-struct FileReadExecutor;
-
-#[async_trait]
-impl EffectExecutor for FileReadExecutor {
-    async fn execute(
-        &self,
-        request: &EffectRequest,
-        permit: ExecutionPermit,
-    ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        let path = fs::canonicalize(&request.resource)
-            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
-        let allowed = permit.obligations().filesystem.iter().any(|grant| {
-            matches!(grant.mode.as_str(), "read" | "write")
-                && fs::canonicalize(&grant.root).is_ok_and(|root| path.starts_with(root))
-        });
-        if !allowed {
-            return Err(ExecutionError::Failed(
-                "canonical path is outside permit roots".into(),
-            ));
-        }
-        let metadata =
-            fs::metadata(&path).map_err(|error| ExecutionError::Failed(error.to_string()))?;
-        if !metadata.is_file() {
-            return Err(ExecutionError::Failed(
-                "filesystem.read requires a regular file".into(),
-            ));
-        }
-        if metadata.len() > permit.obligations().max_output_bytes {
-            return Err(ExecutionError::Failed(
-                "file exceeds permit output bound".into(),
-            ));
-        }
-        let bytes = fs::read(path).map_err(|error| ExecutionError::Failed(error.to_string()))?;
-        Ok(QuarantinedEffectResult {
-            media_type: "text/plain; charset=utf-8".into(),
-            bytes,
-            effect_succeeded: true,
-        })
-    }
-}
-
 struct UnavailableExecutor;
 
 #[async_trait]
@@ -712,7 +953,7 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileReadExecutor, RuntimeConfig, recover_unknown_effects};
+    use super::{RuntimeConfig, recover_unknown_effects};
     use colossus_contracts::{
         Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, NewEvent,
     };
@@ -806,7 +1047,10 @@ surprise: true
         );
         allowed_request.capabilities = vec!["filesystem.read".into()];
         let released = gateway
-            .execute(allowed_request, &FileReadExecutor)
+            .execute(
+                allowed_request,
+                &colossus_sandbox::FilesystemExecutor::new(),
+            )
             .await
             .expect("allowed read");
         assert_eq!(released.bytes, b"safe");
@@ -826,7 +1070,7 @@ surprise: true
         );
         denied_request.capabilities = vec!["filesystem.read".into()];
         let error = gateway
-            .execute(denied_request, &FileReadExecutor)
+            .execute(denied_request, &colossus_sandbox::FilesystemExecutor::new())
             .await
             .expect_err("path escape denied");
         assert!(matches!(error, colossus_policy::GatewayError::Safety(_)));
