@@ -2,11 +2,12 @@
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
 use colossus_contracts::{
     Actor, ActorType, AgentRunResult, DecisionOutcome, EffectRequest, EventClassification,
-    ExecutionContext, FilesystemGrant, ModelMessage, ModelMessageRole, ModelRequest, NewEvent,
-    ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck,
-    ProviderTurn, QuarantinedEffectResult,
+    ExecutionContext, FilesystemGrant, NewEvent, ProjectionStatus, ProviderModelInfo,
+    ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
+    QuarantinedEffectResult, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -18,7 +19,8 @@ use colossus_policy::{
     OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
-    EventJournal, KeyProvider, PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError,
+    EventJournal, KeyProvider, ModelProvider, ModelProviderError, PolicyDecisionPoint,
+    ProjectionStore, SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
     WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{
@@ -33,6 +35,7 @@ use colossus_sandbox::{
     FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig,
     SandboxProcessExecutor, sandbox_doctor,
 };
+use colossus_tools::{StaticToolRegistry, ToolCatalogError};
 use colossus_workflow::{
     EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,
     WorkflowError, WorkflowService, validate_definition,
@@ -44,7 +47,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -64,9 +67,31 @@ pub struct RuntimeConfig {
     /// Provider profiles and role routing.
     #[serde(default)]
     pub providers: ProvidersConfig,
+    /// Agent model-turn and active-tool limits.
+    #[serde(default)]
+    pub agent: AgentConfig,
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
+}
+
+/// Bounded agent-loop and active tool configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentConfig {
+    /// Maximum provider turns in one run.
+    pub max_turns: u16,
+    /// Exact model-visible built-in tool names.
+    pub tools: Vec<String>,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            max_turns: DEFAULT_MAX_TURNS,
+            tools: vec!["echo".into()],
+        }
+    }
 }
 
 /// Strict provider profiles and role routing.
@@ -399,6 +424,12 @@ impl RuntimeConfig {
                 "networked OCI sandboxing requires ociProxyImage".into(),
             ));
         }
+        if !(1..=MAX_TURNS).contains(&config.agent.max_turns) {
+            return Err(RuntimeError::Config(format!(
+                "agent.maxTurns must be in 1..={MAX_TURNS}"
+            )));
+        }
+        StaticToolRegistry::builtins(&config.agent.tools)?;
         validate_provider_config(&config)?;
         Ok(config)
     }
@@ -431,6 +462,7 @@ impl RuntimeConfig {
                 user: PathBuf::from("workflows"),
             },
             providers: ProvidersConfig::default(),
+            agent: AgentConfig::default(),
             sandbox: SandboxConfig::default(),
         }
     }
@@ -558,6 +590,12 @@ pub enum RuntimeError {
     /// Provider configuration or normalized output failed.
     #[error(transparent)]
     Provider(#[from] ProviderError),
+    /// Agent application loop failed.
+    #[error(transparent)]
+    Agent(#[from] AgentError),
+    /// Active tool catalog is invalid.
+    #[error(transparent)]
+    ToolCatalog(#[from] ToolCatalogError),
     /// Workflow validation or execution failed.
     #[error(transparent)]
     Workflow(#[from] WorkflowError),
@@ -595,6 +633,9 @@ pub struct Runtime {
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
+    agent: Arc<AgentService>,
+    agent_max_turns: u16,
+    tools: Arc<dyn ToolRegistry>,
     filesystem_executor: Arc<FilesystemExecutor>,
     process_executor: Arc<SandboxProcessExecutor>,
     http_executor: Arc<HttpExecutor>,
@@ -787,6 +828,23 @@ impl Runtime {
             ]),
             permit_key,
         ));
+        let tool_registry: Arc<dyn ToolRegistry> =
+            Arc::new(StaticToolRegistry::builtins(&config.agent.tools)?);
+        let model_provider: Arc<dyn ModelProvider> = Arc::new(GatewayModelProvider {
+            gateway: Arc::clone(&gateway),
+            providers: Arc::clone(&providers),
+        });
+        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+            gateway: Arc::clone(&gateway),
+            filesystem: Arc::clone(&filesystem_executor),
+            http: Arc::clone(&http_executor),
+        });
+        let agent = Arc::new(AgentService::new(
+            Arc::clone(&journal),
+            model_provider,
+            Arc::clone(&tool_registry),
+            tool_executor,
+        ));
         let workflow_repository: Arc<dyn WorkflowRepository> =
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
         let effects = Arc::new(GatewayWorkflowEffects {
@@ -811,6 +869,9 @@ impl Runtime {
             policy,
             gateway,
             providers,
+            agent,
+            agent_max_turns: config.agent.max_turns,
+            tools: tool_registry,
             filesystem_executor,
             process_executor,
             http_executor,
@@ -917,6 +978,11 @@ impl Runtime {
         json!(self.providers.routes())
     }
 
+    /// Stable active model-visible tool catalog.
+    pub fn tool_specs(&self) -> Vec<ToolSpec> {
+        self.tools.list_specs()
+    }
+
     /// List models for a profile through the universal effect boundary.
     pub async fn provider_models(
         &self,
@@ -991,157 +1057,31 @@ impl Runtime {
         Ok(readiness)
     }
 
-    /// Execute one provider turn and durably record normalized safe events.
+    /// Execute the shared durable bounded provider/tool loop.
     pub async fn run_model(
         &self,
         role: &str,
         instructions: &str,
         prompt: &str,
     ) -> Result<AgentRunResult, RuntimeError> {
-        let started = Instant::now();
-        let run_id = Uuid::now_v7().to_string();
-        let stream_id = format!("run:{run_id}");
-        let provider = self.providers.resolve(role)?;
-        let model_request = ModelRequest {
-            model: provider.profile().model.clone(),
-            instructions: instructions.into(),
-            messages: vec![ModelMessage {
-                role: ModelMessageRole::User,
-                content: prompt.into(),
-                tool_call_id: None,
-            }],
-            tools: Vec::new(),
-        };
-        let context = ExecutionContext {
-            correlation_id: run_id.clone(),
-            run_id: Some(run_id.clone()),
-            ..ExecutionContext::default()
-        };
-        self.journal.append(NewEvent {
-            event_version: 1,
-            stream_id: stream_id.clone(),
-            expected_stream_version: 0,
-            classification: EventClassification::Domain,
-            event_type: "model.request.prepared.v1".into(),
-            actor: Actor {
-                actor_type: ActorType::User,
-                id: "terminal-user".into(),
-            },
-            context: context.clone(),
-            payload: json!({
-                "role": role,
-                "profile": provider.profile().name,
-                "provider": provider.profile().kind.as_str(),
-                "model": provider.profile().model,
-                "message_count": model_request.messages.len(),
-                "tool_count": model_request.tools.len(),
-                "prompt_bytes": prompt.len(),
-            }),
-        })?;
-        let input = ProviderEffectInput {
-            profile: provider.profile().name.clone(),
-            request: Some(model_request),
-        };
-        let mut effect = effect_request(
-            Actor {
-                actor_type: ActorType::User,
-                id: "terminal-user".into(),
-            },
-            provider.profile().kind.generation_action(),
-            provider.profile().generation_endpoint()?,
-            serde_json::to_value(input).map_err(|error| RuntimeError::Config(error.to_string()))?,
-        );
-        effect.capabilities = vec!["provider.call".into()];
-        effect.context = context.clone();
-        effect.credential_references = provider.credential_reference().into_iter().collect();
-        let released = match self.gateway.execute(effect, provider.as_ref()).await {
-            Ok(released) => released,
-            Err(error) => {
-                self.journal.append(NewEvent {
-                    event_version: 1,
-                    stream_id,
-                    expected_stream_version: 1,
-                    classification: EventClassification::Domain,
-                    event_type: "error.v1".into(),
-                    actor: system_actor("provider-runtime"),
-                    context,
-                    payload: json!({"message": error.to_string(), "recoverable": false}),
-                })?;
-                return Err(error.into());
-            }
-        };
-        let turn: ProviderTurn = match serde_json::from_slice(&released.bytes) {
-            Ok(turn) => turn,
-            Err(error) => {
-                self.journal.append(NewEvent {
-                    event_version: 1,
-                    stream_id,
-                    expected_stream_version: 1,
-                    classification: EventClassification::Domain,
-                    event_type: "error.v1".into(),
-                    actor: system_actor("provider-runtime"),
-                    context,
-                    payload: json!({
-                        "message": "released provider output violated the normalized turn contract",
-                        "detail": error.to_string(),
-                        "recoverable": false,
-                    }),
-                })?;
-                return Err(RuntimeError::Provider(ProviderError::Malformed(
-                    "released provider output violated the normalized turn contract".into(),
-                )));
-            }
-        };
-        let mut stream_version = 1_u64;
-        let mut final_output = None;
-        for event in &turn.events {
-            let (event_type, payload) = provider_event_payload(event);
-            self.journal.append(NewEvent {
-                event_version: 1,
-                stream_id: stream_id.clone(),
-                expected_stream_version: stream_version,
-                classification: EventClassification::Domain,
-                event_type,
-                actor: Actor {
-                    actor_type: ActorType::Model,
-                    id: provider.profile().name.clone(),
-                },
-                context: context.clone(),
-                payload,
-            })?;
-            stream_version = stream_version.saturating_add(1);
-            if let ProviderEvent::FinalOutput { text } = event {
-                final_output = Some(text.clone());
-            }
-        }
-        let output = match final_output {
-            Some(output) => output,
-            None => {
-                let message = "provider turn produced no final visible output; tool-loop continuation is not implemented in this slice";
-                self.journal.append(NewEvent {
-                    event_version: 1,
-                    stream_id,
-                    expected_stream_version: stream_version,
-                    classification: EventClassification::Domain,
-                    event_type: "error.v1".into(),
-                    actor: system_actor("provider-runtime"),
-                    context,
-                    payload: json!({"message": message, "recoverable": false}),
-                })?;
-                return Err(RuntimeError::Provider(ProviderError::Malformed(
-                    message.into(),
-                )));
-            }
-        };
-        Ok(AgentRunResult {
-            run_id,
-            role: role.into(),
-            profile: turn.profile,
-            model: turn.model,
-            output,
-            event_count: stream_version,
-            elapsed_seconds: started.elapsed().as_secs_f64(),
-        })
+        self.agent
+            .run(role, instructions, prompt, self.agent_max_turns)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Execute the shared loop with a caller-selected bounded turn limit.
+    pub async fn run_model_with_max_turns(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+    ) -> Result<AgentRunResult, RuntimeError> {
+        self.agent
+            .run(role, instructions, prompt, max_turns)
+            .await
+            .map_err(Into::into)
     }
 
     /// Credential-free, network-free smoke provider routed through policy and journal.
@@ -1343,24 +1283,6 @@ fn recover_unknown_effects(journal: &dyn EventJournal) -> Result<u64, StoreError
     Ok(recovered)
 }
 
-fn provider_event_payload(event: &ProviderEvent) -> (String, Value) {
-    match event {
-        ProviderEvent::ModelDelta { text } => ("model.delta.v1".into(), json!({"text": text})),
-        ProviderEvent::ReasoningSummary { summary } => {
-            ("reasoning.summary.v1".into(), json!({"summary": summary}))
-        }
-        ProviderEvent::ToolCallRequested {
-            call_id,
-            name,
-            arguments,
-        } => (
-            "tool.call.requested.v1".into(),
-            json!({"call_id": call_id, "name": name, "arguments": arguments}),
-        ),
-        ProviderEvent::FinalOutput { text } => ("final.output.v1".into(), json!({"text": text})),
-    }
-}
-
 fn sha2_compat(secret: &[u8; 32], label: &[u8]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     // The journal signing secret is already random. This local KDF only domain-separates
@@ -1370,6 +1292,187 @@ fn sha2_compat(secret: &[u8; 32], label: &[u8]) -> [u8; 32] {
         .chain_update(secret)
         .finalize()
         .into()
+}
+
+struct GatewayModelProvider {
+    gateway: Arc<EffectGateway>,
+    providers: Arc<ProviderRegistry>,
+}
+
+#[async_trait]
+impl ModelProvider for GatewayModelProvider {
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+        let provider = self
+            .providers
+            .resolve(role)
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+        Ok(ProviderRoute {
+            role: role.into(),
+            profile: provider.profile().name.clone(),
+            provider: provider.profile().kind.as_str().into(),
+            model: provider.profile().model.clone(),
+        })
+    }
+
+    async fn turn(
+        &self,
+        role: &str,
+        request: colossus_contracts::ModelRequest,
+        context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        let provider = self
+            .providers
+            .resolve(role)
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+        let endpoint = provider
+            .profile()
+            .generation_endpoint()
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+        let mut effect = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            provider.profile().kind.generation_action(),
+            endpoint,
+            serde_json::to_value(ProviderEffectInput {
+                profile: provider.profile().name.clone(),
+                request: Some(request),
+            })
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?,
+        );
+        effect.capabilities = vec!["provider.call".into()];
+        effect.context = context;
+        effect.credential_references = provider.credential_reference().into_iter().collect();
+        let released = self
+            .gateway
+            .execute(effect, provider.as_ref())
+            .await
+            .map_err(model_gateway_error)?;
+        serde_json::from_slice(&released.bytes).map_err(|_| {
+            ModelProviderError::Failed(
+                "released provider output violated the normalized turn contract".into(),
+            )
+        })
+    }
+}
+
+fn model_gateway_error(error: GatewayError) -> ModelProviderError {
+    match error {
+        GatewayError::RecoverableExecution { code, message } => {
+            ModelProviderError::Recoverable { code, message }
+        }
+        GatewayError::OutcomeUnknown(message) => ModelProviderError::OutcomeUnknown(message),
+        error => ModelProviderError::Failed(error.to_string()),
+    }
+}
+
+struct GatewayToolExecutor {
+    gateway: Arc<EffectGateway>,
+    filesystem: Arc<FilesystemExecutor>,
+    http: Arc<HttpExecutor>,
+}
+
+#[async_trait]
+impl ToolExecutor for GatewayToolExecutor {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        let output = match call.name.as_str() {
+            "echo" => bounded_tool_text(required_tool_string(&call, "text")?, 32_768),
+            "filesystem.read" => {
+                let path = absolute_path(Path::new(required_tool_string(&call, "path")?))
+                    .map_err(|error| ToolError::Failed(error.to_string()))?;
+                let mut request = effect_request(
+                    model_actor(&call),
+                    "filesystem.read",
+                    path.display().to_string(),
+                    json!({"path": path}),
+                );
+                request.capabilities = vec!["filesystem.read".into()];
+                request.context = context;
+                let result = self
+                    .gateway
+                    .execute(request, self.filesystem.as_ref())
+                    .await
+                    .map_err(tool_gateway_error)?;
+                bounded_tool_text(
+                    &String::from_utf8(result.bytes).map_err(|_| {
+                        ToolError::Failed("filesystem.read returned non-UTF-8".into())
+                    })?,
+                    1024 * 1024,
+                )
+            }
+            "network.http" => {
+                let url = required_tool_string(&call, "url")?;
+                let mut request = effect_request(
+                    model_actor(&call),
+                    "network.http",
+                    url,
+                    json!({"method": "GET", "headers": {"accept": "*/*"}}),
+                );
+                request.capabilities = vec!["network.http".into()];
+                request.context = context;
+                let result = self
+                    .gateway
+                    .execute(request, self.http.as_ref())
+                    .await
+                    .map_err(tool_gateway_error)?;
+                bounded_tool_text(
+                    &String::from_utf8(result.bytes)
+                        .map_err(|_| ToolError::Failed("network.http returned non-UTF-8".into()))?,
+                    1024 * 1024,
+                )
+            }
+            name => return Err(ToolError::Unknown(name.into())),
+        };
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output,
+            exit_code: 0,
+        })
+    }
+}
+
+fn required_tool_string<'a>(call: &'a ToolCall, field: &str) -> Result<&'a str, ToolError> {
+    call.arguments
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be a string"),
+        })
+}
+
+fn bounded_tool_text(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.into();
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    text[..end].into()
+}
+
+fn model_actor(call: &ToolCall) -> Actor {
+    Actor {
+        actor_type: ActorType::Model,
+        id: format!("tool-call:{}", call.call_id),
+    }
+}
+
+fn tool_gateway_error(error: GatewayError) -> ToolError {
+    match error {
+        GatewayError::Denied(message) | GatewayError::Approval(message) => {
+            ToolError::Denied(message)
+        }
+        GatewayError::OutcomeUnknown(message) => ToolError::OutcomeUnknown(message),
+        error => ToolError::Failed(error.to_string()),
+    }
 }
 
 struct EchoExecutor;
@@ -1462,11 +1565,14 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderProfileConfig, RuntimeConfig, recover_unknown_effects};
+    use super::{
+        GatewayToolExecutor, ProviderProfileConfig, RuntimeConfig, recover_unknown_effects,
+    };
     use colossus_contracts::{
         Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, NewEvent,
+        ToolCall,
     };
-    use colossus_ports::EventJournal;
+    use colossus_ports::{EventJournal, ToolExecutor};
     use colossus_provider::ProviderKind;
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
@@ -1495,6 +1601,23 @@ workflows:
 surprise: true
 "#;
         assert!(RuntimeConfig::from_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn agent_config_rejects_unknown_tools_and_unbounded_turns() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        config.agent.tools = vec!["surprise".into()];
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "unknown active tool was accepted"
+        );
+
+        config.agent.tools = vec!["echo".into()];
+        config.agent.max_turns = 101;
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "unbounded model turn count was accepted"
+        );
     }
 
     #[test]
@@ -1728,5 +1851,55 @@ surprise: true
             .await
             .expect_err("path escape denied");
         assert!(matches!(error, colossus_policy::GatewayError::Safety(_)));
+    }
+
+    #[tokio::test]
+    async fn agent_filesystem_tool_executes_only_through_the_gateway() {
+        let allowed = tempdir().expect("allowed root");
+        let file = allowed.path().join("note.txt");
+        fs::write(&file, "tool content").expect("fixture");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = colossus_policy::BuiltInPolicy::offline_default()
+            .with_action("filesystem.read", DecisionOutcome::Allow)
+            .with_filesystem_read_root(allowed.path().display().to_string());
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["filesystem.read".into()]),
+            [5_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+        };
+        let result = executor
+            .execute(
+                ToolCall {
+                    call_id: "call-1".into(),
+                    name: "filesystem.read".into(),
+                    arguments: json!({"path": file}),
+                },
+                ExecutionContext {
+                    correlation_id: "run-1".into(),
+                    run_id: Some("run-1".into()),
+                    ..ExecutionContext::default()
+                },
+            )
+            .await
+            .expect("tool result");
+        assert_eq!(result.output, "tool content");
+        let events = journal.read_global(1, 20).expect("effect events");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "effect.started.v1")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "effect.completed.v1")
+        );
     }
 }

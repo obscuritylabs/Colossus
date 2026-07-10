@@ -12,18 +12,21 @@ still required.
 | STORE-01 | Passing embedded foundation | split ports; in-memory and redb journal/projection conformance; atomic outbox; exclusive writer lease; restart catch-up; optimistic positions; deterministic rebuild; startup position validation; session/work/memory/workflow reducers; canonical memory repository | Research/extension repositories, Chroma, queued external index/export work, worker IPC, and additional adapter conformance suites |
 | MEM-01 | Passing offline foundation | canonical create/archive/supersede replay plus Tantivy event-id idempotency, candidate search, removal, status, and rebuild tests | Chroma, embedding profiles, queued lag/retry, gateway transport, and canonical policy re-filtering |
 | FLOW-01 | Passing foundation | strict YAML, exact hash invalidation, condition grammar, direct cycle rejection, durable run reconstruction, wait/input resume, bounded parallel journal writes, interruption rules | Cross-workflow cycle/depth enforcement, compensation, worker IPC, queued triggers, crash fault injection |
-| PROV-01 | Partial P0 slice | strict echo/Responses/compatible profiles; role routing; one-shot CLI and REPL path; model catalog/doctor; full logical request disclosure; reference-only credential policy input; permit-bound late credential resolution; bounded quarantined normalization; strict tool-argument parsing; safe reasoning summaries; audited typed events | Incremental streaming, multi-turn tool execution/recovery, usage accounting, provider retry classification, broader compatible-endpoint acceptance |
+| PROV-01 | Partial P0 agent runtime | strict echo/Responses/compatible profiles; role routing; one-shot CLI and REPL path; model catalog/doctor; full logical request disclosure; reference-only credential policy input; permit-bound late credential resolution; bounded quarantined normalization; safe reasoning summaries; durable multi-turn continuation; call-ID-correlated tool results; strict pre-policy schemas; two-attempt malformed-argument recovery; explicit max-turn exhaustion; pure echo plus permit-bound file/HTTP tools | Incremental transport streaming, remaining core tools, sessions, usage accounting, broader compatible-endpoint acceptance |
 
 The relevant tests live in:
 
 - `rust/crates/colossus-journal-redb/src/lib.rs`
+- `rust/crates/colossus-agent/src/lib.rs`
 - `rust/crates/colossus-memory/src/lib.rs`
 - `rust/crates/colossus-policy/src/lib.rs`
 - `rust/crates/colossus-policy/tests/opa_live.rs`
 - `rust/crates/colossus-provider/src/lib.rs`
+- `rust/crates/colossus-tools/src/lib.rs`
 - `rust/crates/colossus-projection/src/lib.rs`
 - `rust/crates/colossus-runtime/src/lib.rs`
 - `rust/crates/colossus-sandbox/src/lib.rs`
+- `rust/crates/colossus-cli/tests/agent_smoke.rs`
 - `rust/crates/colossus-cli/tests/native_sandbox.rs`
 - `rust/crates/colossus-cli/tests/oci_sandbox.rs`
 - `rust/crates/colossus-workflow/src/lib.rs`

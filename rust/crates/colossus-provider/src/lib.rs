@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     CredentialReference, EffectRequest, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelToolDefinition, ProviderEvent, ProviderModelInfo, ProviderReadiness,
+    ModelToolCall, ModelToolDefinition, ProviderEvent, ProviderModelInfo, ProviderReadiness,
     ProviderReadinessCheck, ProviderTurn, QuarantinedEffectResult,
 };
 use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
@@ -308,6 +308,12 @@ impl EffectExecutor for ProviderExecutor {
                 ProviderError::Transport(message) => ExecutionError::OutcomeUnknown(format!(
                     "provider transport failed after execution began; outcome is unknown: {message}"
                 )),
+                ProviderError::Malformed(message) if invalid_tool_argument_message(&message) => {
+                    ExecutionError::Recoverable {
+                        code: "provider.invalid_tool_arguments".into(),
+                        message,
+                    }
+                }
                 error => ExecutionError::Failed(error.to_string()),
             })
     }
@@ -637,11 +643,10 @@ fn validate_model_request(
 }
 
 fn responses_payload(request: &ModelRequest) -> Result<Value, ProviderError> {
-    let input = request
-        .messages
-        .iter()
-        .map(responses_message)
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut input = Vec::new();
+    for message in &request.messages {
+        input.extend(responses_messages(message)?);
+    }
     let tools = request
         .tools
         .iter()
@@ -667,22 +672,45 @@ fn responses_payload(request: &ModelRequest) -> Result<Value, ProviderError> {
     Ok(payload)
 }
 
-fn responses_message(message: &ModelMessage) -> Result<Value, ProviderError> {
+fn responses_messages(message: &ModelMessage) -> Result<Vec<Value>, ProviderError> {
     match message.role {
-        ModelMessageRole::System => Ok(json!({"role": "developer", "content": message.content})),
-        ModelMessageRole::User => Ok(json!({"role": "user", "content": message.content})),
-        ModelMessageRole::Assistant => Ok(json!({"role": "assistant", "content": message.content})),
+        ModelMessageRole::System => Ok(vec![
+            json!({"role": "developer", "content": message.content}),
+        ]),
+        ModelMessageRole::User => Ok(vec![json!({"role": "user", "content": message.content})]),
+        ModelMessageRole::Assistant => {
+            let mut items = Vec::new();
+            if !message.content.is_empty() {
+                items.push(json!({"role": "assistant", "content": message.content}));
+            }
+            items.extend(message.tool_calls.iter().map(responses_tool_call));
+            if items.is_empty() {
+                return Err(ProviderError::Configuration(
+                    "assistant continuation message is empty".into(),
+                ));
+            }
+            Ok(items)
+        }
         ModelMessageRole::Tool => {
             let call_id = message.tool_call_id.as_ref().ok_or_else(|| {
                 ProviderError::Configuration("tool result message has no call id".into())
             })?;
-            Ok(json!({
+            Ok(vec![json!({
                 "type": "function_call_output",
                 "call_id": call_id,
                 "output": message.content,
-            }))
+            })])
         }
     }
+}
+
+fn responses_tool_call(call: &ModelToolCall) -> Value {
+    json!({
+        "type": "function_call",
+        "call_id": call.call_id,
+        "name": call.name,
+        "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".into()),
+    })
 }
 
 fn chat_payload(request: &ModelRequest) -> Result<Value, ProviderError> {
@@ -719,7 +747,21 @@ fn chat_message(message: &ModelMessage) -> Result<Value, ProviderError> {
                 ProviderError::Configuration("tool result has no call id".into())
             })?);
     }
+    if message.role == ModelMessageRole::Assistant && !message.tool_calls.is_empty() {
+        value["tool_calls"] = Value::Array(message.tool_calls.iter().map(chat_tool_call).collect());
+    }
     Ok(value)
+}
+
+fn chat_tool_call(call: &ModelToolCall) -> Value {
+    json!({
+        "id": call.call_id,
+        "type": "function",
+        "function": {
+            "name": call.name,
+            "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".into()),
+        }
+    })
 }
 
 fn chat_tool(tool: &ModelToolDefinition) -> Value {
@@ -939,6 +981,11 @@ fn function_call_event(
     })
 }
 
+fn invalid_tool_argument_message(message: &str) -> bool {
+    message.starts_with("tool call arguments are invalid JSON")
+        || message.starts_with("tool call arguments are not an object")
+}
+
 fn reasoning_summary_events(message: &Map<String, Value>) -> Vec<ProviderEvent> {
     message
         .get("reasoning_details")
@@ -1111,6 +1158,7 @@ mod tests {
                 role: ModelMessageRole::User,
                 content: "hello".into(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             }],
             tools: Vec::new(),
         }
@@ -1264,6 +1312,42 @@ mod tests {
     }
 
     #[test]
+    fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
+        let request = ModelRequest {
+            model: "unit-model".into(),
+            instructions: "test".into(),
+            messages: vec![
+                ModelMessage {
+                    role: ModelMessageRole::Assistant,
+                    content: String::new(),
+                    tool_call_id: None,
+                    tool_calls: vec![ModelToolCall {
+                        call_id: "call-1".into(),
+                        name: "lookup".into(),
+                        arguments: json!({"query": "rust"}),
+                    }],
+                },
+                ModelMessage {
+                    role: ModelMessageRole::Tool,
+                    content: "result".into(),
+                    tool_call_id: Some("call-1".into()),
+                    tool_calls: Vec::new(),
+                },
+            ],
+            tools: Vec::new(),
+        };
+        let responses = responses_payload(&request).expect("Responses payload");
+        assert_eq!(responses["input"][0]["type"], "function_call");
+        assert_eq!(responses["input"][0]["call_id"], "call-1");
+        assert_eq!(responses["input"][1]["type"], "function_call_output");
+        assert_eq!(responses["input"][1]["call_id"], "call-1");
+
+        let chat = chat_payload(&request).expect("chat payload");
+        assert_eq!(chat["messages"][1]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(chat["messages"][2]["tool_call_id"], "call-1");
+    }
+
+    #[test]
     fn hidden_reasoning_is_not_released_but_safe_summary_is() {
         let profile = ProviderProfile::new(
             "local",
@@ -1391,5 +1475,62 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(event_types.contains(&"effect.release_requested.v1".into()));
         assert!(event_types.contains(&"effect.completed.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn malformed_tool_arguments_cross_gateway_as_recoverable_failure() {
+        let (base_url, server) = one_response_server(json!({
+            "id": "response-1",
+            "choices": [{"message": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "function": {"name": "lookup", "arguments": "not-json"}
+                }]
+            }}]
+        }))
+        .await;
+        let profile = ProviderProfile::new(
+            "local",
+            ProviderKind::OpenAiCompatible,
+            "unit-model",
+            Some(base_url),
+            None,
+            5_000,
+        )
+        .expect("profile");
+        let origin = profile
+            .network_origin()
+            .expect("origin")
+            .expect("network origin");
+        let executor = ProviderExecutor::new(profile.clone());
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+            .with_network_destination(origin);
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["provider.call".into()]),
+            [3_u8; 32],
+        );
+        let error = gateway
+            .execute(provider_request(&profile), &executor)
+            .await
+            .expect_err("malformed arguments must not be released");
+        assert!(matches!(
+            error,
+            GatewayError::RecoverableExecution { ref code, .. }
+                if code == "provider.invalid_tool_arguments"
+        ));
+        server.await.expect("server task");
+        assert!(
+            journal
+                .read_global(1, 20)
+                .expect("events")
+                .iter()
+                .any(|event| event.event_type == "effect.failed.v1")
+        );
     }
 }

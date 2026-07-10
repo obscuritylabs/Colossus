@@ -64,6 +64,13 @@ obsolete Go launcher.
 - One-shot `run`, provider profile/doctor/model diagnostics, role-route inspection, a
   Reedline REPL using the same primary-role application path, audit and policy diagnostics,
   workflow CLI surface, and one-shot worker recovery/drain entry point.
+- A reusable `colossus-agent` application loop and `colossus-tools` catalog with a
+  configurable 1..=100 turn bound (24 by default), strict pre-policy JSON Schema
+  validation, assistant/tool call-ID continuation for Responses and compatible chat,
+  bounded two-attempt malformed-argument recovery, correlated tool results, explicit
+  max-turn exhaustion, and model-visible `echo`, `filesystem.read`, and `network.http`
+  tools. Effectful tools execute through the existing gateway; only `echo` is active by
+  default.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
 
@@ -79,6 +86,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- p
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider doctor
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider models
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- models routes
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tools list
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
@@ -112,11 +120,10 @@ cutover. The following planned work remains:
   helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
-- Incremental provider streaming, the multi-turn tool-execution loop, bounded malformed
-  tool-call recovery, the core tool catalog, sessions, usage accounting, and context
-  compaction. The current provider slice performs one bounded request and persists its
-  normalized event list; a tool request is audited and then fails explicitly until the
-  continuation loop lands.
+- Incremental provider transport streaming, remaining core filesystem/search/write/git/
+  process tools, sessions, usage accounting, and context compaction. The durable
+  multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
+  permit-bound file reads, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
 - Goals, durable subagents, research/citations, skills/resources, telemetry, packs,

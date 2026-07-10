@@ -20,14 +20,22 @@ cargo run -p colossus-cli --bin colossus-rs -- provider profiles
 cargo run -p colossus-cli --bin colossus-rs -- provider doctor
 cargo run -p colossus-cli --bin colossus-rs -- provider models
 cargo run -p colossus-cli --bin colossus-rs -- models routes
+cargo run -p colossus-cli --bin colossus-rs -- tools list
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
 `baseUrl`, an optional `env:VARIABLE` credential reference (required for Responses), and
 an exact canonical origin in `sandbox.networkDestinations`. Their generation action and
 `provider.models` must also be explicitly allowed by the built-in policy. Credentials
-are resolved only inside the adapter after authorization. The current slice is one
-bounded request; incremental streaming and multi-turn tool execution remain pending.
+are resolved only inside the adapter after authorization. The application loop supports
+multiple provider/tool turns, strict schema validation, two bounded malformed-argument
+correction turns, and distinct max-turn exhaustion. Incremental transport streaming
+remains pending.
+
+Fresh config enables only the pure `echo` tool. Configure `agent.maxTurns` in `1..=100`
+and select exact active names from `echo`, `filesystem.read`, and `network.http` under
+`agent.tools`. File and HTTP tools remain subject to the same policy actions, filesystem
+roots, and network destinations as direct runtime calls.
 
 Inspect sandbox readiness or run an explicitly configured exact executable:
 

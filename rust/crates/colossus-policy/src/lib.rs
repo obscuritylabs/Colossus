@@ -71,6 +71,14 @@ pub enum GatewayError {
     /// Adapter reported a known failure.
     #[error("effect failed: {0}")]
     Execution(String),
+    /// Adapter rejected output in a way that permits a bounded application correction.
+    #[error("recoverable effect failure {code}: {message}")]
+    RecoverableExecution {
+        /// Stable application-neutral code.
+        code: String,
+        /// Bounded safe diagnostic.
+        message: String,
+    },
     /// Adapter outcome is unknown and must not be retried implicitly.
     #[error("effect outcome is unknown: {0}")]
     OutcomeUnknown(String),
@@ -85,6 +93,14 @@ pub enum ExecutionError {
     /// Adapter knows the effect failed.
     #[error("{0}")]
     Failed(String),
+    /// Adapter output was rejected but a corrected request may safely be attempted.
+    #[error("{code}: {message}")]
+    Recoverable {
+        /// Stable application-neutral code.
+        code: String,
+        /// Bounded safe diagnostic.
+        message: String,
+    },
     /// Adapter cannot prove whether the external effect occurred.
     #[error("{0}")]
     OutcomeUnknown(String),
@@ -823,6 +839,15 @@ impl EffectGateway {
                     json!({"message": message}),
                 )?;
                 return Err(GatewayError::Execution(message));
+            }
+            Ok(Err(ExecutionError::Recoverable { code, message })) => {
+                self.event(
+                    &request,
+                    "effect.failed.v1",
+                    EventClassification::Effect,
+                    json!({"code": code, "message": message, "recoverable": true}),
+                )?;
+                return Err(GatewayError::RecoverableExecution { code, message });
             }
             Ok(Err(ExecutionError::OutcomeUnknown(message))) => {
                 self.event(

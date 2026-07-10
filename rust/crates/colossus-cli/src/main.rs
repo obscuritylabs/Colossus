@@ -49,6 +49,8 @@ enum Command {
     Provider(ProviderCommand),
     /// Inspect model role routing.
     Models(ModelsCommand),
+    /// Inspect the active strict tool catalog.
+    Tools(ToolsCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -59,6 +61,9 @@ enum Command {
         /// System/developer instructions for this turn.
         #[arg(long, default_value = "You are Colossus.")]
         instructions: String,
+        /// Override the configured bounded model-turn limit.
+        #[arg(long)]
+        max_turns: Option<u16>,
     },
     /// Run the credential-free, network-free echo smoke provider.
     Echo {
@@ -273,6 +278,18 @@ enum ModelsAction {
     Routes,
 }
 
+#[derive(Args)]
+struct ToolsCommand {
+    #[command(subcommand)]
+    command: ToolsAction,
+}
+
+#[derive(Subcommand)]
+enum ToolsAction {
+    /// List model-visible specifications and effect identities.
+    List,
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -422,7 +439,7 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
                 }
                 if line == "/help" {
                     println!(
-                        "/workflow list | /workflow status RUN_ID | /audit verify | /projection status | /exit"
+                        "/workflow list | /workflow status RUN_ID | /audit verify | /projection status | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -439,6 +456,8 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
                     print_json(&runtime.journal().verify()?)?;
                 } else if line == "/projection status" {
                     print_json(&runtime.projection_status()?)?;
+                } else if line == "/tools" {
+                    print_json(&runtime.tool_specs())?;
                 } else {
                     let result = runtime
                         .run_model("primary", "You are Colossus.", line)
@@ -539,11 +558,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Models(command) => match command.command {
             ModelsAction::Routes => print_json(&runtime.provider_routes())?,
         },
+        Command::Tools(command) => match command.command {
+            ToolsAction::List => print_json(&runtime.tool_specs())?,
+        },
         Command::Run {
             prompt,
             role,
             instructions,
-        } => print_json(&runtime.run_model(&role, &instructions, &prompt).await?)?,
+            max_turns,
+        } => {
+            let result = match max_turns {
+                Some(max_turns) => {
+                    runtime
+                        .run_model_with_max_turns(&role, &instructions, &prompt, max_turns)
+                        .await?
+                }
+                None => runtime.run_model(&role, &instructions, &prompt).await?,
+            };
+            print_json(&result)?;
+        }
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;
             println!("{}", String::from_utf8_lossy(&result.bytes));

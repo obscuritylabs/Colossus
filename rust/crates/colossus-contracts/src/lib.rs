@@ -307,7 +307,7 @@ pub enum ModelMessageRole {
 }
 
 /// One provider-neutral model message.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelMessage {
     /// Message provenance role.
@@ -316,6 +316,21 @@ pub struct ModelMessage {
     pub content: String,
     /// Tool-call identifier for tool results.
     pub tool_call_id: Option<String>,
+    /// Strict assistant tool calls preserved for provider continuation.
+    #[serde(default)]
+    pub tool_calls: Vec<ModelToolCall>,
+}
+
+/// Provider-neutral assistant tool call preserved between turns.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelToolCall {
+    /// Provider call identifier.
+    pub call_id: String,
+    /// Registered tool name.
+    pub name: String,
+    /// Validated object arguments.
+    pub arguments: Value,
 }
 
 /// One strict function tool exposed to a provider.
@@ -328,6 +343,50 @@ pub struct ModelToolDefinition {
     pub description: String,
     /// JSON Schema for object arguments.
     pub input_schema: Value,
+}
+
+/// Application tool specification and effect identity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolSpec {
+    /// Stable model-visible name.
+    pub name: String,
+    /// Bounded model-visible description.
+    pub description: String,
+    /// Strict JSON Schema for object arguments.
+    pub input_schema: Value,
+    /// Effect action when the tool is effectful; absent for pure computation.
+    pub effect_action: Option<String>,
+    /// Requested capability identity when effectful.
+    pub capability: Option<String>,
+    /// Tool-specific normalized output ceiling.
+    pub max_output_bytes: u64,
+}
+
+/// One validated model-requested tool call.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolCall {
+    /// Provider call identifier.
+    pub call_id: String,
+    /// Registered tool name.
+    pub name: String,
+    /// Strict object arguments.
+    pub arguments: Value,
+}
+
+/// One bounded tool result suitable for provider continuation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolResult {
+    /// Provider call identifier.
+    pub call_id: String,
+    /// Registered tool name.
+    pub name: String,
+    /// Bounded UTF-8 or JSON output.
+    pub output: String,
+    /// Conventional zero-success exit code.
+    pub exit_code: i32,
 }
 
 /// Provider-neutral request for one model turn.
@@ -388,6 +447,20 @@ pub struct ProviderTurn {
     pub response_id: Option<String>,
     /// Ordered safe normalized events.
     pub events: Vec<ProviderEvent>,
+}
+
+/// Resolved provider route metadata without credentials.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderRoute {
+    /// Requested logical role.
+    pub role: String,
+    /// Resolved profile name.
+    pub profile: String,
+    /// Provider adapter kind.
+    pub provider: String,
+    /// Configured model identifier.
+    pub model: String,
 }
 
 /// One model visible through a provider catalog endpoint.

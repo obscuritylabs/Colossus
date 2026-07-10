@@ -146,6 +146,15 @@ visible text, strict object-shaped tool calls, and explicitly typed safe reasoni
 summaries enter the model event stream; raw response chunks and hidden reasoning fields
 are discarded.
 
+The Rust agent loop receives tool specifications and execution through separate ports.
+The active catalog is explicit in configuration, rejects duplicate/unknown names, and
+compiles every object schema at startup. Each model call is validated against that schema
+before policy or an adapter sees it. Unknown and invalid calls become correlated error
+results without reaching an executor. Effectful file and network tools construct ordinary
+effect requests with model/run provenance and can execute only through the gateway;
+policy denial and unknown outcomes stop the loop. Malformed provider argument syntax is
+never repaired locally and can trigger at most two metadata-only correction turns.
+
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
 are validated against the agent allowlist and active tool catalog before provider calls;
 `required_tools` never auto-approves a tool. Skill audit records include names, versions,

@@ -4,8 +4,10 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ApprovalProof, EffectRequest, EventEnvelope, MemoryRecord, NewEvent, PolicyDecision,
-    ProjectionBatch, ProjectionWorkItem, SignedCheckpoint, WorkflowDefinition, WorkflowRun,
+    Actor, ApprovalProof, EffectRequest, EventEnvelope, ExecutionContext, MemoryRecord,
+    ModelRequest, NewEvent, PolicyDecision, ProjectionBatch, ProjectionWorkItem, ProviderRoute,
+    ProviderTurn, SignedCheckpoint, ToolCall, ToolResult, ToolSpec, WorkflowDefinition,
+    WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -41,6 +43,53 @@ pub enum StoreError {
     /// Writes are disabled because startup verification failed.
     #[error("runtime is in read-only recovery mode")]
     RecoveryMode,
+}
+
+/// Provider-turn failure classification preserved across the application port.
+#[derive(Debug, Error)]
+pub enum ModelProviderError {
+    /// Profile or request configuration is invalid.
+    #[error("provider configuration failed: {0}")]
+    Configuration(String),
+    /// A bounded correction turn may safely be attempted.
+    #[error("recoverable provider failure {code}: {message}")]
+    Recoverable {
+        /// Stable machine-readable recovery code.
+        code: String,
+        /// Bounded safe diagnostic.
+        message: String,
+    },
+    /// Provider failed with a known terminal outcome.
+    #[error("provider turn failed: {0}")]
+    Failed(String),
+    /// The external outcome cannot be proven and must not be retried.
+    #[error("provider outcome is unknown: {0}")]
+    OutcomeUnknown(String),
+}
+
+/// Tool lookup, validation, policy, or execution failure.
+#[derive(Debug, Error)]
+pub enum ToolError {
+    /// Tool name is absent from the active catalog.
+    #[error("unknown tool: {0}")]
+    Unknown(String),
+    /// Arguments failed the strict registered schema.
+    #[error("invalid arguments for {tool}: {message}")]
+    InvalidArguments {
+        /// Requested tool.
+        tool: String,
+        /// Bounded validation detail.
+        message: String,
+    },
+    /// Policy or approval denied the effect before execution.
+    #[error("tool execution denied: {0}")]
+    Denied(String),
+    /// Adapter reported a known failure.
+    #[error("tool execution failed: {0}")]
+    Failed(String),
+    /// Tool effect may have occurred and cannot be retried implicitly.
+    #[error("tool outcome is unknown: {0}")]
+    OutcomeUnknown(String),
 }
 
 /// Result of full journal verification.
@@ -95,6 +144,41 @@ pub trait EventJournal: Send + Sync {
 
     /// Create a signed checkpoint at the current chain head.
     fn checkpoint(&self) -> Result<Option<SignedCheckpoint>, StoreError>;
+}
+
+/// Role-routed, policy-bound model provider used by the application loop.
+#[async_trait]
+pub trait ModelProvider: Send + Sync {
+    /// Resolve role metadata without performing an effect.
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError>;
+
+    /// Execute one normalized provider turn through the effect boundary.
+    async fn turn(
+        &self,
+        role: &str,
+        request: ModelRequest,
+        context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError>;
+}
+
+/// Active model-visible tool catalog with strict schema validation.
+pub trait ToolRegistry: Send + Sync {
+    /// Stable sorted active specifications.
+    fn list_specs(&self) -> Vec<ToolSpec>;
+
+    /// Resolve and validate one call before policy evaluation.
+    fn validate(&self, call: &ToolCall) -> Result<ToolSpec, ToolError>;
+}
+
+/// Execute a previously validated tool call.
+#[async_trait]
+pub trait ToolExecutor: Send + Sync {
+    /// Execute with full run/session provenance.
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError>;
 }
 
 /// Supplies journal encryption keys without a plaintext fallback.

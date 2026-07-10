@@ -8,11 +8,13 @@ The new runtime is developed under `rust/` until P0+P1 cutover. Its dependency d
 is stricter than the legacy diagram below:
 
 ```text
-colossus-cli -> colossus-runtime -> colossus-policy -> colossus-ports
-                    |                    ^                   |
-                    +-> colossus-workflow -------------------+
-                    |
-                    +-> colossus-sandbox -> colossus-policy
+colossus-cli -> colossus-runtime -> colossus-agent -> colossus-ports
+                    |                  |                ^
+                    |                  +-> colossus-tools+
+                    +-> colossus-policy -----------------+
+                    +-> colossus-workflow ---------------+
+                    +-> colossus-provider -> colossus-policy
+                    +-> colossus-sandbox  -> colossus-policy
 
 redb and future adapters -> colossus-ports -> colossus-contracts -> colossus-domain
 ```
@@ -22,6 +24,15 @@ services, and render results; they do not own policy, workflow, effect, or stora
 Effectful adapters require an opaque permit that only `EffectGateway` can mint. redb is
 the canonical event journal, while repositories, projections, memory indexes, and audit
 exports are replaceable ports.
+
+`colossus-agent` owns the bounded reusable model/tool loop. It consumes role-routed
+`ModelProvider`, `ToolRegistry`, and `ToolExecutor` ports, persists each prepared request
+and normalized event, validates tool arguments before execution, preserves assistant
+call IDs and tool results across provider turns, performs at most two metadata-only
+malformed-argument correction turns, and emits a distinct max-turn terminal event.
+`colossus-tools` owns the immutable active catalog and JSON Schema validation. The
+runtime adapters translate validated effectful tools into normal gateway requests; pure
+computation such as `echo` remains outside the permission boundary by design.
 
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
 subprocess specifications are authenticated to a one-shot helper, which clears the

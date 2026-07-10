@@ -9,6 +9,8 @@ members = [
     "crates/colossus-sandbox",
     "crates/colossus-policy",
     "crates/colossus-provider",
+    "crates/colossus-tools",
+    "crates/colossus-agent",
     "crates/colossus-memory",
     "crates/colossus-workflow",
     "crates/colossus-runtime",
@@ -61,6 +63,8 @@ colossus-journal-redb = { path = "crates/colossus-journal-redb" }
 colossus-memory = { path = "crates/colossus-memory" }
 colossus-policy = { path = "crates/colossus-policy" }
 colossus-provider = { path = "crates/colossus-provider" }
+colossus-tools = { path = "crates/colossus-tools" }
+colossus-agent = { path = "crates/colossus-agent" }
 colossus-ports = { path = "crates/colossus-ports" }
 colossus-projection = { path = "crates/colossus-projection" }
 colossus-sandbox = { path = "crates/colossus-sandbox" }
