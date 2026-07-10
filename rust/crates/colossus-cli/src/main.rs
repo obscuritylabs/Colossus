@@ -1,0 +1,361 @@
+//! Thin terminal interface for the Rust runtime.
+
+use clap::{Args, Parser, Subcommand};
+use colossus_runtime::{Runtime, RuntimeConfig};
+use reedline::{DefaultPrompt, Reedline, Signal};
+use serde_json::{Value, json};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[derive(Parser)]
+#[command(
+    name = "colossus-rs",
+    version,
+    about = "Auditable Colossus workflow runtime"
+)]
+struct Cli {
+    /// Fresh Rust YAML configuration path.
+    #[arg(long, default_value = ".colossus/config.yaml")]
+    config: PathBuf,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Create or inspect fresh YAML configuration.
+    Config(ConfigCommand),
+    /// Verify and inspect the authoritative journal.
+    Audit(AuditCommand),
+    /// Diagnose the active built-in or OPA policy channel.
+    Policy(PolicyCommand),
+    /// Validate and operate durable workflows.
+    Workflow(WorkflowCommand),
+    /// Run the credential-free, network-free echo smoke provider.
+    Echo {
+        /// Text returned by the deterministic provider.
+        message: String,
+    },
+    /// Start the modern interactive terminal.
+    Repl,
+    /// Recover abandoned runs and drain queued resumable work.
+    Worker {
+        /// Recover state and return without repeatedly polling.
+        #[arg(long, default_value_t = true)]
+        once: bool,
+    },
+}
+
+#[derive(Args)]
+struct ConfigCommand {
+    #[command(subcommand)]
+    command: ConfigAction,
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Create a strict offline configuration without overwriting an existing file.
+    Init,
+    /// Parse and print the active configuration with references intact.
+    Show,
+}
+
+#[derive(Args)]
+struct AuditCommand {
+    #[command(subcommand)]
+    command: AuditAction,
+}
+
+#[derive(Subcommand)]
+enum AuditAction {
+    /// Verify encryption, chain, checkpoint signature, and secure anchor.
+    Verify,
+    /// Show bounded envelope metadata without decrypted payload content.
+    Show {
+        /// First global sequence.
+        #[arg(long, default_value_t = 1)]
+        from: u64,
+        /// Maximum records.
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Stream bounded redacted envelopes as JSON Lines to stdout.
+    Export {
+        /// First global sequence.
+        #[arg(long, default_value_t = 1)]
+        from: u64,
+        /// Maximum records.
+        #[arg(long, default_value_t = 1_000)]
+        limit: usize,
+    },
+    /// Show the latest signed checkpoint and secure chain head.
+    AnchorStatus,
+}
+
+#[derive(Args)]
+struct PolicyCommand {
+    #[command(subcommand)]
+    command: PolicyAction,
+}
+
+#[derive(Subcommand)]
+enum PolicyAction {
+    /// Check readiness, revision metadata, and decision-log safeguards.
+    Doctor,
+}
+
+#[derive(Args)]
+struct WorkflowCommand {
+    #[command(subcommand)]
+    command: WorkflowAction,
+}
+
+#[derive(Subcommand)]
+enum WorkflowAction {
+    /// Parse and validate a strict workflow YAML file.
+    Validate { path: PathBuf },
+    /// Validate and register a definition with repository provenance.
+    Register { path: PathBuf },
+    /// List registered definition change events.
+    List,
+    /// Show an exact registered definition and pinned content hash.
+    Show { name: String, version: String },
+    /// Start a durable run.
+    Run {
+        name: String,
+        version: String,
+        /// Inline JSON or @path to a JSON document.
+        #[arg(long, default_value = "{}")]
+        inputs: String,
+    },
+    /// Show a reconstructed run.
+    Status { run_id: String },
+    /// Resume a waiting or interrupted run.
+    Resume { run_id: String },
+    /// Supply inline JSON or @path input and resume.
+    Input { run_id: String, input: String },
+    /// Cancel a non-terminal run.
+    Cancel { run_id: String },
+}
+
+async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
+    let document = if let Some(path) = source.strip_prefix('@') {
+        runtime.read_text_file(path).await?
+    } else {
+        source.to_owned()
+    };
+    Ok(serde_json::from_str(&document)?)
+}
+
+fn init_config(path: &Path) -> Result<(), Box<dyn Error>> {
+    if path.exists() {
+        return Err(format!("refusing to overwrite {}", path.display()).into());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let state = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("state.redb");
+    let config = RuntimeConfig::offline_template(state);
+    fs::write(path, config.to_yaml()?)?;
+    println!("created {}", path.display());
+    Ok(())
+}
+
+fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Error>> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+async fn workflow_command(
+    runtime: &Runtime,
+    command: WorkflowAction,
+) -> Result<(), Box<dyn Error>> {
+    match command {
+        WorkflowAction::Validate { path } => {
+            let validated = runtime.validate_workflow_path(&path).await?;
+            print_json(&json!({
+                "valid": true,
+                "name": validated.definition.metadata.name,
+                "version": validated.definition.metadata.version,
+                "content_hash": validated.content_hash,
+            }))?;
+        }
+        WorkflowAction::Register { path } => {
+            let provenance = format!("repo:{}", path.display());
+            let validated = runtime.register_workflow_path(&path).await?;
+            print_json(&json!({
+                "registered": true,
+                "name": validated.definition.metadata.name,
+                "version": validated.definition.metadata.version,
+                "content_hash": validated.content_hash,
+                "provenance": provenance,
+            }))?;
+        }
+        WorkflowAction::List => {
+            let journal = runtime.journal();
+            let definitions = journal
+                .read_global(1, usize::MAX)?
+                .into_iter()
+                .filter(|event| event.event_type.starts_with("workflow.definition."))
+                .map(|event| {
+                    json!({
+                        "event_id": event.event_id,
+                        "event_type": event.event_type,
+                        "stream_id": event.stream_id,
+                        "occurred_at": event.occurred_at,
+                        "record_hash": event.record_hash,
+                    })
+                })
+                .collect::<Vec<_>>();
+            print_json(&definitions)?;
+        }
+        WorkflowAction::Show { name, version } => {
+            let (definition, content_hash) = runtime
+                .workflow_repository()
+                .definition(&name, &version)?
+                .ok_or_else(|| format!("workflow {name}:{version} is not registered"))?;
+            print_json(&json!({
+                "definition": definition,
+                "content_hash": content_hash,
+            }))?;
+        }
+        WorkflowAction::Run {
+            name,
+            version,
+            inputs,
+        } => {
+            let run = runtime
+                .workflows()
+                .start_run(
+                    &name,
+                    &version,
+                    parse_json_argument(runtime, &inputs).await?,
+                )
+                .await?;
+            print_json(&run)?;
+        }
+        WorkflowAction::Status { run_id } => {
+            print_json(&runtime.workflows().get_run(&run_id)?)?;
+        }
+        WorkflowAction::Resume { run_id } => {
+            print_json(&runtime.workflows().resume_run(&run_id).await?)?;
+        }
+        WorkflowAction::Input { run_id, input } => {
+            print_json(
+                &runtime
+                    .workflows()
+                    .provide_input(&run_id, parse_json_argument(runtime, &input).await?)
+                    .await?,
+            )?;
+        }
+        WorkflowAction::Cancel { run_id } => {
+            print_json(&runtime.workflows().cancel_run(&run_id)?)?;
+        }
+    }
+    Ok(())
+}
+
+async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
+    let mut editor = Reedline::create();
+    let prompt = DefaultPrompt::default();
+    println!("Colossus Rust alpha. /help for commands; Ctrl-D to exit.");
+    loop {
+        match editor.read_line(&prompt)? {
+            Signal::Success(line) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if matches!(line, "/quit" | "/exit") {
+                    break;
+                }
+                if line == "/help" {
+                    println!("/workflow list | /workflow status RUN_ID | /audit verify | /exit");
+                    println!("Any other line is sent to the offline echo provider.");
+                } else if line == "/workflow list" {
+                    workflow_command(runtime, WorkflowAction::List).await?;
+                } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
+                    workflow_command(
+                        runtime,
+                        WorkflowAction::Status {
+                            run_id: run_id.trim().into(),
+                        },
+                    )
+                    .await?;
+                } else if line == "/audit verify" {
+                    print_json(&runtime.journal().verify()?)?;
+                } else {
+                    let result = runtime.echo(line).await?;
+                    println!("{}", String::from_utf8_lossy(&result.bytes));
+                }
+            }
+            Signal::CtrlD | Signal::CtrlC => break,
+            _ => continue,
+        }
+    }
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let cli = Cli::parse();
+    if let Command::Config(ConfigCommand {
+        command: ConfigAction::Init,
+    }) = &cli.command
+    {
+        return init_config(&cli.config);
+    }
+    let config = RuntimeConfig::from_path(&cli.config)?;
+    if matches!(
+        cli.command,
+        Command::Config(ConfigCommand {
+            command: ConfigAction::Show
+        })
+    ) {
+        print!("{}", config.to_yaml()?);
+        return Ok(());
+    }
+    let runtime = Runtime::open(&config)?;
+    match cli.command {
+        Command::Config(_) => unreachable!("handled before runtime construction"),
+        Command::Audit(command) => match command.command {
+            AuditAction::Verify | AuditAction::AnchorStatus => {
+                print_json(&runtime.journal().verify()?)?;
+            }
+            AuditAction::Show { from, limit } => {
+                print_json(&runtime.journal().read_global(from, limit)?)?;
+            }
+            AuditAction::Export { from, limit } => {
+                for event in runtime.journal().read_global(from, limit)? {
+                    println!("{}", serde_json::to_string(&event)?);
+                }
+            }
+        },
+        Command::Policy(command) => match command.command {
+            PolicyAction::Doctor => print_json(&runtime.policy_doctor().await?)?,
+        },
+        Command::Workflow(command) => workflow_command(&runtime, command.command).await?,
+        Command::Echo { message } => {
+            let result = runtime.echo(&message).await?;
+            println!("{}", String::from_utf8_lossy(&result.bytes));
+        }
+        Command::Repl => repl(&runtime).await?,
+        Command::Worker { once } => {
+            let recovered = runtime.workflows().recover_interrupted()?;
+            let drained = runtime.workflows().drain().await?;
+            print_json(&json!({
+                "once": once,
+                "recovered": recovered,
+                "drained": drained,
+            }))?;
+        }
+    }
+    runtime.checkpoint()?;
+    Ok(())
+}

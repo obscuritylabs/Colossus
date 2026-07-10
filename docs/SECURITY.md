@@ -1,5 +1,39 @@
 # Security Model
 
+## Rust Safety Kernel And Effect Gateway
+
+The Rust reconstruction treats every external or sensitive operation as an effect. The
+only supported path to an effectful adapter is:
+
+```text
+request journal -> hard safety kernel -> built-in/OPA decision -> approval proof
+-> authenticated one-use permit -> adapter quarantine -> optional release decision
+-> terminal journal event
+```
+
+The safety kernel rejects invalid requests, unknown capabilities, invalid/expired/reused
+permits, unsafe path obligations, absent audit durability, oversized policy input, and
+hard-secret disclosure regardless of policy. Adapter constructors stay in the runtime;
+adapter methods require the opaque permit type. A compile-fail test proves external code
+cannot construct one.
+
+Journal payloads use XChaCha20-Poly1305 with platform or explicit environment keys. The
+journal never silently stores plaintext. Records are globally hash chained and stream
+versioned; Ed25519 checkpoints and separately protected anchors detect record changes and
+consistent tail truncation. Startup verification failure enables read-only recovery and
+blocks effects. A missing terminal event after `effect.started` is recorded as
+`effect.outcome_unknown` and never automatically retried.
+
+OPA receives full logical request content after raw credentials, authentication headers,
+private keys, key material, and hidden reasoning are replaced by bounded hashes and
+references. Input over 1 MiB, transport failure, invalid decisions, missing obligations,
+or unhealthy policy fails closed. Remote OPA requires HTTPS, mTLS, pinned CA trust, a
+fixed decision path, and explicit disclosure acknowledgement. Output can remain in a
+bounded quarantine until a post-effect allow decision.
+
+The sections below describe the frozen Python 0.5 implementation. They remain relevant
+to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.
+
 Colossus starts with capability-based policy, brokered execution, and append-only audit
 logs. OS-level isolation can be added behind the subprocess broker without changing tool
 contracts.

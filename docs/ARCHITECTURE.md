@@ -2,6 +2,38 @@
 
 Colossus uses a ports-and-adapters architecture with strict dependency direction.
 
+## Rust Reconstruction Boundary
+
+The new runtime is developed under `rust/` until P0+P1 cutover. Its dependency direction
+is stricter than the legacy diagram below:
+
+```text
+colossus-cli -> colossus-runtime -> colossus-policy / colossus-workflow
+                                      |                 |
+                                      v                 v
+                                  colossus-ports -> colossus-contracts -> colossus-domain
+                                      ^
+                                      |
+                              redb and future adapters
+```
+
+`colossus-domain` has no dependencies. Interfaces construct requests, call runtime
+services, and render results; they do not own policy, workflow, effect, or storage logic.
+Effectful adapters require an opaque permit that only `EffectGateway` can mint. redb is
+the canonical event journal, while repositories, projections, memory indexes, and audit
+exports are replaceable ports.
+
+The journal is authoritative. Application state is reconstructed by replay, and redb
+atomically appends events, advances stream/global versions, and queues projection work.
+Workflow definitions are exact-content hash pinned and workflow runs are normal journal
+streams. The composition root opens fresh YAML config and fresh state; it never silently
+imports the Python SQLite store.
+
+See [Rust Reconstruction Status](RUST_RECONSTRUCTION.md) for the current implementation
+line and remaining milestones.
+
+## Python 0.5 Legacy Architecture
+
 For user-facing documentation, start with [Documentation Home](README.md). This document
 is the implementation-boundary reference for contributors.
 

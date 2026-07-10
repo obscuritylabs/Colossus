@@ -1,0 +1,22 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: offline-echo
+  version: 1.0.0
+  description: Exercise a policy-controlled workflow without credentials or network
+inputs:
+  type: object
+  additionalProperties: false
+outputs:
+  type: object
+capabilities:
+  - workflow.execute
+maxConcurrency: 1
+stepBudget: 2
+steps:
+  - type: tool
+    id: echo_step
+    tool: echo
+    arguments:
+      message: workflow-ok
+    idempotency: request_hash

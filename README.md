@@ -1,5 +1,10 @@
 # Colossus
 
+Colossus is being reconstructed in Rust as an event-sourced, policy-enforced workflow
+runtime. The active alpha lives in [`rust/`](rust/README.md); the passing Python 0.5
+implementation is frozen at `python-v0.5.0` and on `python-legacy` until Rust completes
+the P0+P1 cutover.
+
 Colossus is a secure, layered Python CLI harness for agentic development. It is built
 for OpenAI-compatible online providers, local OpenAI-compatible offline endpoints,
 bundled skills, brokered tools, local-first state, and auditability.
@@ -8,6 +13,16 @@ The default provider is deterministic and credential-free, so new checkouts and
 airgapped environments can exercise the harness before any model endpoint is configured.
 
 ## Quick Start
+
+Rust foundation smoke test (fresh YAML and fresh encrypted state):
+
+```bash
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- config init
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- echo hello
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
+```
+
+The current Python 0.5 surface remains available during reconstruction:
 
 ```bash
 uv sync --extra dev
@@ -82,6 +97,8 @@ Reference docs:
 - [Configuration](docs/CONFIGURATION.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md)
+- [Rust reconstruction status](docs/RUST_RECONSTRUCTION.md)
+- [Rust foundational acceptance matrix](docs/RUST_ACCEPTANCE_MATRIX.md)
 - [Offline and airgapped operation](docs/OFFLINE_AIRGAP.md)
 - [Release process](docs/RELEASE.md)
 
@@ -126,3 +143,12 @@ uv run python -m build
 ```
 
 Colossus targets Python 3.12 and is packaged with Hatchling.
+
+The Rust alpha uses Rust 1.96 and edition 2024:
+
+```bash
+cd rust
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```

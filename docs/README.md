@@ -41,6 +41,10 @@ how the codebase is put together.
 ## Developers
 
 - [Architecture](ARCHITECTURE.md): ports-and-adapters layering and service boundaries.
+- [Rust reconstruction status](RUST_RECONSTRUCTION.md): implemented alpha foundation,
+  commands, and remaining cutover milestones.
+- [Rust foundational acceptance matrix](RUST_ACCEPTANCE_MATRIX.md): requirement-to-test
+  evidence for AUDIT-01, AUTHZ-01, STORE-01, MEM-01, and FLOW-01.
 - [Product Requirements And Reconstruction Specification](FEATURE_INVENTORY.md):
   implementation-neutral product contract, complete feature baseline, milestones, and
   acceptance checklist for a clean reconstruction.

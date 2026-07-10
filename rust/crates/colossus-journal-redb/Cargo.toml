@@ -1,0 +1,29 @@
+[package]
+name = "colossus-journal-redb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+base64.workspace = true
+chacha20poly1305.workspace = true
+colossus-contracts.workspace = true
+colossus-ports.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+keyring.workspace = true
+redb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+colossus-testkit = { path = "../colossus-testkit" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -116,6 +116,9 @@ inspect hashes, audit records, and package contents without network access.
 | --- | --- | --- | --- |
 | CORE-01 | Agent orchestration loop | P0 | Multi-turn model and tool execution is bounded, observable, and durable. |
 | CORE-02 | Typed event stream | P0 | Provider and harness activity uses strict, replayable events. |
+| AUDIT-01 | Tamper-evident event journal | P0 | The authoritative journal reconstructs state and proves every attempted and uncertain effect. |
+| AUTHZ-01 | Universal effect authorization | P0 | No external or sensitive effect can execute without the single policy gateway issuing a matching one-use permit. |
+| STORE-01 | Replaceable storage ports | P0 | Journals, repositories, projections, signing, indexes, embeddings, and exports have conformance-tested adapters. |
 | PROV-01 | Provider abstraction | P0 | Echo, OpenAI Responses, and OpenAI-compatible chat are normalized. |
 | TOOL-01 | Brokered tool system | P0 | Schemas, permissions, policy, approvals, execution, and audit run in order. |
 | SAFE-01 | Policy and approval modes | P0 | `deny`, `ask`, `risk-auto`, and `full-access` preserve exact safety semantics. |
@@ -123,6 +126,8 @@ inspect hashes, audit records, and package contents without network access.
 | UX-01 | One-shot CLI and interactive REPL | P0 | Both surfaces use the same application behavior and event stream. |
 | CTX-01 | Context composition and compaction | P1 | Raw history is retained while provider input stays within budget. |
 | WORK-01 | Tasks, decisions, memories, and plans | P1 | Long-running work state is persisted and inspectable. |
+| MEM-01 | Canonical memory and disposable indexes | P1 | Memory lifecycle state remains authoritative and usable while lexical or semantic indexes lag or rebuild. |
+| FLOW-01 | Durable versioned workflows | P1 | YAML workflows are validated, hash-pinned, restartable, bounded, and use normal authorization for every effectful step. |
 | GOAL-01 | Bounded Goal Mode | P1 | Autonomous iterations stop on terminal status or budget exhaustion. |
 | AGENT-01 | Durable subagents | P1 | Queued child jobs support bounded concurrency and lifecycle controls. |
 | RES-01 | Deep Research | P1 | Evidence collection, claims, citations, progress, and fallback are durable. |
@@ -158,6 +163,12 @@ infrastructure may compose implementations but must not own product behavior
 
 Dependency direction MUST point inward. A boundary test SHOULD fail the build if domain
 or application code imports a user-interface implementation.
+
+State MUST NOT be hidden behind one monolithic storage interface. The minimum storage
+port set is `EventJournal`, `CheckpointSigner`, `ProjectionStore`,
+`SessionRepository`, `WorkRepository`, `MemoryRepository`, `WorkflowRepository`,
+`ResearchRepository`, `ExtensionRepository`, `MemoryIndex`, `EmbeddingProvider`, and
+`AuditExporter`. Adapter implementations MUST pass shared behavioral conformance tests.
 
 ## 7. Agent Orchestration
 
@@ -365,6 +376,29 @@ and audit pipeline as built-ins.
 
 ## 11. Policy, Risk, Approval, And Audit
 
+### 11.0 Universal Effect Boundary
+
+Every filesystem access, process spawn, network or provider call, credential use,
+memory operation, durable domain mutation, workflow transition, subagent operation, and
+executable extension operation MUST enter one effect gateway before an adapter can run.
+Effectful adapter constructors remain runtime-private, and effectful methods require an
+opaque, authenticated `ExecutionPermit` bound to the canonical request hash, policy
+decision, actor, obligations, nonce, and short expiry. Permits are single-use.
+
+The trusted safety kernel rejects invalid schemas, unknown or unsigned capabilities,
+path escapes, invalid or expired permits, missing sandbox obligations, unredacted hard
+secrets, and unavailable audit durability. Policy cannot override these checks. Journal
+append, policy lookup, pure computation, rendering, schema validation, and projection
+replay do not recursively require permits.
+
+The versioned `EffectRequest` includes actor/provenance, action/resource, complete
+proposed request content, credential references with values removed, declared
+capabilities and risk, execution context, correlation/causation/idempotency identifiers,
+and pre- or post-effect phase. A strict `PolicyDecision` is allow, deny, or
+require-approval and includes decision/revision identifiers, reason, sandbox and
+filesystem/network obligations, resource bounds, redactions, post-effect requirements,
+audit labels, and retention obligations.
+
 ### 11.1 Approval Modes
 
 - `deny`: block every operation that requires approval.
@@ -385,12 +419,36 @@ sessions default to ask.
 
 Deterministic policy MUST run before model-assisted risk review. A risk model may
 escalate risk or add context but MUST NOT override a deterministic deny. If risk review
-is unavailable or malformed, the system records that fact and continues with the
-deterministic decision.
+is unavailable, the policy input explicitly records `risk.status: unavailable`.
+
+When configured, OPA is the primary policy decision point and Colossus remains the
+enforcement point. Local and remote OPA are supported. Remote OPA requires HTTPS, mTLS,
+pinned trust, a fixed decision path, readiness checks, and explicit acknowledgement that
+logical request content is disclosed. Without OPA, an offline built-in policy provider
+implements the same decision contract.
+
+Unknown obligations, invalid or incomplete responses, unhealthy policy bundles,
+transport failures, timeouts, and inputs over the default 1 MiB cap fail closed. Full
+logical request content is disclosed by default, but credentials, private keys,
+authentication headers, hidden reasoning, and key material are always replaced by
+references and hashes. Approval is a policy obligation: after a user approves, policy is
+re-evaluated with the approval proof before a permit is minted.
+
+Reads, provider/network responses, subprocess output, and memory retrieval support a
+two-phase release gate. The request is pre-authorized, output is captured in a bounded
+quarantine, content receives a post-effect decision, and only an allow decision releases
+it to the requester. Denied content MUST never reach the model, workflow, or user.
 
 ### 11.3 Audit
 
-Audit records MUST be append-only and hash-chained. Records cover at least:
+The event journal is the authoritative source for reconstructing product state. Audit
+records MUST be immutable, encrypted by default, append-only, and hash-chained. Every
+aggregate append uses optimistic concurrency through an expected stream version. Each
+envelope carries schema/event versions, a UUIDv7 identifier, global and stream sequence,
+classification, actor, correlation and causation context, UTC timestamp, encrypted
+payload descriptor, plaintext payload hash, previous record hash, and record hash.
+
+Records cover at least:
 
 - runs and model-turn terminal conditions;
 - tool validation, policy, approval, execution, and failure;
@@ -402,7 +460,17 @@ Audit records MUST be append-only and hash-chained. Records cover at least:
 - credential-reference use, skill activity, packs, and bundles.
 
 Audit payloads MUST be bounded and redacted. Raw credentials, private keys, full skill
-bodies, unbounded command output, and hidden reasoning are prohibited.
+bodies, unbounded command output, and hidden reasoning are prohibited. Sensitive event
+payloads use authenticated encryption with keys from an explicit platform or environment
+key provider; there is no plaintext downgrade.
+
+The chain is signed at least every 100 events or 60 seconds and at clean shutdown. The
+latest secure anchor is stored separately and may also be exported to remote or WORM
+storage. Startup verifies the chain, anchor, checkpoint signatures, and projection
+positions. Verification failure places the runtime in read-only recovery mode and blocks
+new effects. An `effect.started` with no terminal event becomes `outcome_unknown` during
+recovery and is never silently retried. Operators can verify, inspect, export, and check
+anchor status through bounded redacted audit commands.
 
 ## 12. Sessions, Context, Decisions, And Memories
 
@@ -456,6 +524,16 @@ status, text, rationale, staleness/expiry metadata, and optional supersession li
 Relevant active memories are retrieved through full-text search and injected after
 active decisions. Memories MUST NOT store secrets.
 
+`MemoryRepository` owns canonical lifecycle events and reconstructs active records.
+`MemoryIndex` is a disposable projection exposing `upsert`, `remove`, `search`, `status`,
+and `rebuild`. The offline lexical default is Tantivy; Chroma is an optional semantic
+adapter that stores candidate ids, caller-supplied embeddings, bounded searchable text,
+and bounded metadata, never canonical lifecycle state. Search results are reloaded from
+the repository and re-filtered for scope, status, expiry, supersession, and policy.
+Index work is queued with event ids as idempotency keys; lag and failures are visible,
+and canonical memory remains usable while any index is unavailable. Chroma, embeddings,
+and remote index operations cross the effect gateway.
+
 ### 12.6 Plans
 
 Plans are `draft`, `approved`, or `executed`. A plan stores the originating prompt,
@@ -464,6 +542,33 @@ markdown content, ordered steps, mutation flags, session id, and timestamps.
 Plan Mode may inspect context and create tasks, but it MUST NOT mutate the workspace or
 claim implementation is complete. A draft can be reviewed, approved, discarded,
 executed once, or handed to Goal Mode. Execution preserves the plan id for lineage.
+
+### 12.7 Durable Workflows
+
+Workflow definitions are loaded from `.colossus/workflows/*.yaml` and the platform user
+configuration directory's `workflows/` library. A definition has `apiVersion`, `kind`,
+name/version/description metadata, JSON Schema inputs/outputs, maximum declared
+capabilities, bounded concurrency and total-step budget, and typed steps: `agent`,
+`tool`, `workflow`, `approval`, `condition`, `parallel`, `foreach`, `wait_for_input`, and
+`emit`.
+
+Workflow YAML MUST NOT execute inline shell, Rust, JavaScript, Python, or Rego. Conditions
+use a small non-executable grammar limited to JSON-pointer lookup, existence, equality,
+comparison, and boolean operators. Every definition is content-hashed; any change
+invalidates prior trust, and each run pins its exact hash and provenance.
+
+Every effectful step creates a normal effect request containing workflow hash, run id,
+step id, and attempt. Parallelism, iteration, recursion depth, and total steps are
+bounded; cycles are rejected. Effectful retries require an explicit idempotency strategy.
+Compensation is explicit and independently authorized. External exactly-once execution
+is never claimed.
+
+Run statuses are `queued`, `running`, `waiting`, `completed`, `failed`, `cancelled`,
+and `interrupted`. State is reconstructed from the journal. Recovery marks abandoned
+attempts interrupted or unknown rather than rerunning them. The application API exposes
+definition validation/registration plus start, get, list, input, resume, cancel, and
+drain. CLI, REPL, an embedded API, and an optional single-writer worker all invoke that
+same application layer.
 
 ## 13. Goal Mode
 
@@ -672,14 +777,15 @@ named model profiles and roles, context budgets, agent turn limits, subagent con
 memory index, global HTTP transport, research limits/sources/search/MCP, and skill
 override policy.
 
-Configuration accepts credential references such as `env:NAME`. Raw secret values MUST
+Configuration uses fresh strict YAML and accepts credential references such as
+`env:NAME`. Raw secret values MUST
 not be written back when configuration is shown.
 
-The default local state store is SQLite or an equivalent transactional embedded store.
-It persists sessions, messages, run events, snapshots, tasks, decisions, memories,
-plans, goals, subagents, research sources/claims/reports, preferences, integrations,
-packs, trust records, and telemetry inputs. Schema migration MUST preserve existing user
-records or fail safely with a clear recovery path.
+The default canonical adapter is an ACID, crash-safe embedded event store with a stable
+file format. A single transaction appends events, advances stream/global sequence
+numbers, records projection work, and queues external index/export work. Fresh Rust state
+does not silently import legacy state. Schema migration MUST preserve records or fail
+safely with a clear recovery path.
 
 Colossus-owned HTTP clients share configurable CA, mTLS, proxy, and environment-trust
 settings. Transport configuration does not grant network approval.
@@ -735,11 +841,30 @@ access and produces retainable evidence for operators.
 
 ### Milestone 0: Contracts And Safety
 
-Deliver strict domain models, typed events, tool schemas, deterministic policy, approval
-modes, state/audit ports, redaction, and boundary tests.
+Checkpoint the passing Python implementation, define AUDIT-01, AUTHZ-01, STORE-01,
+FLOW-01, and MEM-01 acceptance tests, then deliver strict Rust contracts and locked
+dependencies.
 
-Exit gate: invalid tools cannot reach execution, audit chaining verifies, and event
-round trips pass.
+Exit gate: the legacy checkpoint is reproducible and all foundational contracts have
+schema and boundary tests.
+
+### Milestone 0A: Audit And Storage Kernel
+
+Deliver the encrypted embedded journal, repositories, projections, signing, chain
+verification, key providers, audit export, recovery mode, and adapter conformance suites.
+
+Exit gate: concurrency, crash recovery, tampering, truncation, rotation, signatures,
+unknown effects, projection lag, and recovery mode tests pass before any effectful adapter
+is added.
+
+### Milestone 0B: Effect Gateway And Policy
+
+Deliver the safety kernel, built-in and OPA policy providers, approvals, permits,
+two-phase content release, policy diagnostics, sandbox helper/backends, network allowlist
+proxy, and downgrade rules.
+
+Exit gate: no adapter can execute without a valid matching permit, policy failures close,
+and denied quarantined content is never released.
 
 ### Milestone 1: Minimum Agent
 
@@ -759,8 +884,9 @@ active commitments.
 
 ### Milestone 3: Autonomous Workflows
 
-Deliver Goal Mode, active-goal tools, plan handoff, subagent queue, configurable
-concurrency, drain/cancel/resume, and parent result previews.
+Deliver versioned YAML workflows, the embedded application API, optional worker, Goal
+Mode, active-goal tools, plan handoff, subagent queue, configurable concurrency,
+drain/cancel/resume, and parent result previews.
 
 Exit gate: bounded goals and parallel child jobs survive process interruption without
 unbounded delegation.
@@ -810,6 +936,24 @@ A reconstruction is complete only when all applicable checks pass:
   user-visible diagnostic payloads.
 - [ ] Skills cannot gain executable privilege; packs cannot activate before verification.
 - [ ] Audit-chain verification detects tampering.
+- [ ] Journal concurrency, encryption/key rotation, tail truncation, signed checkpoints,
+  unknown effects, and read-only recovery behavior pass fault-injection tests.
+- [ ] Every effect category is rejected before adapter execution without an unexpired,
+  unused permit matching the request, decision, actor, and obligations.
+- [ ] OPA allow, deny, approval, full-content disclosure, hard redaction, mTLS, bundle
+  revision, invalid response, outage, oversized input, and decision-log checks fail or
+  proceed exactly as specified.
+- [ ] Two-phase file, network, provider, subprocess, and memory tests prove denied content
+  never reaches the requester.
+- [ ] In-memory and embedded journals/repositories plus Tantivy and Chroma indexes pass
+  the shared conformance contract; canonical memory works during index outage/rebuild.
+- [ ] Workflow schema, trust invalidation, restart, bounded parallelism, cycles, input
+  waits, explicit idempotent retries, compensation, cancellation, and unknown outcomes
+  pass durable acceptance tests.
+- [ ] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
+  network escapes on each supported platform.
+- [ ] Formatting, warnings-denied lint, workspace tests, fuzzing, dependency/license and
+  vulnerability policy, and macOS/Linux/Windows arm64/x64 release smoke tests pass.
 - [ ] Strict configuration rejects unknown fields and safely redacts displayed secrets.
 - [ ] Unit, integration, boundary, security, type, lint, and packaging checks pass.
 
