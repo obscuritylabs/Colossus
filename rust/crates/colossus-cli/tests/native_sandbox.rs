@@ -81,6 +81,7 @@ sandbox:
   helperPath: null
   ociRuntime: null
   ociImage: null
+  ociProxyImage: null
   filesystem:
     - root: {allowed}
       mode: write

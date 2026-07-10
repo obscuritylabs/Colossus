@@ -7,9 +7,12 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     EffectRequest, FilesystemGrant, PolicyObligations, QuarantinedEffectResult,
 };
-use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit, MIN_OCI_EFFECT_TIMEOUT_MS};
+use colossus_policy::{
+    EffectExecutor, ExecutionError, ExecutionPermit, MIN_OCI_EFFECT_TIMEOUT_MS,
+    MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS,
+};
 use command_group::CommandGroup as _;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, stream::FuturesUnordered};
 use hmac::{Hmac, Mac};
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
@@ -19,7 +22,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{Read, Write},
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex},
@@ -33,7 +36,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, lookup_host},
     process::Command as TokioCommand,
-    sync::oneshot,
+    sync::{Semaphore, oneshot},
 };
 use uuid::Uuid;
 
@@ -43,10 +46,16 @@ use nono::{AccessMode, CapabilitySet, Sandbox};
 type HmacSha256 = Hmac<Sha256>;
 
 const HELPER_KEY_VARIABLE: &str = "COLOSSUS_SANDBOX_JOB_KEY";
+const OCI_PROXY_CONFIG_VARIABLE: &str = "COLOSSUS_OCI_PROXY_CONFIG";
+const OCI_PROXY_PORT: u16 = 18_080;
 const MAX_JOB_BYTES: usize = 1024 * 1024;
 const MAX_PROXY_HEADER_BYTES: usize = 16 * 1024;
+const MAX_TLS_RECORD_BYTES: usize = 18 * 1024;
+const MAX_TLS_CLIENT_HELLO_BYTES: usize = 64 * 1024;
 const OCI_CLEANUP_RESERVE_MS: u64 = 2_000;
-const OCI_CONTROL_COMMAND_TIMEOUT_MS: u64 = 750;
+const OCI_NETWORK_CLEANUP_RESERVE_MS: u64 = 5_000;
+const OCI_CONTROL_COMMAND_TIMEOUT_MS: u64 = 1_500;
+const OCI_DNS_RESOLUTION_TIMEOUT_MS: u64 = 3_000;
 
 fn adapter_failure(error: impl std::fmt::Display) -> ExecutionError {
     ExecutionError::Failed(error.to_string())
@@ -81,6 +90,8 @@ pub struct SandboxExecutorConfig {
     pub oci_runtime: Option<PathBuf>,
     /// Immutable image reference used by the `oci` backend.
     pub oci_image: Option<String>,
+    /// Immutable Colossus allowlist-proxy image used by networked OCI jobs.
+    pub oci_proxy_image: Option<String>,
 }
 
 /// Runtime support and configured fallback report.
@@ -315,15 +326,15 @@ pub struct SandboxProcessExecutor {
 
 struct OciCancellationGuard {
     runtime: Option<PathBuf>,
-    container_name: String,
+    resources: OciResourceNames,
     armed: bool,
 }
 
 impl OciCancellationGuard {
-    fn new(runtime: Option<PathBuf>, container_name: String, armed: bool) -> Self {
+    fn new(runtime: Option<PathBuf>, resources: OciResourceNames, armed: bool) -> Self {
         Self {
             runtime,
-            container_name,
+            resources,
             armed,
         }
     }
@@ -341,23 +352,19 @@ impl Drop for OciCancellationGuard {
         let Some(runtime) = self.runtime.clone() else {
             return;
         };
-        let container_name = self.container_name.clone();
-        let Some(arguments) = oci_remove_arguments(&runtime, &container_name) else {
-            return;
-        };
-        let mut command = Command::new(runtime);
-        command
-            .env_clear()
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if let Ok(mut child) = command.spawn() {
-            thread::spawn(move || {
-                let _ = child.wait();
-            });
-        }
+        let resources = self.resources.clone();
+        thread::spawn(move || {
+            cleanup_oci_resources(&runtime, &resources);
+        });
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OciResourceNames {
+    workload: String,
+    proxy: String,
+    internal_network: String,
+    egress_network: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -417,16 +424,35 @@ impl EffectExecutor for SandboxProcessExecutor {
                 "OCI process execution requires at least {MIN_OCI_EFFECT_TIMEOUT_MS}ms"
             )));
         }
+        if permit.obligations().sandbox_backend == "oci"
+            && !permit.obligations().network_destinations.is_empty()
+            && permit.obligations().timeout_ms < MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS
+        {
+            return Err(adapter_failure(format!(
+                "networked OCI process execution requires at least {MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS}ms"
+            )));
+        }
         let proxy = if permit.obligations().network_destinations.is_empty() {
             None
         } else if permit.obligations().sandbox_backend == "native" {
             Some(AllowlistProxy::start(permit.obligations().network_destinations.clone()).await?)
+        } else if permit.obligations().sandbox_backend == "oci" {
+            if self.config.oci_proxy_image.is_none() {
+                return Err(adapter_failure(
+                    "networked OCI process execution requires an immutable proxy image",
+                ));
+            }
+            None
         } else {
             return Err(adapter_failure(
                 "networked process execution currently requires the native proxy-only backend",
             ));
         };
-        let helper_reserve = if permit.obligations().sandbox_backend == "oci" {
+        let helper_reserve = if permit.obligations().sandbox_backend == "oci"
+            && !permit.obligations().network_destinations.is_empty()
+        {
+            OCI_NETWORK_CLEANUP_RESERVE_MS
+        } else if permit.obligations().sandbox_backend == "oci" {
             OCI_CLEANUP_RESERVE_MS
         } else {
             250
@@ -451,14 +477,12 @@ impl EffectExecutor for SandboxProcessExecutor {
             proxy_port: proxy.as_ref().map(AllowlistProxy::port),
             oci_runtime: self.config.oci_runtime.clone(),
             oci_image: self.config.oci_image.clone(),
+            oci_proxy_image: self.config.oci_proxy_image.clone(),
         };
-        let container_name = oci_container_name(&job.job_id);
+        let resources = oci_resource_names(&job.job_id);
         let is_oci = job.obligations.sandbox_backend == "oci";
-        let mut cleanup_guard = OciCancellationGuard::new(
-            self.config.oci_runtime.clone(),
-            container_name.clone(),
-            is_oci,
-        );
+        let mut cleanup_guard =
+            OciCancellationGuard::new(self.config.oci_runtime.clone(), resources.clone(), is_oci);
         let signed = SignedSandboxJob::sign(job, &self.job_key)?;
         let encoded = serde_json::to_vec(&signed).map_err(adapter_failure)?;
         if encoded.len() > MAX_JOB_BYTES {
@@ -484,9 +508,9 @@ impl EffectExecutor for SandboxProcessExecutor {
             Ok(output) => output,
             Err(error) => {
                 if is_oci
-                    && !ensure_oci_container_absent_async(
+                    && !ensure_oci_resources_absent_async(
                         self.config.oci_runtime.as_deref(),
-                        &container_name,
+                        &resources,
                     )
                     .await
                 {
@@ -501,9 +525,9 @@ impl EffectExecutor for SandboxProcessExecutor {
         drop(proxy);
         if !output.status.success() {
             if is_oci
-                && !ensure_oci_container_absent_async(
+                && !ensure_oci_resources_absent_async(
                     self.config.oci_runtime.as_deref(),
-                    &container_name,
+                    &resources,
                 )
                 .await
             {
@@ -521,9 +545,9 @@ impl EffectExecutor for SandboxProcessExecutor {
             Ok(result) => result,
             Err(error) => {
                 if is_oci
-                    && !ensure_oci_container_absent_async(
+                    && !ensure_oci_resources_absent_async(
                         self.config.oci_runtime.as_deref(),
-                        &container_name,
+                        &resources,
                     )
                     .await
                 {
@@ -565,14 +589,22 @@ fn validate_process_spec(
     executable: &str,
     obligations: &PolicyObligations,
 ) -> Result<(), ExecutionError> {
-    let executable = fs::canonicalize(executable).map_err(adapter_failure)?;
-    if !executable.is_file() {
-        return Err(adapter_failure("process executable is not a regular file"));
-    }
-    let executable_allowed = obligations.filesystem.iter().any(|grant| {
-        grant.mode == "execute"
-            && fs::canonicalize(&grant.root).is_ok_and(|root| root == executable)
-    });
+    let executable_allowed = if obligations.sandbox_backend == "oci" {
+        normalized_oci_path(executable)
+            && obligations
+                .filesystem
+                .iter()
+                .any(|grant| grant.mode == "execute" && grant.root == executable)
+    } else {
+        let executable = fs::canonicalize(executable).map_err(adapter_failure)?;
+        if !executable.is_file() {
+            return Err(adapter_failure("process executable is not a regular file"));
+        }
+        obligations.filesystem.iter().any(|grant| {
+            grant.mode == "execute"
+                && fs::canonicalize(&grant.root).is_ok_and(|root| root == executable)
+        })
+    };
     if !executable_allowed {
         return Err(adapter_failure(
             "process executable is not explicitly granted",
@@ -613,6 +645,15 @@ fn validate_process_spec(
         }
     }
     Ok(())
+}
+
+fn normalized_oci_path(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() > 1
+        && value
+            .split('/')
+            .skip(1)
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
 }
 
 fn valid_environment_name(name: &str) -> bool {
@@ -695,6 +736,7 @@ struct SandboxJob {
     proxy_port: Option<u16>,
     oci_runtime: Option<PathBuf>,
     oci_image: Option<String>,
+    oci_proxy_image: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -809,9 +851,17 @@ fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelpe
             "OCI execution is disabled on Windows until path mapping passes live acceptance".into(),
         ));
     }
+    let mut oci_network = if backend == "oci" && !job.obligations.network_destinations.is_empty() {
+        Some(OciNetworkResources::start(&job)?)
+    } else {
+        None
+    };
     let mut command = match backend.as_str() {
         "native" => native_command(&job)?,
-        "oci" => oci_command(&job)?,
+        "oci" => oci_command(
+            &job,
+            oci_network.as_ref().map(OciNetworkResources::proxy_address),
+        )?,
         "broker" if job.obligations.allow_sandbox_downgrade => direct_command(&job),
         "broker" => {
             return Err(SandboxHelperError::Setup(
@@ -830,9 +880,12 @@ fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelpe
         }
     };
     let result = supervise(&mut command, &job, backend.clone());
-    if backend == "oci" && !ensure_oci_container_absent(&job) {
+    if let Some(network) = oci_network.as_mut() {
+        network.cleanup();
+    }
+    if backend == "oci" && !ensure_oci_resources_absent(&job) {
         return Err(SandboxHelperError::Execution(
-            "OCI container cleanup could not be confirmed".into(),
+            "OCI container or network cleanup could not be confirmed".into(),
         ));
     }
     result
@@ -926,10 +979,248 @@ fn native_runtime_paths() -> Vec<&'static Path> {
     .collect()
 }
 
-fn oci_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
-    if job.proxy_port.is_some() || !job.obligations.network_destinations.is_empty() {
+struct OciNetworkResources {
+    runtime: PathBuf,
+    names: OciResourceNames,
+    proxy_address: SocketAddr,
+    armed: bool,
+}
+
+impl OciNetworkResources {
+    fn start(job: &SandboxJob) -> Result<Self, SandboxHelperError> {
+        let runtime = job
+            .oci_runtime
+            .as_ref()
+            .ok_or_else(|| SandboxHelperError::Setup("OCI runtime is not configured".into()))?;
+        oci_runtime_kind(runtime).ok_or_else(|| {
+            SandboxHelperError::Setup("OCI runtime must be the Docker or Podman executable".into())
+        })?;
+        let proxy_image = job
+            .oci_proxy_image
+            .as_ref()
+            .ok_or_else(|| SandboxHelperError::Setup("OCI proxy image is not configured".into()))?;
+        if !valid_oci_image_reference(proxy_image) {
+            return Err(SandboxHelperError::Setup(
+                "OCI proxy image must use a complete immutable SHA-256 reference".into(),
+            ));
+        }
+        let names = oci_resource_names(&job.job_id);
+        let mut resources = Self {
+            runtime: runtime.clone(),
+            names,
+            proxy_address: SocketAddr::from(([0, 0, 0, 0], OCI_PROXY_PORT)),
+            armed: true,
+        };
+        run_oci_control(
+            runtime,
+            &[
+                "network".into(),
+                "create".into(),
+                "--internal".into(),
+                "--label".into(),
+                format!("dev.colossus.job={}", job.job_id),
+                resources.names.internal_network.clone(),
+            ],
+            &[],
+            "create the internal OCI network",
+        )?;
+        run_oci_control(
+            runtime,
+            &[
+                "network".into(),
+                "create".into(),
+                "--label".into(),
+                format!("dev.colossus.job={}", job.job_id),
+                resources.names.egress_network.clone(),
+            ],
+            &[],
+            "create the OCI proxy egress network",
+        )?;
+        let bootstrap = OciProxyBootstrap {
+            schema_version: 1,
+            request_hash: job.request_hash.clone(),
+            decision_id: job.decision_id.clone(),
+            permit_nonce: job.permit_nonce.clone(),
+            expires_at_unix_ms: job.permit_expires_at_unix_ms,
+            allowed_origins: job.obligations.network_destinations.clone(),
+            resolved_origins: resolve_oci_origins(&job.obligations.network_destinations)?,
+            max_connections: usize::try_from(job.obligations.max_processes)
+                .unwrap_or(256)
+                .clamp(1, 256),
+            connection_timeout_ms: job.timeout_ms,
+        };
+        let encoded = BASE64.encode(serde_json::to_vec(&bootstrap)?);
+        let proxy_environment = [(OCI_PROXY_CONFIG_VARIABLE, encoded.as_str())];
+        run_oci_control(
+            runtime,
+            &[
+                "run".into(),
+                "--detach".into(),
+                "--rm".into(),
+                "--pull=never".into(),
+                "--network".into(),
+                resources.names.internal_network.clone(),
+                "--read-only".into(),
+                "--cap-drop=ALL".into(),
+                "--security-opt=no-new-privileges".into(),
+                "--pids-limit=16".into(),
+                "--memory=67108864".into(),
+                "--name".into(),
+                resources.names.proxy.clone(),
+                "--env".into(),
+                OCI_PROXY_CONFIG_VARIABLE.into(),
+                proxy_image.clone(),
+            ],
+            &proxy_environment,
+            "start the OCI allowlist proxy",
+        )?;
+        run_oci_control(
+            runtime,
+            &[
+                "network".into(),
+                "connect".into(),
+                resources.names.egress_network.clone(),
+                resources.names.proxy.clone(),
+            ],
+            &[],
+            "connect the OCI proxy to its egress network",
+        )?;
+        let inspected = run_oci_control(
+            runtime,
+            &[
+                "container".into(),
+                "inspect".into(),
+                resources.names.proxy.clone(),
+            ],
+            &[],
+            "inspect the OCI proxy address",
+        )?;
+        resources.proxy_address =
+            oci_network_address(&inspected, &resources.names.internal_network)?;
+        let mut ready = false;
+        for _ in 0..20 {
+            let logs = run_oci_control(
+                runtime,
+                &["logs".into(), resources.names.proxy.clone()],
+                &[],
+                "read OCI proxy readiness",
+            )?;
+            if logs
+                .windows(b"colossus-oci-proxy-ready".len())
+                .any(|window| window == b"colossus-oci-proxy-ready")
+            {
+                ready = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        if !ready {
+            return Err(SandboxHelperError::Setup(
+                "OCI allowlist proxy did not become ready".into(),
+            ));
+        }
+        Ok(resources)
+    }
+
+    fn proxy_address(&self) -> SocketAddr {
+        self.proxy_address
+    }
+
+    fn cleanup(&mut self) {
+        if self.armed {
+            cleanup_oci_resources(&self.runtime, &self.names);
+            self.armed = false;
+        }
+    }
+}
+
+impl Drop for OciNetworkResources {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+fn resolve_oci_origins(
+    origins: &[String],
+) -> Result<BTreeMap<String, Vec<SocketAddr>>, SandboxHelperError> {
+    let origins = origins.to_vec();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(resolve_oci_origins_blocking(&origins));
+    });
+    receiver
+        .recv_timeout(Duration::from_millis(OCI_DNS_RESOLUTION_TIMEOUT_MS))
+        .map_err(|_| SandboxHelperError::Setup("OCI proxy DNS resolution timed out".into()))?
+}
+
+fn resolve_oci_origins_blocking(
+    origins: &[String],
+) -> Result<BTreeMap<String, Vec<SocketAddr>>, SandboxHelperError> {
+    let mut resolved = BTreeMap::new();
+    for origin in origins {
+        let url =
+            Url::parse(origin).map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| SandboxHelperError::Setup("OCI proxy origin has no host".into()))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| SandboxHelperError::Setup("OCI proxy origin has no port".into()))?;
+        let host_is_ip = host.parse::<IpAddr>().is_ok();
+        let mut addresses = (host, port)
+            .to_socket_addrs()
+            .map_err(|error| SandboxHelperError::Setup(error.to_string()))?
+            .filter(|address| host_is_ip || !non_public_ip(address.ip()))
+            .collect::<Vec<_>>();
+        addresses.sort_by_key(|address| usize::from(address.is_ipv6()));
+        addresses.dedup();
+        addresses.truncate(16);
+        if addresses.is_empty() {
+            return Err(SandboxHelperError::Setup(format!(
+                "OCI proxy origin resolved to no permitted address: {origin}"
+            )));
+        }
+        resolved.insert(origin.clone(), addresses);
+    }
+    Ok(resolved)
+}
+
+fn oci_network_address(
+    inspection: &[u8],
+    network_name: &str,
+) -> Result<SocketAddr, SandboxHelperError> {
+    let documents: Value = serde_json::from_slice(inspection)?;
+    let address = documents
+        .as_array()
+        .and_then(|documents| documents.first())
+        .and_then(|document| document.get("NetworkSettings"))
+        .and_then(|settings| settings.get("Networks"))
+        .and_then(|networks| networks.get(network_name))
+        .and_then(|network| network.get("IPAddress"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| SandboxHelperError::Setup("OCI proxy has no internal address".into()))?
+        .parse::<IpAddr>()
+        .map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
+    if address.is_unspecified() {
         return Err(SandboxHelperError::Setup(
-            "OCI process networking is fail-closed until proxy injection is configured".into(),
+            "OCI proxy internal address is unspecified".into(),
+        ));
+    }
+    Ok(SocketAddr::new(address, OCI_PROXY_PORT))
+}
+
+fn oci_command(
+    job: &SandboxJob,
+    proxy_address: Option<SocketAddr>,
+) -> Result<Command, SandboxHelperError> {
+    if job.proxy_port.is_some() {
+        return Err(SandboxHelperError::Setup(
+            "OCI jobs cannot use a host loopback proxy".into(),
+        ));
+    }
+    if job.obligations.network_destinations.is_empty() != proxy_address.is_none() {
+        return Err(SandboxHelperError::Setup(
+            "OCI proxy resources do not match the network obligations".into(),
         ));
     }
     let runtime = job
@@ -945,15 +1236,20 @@ fn oci_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
         .ok_or_else(|| SandboxHelperError::Setup("OCI image is not configured".into()))?;
     if !valid_oci_image_reference(image) {
         return Err(SandboxHelperError::Setup(
-            "OCI image must use a complete immutable sha256 digest".into(),
+            "OCI image must use a complete immutable SHA-256 reference".into(),
         ));
     }
     let mut command = Command::new(runtime);
-    command.env_clear().args([
-        "run",
-        "--rm",
-        "--pull=never",
-        "--network=none",
+    command.env_clear().args(["run", "--rm", "--pull=never"]);
+    if proxy_address.is_some() {
+        command
+            .arg("--network")
+            .arg(oci_resource_names(&job.job_id).internal_network)
+            .arg("--dns=127.0.0.1");
+    } else {
+        command.arg("--network=none");
+    }
+    command.args([
         "--read-only",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
@@ -987,11 +1283,19 @@ fn oci_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
             readonly
         ));
     }
-    for (name, value) in &job.process.environment {
+    let mut environment = job.process.environment.clone();
+    if let Some(proxy_address) = proxy_address {
+        let proxy = format!("http://{proxy_address}");
+        environment.insert("HTTP_PROXY".into(), proxy.clone());
+        environment.insert("HTTPS_PROXY".into(), proxy.clone());
+        environment.insert("ALL_PROXY".into(), proxy);
+        environment.insert("NO_PROXY".into(), String::new());
+    }
+    for (name, value) in &environment {
         command.env(name, value).arg("--env").arg(name);
     }
     let mut bootstrap = "exec /usr/bin/env -i --".to_owned();
-    for name in job.process.environment.keys() {
+    for name in environment.keys() {
         if !valid_environment_name(name) {
             return Err(SandboxHelperError::Setup(format!(
                 "invalid OCI environment name {name}"
@@ -1023,6 +1327,9 @@ fn oci_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
 }
 
 fn valid_oci_image_reference(image: &str) -> bool {
+    if let Some(digest) = image.strip_prefix("sha256:") {
+        return digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit());
+    }
     let Some((repository, digest)) = image.rsplit_once("@sha256:") else {
         return false;
     };
@@ -1037,6 +1344,17 @@ fn oci_container_name(job_id: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric())
         .collect::<String>();
     format!("colossus-{sanitized}")
+}
+
+fn oci_resource_names(job_id: &str) -> OciResourceNames {
+    let workload = oci_container_name(job_id);
+    let suffix = workload.trim_start_matches("colossus-").to_owned();
+    OciResourceNames {
+        workload,
+        proxy: format!("colossus-proxy-{suffix}"),
+        internal_network: format!("colossus-int-{suffix}"),
+        egress_network: format!("colossus-egress-{suffix}"),
+    }
 }
 
 fn bounded_control_command(mut command: Command) -> Option<(std::process::ExitStatus, Vec<u8>)> {
@@ -1061,55 +1379,48 @@ fn bounded_control_command(mut command: Command) -> Option<(std::process::ExitSt
     }
 }
 
-fn ensure_oci_container_absent(job: &SandboxJob) -> bool {
-    let Some(runtime) = job.oci_runtime.as_ref() else {
-        return false;
-    };
-    let name = oci_container_name(&job.job_id);
-    let Some(remove_arguments) = oci_remove_arguments(runtime, &name) else {
-        return false;
-    };
-    let mut remove = Command::new(runtime);
-    remove.env_clear().args(remove_arguments);
-    let _ = bounded_control_command(remove);
-    let mut list = Command::new(runtime);
-    list.env_clear().args([
-        "container",
-        "ls",
-        "--all",
-        "--filter",
-        &format!("name=^/{name}$"),
-        "--format",
-        "{{.ID}}",
-    ]);
-    bounded_control_command(list).is_some_and(|(status, stdout)| {
-        status.success() && stdout.iter().all(u8::is_ascii_whitespace)
-    })
+fn run_oci_control(
+    runtime: &Path,
+    arguments: &[String],
+    environment: &[(&str, &str)],
+    operation: &str,
+) -> Result<Vec<u8>, SandboxHelperError> {
+    let mut command = Command::new(runtime);
+    command
+        .env_clear()
+        .envs(environment.iter().copied())
+        .args(arguments);
+    match bounded_control_command(command) {
+        Some((status, stdout)) if status.success() => Ok(stdout),
+        Some((status, _)) => Err(SandboxHelperError::Setup(format!(
+            "failed to {operation}: runtime exited with {status}"
+        ))),
+        None => Err(SandboxHelperError::Setup(format!(
+            "failed to {operation}: runtime command timed out"
+        ))),
+    }
 }
 
-async fn ensure_oci_container_absent_async(runtime: Option<&Path>, name: &str) -> bool {
-    let Some(runtime) = runtime else {
-        return false;
-    };
-    let Some(remove_arguments) = oci_remove_arguments(runtime, name) else {
-        return false;
-    };
-    let mut remove = TokioCommand::new(runtime);
-    remove
-        .env_clear()
-        .args(remove_arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    let _ = tokio::time::timeout(
-        Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS),
-        remove.status(),
-    )
-    .await;
-    let mut list = TokioCommand::new(runtime);
-    list.env_clear()
-        .args([
+fn cleanup_oci_resources(runtime: &Path, names: &OciResourceNames) {
+    for name in [&names.workload, &names.proxy] {
+        let Some(arguments) = oci_remove_arguments(runtime, name) else {
+            continue;
+        };
+        let mut remove = Command::new(runtime);
+        remove.env_clear().args(arguments);
+        let _ = bounded_control_command(remove);
+    }
+    for name in [&names.internal_network, &names.egress_network] {
+        let mut remove = Command::new(runtime);
+        remove.env_clear().args(["network", "rm", "--force", name]);
+        let _ = bounded_control_command(remove);
+    }
+}
+
+fn oci_resources_absent(runtime: &Path, names: &OciResourceNames) -> bool {
+    let containers_absent = [&names.workload, &names.proxy].iter().all(|name| {
+        let mut list = Command::new(runtime);
+        list.env_clear().args([
             "container",
             "ls",
             "--all",
@@ -1117,19 +1428,131 @@ async fn ensure_oci_container_absent_async(runtime: Option<&Path>, name: &str) -
             &format!("name=^/{name}$"),
             "--format",
             "{{.ID}}",
-        ])
-        .stdin(Stdio::null())
-        .kill_on_drop(true);
-    tokio::time::timeout(
-        Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS),
-        list.output(),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .is_some_and(|output| {
-        output.status.success() && output.stdout.iter().all(u8::is_ascii_whitespace)
-    })
+        ]);
+        bounded_control_command(list).is_some_and(|(status, stdout)| {
+            status.success() && stdout.iter().all(u8::is_ascii_whitespace)
+        })
+    });
+    let networks_absent = [&names.internal_network, &names.egress_network]
+        .iter()
+        .all(|name| {
+            let mut list = Command::new(runtime);
+            list.env_clear().args([
+                "network",
+                "ls",
+                "--filter",
+                &format!("name=^{name}$"),
+                "--format",
+                "{{.Name}}",
+            ]);
+            bounded_control_command(list).is_some_and(|(status, stdout)| {
+                status.success() && stdout.iter().all(u8::is_ascii_whitespace)
+            })
+        });
+    containers_absent && networks_absent
+}
+
+fn ensure_oci_resources_absent(job: &SandboxJob) -> bool {
+    let Some(runtime) = job.oci_runtime.as_ref() else {
+        return false;
+    };
+    let names = oci_resource_names(&job.job_id);
+    cleanup_oci_resources(runtime, &names);
+    oci_resources_absent(runtime, &names)
+}
+
+async fn ensure_oci_resources_absent_async(
+    runtime: Option<&Path>,
+    names: &OciResourceNames,
+) -> bool {
+    let Some(runtime) = runtime else {
+        return false;
+    };
+    for name in [&names.workload, &names.proxy] {
+        let Some(remove_arguments) = oci_remove_arguments(runtime, name) else {
+            return false;
+        };
+        let mut remove = TokioCommand::new(runtime);
+        remove
+            .env_clear()
+            .args(remove_arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let _ = tokio::time::timeout(
+            Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS),
+            remove.status(),
+        )
+        .await;
+    }
+    for name in [&names.internal_network, &names.egress_network] {
+        let mut remove = TokioCommand::new(runtime);
+        remove
+            .env_clear()
+            .args(["network", "rm", "--force", name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let _ = tokio::time::timeout(
+            Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS),
+            remove.status(),
+        )
+        .await;
+    }
+    let mut containers_absent = true;
+    for name in [&names.workload, &names.proxy] {
+        let mut list = TokioCommand::new(runtime);
+        list.env_clear()
+            .args([
+                "container",
+                "ls",
+                "--all",
+                "--filter",
+                &format!("name=^/{name}$"),
+                "--format",
+                "{{.ID}}",
+            ])
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        containers_absent &= tokio::time::timeout(
+            Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS),
+            list.output(),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .is_some_and(|output| {
+            output.status.success() && output.stdout.iter().all(u8::is_ascii_whitespace)
+        });
+    }
+    let mut networks_absent = true;
+    for name in [&names.internal_network, &names.egress_network] {
+        let mut list = TokioCommand::new(runtime);
+        list.env_clear()
+            .args([
+                "network",
+                "ls",
+                "--filter",
+                &format!("name=^{name}$"),
+                "--format",
+                "{{.Name}}",
+            ])
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        networks_absent &= tokio::time::timeout(
+            Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS),
+            list.output(),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .is_some_and(|output| {
+            output.status.success() && output.stdout.iter().all(u8::is_ascii_whitespace)
+        });
+    }
+    containers_absent && networks_absent
 }
 
 fn configure_command(command: &mut Command, job: &SandboxJob) {
@@ -1343,11 +1766,11 @@ impl EffectExecutor for HttpExecutor {
         let port = url
             .port_or_known_default()
             .ok_or_else(|| adapter_failure("HTTP URL has no port"))?;
-        let address = resolve_destination(host, port).await?;
+        let addresses = resolve_destinations(host, port).await?;
         let client = Client::builder()
             .redirect(RedirectPolicy::none())
             .no_proxy()
-            .resolve(host, address)
+            .resolve_to_addrs(host, &addresses)
             .timeout(Duration::from_millis(permit.obligations().timeout_ms))
             .build()
             .map_err(adapter_failure)?;
@@ -1419,18 +1842,46 @@ impl EffectExecutor for HttpExecutor {
     }
 }
 
-async fn resolve_destination(host: &str, port: u16) -> Result<SocketAddr, ExecutionError> {
+async fn resolve_destinations(host: &str, port: u16) -> Result<Vec<SocketAddr>, ExecutionError> {
     let host_is_ip = host.parse::<IpAddr>().is_ok();
-    let mut addresses = lookup_host((host, port)).await.map_err(adapter_failure)?;
-    let address = addresses
-        .next()
-        .ok_or_else(|| adapter_failure("network destination resolved to no address"))?;
-    if !host_is_ip && non_public_ip(address.ip()) {
+    let mut addresses = lookup_host((host, port))
+        .await
+        .map_err(adapter_failure)?
+        .filter(|address| host_is_ip || !non_public_ip(address.ip()))
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
         return Err(adapter_failure(
-            "domain network destinations may not resolve to non-public addresses",
+            "network destination resolved to no permitted address",
         ));
     }
-    Ok(address)
+    addresses.sort_by_key(|address| usize::from(address.is_ipv6()));
+    addresses.dedup();
+    addresses.truncate(16);
+    Ok(addresses)
+}
+
+async fn connect_destination(
+    host: &str,
+    port: u16,
+    pinned: Option<&[SocketAddr]>,
+) -> Result<TcpStream, ExecutionError> {
+    let mut attempts = FuturesUnordered::new();
+    let addresses = if let Some(pinned) = pinned {
+        pinned.to_vec()
+    } else {
+        resolve_destinations(host, port).await?
+    };
+    for address in addresses {
+        attempts.push(TcpStream::connect(address));
+    }
+    while let Some(result) = attempts.next().await {
+        if let Ok(stream) = result {
+            return Ok(stream);
+        }
+    }
+    Err(adapter_failure(
+        "network destination did not accept a connection on any permitted address",
+    ))
 }
 
 fn non_public_ip(ip: IpAddr) -> bool {
@@ -1458,6 +1909,119 @@ struct AllowlistProxy {
     task: tokio::task::JoinHandle<()>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OciProxyBootstrap {
+    schema_version: u16,
+    request_hash: String,
+    decision_id: String,
+    permit_nonce: String,
+    expires_at_unix_ms: i128,
+    allowed_origins: Vec<String>,
+    resolved_origins: BTreeMap<String, Vec<SocketAddr>>,
+    max_connections: usize,
+    connection_timeout_ms: u64,
+}
+
+/// Run the trusted OCI proxy sidecar from its bounded environment bootstrap.
+pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
+    let encoded = std::env::var(OCI_PROXY_CONFIG_VARIABLE).map_err(adapter_failure)?;
+    let bytes = BASE64.decode(encoded).map_err(adapter_failure)?;
+    if bytes.len() > MAX_JOB_BYTES {
+        return Err(adapter_failure(
+            "OCI proxy bootstrap exceeds its input bound",
+        ));
+    }
+    let bootstrap: OciProxyBootstrap = serde_json::from_slice(&bytes).map_err(adapter_failure)?;
+    let now_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+    if bootstrap.schema_version != 1
+        || bootstrap.request_hash.is_empty()
+        || bootstrap.decision_id.is_empty()
+        || bootstrap.permit_nonce.is_empty()
+        || bootstrap.expires_at_unix_ms < now_ms
+        || bootstrap.allowed_origins.is_empty()
+        || bootstrap.resolved_origins.len() != bootstrap.allowed_origins.len()
+        || bootstrap.max_connections == 0
+        || bootstrap.max_connections > 256
+        || bootstrap.connection_timeout_ms == 0
+    {
+        return Err(adapter_failure("invalid OCI proxy bootstrap"));
+    }
+    for origin in &bootstrap.allowed_origins {
+        let url = Url::parse(origin).map_err(adapter_failure)?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.origin().ascii_serialization() != *origin
+        {
+            return Err(adapter_failure(format!(
+                "OCI proxy origin is not canonical: {origin}"
+            )));
+        }
+        let host = url
+            .host_str()
+            .ok_or_else(|| adapter_failure("OCI proxy origin has no host"))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| adapter_failure("OCI proxy origin has no port"))?;
+        let host_ip = host.parse::<IpAddr>().ok();
+        let addresses = bootstrap
+            .resolved_origins
+            .get(origin)
+            .ok_or_else(|| adapter_failure("OCI proxy origin has no pinned addresses"))?;
+        if addresses.is_empty()
+            || addresses.len() > 16
+            || addresses.iter().any(|address| {
+                address.port() != port
+                    || host_ip.map_or_else(
+                        || non_public_ip(address.ip()),
+                        |host_ip| address.ip() != host_ip,
+                    )
+            })
+        {
+            return Err(adapter_failure(format!(
+                "OCI proxy origin has invalid pinned addresses: {origin}"
+            )));
+        }
+    }
+    let listener = TcpListener::bind(("0.0.0.0", OCI_PROXY_PORT))
+        .await
+        .map_err(adapter_failure)?;
+    let allowed = Arc::new(bootstrap.allowed_origins);
+    let resolved = Arc::new(bootstrap.resolved_origins);
+    let concurrency = Arc::new(Semaphore::new(bootstrap.max_connections));
+    let connection_timeout = Duration::from_millis(bootstrap.connection_timeout_ms);
+    println!("colossus-oci-proxy-ready");
+    loop {
+        let (stream, _) = listener.accept().await.map_err(adapter_failure)?;
+        let now_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+        if now_ms >= bootstrap.expires_at_unix_ms {
+            drop(stream);
+            return Err(adapter_failure("OCI proxy permit expired"));
+        }
+        let Ok(permit) = Arc::clone(&concurrency).try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
+        let allowed = Arc::clone(&allowed);
+        let resolved = Arc::clone(&resolved);
+        tokio::spawn(async move {
+            let _permit = permit;
+            match tokio::time::timeout(
+                connection_timeout,
+                proxy_connection(stream, allowed.as_slice(), resolved.as_ref()),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => eprintln!("colossus-oci-proxy-connection-failed: {error}"),
+                Err(_) => eprintln!("colossus-oci-proxy-connection-timed-out"),
+            }
+        });
+    }
+}
+
 impl AllowlistProxy {
     async fn start(origins: Vec<String>) -> Result<Self, ExecutionError> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -1465,6 +2029,7 @@ impl AllowlistProxy {
             .map_err(adapter_failure)?;
         let address = listener.local_addr().map_err(adapter_failure)?;
         let allowed = Arc::new(origins);
+        let resolved = Arc::new(BTreeMap::new());
         let (shutdown, mut shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
             loop {
@@ -1473,8 +2038,14 @@ impl AllowlistProxy {
                     accepted = listener.accept() => {
                         let Ok((stream, _)) = accepted else { break };
                         let allowed = Arc::clone(&allowed);
+                        let resolved = Arc::clone(&resolved);
                         tokio::spawn(async move {
-                            let _ = proxy_connection(stream, allowed.as_slice()).await;
+                            let _ = proxy_connection(
+                                stream,
+                                allowed.as_slice(),
+                                resolved.as_ref(),
+                            )
+                            .await;
                         });
                     }
                 }
@@ -1504,6 +2075,7 @@ impl Drop for AllowlistProxy {
 async fn proxy_connection(
     mut client: TcpStream,
     allowed_origins: &[String],
+    resolved_origins: &BTreeMap<String, Vec<SocketAddr>>,
 ) -> Result<(), ExecutionError> {
     let mut header = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -1539,10 +2111,27 @@ async fn proxy_connection(
                 .map_err(adapter_failure)?;
             return Ok(());
         }
-        let address = resolve_destination(&host, port).await?;
-        let mut upstream = TcpStream::connect(address).await.map_err(adapter_failure)?;
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .map_err(adapter_failure)?;
+        let client_hello = read_tls_client_hello(&mut client, &header[header_end..]).await?;
+        let server_name = tls_server_name(&client_hello)?;
+        if host.parse::<IpAddr>().is_err()
+            && !server_name.is_some_and(|server_name| server_name.eq_ignore_ascii_case(&host))
+        {
+            return Err(adapter_failure(
+                "TLS server name does not match the permitted CONNECT authority",
+            ));
+        }
+        let mut upstream = connect_destination(
+            &host,
+            port,
+            resolved_origins.get(&origin).map(Vec::as_slice),
+        )
+        .await?;
+        upstream
+            .write_all(&client_hello)
             .await
             .map_err(adapter_failure)?;
         tokio::io::copy_bidirectional(&mut client, &mut upstream)
@@ -1551,6 +2140,15 @@ async fn proxy_connection(
         return Ok(());
     }
     let url = Url::parse(target).map_err(adapter_failure)?;
+    if url.scheme() != "http"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(adapter_failure(
+            "plain proxy requests require an absolute credential-free HTTP URL",
+        ));
+    }
     let origin = url.origin().ascii_serialization();
     if !allowed_origins.contains(&origin) {
         client
@@ -1565,8 +2163,16 @@ async fn proxy_connection(
     let port = url
         .port_or_known_default()
         .ok_or_else(|| adapter_failure("proxy URL has no port"))?;
-    let address = resolve_destination(host, port).await?;
-    let mut upstream = TcpStream::connect(address).await.map_err(adapter_failure)?;
+    let host_header = single_header_value(text, "host")?
+        .ok_or_else(|| adapter_failure("proxy request has no Host header"))?;
+    let (header_host, header_port) = authority(host_header, port)?;
+    if canonical_origin("http", &header_host, header_port)? != origin {
+        return Err(adapter_failure(
+            "HTTP Host header does not match the permitted request origin",
+        ));
+    }
+    let mut upstream =
+        connect_destination(host, port, resolved_origins.get(&origin).map(Vec::as_slice)).await?;
     let path = if let Some(query) = url.query() {
         format!("{}?{query}", url.path())
     } else {
@@ -1596,6 +2202,228 @@ async fn proxy_connection(
     Ok(())
 }
 
+fn single_header_value<'a>(
+    header: &'a str,
+    expected_name: &str,
+) -> Result<Option<&'a str>, ExecutionError> {
+    let mut value = None;
+    for line in header.lines().skip(1) {
+        let Some((name, candidate)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case(expected_name) {
+            if value.is_some() {
+                return Err(adapter_failure(format!(
+                    "proxy request contains multiple {expected_name} headers"
+                )));
+            }
+            let candidate = candidate.trim();
+            if candidate.is_empty() {
+                return Err(adapter_failure(format!(
+                    "proxy request contains an empty {expected_name} header"
+                )));
+            }
+            value = Some(candidate);
+        }
+    }
+    Ok(value)
+}
+
+async fn read_tls_client_hello(
+    client: &mut TcpStream,
+    initial: &[u8],
+) -> Result<Vec<u8>, ExecutionError> {
+    let mut captured = initial.to_vec();
+    let mut handshake = Vec::new();
+    let mut offset = 0_usize;
+    loop {
+        read_proxy_bytes(client, &mut captured, offset.saturating_add(5)).await?;
+        if captured[offset] != 22 {
+            return Err(adapter_failure(
+                "CONNECT tunnel did not begin with a TLS handshake record",
+            ));
+        }
+        let record_len = usize::from(u16::from_be_bytes([
+            captured[offset + 3],
+            captured[offset + 4],
+        ]));
+        if record_len == 0 || record_len > MAX_TLS_RECORD_BYTES {
+            return Err(adapter_failure("TLS handshake record is oversized"));
+        }
+        let record_end = offset.saturating_add(5).saturating_add(record_len);
+        read_proxy_bytes(client, &mut captured, record_end).await?;
+        handshake.extend_from_slice(&captured[offset + 5..record_end]);
+        if handshake.len() > MAX_TLS_CLIENT_HELLO_BYTES {
+            return Err(adapter_failure("TLS ClientHello is oversized"));
+        }
+        if handshake.len() >= 4 {
+            if handshake[0] != 1 {
+                return Err(adapter_failure(
+                    "CONNECT tunnel did not begin with a TLS ClientHello",
+                ));
+            }
+            let hello_len = (usize::from(handshake[1]) << 16)
+                | (usize::from(handshake[2]) << 8)
+                | usize::from(handshake[3]);
+            if hello_len > MAX_TLS_CLIENT_HELLO_BYTES.saturating_sub(4) {
+                return Err(adapter_failure("TLS ClientHello is oversized"));
+            }
+            if handshake.len() >= hello_len.saturating_add(4) {
+                return Ok(captured);
+            }
+        }
+        offset = record_end;
+    }
+}
+
+async fn read_proxy_bytes(
+    client: &mut TcpStream,
+    captured: &mut Vec<u8>,
+    required: usize,
+) -> Result<(), ExecutionError> {
+    while captured.len() < required {
+        if required > MAX_TLS_CLIENT_HELLO_BYTES.saturating_add(MAX_TLS_RECORD_BYTES) {
+            return Err(adapter_failure("TLS ClientHello is oversized"));
+        }
+        let mut buffer = [0_u8; 4096];
+        let count = client.read(&mut buffer).await.map_err(adapter_failure)?;
+        if count == 0 {
+            return Err(adapter_failure("TLS ClientHello ended unexpectedly"));
+        }
+        captured.extend_from_slice(&buffer[..count]);
+    }
+    Ok(())
+}
+
+fn tls_server_name(client_hello_records: &[u8]) -> Result<Option<String>, ExecutionError> {
+    let mut handshake = Vec::new();
+    let mut offset = 0_usize;
+    while offset.saturating_add(5) <= client_hello_records.len() {
+        if client_hello_records[offset] != 22 {
+            break;
+        }
+        let record_len = usize::from(u16::from_be_bytes([
+            client_hello_records[offset + 3],
+            client_hello_records[offset + 4],
+        ]));
+        let record_end = offset.saturating_add(5).saturating_add(record_len);
+        if record_end > client_hello_records.len() {
+            return Err(adapter_failure("TLS ClientHello record is truncated"));
+        }
+        handshake.extend_from_slice(&client_hello_records[offset + 5..record_end]);
+        if handshake.len() >= 4 {
+            let hello_len = (usize::from(handshake[1]) << 16)
+                | (usize::from(handshake[2]) << 8)
+                | usize::from(handshake[3]);
+            if handshake.len() >= hello_len.saturating_add(4) {
+                break;
+            }
+        }
+        offset = record_end;
+    }
+    let hello_len = tls_u24(&handshake, 1)?;
+    if handshake.first() != Some(&1) || handshake.len() < hello_len.saturating_add(4) {
+        return Err(adapter_failure("TLS ClientHello is invalid"));
+    }
+    let body = &handshake[4..4 + hello_len];
+    let mut cursor = 34;
+    cursor = skip_tls_vector(body, cursor, 1)?;
+    cursor = skip_tls_vector(body, cursor, 2)?;
+    cursor = skip_tls_vector(body, cursor, 1)?;
+    if cursor == body.len() {
+        return Ok(None);
+    }
+    let extensions_len = tls_u16(body, cursor)?;
+    cursor = cursor.saturating_add(2);
+    let extensions_end = cursor.saturating_add(extensions_len);
+    if extensions_end != body.len() {
+        return Err(adapter_failure("TLS ClientHello extensions are invalid"));
+    }
+    while cursor < extensions_end {
+        let extension_type = tls_u16(body, cursor)?;
+        let extension_len = tls_u16(body, cursor.saturating_add(2))?;
+        cursor = cursor.saturating_add(4);
+        let extension_end = cursor.saturating_add(extension_len);
+        if extension_end > extensions_end {
+            return Err(adapter_failure("TLS ClientHello extension is truncated"));
+        }
+        if extension_type == 0 {
+            let names_len = tls_u16(body, cursor)?;
+            let mut name_cursor = cursor.saturating_add(2);
+            if name_cursor.saturating_add(names_len) != extension_end {
+                return Err(adapter_failure("TLS server-name extension is invalid"));
+            }
+            while name_cursor < extension_end {
+                let name_type = *body
+                    .get(name_cursor)
+                    .ok_or_else(|| adapter_failure("TLS server name is truncated"))?;
+                let name_len = tls_u16(body, name_cursor.saturating_add(1))?;
+                name_cursor = name_cursor.saturating_add(3);
+                let name_end = name_cursor.saturating_add(name_len);
+                if name_end > extension_end {
+                    return Err(adapter_failure("TLS server name is truncated"));
+                }
+                if name_type == 0 {
+                    let name = std::str::from_utf8(&body[name_cursor..name_end])
+                        .map_err(adapter_failure)?;
+                    if name.is_empty() || !name.is_ascii() {
+                        return Err(adapter_failure("TLS server name is invalid"));
+                    }
+                    return Ok(Some(name.to_owned()));
+                }
+                name_cursor = name_end;
+            }
+            return Ok(None);
+        }
+        cursor = extension_end;
+    }
+    Ok(None)
+}
+
+fn tls_u16(bytes: &[u8], offset: usize) -> Result<usize, ExecutionError> {
+    let high = *bytes
+        .get(offset)
+        .ok_or_else(|| adapter_failure("TLS structure is truncated"))?;
+    let low = *bytes
+        .get(offset.saturating_add(1))
+        .ok_or_else(|| adapter_failure("TLS structure is truncated"))?;
+    Ok((usize::from(high) << 8) | usize::from(low))
+}
+
+fn tls_u24(bytes: &[u8], offset: usize) -> Result<usize, ExecutionError> {
+    let first = *bytes
+        .get(offset)
+        .ok_or_else(|| adapter_failure("TLS structure is truncated"))?;
+    let second = *bytes
+        .get(offset.saturating_add(1))
+        .ok_or_else(|| adapter_failure("TLS structure is truncated"))?;
+    let third = *bytes
+        .get(offset.saturating_add(2))
+        .ok_or_else(|| adapter_failure("TLS structure is truncated"))?;
+    Ok((usize::from(first) << 16) | (usize::from(second) << 8) | usize::from(third))
+}
+
+fn skip_tls_vector(
+    bytes: &[u8],
+    offset: usize,
+    length_bytes: usize,
+) -> Result<usize, ExecutionError> {
+    let length = match length_bytes {
+        1 => usize::from(
+            *bytes
+                .get(offset)
+                .ok_or_else(|| adapter_failure("TLS vector is truncated"))?,
+        ),
+        2 => tls_u16(bytes, offset)?,
+        _ => return Err(adapter_failure("TLS vector length is unsupported")),
+    };
+    let end = offset.saturating_add(length_bytes).saturating_add(length);
+    if end > bytes.len() {
+        return Err(adapter_failure("TLS vector is truncated"));
+    }
+    Ok(end)
+}
+
 fn authority(value: &str, default_port: u16) -> Result<(String, u16), ExecutionError> {
     let url = Url::parse(&format!("https://{value}")).map_err(adapter_failure)?;
     let host = url
@@ -1615,7 +2443,7 @@ mod tests {
     use super::{
         AllowlistProxy, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
         atomic_write, authority, non_public_ip, oci_command, oci_remove_arguments,
-        proposed_write_bytes,
+        proposed_write_bytes, resolve_oci_origins, tls_server_name, validate_process_spec,
     };
     use colossus_contracts::{DecisionOutcome, PolicyObligations};
     use colossus_policy::{
@@ -1626,7 +2454,7 @@ mod tests {
     use serde_json::json;
     use std::{
         collections::BTreeMap,
-        net::{IpAddr, Ipv4Addr},
+        net::{IpAddr, Ipv4Addr, SocketAddr},
         path::PathBuf,
         sync::Arc,
     };
@@ -1677,6 +2505,7 @@ mod tests {
             proxy_port: None,
             oci_runtime: None,
             oci_image: None,
+            oci_proxy_image: None,
         };
         let key = [7_u8; 32];
         let signed = SignedSandboxJob::sign(job, &key).expect("sign");
@@ -1692,6 +2521,74 @@ mod tests {
         );
         assert!(non_public_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
         assert!(!non_public_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        let resolved =
+            resolve_oci_origins(&["http://127.0.0.1:18080".into()]).expect("explicit IP origin");
+        assert_eq!(
+            resolved["http://127.0.0.1:18080"],
+            [SocketAddr::from(([127, 0, 0, 1], 18_080))]
+        );
+    }
+
+    #[test]
+    fn tls_client_hello_server_name_is_extracted_for_connect_enforcement() {
+        let records = tls_client_hello("api.example.com");
+        assert_eq!(
+            tls_server_name(&records).expect("server name"),
+            Some("api.example.com".into())
+        );
+        let mut truncated = records;
+        truncated.pop();
+        assert!(tls_server_name(&truncated).is_err());
+    }
+
+    fn tls_client_hello(server_name: &str) -> Vec<u8> {
+        let mut server_name_extension = Vec::new();
+        let name_len = u16::try_from(server_name.len()).expect("name length");
+        server_name_extension.extend_from_slice(&(name_len + 3).to_be_bytes());
+        server_name_extension.push(0);
+        server_name_extension.extend_from_slice(&name_len.to_be_bytes());
+        server_name_extension.extend_from_slice(server_name.as_bytes());
+
+        let mut extensions = Vec::new();
+        extensions.extend_from_slice(&0_u16.to_be_bytes());
+        extensions.extend_from_slice(
+            &u16::try_from(server_name_extension.len())
+                .expect("extension length")
+                .to_be_bytes(),
+        );
+        extensions.extend_from_slice(&server_name_extension);
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&[3, 3]);
+        body.extend_from_slice(&[7; 32]);
+        body.push(0);
+        body.extend_from_slice(&2_u16.to_be_bytes());
+        body.extend_from_slice(&[0x13, 0x01]);
+        body.push(1);
+        body.push(0);
+        body.extend_from_slice(
+            &u16::try_from(extensions.len())
+                .expect("extensions length")
+                .to_be_bytes(),
+        );
+        body.extend_from_slice(&extensions);
+
+        let mut handshake = vec![
+            1,
+            u8::try_from((body.len() >> 16) & 0xff).expect("length"),
+            u8::try_from((body.len() >> 8) & 0xff).expect("length"),
+            u8::try_from(body.len() & 0xff).expect("length"),
+        ];
+        handshake.extend_from_slice(&body);
+
+        let mut record = vec![22, 3, 1];
+        record.extend_from_slice(
+            &u16::try_from(handshake.len())
+                .expect("record length")
+                .to_be_bytes(),
+        );
+        record.extend_from_slice(&handshake);
+        record
     }
 
     #[test]
@@ -1714,7 +2611,14 @@ mod tests {
                 root: directory.path().display().to_string(),
                 mode: "write".into(),
             });
-        let job = SandboxJob {
+        obligations
+            .filesystem
+            .push(colossus_contracts::FilesystemGrant {
+                root: "/usr/bin/example".into(),
+                mode: "execute".into(),
+            });
+        obligations.allowed_environment.push("TOKEN".into());
+        let mut job = SandboxJob {
             schema_version: 1,
             job_id: "018f0f9b-7b6e-7cc0-8000-000000000002".into(),
             request_id: "request".into(),
@@ -1734,8 +2638,11 @@ mod tests {
             proxy_port: None,
             oci_runtime: Some(PathBuf::from("/usr/bin/docker")),
             oci_image: Some(format!("example@sha256:{}", "a".repeat(64))),
+            oci_proxy_image: None,
         };
-        let command = oci_command(&job).expect("OCI command");
+        validate_process_spec(&job.process, "/usr/bin/example", &job.obligations)
+            .expect("exact OCI image executable");
+        let command = oci_command(&job, None).expect("OCI command");
         let args = command
             .get_args()
             .map(|value| value.to_string_lossy().into_owned())
@@ -1772,6 +2679,24 @@ mod tests {
             ["container", "rm", "--force", "--time", "0", "job"]
         );
         assert!(oci_remove_arguments(PathBuf::from("/usr/bin/unknown").as_path(), "job").is_none());
+
+        job.obligations
+            .network_destinations
+            .push("https://example.com".into());
+        job.oci_proxy_image = Some(format!("sha256:{}", "b".repeat(64)));
+        let proxy_address = SocketAddr::from(([10, 88, 0, 2], super::OCI_PROXY_PORT));
+        let command = oci_command(&job, Some(proxy_address)).expect("networked OCI command");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&"--network=none".into()));
+        assert!(args.contains(&"--dns=127.0.0.1".into()));
+        assert!(args.contains(&super::oci_resource_names(&job.job_id).internal_network));
+        assert!(!args.iter().any(|argument| argument.contains("10.88.0.2")));
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "HTTPS_PROXY" && value.is_some_and(|value| value == "http://10.88.0.2:18080")
+        }));
     }
 
     #[cfg(unix)]
@@ -1905,5 +2830,86 @@ mod tests {
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await.expect("response");
         assert!(response.starts_with(b"HTTP/1.1 403"));
+    }
+
+    #[tokio::test]
+    async fn allowlist_proxy_forwards_an_exact_http_origin() {
+        let upstream = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
+        let address = upstream.local_addr().expect("address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await.expect("accept");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).await.expect("read");
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            assert!(request.starts_with(b"GET /health HTTP/1.1\r\n"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .expect("response");
+        });
+        let origin = format!("http://{address}");
+        let proxy = AllowlistProxy::start(vec![origin.clone()])
+            .await
+            .expect("proxy");
+        let mut client = TcpStream::connect(("127.0.0.1", proxy.port()))
+            .await
+            .expect("connect");
+        client
+            .write_all(
+                format!(
+                    "GET {origin}/health HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("request");
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.expect("response");
+        assert!(response.starts_with(b"HTTP/1.1 200 OK"));
+        assert!(response.ends_with(b"ok"));
+        server.await.expect("server");
+    }
+
+    #[tokio::test]
+    async fn allowlist_proxy_rejects_conflicting_http_host_and_tls_server_name() {
+        let proxy = AllowlistProxy::start(vec![
+            "http://example.com".into(),
+            "https://example.com".into(),
+        ])
+        .await
+        .expect("proxy");
+
+        let mut http = TcpStream::connect(("127.0.0.1", proxy.port()))
+            .await
+            .expect("connect HTTP");
+        http.write_all(b"GET http://example.com/ HTTP/1.1\r\nHost: attacker.example\r\n\r\n")
+            .await
+            .expect("write HTTP");
+        let mut response = Vec::new();
+        http.read_to_end(&mut response).await.expect("HTTP close");
+        assert!(response.is_empty());
+
+        let mut tls = TcpStream::connect(("127.0.0.1", proxy.port()))
+            .await
+            .expect("connect TLS");
+        tls.write_all(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com\r\n\r\n")
+            .await
+            .expect("write CONNECT");
+        let expected = b"HTTP/1.1 200 Connection Established\r\n\r\n";
+        let mut established = vec![0_u8; expected.len()];
+        tls.read_exact(&mut established)
+            .await
+            .expect("CONNECT response");
+        assert_eq!(&established, expected);
+        tls.write_all(&tls_client_hello("attacker.example"))
+            .await
+            .expect("write ClientHello");
+        let mut response = Vec::new();
+        tls.read_to_end(&mut response).await.expect("TLS close");
+        assert!(response.is_empty());
     }
 }

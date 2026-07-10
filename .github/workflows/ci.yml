@@ -124,7 +124,7 @@ jobs:
   rust-live-security:
     name: Rust live OCI (Docker/Podman) and OPA security
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     needs: rust
     defaults:
       run:
@@ -144,6 +144,23 @@ jobs:
         with:
           workspaces: rust -> target
 
+      - name: Install static proxy and Podman prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools podman
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Build immutable OCI allowlist proxy
+        id: build-proxy
+        run: |
+          cargo build --locked --release --target x86_64-unknown-linux-musl \
+            --package colossus-sandbox --bin colossus-oci-proxy
+          docker build --file oci-proxy.Dockerfile \
+            --build-arg TARGET_TRIPLE=x86_64-unknown-linux-musl \
+            --tag colossus-oci-proxy:acceptance .
+          PROXY_IMAGE=$(docker image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')
+          echo "image=$PROXY_IMAGE" >> "$GITHUB_OUTPUT"
+
       - name: Preload immutable OCI acceptance image
         run: docker pull python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
 
@@ -151,19 +168,28 @@ jobs:
         env:
           COLOSSUS_OCI_RUNTIME: /usr/bin/docker
           COLOSSUS_OCI_IMAGE: python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+          COLOSSUS_OCI_PROXY_IMAGE: ${{ steps.build-proxy.outputs.image }}
         run: cargo test --locked -p colossus-cli --test oci_sandbox -- --ignored
 
-      - name: Install and preload Podman
+      - name: Preload Podman images
+        id: podman-images
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes podman
           podman version
           podman pull python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+          docker save --output /tmp/colossus-oci-proxy.tar colossus-oci-proxy:acceptance
+          podman load --input /tmp/colossus-oci-proxy.tar
+          PROXY_IMAGE=$(podman image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')
+          case "$PROXY_IMAGE" in
+            sha256:*) ;;
+            *) PROXY_IMAGE="sha256:$PROXY_IMAGE" ;;
+          esac
+          echo "proxy=$PROXY_IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Run live Podman escape and recovery suite
         env:
           COLOSSUS_OCI_RUNTIME: /usr/bin/podman
           COLOSSUS_OCI_IMAGE: python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+          COLOSSUS_OCI_PROXY_IMAGE: ${{ steps.podman-images.outputs.proxy }}
         run: cargo test --locked -p colossus-cli --test oci_sandbox -- --ignored
 
       - name: Install checksum-verified OPA 1.16.2

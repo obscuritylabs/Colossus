@@ -64,15 +64,22 @@ bind mounts and environment names. The target starts through a fixed `env -i` bo
 so image-defined environment variables do not cross into the executable. OCI execution
 uses `--pull=never`; images must be preloaded and referenced by a complete immutable
 SHA-256 digest so the Docker/Podman daemon cannot perform an unapproved registry request.
-OCI subprocess networking fails closed until a broker proxy can be injected into the
-container.
+Networked OCI execution additionally requires a preloaded immutable Colossus proxy image.
+The workload joins only a per-job internal network and receives no usable DNS resolver;
+the proxy sidecar alone also joins a per-job egress network. After authorization, the
+helper resolves each approved canonical origin, removes non-public domain answers, and
+binds the bounded address sets, request hash, decision ID, permit nonce, and expiry into
+the authenticated sidecar bootstrap. Plain HTTP `Host` and HTTPS TLS SNI must match the
+approved origin before any upstream connection. Workloads therefore cannot bypass the
+proxy with direct DNS, IP, or raw-socket egress.
 
 Every OCI job has an unpredictable authenticated container name. The helper reserves
-time within the policy timeout to force removal and verify that no matching container
-remains. A cancellation guard starts cleanup if the gateway drops a stalled helper. OCI
-timeouts below five seconds fail before execution because they cannot reserve enough
-cleanup time. If absence cannot be confirmed, the gateway records `outcome_unknown`
-rather than claiming failure or retrying.
+time within the policy timeout to force removal and verify that no matching container or
+network remains. A cancellation guard starts cleanup if the gateway drops a stalled
+helper. Network-free OCI timeouts below five seconds and networked OCI timeouts below ten
+seconds fail before execution because they cannot reserve enough cleanup time. If
+absence cannot be confirmed, the gateway records `outcome_unknown` rather than claiming
+failure or retrying.
 
 The configured OCI executable must resolve exactly to Docker, Podman, or the official
 `podman-remote` client; arbitrary wrapper executables are rejected. Podman cleanup uses

@@ -27,11 +27,14 @@ Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters.
 subprocess specifications are authenticated to a one-shot helper, which clears the
 environment and applies the selected native or OCI isolation profile before spawning.
 Native macOS/Linux isolation uses Seatbelt/Landlock, process groups contain descendants,
-and networked subprocesses receive only a loopback allowlist proxy. The direct HTTP
-adapter pins an allowed origin through DNS resolution and keeps the bounded response in
-the gateway quarantine until post-effect policy allows release. Windows native
-filesystem/network isolation remains fail-closed. OCI is the planned portable fallback,
-but Windows path mapping remains disabled until its live platform suite passes.
+and native networked subprocesses receive only a loopback allowlist proxy. Networked OCI
+jobs use a Colossus proxy sidecar: the workload joins an internal proxy-only network,
+the sidecar alone joins a separate egress network, and the authenticated bootstrap pins
+the policy-approved origin/address sets. The direct HTTP adapter applies the same
+origin and DNS-address constraints and keeps the bounded response in gateway quarantine
+until post-effect policy allows release. Windows native filesystem/network isolation
+remains fail-closed, and Windows OCI path mapping stays disabled until its live platform
+suite passes.
 
 The journal is authoritative. Application state is reconstructed by replay, and redb
 atomically appends events, advances stream/global versions, and queues projection work.

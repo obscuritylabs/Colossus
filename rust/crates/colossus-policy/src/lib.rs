@@ -33,6 +33,8 @@ const PERMIT_LIFETIME_MS: i128 = 30_000;
 
 /// Minimum timeout that leaves the OCI helper enough time to confirm container cleanup.
 pub const MIN_OCI_EFFECT_TIMEOUT_MS: u64 = 5_000;
+/// Minimum timeout for OCI jobs that must also create and remove proxy networks.
+pub const MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS: u64 = 10_000;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -286,6 +288,15 @@ impl SafetyKernel {
                 "OCI process execution requires timeout_ms >= {MIN_OCI_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
             )));
         }
+        if obligations.sandbox_backend == "oci"
+            && request.action == "process.spawn"
+            && !obligations.network_destinations.is_empty()
+            && obligations.timeout_ms < MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS
+        {
+            return Err(GatewayError::Safety(format!(
+                "networked OCI process execution requires timeout_ms >= {MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS} so proxy cleanup can be confirmed"
+            )));
+        }
         let mut environment = BTreeSet::new();
         for name in &obligations.allowed_environment {
             if !valid_environment_name(name) || !environment.insert(name.as_str()) {
@@ -362,11 +373,19 @@ fn validate_process_obligations(
     request: &EffectRequest,
     obligations: &PolicyObligations,
 ) -> Result<(), GatewayError> {
-    let executable = canonical_effect_path(&request.resource, false)?;
-    let executable_allowed = obligations.filesystem.iter().any(|grant| {
-        grant.mode == "execute"
-            && fs::canonicalize(&grant.root).is_ok_and(|root| executable == root)
-    });
+    let executable_allowed = if obligations.sandbox_backend == "oci" {
+        normalized_absolute_path(&request.resource)
+            && obligations
+                .filesystem
+                .iter()
+                .any(|grant| grant.mode == "execute" && grant.root == request.resource)
+    } else {
+        let executable = canonical_effect_path(&request.resource, false)?;
+        obligations.filesystem.iter().any(|grant| {
+            grant.mode == "execute"
+                && fs::canonicalize(&grant.root).is_ok_and(|root| executable == root)
+        })
+    };
     if !executable_allowed {
         return Err(GatewayError::Safety(format!(
             "executable {} is not explicitly granted",
@@ -405,6 +424,15 @@ fn validate_process_obligations(
         }
     }
     Ok(())
+}
+
+fn normalized_absolute_path(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() > 1
+        && value
+            .split('/')
+            .skip(1)
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
 }
 
 fn validate_filesystem_containment(
@@ -1433,6 +1461,109 @@ mod tests {
             Err(GatewayError::Safety(_))
         ));
         assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn networked_oci_process_reserves_proxy_and_container_cleanup_time() {
+        let directory = tempfile::tempdir().expect("directory");
+        let executable = std::env::current_exe()
+            .expect("executable")
+            .canonicalize()
+            .expect("canonical executable");
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox("oci", "test", false)
+            .with_limits(9_999, 1024, 2, 64 * 1024 * 1024, 1)
+            .with_filesystem_root(executable.display().to_string(), "execute")
+            .with_filesystem_read_root(directory.path().display().to_string())
+            .with_network_destination("https://example.com");
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()]),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "process.spawn",
+            executable.display().to_string(),
+            serde_json::json!({
+                "cwd": directory.path(),
+                "args": [],
+                "environment": {},
+                "stdin_base64": null,
+            }),
+        );
+        request.capabilities = vec!["process.spawn".into()];
+        assert!(matches!(
+            gateway.execute(request, &executor).await,
+            Err(GatewayError::Safety(_))
+        ));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn oci_executable_identity_is_an_exact_normalized_image_path() {
+        let directory = tempfile::tempdir().expect("directory");
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("process.spawn", DecisionOutcome::Allow)
+            .with_sandbox("oci", "test", false)
+            .with_limits(10_000, 1024, 2, 64 * 1024 * 1024, 1)
+            .with_filesystem_root("/image/bin/tool", "execute")
+            .with_filesystem_read_root(directory.path().display().to_string());
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new(["process.spawn".into()]),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "process.spawn",
+            "/image/bin/tool",
+            serde_json::json!({
+                "cwd": directory.path(),
+                "args": [],
+                "environment": {},
+                "stdin_base64": null,
+            }),
+        );
+        request.capabilities = vec!["process.spawn".into()];
+        gateway
+            .execute(request, &executor)
+            .await
+            .expect("exact image path");
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+
+        let mut request = effect_request(
+            system_actor("test"),
+            "process.spawn",
+            "/image/../image/bin/tool",
+            serde_json::json!({
+                "cwd": directory.path(),
+                "args": [],
+                "environment": {},
+                "stdin_base64": null,
+            }),
+        );
+        request.capabilities = vec!["process.spawn".into()];
+        assert!(matches!(
+            gateway.execute(request, &executor).await,
+            Err(GatewayError::Safety(_))
+        ));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]

@@ -12,8 +12,8 @@ use colossus_journal_redb::{
 };
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
-    GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, OpaConfig, OpaPolicy, ReleasedEffectResult,
-    SafetyKernel, effect_request, system_actor,
+    GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, OpaConfig,
+    OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
     EventJournal, KeyProvider, PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError,
@@ -75,6 +75,8 @@ pub struct SandboxConfig {
     pub oci_runtime: Option<PathBuf>,
     /// Immutable OCI image reference.
     pub oci_image: Option<String>,
+    /// Immutable Colossus allowlist-proxy image used by networked OCI jobs.
+    pub oci_proxy_image: Option<String>,
     /// Built-in policy filesystem roots.
     #[serde(default)]
     pub filesystem: Vec<FilesystemGrant>,
@@ -114,6 +116,7 @@ impl Default for SandboxConfig {
             helper_path: None,
             oci_runtime: None,
             oci_image: None,
+            oci_proxy_image: None,
             filesystem: Vec::new(),
             executables: Vec::new(),
             environment: Vec::new(),
@@ -256,6 +259,14 @@ impl RuntimeConfig {
                 "OCI sandbox timeoutMs must be at least {MIN_OCI_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
             )));
         }
+        if config.sandbox.backend == "oci"
+            && !config.sandbox.network_destinations.is_empty()
+            && config.sandbox.timeout_ms < MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS
+        {
+            return Err(RuntimeError::Config(format!(
+                "networked OCI sandbox timeoutMs must be at least {MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS} so proxy cleanup can be confirmed"
+            )));
+        }
         if config
             .sandbox
             .executables
@@ -311,6 +322,24 @@ impl RuntimeConfig {
                 "OCI images must use an immutable @sha256: digest".into(),
             ));
         }
+        if config
+            .sandbox
+            .oci_proxy_image
+            .as_deref()
+            .is_some_and(|image| !valid_oci_image_reference(image))
+        {
+            return Err(RuntimeError::Config(
+                "OCI proxy images must use an immutable SHA-256 reference".into(),
+            ));
+        }
+        if config.sandbox.backend == "oci"
+            && !config.sandbox.network_destinations.is_empty()
+            && config.sandbox.oci_proxy_image.is_none()
+        {
+            return Err(RuntimeError::Config(
+                "networked OCI sandboxing requires ociProxyImage".into(),
+            ));
+        }
         Ok(config)
     }
 
@@ -352,6 +381,9 @@ impl RuntimeConfig {
 }
 
 fn valid_oci_image_reference(image: &str) -> bool {
+    if let Some(digest) = image.strip_prefix("sha256:") {
+        return digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit());
+    }
     let Some((repository, digest)) = image.rsplit_once("@sha256:") else {
         return false;
     };
@@ -378,6 +410,15 @@ fn valid_environment_name(name: &str) -> bool {
         .next()
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+fn normalized_oci_path(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() > 1
+        && value
+            .split('/')
+            .skip(1)
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
 }
 
 /// Runtime construction or application failure.
@@ -435,6 +476,7 @@ pub struct Runtime {
     process_executor: Arc<SandboxProcessExecutor>,
     http_executor: Arc<HttpExecutor>,
     sandbox_executor_config: SandboxExecutorConfig,
+    sandbox_backend: String,
     workflow_repository: Arc<dyn WorkflowRepository>,
     workflows: Arc<WorkflowService>,
 }
@@ -521,7 +563,11 @@ impl Runtime {
                     policy = policy.with_filesystem_root(root.display().to_string(), &grant.mode);
                 }
                 for executable in &config.sandbox.executables {
-                    let executable = fs::canonicalize(executable)?;
+                    let executable = if config.sandbox.backend == "oci" {
+                        executable.clone()
+                    } else {
+                        fs::canonicalize(executable)?
+                    };
                     policy =
                         policy.with_filesystem_root(executable.display().to_string(), "execute");
                 }
@@ -589,6 +635,7 @@ impl Runtime {
                 .map(fs::canonicalize)
                 .transpose()?,
             oci_image: config.sandbox.oci_image.clone(),
+            oci_proxy_image: config.sandbox.oci_proxy_image.clone(),
         };
         let filesystem_executor = Arc::new(FilesystemExecutor::new());
         let process_executor = Arc::new(SandboxProcessExecutor::new(
@@ -639,6 +686,7 @@ impl Runtime {
             process_executor,
             http_executor,
             sandbox_executor_config,
+            sandbox_backend: config.sandbox.backend.clone(),
             workflow_repository,
             workflows,
         })
@@ -798,7 +846,20 @@ impl Runtime {
         args: Vec<String>,
         environment: std::collections::BTreeMap<String, String>,
     ) -> Result<Value, RuntimeError> {
-        let executable = fs::canonicalize(executable)?;
+        let executable = if self.sandbox_backend == "oci" {
+            let executable = executable.as_ref();
+            let value = executable
+                .to_str()
+                .ok_or_else(|| RuntimeError::Config("OCI executable path must be UTF-8".into()))?;
+            if !normalized_oci_path(value) {
+                return Err(RuntimeError::Config(
+                    "OCI executable must be an exact normalized absolute image path".into(),
+                ));
+            }
+            executable.to_owned()
+        } else {
+            fs::canonicalize(executable)?
+        };
         let cwd = fs::canonicalize(cwd)?;
         let spec = ProcessSpec {
             cwd,
@@ -1070,6 +1131,33 @@ surprise: true
         );
 
         config.sandbox.oci_image = Some(format!("python@sha256:{}", "a".repeat(64)));
+        config.sandbox.network_destinations = vec!["https://example.com".into()];
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "networked OCI sandbox without a proxy image was accepted"
+        );
+
+        config.sandbox.oci_proxy_image = Some("colossus-proxy:latest".into());
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "mutable OCI proxy image was accepted"
+        );
+
+        config.sandbox.oci_proxy_image = Some(format!("sha256:{}", "b".repeat(64)));
+        config.sandbox.timeout_ms = 9_999;
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "networked OCI cleanup budget was accepted"
+        );
+
+        config.sandbox.timeout_ms = 10_000;
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
+            "valid networked OCI proxy configuration was rejected"
+        );
+
+        config.sandbox.network_destinations.clear();
+        config.sandbox.oci_proxy_image = None;
         config.sandbox.environment = vec!["BAD-NAME".into()];
         assert!(
             RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),

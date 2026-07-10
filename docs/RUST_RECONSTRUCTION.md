@@ -38,12 +38,15 @@ obsolete Go launcher.
   authorization.
 - Permit-bound filesystem, subprocess, and HTTP adapters; an authenticated one-shot
   sandbox helper; Seatbelt/Landlock native isolation; cross-platform process-tree
-  ownership; exact-origin network policy; a loopback allowlist proxy; bounded output and
-  resources; post-effect HTTP/file quarantine; and hardened network-off OCI command
-  construction. Broker downgrades require an explicit configuration and policy grant.
-- Live Docker and Podman acceptance for bind mounts, immutable/preloaded images, environment
-  clearing, read-only roots, network denial, timeouts, cancellation cleanup, and audited
-  unknown outcomes. Live OPA acceptance covers readiness, allow/deny, approval proof
+  ownership; exact-origin network policy; native loopback and OCI sidecar allowlist
+  proxies; bounded output and resources; post-effect HTTP/file quarantine; and hardened
+  OCI command construction. Broker downgrades require an explicit configuration and
+  policy grant.
+- Live Docker acceptance for bind mounts, immutable/preloaded workload and proxy images,
+  environment clearing, read-only roots, proxy-only networking, raw-egress denial,
+  timeouts, cancellation cleanup, and audited unknown outcomes. The same suite is wired
+  into Linux CI for Podman revalidation. Live OPA acceptance covers readiness,
+  allow/deny, approval proof
   re-evaluation, post-effect denial, invalid decisions, outages, decision-log warnings,
   pinned CA trust, and mutual TLS client identity.
 - Strict, hash-pinned YAML workflow definitions; non-executable conditions; all planned
@@ -93,10 +96,11 @@ cutover. The following planned work remains:
 - Research and extension repositories plus their shared conformance suites.
 - Chroma semantic candidates, embedding providers, queued index lag operations, and
   application-layer policy re-filtering of canonical memory records.
-- Windows filesystem/network runtime acceptance and OCI allowlist-proxy injection. Native
-  macOS/Linux isolation, live network-off Docker/Podman execution/recovery, OCI command hardening,
-  the native allowlist proxy, authenticated helper, explicit broker downgrade rules,
-  resource supervision, and native/OCI escape tests are implemented. CI compiles every
+- Podman revalidation of the new proxy-only network path and Windows filesystem/network
+  runtime acceptance. Native macOS/Linux isolation, live Docker execution/recovery, OCI
+  command and allowlist-proxy hardening, the native allowlist proxy, authenticated
+  helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
+  tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
 - OpenAI Responses and OpenAI-compatible providers, the core tool catalog, provider
   diagnostics/routing, sessions, streaming, and context compaction.
