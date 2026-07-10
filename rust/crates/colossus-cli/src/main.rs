@@ -32,6 +32,10 @@ enum Command {
     Audit(AuditCommand),
     /// Diagnose the active built-in or OPA policy channel.
     Policy(PolicyCommand),
+    /// Inspect, drain, or rebuild disposable state projections.
+    Projection(ProjectionCommand),
+    /// Diagnose canonical storage, lease, repositories, and projection readiness.
+    State(StateCommand),
     /// Validate and operate durable workflows.
     Workflow(WorkflowCommand),
     /// Run the credential-free, network-free echo smoke provider.
@@ -104,6 +108,34 @@ struct PolicyCommand {
 #[derive(Subcommand)]
 enum PolicyAction {
     /// Check readiness, revision metadata, and decision-log safeguards.
+    Doctor,
+}
+
+#[derive(Args)]
+struct ProjectionCommand {
+    #[command(subcommand)]
+    command: ProjectionAction,
+}
+
+#[derive(Subcommand)]
+enum ProjectionAction {
+    /// Show position, journal head, lag, and readiness.
+    Status,
+    /// Replay queued journal records into every projection.
+    Drain,
+    /// Delete and replay one projection, or every projection when omitted.
+    Rebuild { name: Option<String> },
+}
+
+#[derive(Args)]
+struct StateCommand {
+    #[command(subcommand)]
+    command: StateAction,
+}
+
+#[derive(Subcommand)]
+enum StateAction {
+    /// Check the writer lease, journal head, adapters, and projection lag.
     Doctor,
 }
 
@@ -276,7 +308,9 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
                     break;
                 }
                 if line == "/help" {
-                    println!("/workflow list | /workflow status RUN_ID | /audit verify | /exit");
+                    println!(
+                        "/workflow list | /workflow status RUN_ID | /audit verify | /projection status | /exit"
+                    );
                     println!("Any other line is sent to the offline echo provider.");
                 } else if line == "/workflow list" {
                     workflow_command(runtime, WorkflowAction::List).await?;
@@ -290,6 +324,8 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
                     .await?;
                 } else if line == "/audit verify" {
                     print_json(&runtime.journal().verify()?)?;
+                } else if line == "/projection status" {
+                    print_json(&runtime.projection_status()?)?;
                 } else {
                     let result = runtime.echo(line).await?;
                     println!("{}", String::from_utf8_lossy(&result.bytes));
@@ -340,6 +376,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Policy(command) => match command.command {
             PolicyAction::Doctor => print_json(&runtime.policy_doctor().await?)?,
         },
+        Command::Projection(command) => match command.command {
+            ProjectionAction::Status => print_json(&runtime.projection_status()?)?,
+            ProjectionAction::Drain => print_json(&runtime.drain_projections()?)?,
+            ProjectionAction::Rebuild { name } => {
+                print_json(&runtime.rebuild_projection(name.as_deref())?)?;
+            }
+        },
+        Command::State(command) => match command.command {
+            StateAction::Doctor => print_json(&runtime.state_doctor()?)?,
+        },
         Command::Workflow(command) => workflow_command(&runtime, command.command).await?,
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;
@@ -349,9 +395,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Worker { once } => {
             let recovered = runtime.workflows().recover_interrupted()?;
             let drained = runtime.workflows().drain().await?;
+            let projections = runtime.drain_projections()?;
             print_json(&json!({
                 "once": once,
                 "recovered": recovered,
+                "projections": projections,
                 "drained": drained,
             }))?;
         }

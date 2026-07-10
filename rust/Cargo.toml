@@ -5,6 +5,7 @@ members = [
     "crates/colossus-contracts",
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
+    "crates/colossus-projection",
     "crates/colossus-policy",
     "crates/colossus-memory",
     "crates/colossus-workflow",
@@ -31,6 +32,7 @@ getrandom = "0.4.3"
 hex = "0.4.3"
 hmac = "0.12.1"
 futures = "0.3.31"
+fs4 = "0.13.1"
 jsonschema = "0.33.0"
 keyring = "4.1.4"
 redb = "4.1.0"
@@ -53,6 +55,7 @@ colossus-journal-redb = { path = "crates/colossus-journal-redb" }
 colossus-memory = { path = "crates/colossus-memory" }
 colossus-policy = { path = "crates/colossus-policy" }
 colossus-ports = { path = "crates/colossus-ports" }
+colossus-projection = { path = "crates/colossus-projection" }
 colossus-runtime = { path = "crates/colossus-runtime" }
 colossus-workflow = { path = "crates/colossus-workflow" }
 

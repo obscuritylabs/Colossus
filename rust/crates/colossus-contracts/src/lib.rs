@@ -212,6 +212,64 @@ pub struct SignedCheckpoint {
     pub created_at: String,
 }
 
+/// One journal event queued for deterministic projection replay.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectionWorkItem {
+    /// Global journal sequence to apply.
+    pub global_sequence: u64,
+    /// Event identifier expected at that sequence.
+    pub event_id: String,
+}
+
+/// One atomic projection record change.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProjectionMutation {
+    /// Create or replace a projection value.
+    Upsert {
+        /// Projection-local record key.
+        key: String,
+        /// Fully materialized projection value.
+        value: Value,
+    },
+    /// Remove a projection value.
+    Delete {
+        /// Projection-local record key.
+        key: String,
+    },
+}
+
+/// Atomic projection update and optimistic position advance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectionBatch {
+    /// Stable projection name and schema version.
+    pub projection: String,
+    /// Position the caller observed before projecting.
+    pub expected_position: u64,
+    /// Last global sequence represented by this batch.
+    pub through_sequence: u64,
+    /// Zero or more record changes. Empty batches still advance the position.
+    pub mutations: Vec<ProjectionMutation>,
+}
+
+/// Bounded projection readiness and lag report.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectionStatus {
+    /// Projection name.
+    pub projection: String,
+    /// Last applied global journal sequence.
+    pub position: u64,
+    /// Current journal head.
+    pub journal_head: u64,
+    /// Number of unapplied journal records.
+    pub lag: u64,
+    /// Whether the projection can serve current reads.
+    pub ready: bool,
+}
+
 /// Declared risk passed into policy as non-authoritative input.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

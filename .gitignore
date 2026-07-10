@@ -8,4 +8,4 @@ dist/
 *.egg-info/
 rust/target/
 .colossus/config.yaml
-.colossus/state.redb
+.colossus/*.redb*

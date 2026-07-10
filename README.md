@@ -20,6 +20,7 @@ Rust foundation smoke test (fresh YAML and fresh encrypted state):
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- config init
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- echo hello
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
 ```
 
 The current Python 0.5 surface remains available during reconstruction:

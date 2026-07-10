@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, ActorType, DecisionOutcome, EffectRequest, EventClassification, ExecutionContext,
-    NewEvent, QuarantinedEffectResult,
+    NewEvent, ProjectionStatus, QuarantinedEffectResult,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
-    platform_secret,
+    RedbWriterLease, platform_secret,
 };
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
@@ -16,7 +16,12 @@ use colossus_policy::{
     system_actor,
 };
 use colossus_ports::{
-    EventJournal, KeyProvider, PolicyDecisionPoint, StoreError, WorkflowRepository,
+    EventJournal, KeyProvider, PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError,
+    WorkRepository, WorkflowRepository,
+};
+use colossus_projection::{
+    ProjectedSessionRepository, ProjectedWorkRepository, ProjectionRunReport, ProjectionWorker,
+    default_handlers,
 };
 use colossus_workflow::{
     EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,
@@ -220,7 +225,12 @@ fn read_optional(path: Option<&PathBuf>) -> Result<Option<Vec<u8>>, RuntimeError
 
 /// Fully composed auditable runtime.
 pub struct Runtime {
+    writer_lease: RedbWriterLease,
     journal: Arc<dyn EventJournal>,
+    recovery_reason: Option<String>,
+    projections: Arc<ProjectionWorker>,
+    sessions: Arc<dyn SessionRepository>,
+    work: Arc<dyn WorkRepository>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
     workflow_repository: Arc<dyn WorkflowRepository>,
@@ -233,6 +243,7 @@ impl Runtime {
         if let Some(parent) = config.storage.path.parent() {
             fs::create_dir_all(parent)?;
         }
+        let writer_lease = RedbWriterLease::acquire(&config.storage.path)?;
         let (keys, signing_key_id, signing_key): (Arc<dyn KeyProvider>, String, [u8; 32]) =
             match &config.storage.keys {
                 KeyConfig::Platform {
@@ -260,8 +271,20 @@ impl Runtime {
                 ),
             };
         let signer = Arc::new(Ed25519CheckpointSigner::new(signing_key_id, signing_key));
-        let journal: Arc<dyn EventJournal> =
-            Arc::new(RedbEventJournal::open(&config.storage.path, keys, signer)?);
+        let redb = Arc::new(RedbEventJournal::open(&config.storage.path, keys, signer)?);
+        let recovery_reason = redb.recovery_reason()?;
+        let journal: Arc<dyn EventJournal> = redb.clone();
+        let projection_store: Arc<dyn ProjectionStore> = redb;
+        let projections = Arc::new(ProjectionWorker::new(
+            Arc::clone(&journal),
+            Arc::clone(&projection_store),
+            default_handlers(),
+        )?);
+        let sessions: Arc<dyn SessionRepository> = Arc::new(ProjectedSessionRepository::new(
+            Arc::clone(&projection_store),
+        ));
+        let work: Arc<dyn WorkRepository> =
+            Arc::new(ProjectedWorkRepository::new(Arc::clone(&projection_store)));
         if !journal.is_recovery_mode() {
             recover_unknown_effects(journal.as_ref())?;
         }
@@ -344,9 +367,15 @@ impl Runtime {
         ));
         if !journal.is_recovery_mode() {
             workflows.recover_interrupted()?;
+            projections.drain(256, 16_384)?;
         }
         Ok(Self {
+            writer_lease,
             journal,
+            recovery_reason,
+            projections,
+            sessions,
+            work,
             policy,
             gateway,
             workflow_repository,
@@ -367,6 +396,63 @@ impl Runtime {
     /// Exact workflow definition repository for list/show surfaces.
     pub fn workflow_repository(&self) -> Arc<dyn WorkflowRepository> {
         Arc::clone(&self.workflow_repository)
+    }
+
+    /// Current session snapshots served by the disposable session projection.
+    pub fn session_repository(&self) -> Arc<dyn SessionRepository> {
+        Arc::clone(&self.sessions)
+    }
+
+    /// Current task, decision, plan, and goal snapshots.
+    pub fn work_repository(&self) -> Arc<dyn WorkRepository> {
+        Arc::clone(&self.work)
+    }
+
+    /// Projection position, lag, and readiness for every built-in reducer.
+    pub fn projection_status(&self) -> Result<Vec<ProjectionStatus>, RuntimeError> {
+        self.projections.status().map_err(Into::into)
+    }
+
+    /// Catch all built-in projections up to the current journal head.
+    pub fn drain_projections(&self) -> Result<ProjectionRunReport, RuntimeError> {
+        self.projections.drain(256, 16_384).map_err(Into::into)
+    }
+
+    /// Delete and replay one projection, or every projection when omitted.
+    pub fn rebuild_projection(
+        &self,
+        name: Option<&str>,
+    ) -> Result<ProjectionRunReport, RuntimeError> {
+        name.map_or_else(
+            || self.projections.rebuild_all(),
+            |projection| self.projections.rebuild(projection),
+        )
+        .map_err(Into::into)
+    }
+
+    /// Bounded local storage health report without decrypted event payloads.
+    pub fn state_doctor(&self) -> Result<Value, RuntimeError> {
+        let (journal_head, record_hash) = self.journal.head()?;
+        Ok(json!({
+            "recovery_mode": self.journal.is_recovery_mode(),
+            "recovery_reason": self.recovery_reason,
+            "journal_head": journal_head,
+            "record_hash": record_hash,
+            "writer_lease": {
+                "held": true,
+                "path": self.writer_lease.path(),
+            },
+            "projection_store": {
+                "adapter": "redb",
+                "positions": self.projection_status()?,
+            },
+            "repository_adapters": {
+                "sessions": "redb-projection:sessions-v1",
+                "work": "redb-projection:work-v1",
+                "memory": "event-journal+redb-projection:memory-v1",
+                "workflows": "event-journal+redb-projection:workflows-v1",
+            }
+        }))
     }
 
     /// Policy readiness and decision-log safety status.
@@ -433,6 +519,10 @@ impl Runtime {
 
     /// Sign the current chain head for clean shutdown.
     pub fn checkpoint(&self) -> Result<(), RuntimeError> {
+        if self.journal.is_recovery_mode() {
+            return Ok(());
+        }
+        self.drain_projections()?;
         self.journal.checkpoint()?;
         Ok(())
     }

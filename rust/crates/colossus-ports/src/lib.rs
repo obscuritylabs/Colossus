@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ApprovalProof, EffectRequest, EventEnvelope, MemoryRecord, NewEvent, PolicyDecision,
-    SignedCheckpoint, WorkflowDefinition, WorkflowRun,
+    ProjectionBatch, ProjectionWorkItem, SignedCheckpoint, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -74,6 +74,16 @@ pub trait EventJournal: Send + Sync {
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, StoreError>;
 
+    /// Read projection outbox items in ascending sequence order.
+    fn read_projection_work(
+        &self,
+        from_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<ProjectionWorkItem>, StoreError>;
+
+    /// Return the durable global sequence and record hash at the journal head.
+    fn head(&self) -> Result<(u64, String), StoreError>;
+
     /// Decrypt an event payload after policy has authorized disclosure.
     fn decrypt_payload(&self, event: &EventEnvelope) -> Result<Value, StoreError>;
 
@@ -119,8 +129,19 @@ pub trait ProjectionStore: Send + Sync {
     /// Last globally applied sequence for a named projection.
     fn position(&self, projection: &str) -> Result<u64, StoreError>;
 
-    /// Atomically apply a projection update at a sequence.
-    fn apply(&self, projection: &str, sequence: u64, value: Value) -> Result<(), StoreError>;
+    /// Load one projection-local record.
+    fn get(&self, projection: &str, key: &str) -> Result<Option<Value>, StoreError>;
+
+    /// List bounded projection-local records in key order.
+    fn list(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError>;
+
+    /// Atomically apply mutations and advance an optimistic projection position.
+    fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError>;
 
     /// Delete a projection so it can be rebuilt.
     fn reset(&self, projection: &str) -> Result<(), StoreError>;

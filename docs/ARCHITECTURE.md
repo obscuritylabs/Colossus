@@ -25,6 +25,11 @@ exports are replaceable ports.
 
 The journal is authoritative. Application state is reconstructed by replay, and redb
 atomically appends events, advances stream/global versions, and queues projection work.
+Named projection workers consume that outbox in global order and atomically commit
+record mutations with an optimistic position. Session and work repositories serve those
+disposable views; reset/rebuild always replays the canonical journal. A cross-process
+writer lease prevents embedded surfaces and the headless worker from opening concurrent
+redb writers.
 Workflow definitions are exact-content hash pinned and workflow runs are normal journal
 streams. The composition root opens fresh YAML config and fresh state; it never silently
 imports the Python SQLite store.

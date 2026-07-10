@@ -1,7 +1,10 @@
 //! Shared adapter conformance fixtures.
 
-use colossus_contracts::{EncryptedPayload, EventEnvelope, NewEvent, SignedCheckpoint};
-use colossus_ports::{EventJournal, StoreError, VerificationReport};
+use colossus_contracts::{
+    EncryptedPayload, EventEnvelope, NewEvent, ProjectionBatch, ProjectionMutation,
+    ProjectionWorkItem, SignedCheckpoint,
+};
+use colossus_ports::{EventJournal, ProjectionStore, StoreError, VerificationReport};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::Mutex};
@@ -133,6 +136,34 @@ impl EventJournal for InMemoryEventJournal {
             .collect())
     }
 
+    fn read_projection_work(
+        &self,
+        from_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<ProjectionWorkItem>, StoreError> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(failure)?
+            .events
+            .iter()
+            .filter(|event| event.global_sequence >= from_sequence)
+            .take(limit)
+            .map(|event| ProjectionWorkItem {
+                global_sequence: event.global_sequence,
+                event_id: event.event_id.clone(),
+            })
+            .collect())
+    }
+
+    fn head(&self) -> Result<(u64, String), StoreError> {
+        let state = self.state.lock().map_err(failure)?;
+        Ok(state.events.last().map_or_else(
+            || (0, ZERO_HASH.into()),
+            |event| (event.global_sequence, event.record_hash.clone()),
+        ))
+    }
+
     fn decrypt_payload(&self, event: &EventEnvelope) -> Result<Value, StoreError> {
         self.state
             .lock()
@@ -163,14 +194,171 @@ impl EventJournal for InMemoryEventJournal {
     }
 }
 
+#[derive(Default)]
+struct ProjectionState {
+    positions: BTreeMap<String, u64>,
+    records: BTreeMap<(String, String), Value>,
+}
+
+/// Deterministic in-memory projection store for workers and conformance tests.
+#[derive(Default)]
+pub struct InMemoryProjectionStore {
+    state: Mutex<ProjectionState>,
+}
+
+impl ProjectionStore for InMemoryProjectionStore {
+    fn position(&self, projection: &str) -> Result<u64, StoreError> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(failure)?
+            .positions
+            .get(projection)
+            .copied()
+            .unwrap_or(0))
+    }
+
+    fn get(&self, projection: &str, key: &str) -> Result<Option<Value>, StoreError> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(failure)?
+            .records
+            .get(&(projection.into(), key.into()))
+            .cloned())
+    }
+
+    fn list(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(failure)?
+            .records
+            .iter()
+            .filter(|((name, key), _)| name == projection && key.starts_with(key_prefix))
+            .take(limit)
+            .map(|((_, key), value)| (key.clone(), value.clone()))
+            .collect())
+    }
+
+    fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError> {
+        let mut state = self.state.lock().map_err(failure)?;
+        let actual = state.positions.get(&batch.projection).copied().unwrap_or(0);
+        if actual != batch.expected_position {
+            return Err(StoreError::Conflict {
+                stream_id: format!("projection:{}", batch.projection),
+                expected: batch.expected_position,
+                actual,
+            });
+        }
+        if batch.through_sequence <= batch.expected_position {
+            return Err(StoreError::Adapter(
+                "projection position must advance".into(),
+            ));
+        }
+        for mutation in batch.mutations {
+            match mutation {
+                ProjectionMutation::Upsert { key, value } => {
+                    state.records.insert((batch.projection.clone(), key), value);
+                }
+                ProjectionMutation::Delete { key } => {
+                    state.records.remove(&(batch.projection.clone(), key));
+                }
+            }
+        }
+        state
+            .positions
+            .insert(batch.projection, batch.through_sequence);
+        Ok(())
+    }
+
+    fn reset(&self, projection: &str) -> Result<(), StoreError> {
+        let mut state = self.state.lock().map_err(failure)?;
+        state.positions.remove(projection);
+        state.records.retain(|(name, _), _| name != projection);
+        Ok(())
+    }
+}
+
 /// Run the storage behavior shared by every canonical journal adapter.
 pub fn assert_journal_conformance(journal: &dyn EventJournal, first: NewEvent, stale: NewEvent) {
     let stored = journal.append(first).expect("conformance append");
     assert_eq!(stored.global_sequence, 1);
     assert_eq!(stored.stream_version, 1);
+    assert_eq!(
+        journal.head().expect("conformance head"),
+        (1, stored.record_hash.clone())
+    );
+    assert_eq!(
+        journal
+            .read_projection_work(1, 10)
+            .expect("conformance projection work"),
+        vec![ProjectionWorkItem {
+            global_sequence: 1,
+            event_id: stored.event_id.clone(),
+        }]
+    );
     assert!(matches!(
         journal.append(stale),
         Err(StoreError::Conflict { .. })
     ));
     assert_eq!(journal.verify().expect("conformance verify").event_count, 1);
+}
+
+/// Run the behavior shared by every projection-store adapter.
+pub fn assert_projection_store_conformance(store: &dyn ProjectionStore) {
+    assert_eq!(store.position("test").expect("initial position"), 0);
+    store
+        .apply(ProjectionBatch {
+            projection: "test".into(),
+            expected_position: 0,
+            through_sequence: 1,
+            mutations: vec![ProjectionMutation::Upsert {
+                key: "record-1".into(),
+                value: serde_json::json!({"value": 1}),
+            }],
+        })
+        .expect("projection apply");
+    assert_eq!(store.position("test").expect("position"), 1);
+    assert_eq!(
+        store.get("test", "record-1").expect("record"),
+        Some(serde_json::json!({"value": 1}))
+    );
+    assert_eq!(
+        store.list("test", "record-", 10).expect("list"),
+        vec![("record-1".into(), serde_json::json!({"value": 1}))]
+    );
+    store
+        .apply(ProjectionBatch {
+            projection: "test".into(),
+            expected_position: 1,
+            through_sequence: 2,
+            mutations: vec![ProjectionMutation::Delete {
+                key: "record-1".into(),
+            }],
+        })
+        .expect("projection delete");
+    assert!(store.get("test", "record-1").expect("deleted").is_none());
+    assert!(matches!(
+        store.apply(ProjectionBatch {
+            projection: "test".into(),
+            expected_position: 1,
+            through_sequence: 3,
+            mutations: Vec::new(),
+        }),
+        Err(StoreError::Conflict { actual: 2, .. })
+    ));
+    store.reset("test").expect("projection reset");
+    assert_eq!(store.position("test").expect("reset position"), 0);
+    assert!(
+        store
+            .get("test", "record-1")
+            .expect("reset record")
+            .is_none()
+    );
 }

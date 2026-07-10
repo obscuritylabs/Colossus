@@ -22,6 +22,12 @@ obsolete Go launcher.
 - Startup verification of event sequences, stream versions, payload authentication,
   plaintext hashes, record hashes, projection outbox positions, checkpoints, and secure
   anchors. Failure opens the runtime read-only.
+- An exclusive cross-process redb writer lease shared by embedded CLI/REPL and worker
+  startup. A second writer fails immediately instead of racing the canonical journal.
+- Restartable projection workers with optimistic per-projection positions, atomic redb
+  record/position commits, deterministic rebuilds, lag/readiness diagnostics, and
+  default session, work, memory, and workflow reducers. Session and work repository
+  ports have concrete projected adapters.
 - Checkpoints every 100 events or 60 seconds, plus explicit clean-shutdown checkpoints.
 - Startup conversion of abandoned `effect.started` records to
   `effect.outcome_unknown`, with no automatic retry.
@@ -52,6 +58,9 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- c
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- echo hello
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- projection status
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- projection rebuild
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow validate .colossus/workflows/offline-echo.yaml
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow register .colossus/workflows/offline-echo.yaml
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}'
@@ -66,15 +75,15 @@ file. It neither asks for an application credential nor performs a network reque
 This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
 cutover. The following planned work remains:
 
-- Projection processors and concrete session, work, research, and extension
-  repositories with their shared conformance suites.
+- Research and extension repositories plus their shared conformance suites.
 - Chroma semantic candidates, embedding providers, queued index lag operations, and
   application-layer policy re-filtering of canonical memory records.
 - Birdcage and Windows sandbox helpers, OCI fallback, the allowlist network proxy,
   broker downgrade prompts, resource enforcement, and platform escape suites.
 - OpenAI Responses and OpenAI-compatible providers, the core tool catalog, provider
   diagnostics/routing, sessions, streaming, and context compaction.
-- A long-running single-writer worker lease and authenticated Unix-socket/named-pipe IPC.
+- Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
+  cross-process writer lease itself is implemented.
 - Goals, durable subagents, research/citations, skills/resources, telemetry, packs,
   integrations, offline bundles, and the rest of P1/P2.
 - Fuzzing, dependency/license/vulnerability policy, cross-platform sandbox tests, and

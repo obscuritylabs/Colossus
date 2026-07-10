@@ -5,16 +5,22 @@ use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
     aead::{Aead, Payload},
 };
-use colossus_contracts::{EncryptedPayload, EventEnvelope, NewEvent, SignedCheckpoint};
-use colossus_ports::{CheckpointSigner, EventJournal, KeyProvider, StoreError, VerificationReport};
+use colossus_contracts::{
+    EncryptedPayload, EventEnvelope, NewEvent, ProjectionBatch, ProjectionMutation,
+    ProjectionWorkItem, SignedCheckpoint,
+};
+use colossus_ports::{
+    CheckpointSigner, EventJournal, KeyProvider, ProjectionStore, StoreError, VerificationReport,
+};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
+use fs4::fs_std::FileExt as _;
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -29,6 +35,9 @@ const EVENTS: TableDefinition<u64, &[u8]> = TableDefinition::new("events");
 const STREAM_VERSIONS: TableDefinition<&str, u64> = TableDefinition::new("stream_versions");
 const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 const OUTBOX: TableDefinition<u64, &[u8]> = TableDefinition::new("projection_outbox");
+const PROJECTION_POSITIONS: TableDefinition<&str, u64> =
+    TableDefinition::new("projection_positions");
+const PROJECTION_RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("projection_records");
 const ZERO_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const CHECKPOINT_INTERVAL: u64 = 100;
 const CHECKPOINT_MAX_AGE: Duration = Duration::from_secs(60);
@@ -45,6 +54,73 @@ fn utc_now() -> Result<String, StoreError> {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+fn projection_record_key(projection: &str, key: &str) -> Result<String, StoreError> {
+    if projection.is_empty() || projection.contains('\0') {
+        return Err(StoreError::Adapter(
+            "projection name must be nonempty and contain no NUL".into(),
+        ));
+    }
+    if key.is_empty() || key.contains('\0') {
+        return Err(StoreError::Adapter(
+            "projection key must be nonempty and contain no NUL".into(),
+        ));
+    }
+    Ok(format!("{projection}\0{key}"))
+}
+
+fn projection_prefix(projection: &str) -> Result<String, StoreError> {
+    if projection.is_empty() || projection.contains('\0') {
+        return Err(StoreError::Adapter(
+            "projection name must be nonempty and contain no NUL".into(),
+        ));
+    }
+    Ok(format!("{projection}\0"))
+}
+
+/// Exclusive process-level lease for the canonical redb writer.
+pub struct RedbWriterLease {
+    file: File,
+    path: PathBuf,
+}
+
+impl RedbWriterLease {
+    /// Acquire the non-blocking writer lease associated with a redb state path.
+    pub fn acquire(state_path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let state_path = state_path.as_ref();
+        if let Some(parent) = state_path.parent() {
+            fs::create_dir_all(parent).map_err(adapter_error)?;
+        }
+        let mut lock_name = state_path.as_os_str().to_os_string();
+        lock_name.push(".writer.lock");
+        let path = PathBuf::from(lock_name);
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(adapter_error)?;
+        if !file.try_lock_exclusive().map_err(adapter_error)? {
+            return Err(StoreError::Adapter(format!(
+                "redb writer lease is already held: {}",
+                path.display()
+            )));
+        }
+        Ok(Self { file, path })
+    }
+
+    /// Lock file used to coordinate embedded and worker writers.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for RedbWriterLease {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
 }
 
 /// Explicit in-memory key provider for tests and embedded applications.
@@ -415,6 +491,12 @@ impl RedbEventJournal {
         write.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
         write.open_table(METADATA).map_err(adapter_error)?;
         write.open_table(OUTBOX).map_err(adapter_error)?;
+        write
+            .open_table(PROJECTION_POSITIONS)
+            .map_err(adapter_error)?;
+        write
+            .open_table(PROJECTION_RECORDS)
+            .map_err(adapter_error)?;
         write.commit().map_err(adapter_error)?;
         let journal = Self {
             database,
@@ -629,6 +711,10 @@ impl RedbEventJournal {
         let durable_stream_table = read.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
         let metadata = read.open_table(METADATA).map_err(adapter_error)?;
         let outbox = read.open_table(OUTBOX).map_err(adapter_error)?;
+        let projection_positions = read
+            .open_table(PROJECTION_POSITIONS)
+            .map_err(adapter_error)?;
+        let projection_records = read.open_table(PROJECTION_RECORDS).map_err(adapter_error)?;
         let mut expected_sequence = 1_u64;
         let mut previous_hash = ZERO_HASH.to_owned();
         let mut stream_versions = BTreeMap::<String, u64>::new();
@@ -730,6 +816,32 @@ impl RedbEventJournal {
                 "durable stream versions do not match journal replay".into(),
             ));
         }
+        for entry in projection_positions.iter().map_err(adapter_error)? {
+            let (projection, position) = entry.map_err(adapter_error)?;
+            projection_prefix(projection.value())?;
+            if position.value() > last_sequence {
+                return Err(StoreError::Verification(format!(
+                    "projection {} position {} is ahead of journal head {last_sequence}",
+                    projection.value(),
+                    position.value()
+                )));
+            }
+        }
+        for entry in projection_records.iter().map_err(adapter_error)? {
+            let (key, value) = entry.map_err(adapter_error)?;
+            let Some((projection, record_key)) = key.value().split_once('\0') else {
+                return Err(StoreError::Verification(
+                    "projection record key has no namespace delimiter".into(),
+                ));
+            };
+            projection_record_key(projection, record_key)?;
+            serde_json::from_slice::<Value>(value.value()).map_err(|error| {
+                StoreError::Verification(format!(
+                    "projection record {} is invalid JSON: {error}",
+                    key.value()
+                ))
+            })?;
+        }
 
         let checkpoint = metadata
             .get("latest_checkpoint")
@@ -816,6 +928,62 @@ impl EventJournal for RedbEventJournal {
         Ok(events)
     }
 
+    fn read_projection_work(
+        &self,
+        from_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<ProjectionWorkItem>, StoreError> {
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let table = read.open_table(OUTBOX).map_err(adapter_error)?;
+        let mut work = Vec::with_capacity(limit.min(1024));
+        for entry in table.range(from_sequence..).map_err(adapter_error)? {
+            if work.len() >= limit {
+                break;
+            }
+            let (sequence, value) = entry.map_err(adapter_error)?;
+            let record: Value = serde_json::from_slice(value.value()).map_err(adapter_error)?;
+            let event_id = record
+                .get("event_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    StoreError::Verification(format!(
+                        "projection outbox record {} has no event_id",
+                        sequence.value()
+                    ))
+                })?;
+            if record.get("global_sequence").and_then(Value::as_u64) != Some(sequence.value()) {
+                return Err(StoreError::Verification(format!(
+                    "projection outbox record {} has a mismatched sequence",
+                    sequence.value()
+                )));
+            }
+            work.push(ProjectionWorkItem {
+                global_sequence: sequence.value(),
+                event_id: event_id.to_owned(),
+            });
+        }
+        Ok(work)
+    }
+
+    fn head(&self) -> Result<(u64, String), StoreError> {
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+        let sequence = metadata
+            .get("last_sequence")
+            .map_err(adapter_error)?
+            .map_or(Ok(0_u64), |value| {
+                serde_json::from_slice(value.value()).map_err(adapter_error)
+            })?;
+        let hash = metadata
+            .get("last_hash")
+            .map_err(adapter_error)?
+            .map_or_else(
+                || Ok::<String, StoreError>(ZERO_HASH.into()),
+                |value| serde_json::from_slice(value.value()).map_err(adapter_error),
+            )?;
+        Ok((sequence, hash))
+    }
+
     fn decrypt_payload(&self, event: &EventEnvelope) -> Result<Value, StoreError> {
         serde_json::from_slice(&self.decrypt(event)?).map_err(adapter_error)
     }
@@ -876,15 +1044,157 @@ impl EventJournal for RedbEventJournal {
     }
 }
 
+impl ProjectionStore for RedbEventJournal {
+    fn position(&self, projection: &str) -> Result<u64, StoreError> {
+        projection_prefix(projection)?;
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let table = read
+            .open_table(PROJECTION_POSITIONS)
+            .map_err(adapter_error)?;
+        Ok(table
+            .get(projection)
+            .map_err(adapter_error)?
+            .map_or(0, |position| position.value()))
+    }
+
+    fn get(&self, projection: &str, key: &str) -> Result<Option<Value>, StoreError> {
+        let namespaced = projection_record_key(projection, key)?;
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let table = read.open_table(PROJECTION_RECORDS).map_err(adapter_error)?;
+        table
+            .get(namespaced.as_str())
+            .map_err(adapter_error)?
+            .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
+            .transpose()
+    }
+
+    fn list(
+        &self,
+        projection: &str,
+        key_prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, Value)>, StoreError> {
+        let namespace = projection_prefix(projection)?;
+        if key_prefix.contains('\0') {
+            return Err(StoreError::Adapter(
+                "projection key prefix may not contain NUL".into(),
+            ));
+        }
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let table = read.open_table(PROJECTION_RECORDS).map_err(adapter_error)?;
+        let mut records = Vec::with_capacity(limit.min(1024));
+        for entry in table.iter().map_err(adapter_error)? {
+            if records.len() >= limit {
+                break;
+            }
+            let (stored_key, value) = entry.map_err(adapter_error)?;
+            let Some(key) = stored_key.value().strip_prefix(&namespace) else {
+                continue;
+            };
+            if !key.starts_with(key_prefix) {
+                continue;
+            }
+            records.push((
+                key.to_owned(),
+                serde_json::from_slice(value.value()).map_err(adapter_error)?,
+            ));
+        }
+        Ok(records)
+    }
+
+    fn apply(&self, batch: ProjectionBatch) -> Result<(), StoreError> {
+        projection_prefix(&batch.projection)?;
+        if batch.through_sequence <= batch.expected_position {
+            return Err(StoreError::Adapter(
+                "projection position must advance".into(),
+            ));
+        }
+        let encoded = batch
+            .mutations
+            .into_iter()
+            .map(|mutation| match mutation {
+                ProjectionMutation::Upsert { key, value } => Ok((
+                    projection_record_key(&batch.projection, &key)?,
+                    Some(serde_json::to_vec(&value).map_err(adapter_error)?),
+                )),
+                ProjectionMutation::Delete { key } => {
+                    Ok((projection_record_key(&batch.projection, &key)?, None))
+                }
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let _guard = self.writer.lock().map_err(adapter_error)?;
+        let write = self.database.begin_write().map_err(adapter_error)?;
+        {
+            let mut positions = write
+                .open_table(PROJECTION_POSITIONS)
+                .map_err(adapter_error)?;
+            let actual = positions
+                .get(batch.projection.as_str())
+                .map_err(adapter_error)?
+                .map_or(0, |position| position.value());
+            if actual != batch.expected_position {
+                return Err(StoreError::Conflict {
+                    stream_id: format!("projection:{}", batch.projection),
+                    expected: batch.expected_position,
+                    actual,
+                });
+            }
+            let mut records = write
+                .open_table(PROJECTION_RECORDS)
+                .map_err(adapter_error)?;
+            for (key, value) in &encoded {
+                if let Some(value) = value {
+                    records
+                        .insert(key.as_str(), value.as_slice())
+                        .map_err(adapter_error)?;
+                } else {
+                    records.remove(key.as_str()).map_err(adapter_error)?;
+                }
+            }
+            positions
+                .insert(batch.projection.as_str(), batch.through_sequence)
+                .map_err(adapter_error)?;
+        }
+        write.commit().map_err(adapter_error)
+    }
+
+    fn reset(&self, projection: &str) -> Result<(), StoreError> {
+        let namespace = projection_prefix(projection)?;
+        let _guard = self.writer.lock().map_err(adapter_error)?;
+        let write = self.database.begin_write().map_err(adapter_error)?;
+        {
+            let mut records = write
+                .open_table(PROJECTION_RECORDS)
+                .map_err(adapter_error)?;
+            let mut keys = Vec::new();
+            for entry in records.iter().map_err(adapter_error)? {
+                let (key, _) = entry.map_err(adapter_error)?;
+                if key.value().starts_with(&namespace) {
+                    keys.push(key.value().to_owned());
+                }
+            }
+            for key in keys {
+                records.remove(key.as_str()).map_err(adapter_error)?;
+            }
+            let mut positions = write
+                .open_table(PROJECTION_POSITIONS)
+                .map_err(adapter_error)?;
+            positions.remove(projection).map_err(adapter_error)?;
+        }
+        write.commit().map_err(adapter_error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX, RedbEventJournal, STREAM_VERSIONS,
-        StaticKeyProvider, adapter_error,
+        EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX, PROJECTION_POSITIONS, RedbEventJournal,
+        RedbWriterLease, STREAM_VERSIONS, StaticKeyProvider, adapter_error,
     };
     use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
-    use colossus_ports::{EventJournal, StoreError};
-    use colossus_testkit::assert_journal_conformance;
+    use colossus_ports::{EventJournal, ProjectionStore, StoreError};
+    use colossus_projection::{ProjectionWorker, default_handlers};
+    use colossus_testkit::{assert_journal_conformance, assert_projection_store_conformance};
     use redb::{Database, ReadableDatabase};
     use serde_json::json;
     use std::{sync::Arc, thread};
@@ -952,6 +1262,62 @@ mod tests {
             &journal,
             event("conformance", 0, 1),
             event("conformance", 0, 2),
+        );
+    }
+
+    #[test]
+    fn shared_projection_store_conformance_suite_passes() {
+        let directory = tempdir().expect("tempdir");
+        let journal = journal(&directory.path().join("state.redb"));
+        assert_projection_store_conformance(&journal);
+    }
+
+    #[test]
+    fn writer_lease_is_exclusive_and_reacquirable() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("state.redb");
+        let first = RedbWriterLease::acquire(&path).expect("first lease");
+        assert!(RedbWriterLease::acquire(&path).is_err());
+        assert!(first.path().ends_with("state.redb.writer.lock"));
+        drop(first);
+        RedbWriterLease::acquire(&path).expect("reacquired lease");
+    }
+
+    #[test]
+    fn projection_worker_catches_up_after_journal_only_restart() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("state.redb");
+        let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+        {
+            let journal = journal_with_keys(&path, Arc::clone(&keys));
+            journal
+                .append(NewEvent {
+                    event_type: "session.created.v1".into(),
+                    stream_id: "session:restarted".into(),
+                    payload: json!({"title": "Recovered"}),
+                    ..event("unused", 0, 1)
+                })
+                .expect("journal append before crash");
+        }
+        let journal = Arc::new(journal_with_keys(&path, keys));
+        let journal_port: Arc<dyn EventJournal> = journal.clone();
+        let store_port: Arc<dyn ProjectionStore> = journal.clone();
+        let worker =
+            ProjectionWorker::new(journal_port, store_port, default_handlers()).expect("worker");
+        assert!(
+            worker
+                .status()
+                .expect("lag")
+                .iter()
+                .all(|item| item.lag == 1)
+        );
+        worker.drain(16, 16).expect("catch up");
+        assert_eq!(
+            journal
+                .get("sessions-v1", "restarted")
+                .expect("record")
+                .expect("session")["title"],
+            json!("Recovered")
         );
     }
 
@@ -1097,6 +1463,39 @@ mod tests {
                 .expect("reason")
                 .expect("recovery reason")
                 .contains("secure anchor")
+        );
+    }
+
+    #[test]
+    fn projection_position_ahead_of_journal_enters_recovery_mode() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("state.redb");
+        let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+        {
+            let journal = journal_with_keys(&path, Arc::clone(&keys));
+            journal.append(event("stream", 0, 1)).expect("append");
+        }
+        let database = Database::create(&path).expect("database");
+        let write = database.begin_write().expect("write");
+        {
+            let mut positions = write
+                .open_table(PROJECTION_POSITIONS)
+                .expect("projection positions");
+            positions
+                .insert("sessions-v1", 2)
+                .expect("corrupt position");
+        }
+        write.commit().expect("commit corruption");
+        drop(database);
+
+        let reopened = journal_with_keys(&path, keys);
+        assert!(reopened.is_recovery_mode());
+        assert!(
+            reopened
+                .recovery_reason()
+                .expect("reason")
+                .expect("recovery reason")
+                .contains("ahead of journal head")
         );
     }
 }

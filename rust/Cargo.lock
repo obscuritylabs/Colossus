@@ -600,8 +600,10 @@ dependencies = [
  "chacha20poly1305",
  "colossus-contracts",
  "colossus-ports",
+ "colossus-projection",
  "colossus-testkit",
  "ed25519-dalek",
+ "fs4",
  "getrandom 0.4.3",
  "hex",
  "keyring",
@@ -662,6 +664,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-projection"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "colossus-contracts",
+ "colossus-ports",
+ "colossus-testkit",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "colossus-runtime"
 version = "0.6.0-alpha.1"
 dependencies = [
@@ -671,6 +684,7 @@ dependencies = [
  "colossus-journal-redb",
  "colossus-policy",
  "colossus-ports",
+ "colossus-projection",
  "colossus-testkit",
  "colossus-workflow",
  "hex",
