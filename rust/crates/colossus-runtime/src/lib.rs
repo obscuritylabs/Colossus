@@ -283,6 +283,16 @@ impl RuntimeConfig {
         }
         if config
             .sandbox
+            .oci_runtime
+            .as_deref()
+            .is_some_and(|path| !valid_oci_runtime_name(path))
+        {
+            return Err(RuntimeError::Config(
+                "OCI runtime must be an exact Docker or Podman executable path".into(),
+            ));
+        }
+        if config
+            .sandbox
             .environment
             .iter()
             .any(|name| !valid_environment_name(name))
@@ -348,6 +358,18 @@ fn valid_oci_image_reference(image: &str) -> bool {
     !repository.is_empty()
         && digest.len() == 64
         && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_oci_runtime_name(runtime: &Path) -> bool {
+    runtime
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "docker" | "podman" | "podman-remote"
+            )
+        })
 }
 
 fn valid_environment_name(name: &str) -> bool {
@@ -1052,6 +1074,13 @@ surprise: true
         assert!(
             RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
             "unsafe environment name was accepted"
+        );
+
+        config.sandbox.environment.clear();
+        config.sandbox.oci_runtime = Some("/usr/bin/container-runtime".into());
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "unknown OCI runtime was accepted"
         );
     }
 

@@ -342,10 +342,13 @@ impl Drop for OciCancellationGuard {
             return;
         };
         let container_name = self.container_name.clone();
+        let Some(arguments) = oci_remove_arguments(&runtime, &container_name) else {
+            return;
+        };
         let mut command = Command::new(runtime);
         command
             .env_clear()
-            .args(["container", "rm", "--force", &container_name])
+            .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -355,6 +358,35 @@ impl Drop for OciCancellationGuard {
             });
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OciRuntimeKind {
+    Docker,
+    Podman,
+}
+
+fn oci_runtime_kind(runtime: &Path) -> Option<OciRuntimeKind> {
+    match runtime
+        .file_stem()
+        .and_then(|name| name.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "docker" => Some(OciRuntimeKind::Docker),
+        "podman" | "podman-remote" => Some(OciRuntimeKind::Podman),
+        _ => None,
+    }
+}
+
+fn oci_remove_arguments(runtime: &Path, name: &str) -> Option<Vec<String>> {
+    let kind = oci_runtime_kind(runtime)?;
+    let mut arguments = vec!["container".into(), "rm".into(), "--force".into()];
+    if kind == OciRuntimeKind::Podman {
+        arguments.extend(["--time".into(), "0".into()]);
+    }
+    arguments.push(name.into());
+    Some(arguments)
 }
 
 impl SandboxProcessExecutor {
@@ -904,6 +936,9 @@ fn oci_command(job: &SandboxJob) -> Result<Command, SandboxHelperError> {
         .oci_runtime
         .as_ref()
         .ok_or_else(|| SandboxHelperError::Setup("OCI runtime is not configured".into()))?;
+    oci_runtime_kind(runtime).ok_or_else(|| {
+        SandboxHelperError::Setup("OCI runtime must be the Docker or Podman executable".into())
+    })?;
     let image = job
         .oci_image
         .as_ref()
@@ -1031,10 +1066,11 @@ fn ensure_oci_container_absent(job: &SandboxJob) -> bool {
         return false;
     };
     let name = oci_container_name(&job.job_id);
+    let Some(remove_arguments) = oci_remove_arguments(runtime, &name) else {
+        return false;
+    };
     let mut remove = Command::new(runtime);
-    remove
-        .env_clear()
-        .args(["container", "rm", "--force", &name]);
+    remove.env_clear().args(remove_arguments);
     let _ = bounded_control_command(remove);
     let mut list = Command::new(runtime);
     list.env_clear().args([
@@ -1055,10 +1091,13 @@ async fn ensure_oci_container_absent_async(runtime: Option<&Path>, name: &str) -
     let Some(runtime) = runtime else {
         return false;
     };
+    let Some(remove_arguments) = oci_remove_arguments(runtime, name) else {
+        return false;
+    };
     let mut remove = TokioCommand::new(runtime);
     remove
         .env_clear()
-        .args(["container", "rm", "--force", name])
+        .args(remove_arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1575,7 +1614,8 @@ fn canonical_origin(scheme: &str, host: &str, port: u16) -> Result<String, Execu
 mod tests {
     use super::{
         AllowlistProxy, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
-        atomic_write, authority, non_public_ip, oci_command, proposed_write_bytes,
+        atomic_write, authority, non_public_ip, oci_command, oci_remove_arguments,
+        proposed_write_bytes,
     };
     use colossus_contracts::{DecisionOutcome, PolicyObligations};
     use colossus_policy::{
@@ -1716,6 +1756,22 @@ mod tests {
         assert!(command.get_envs().any(|(name, value)| {
             name == "TOKEN" && value.is_some_and(|value| value == "secret-value")
         }));
+        assert_eq!(
+            oci_remove_arguments(PathBuf::from("/usr/bin/docker").as_path(), "job")
+                .expect("Docker cleanup"),
+            ["container", "rm", "--force", "job"]
+        );
+        assert_eq!(
+            oci_remove_arguments(PathBuf::from("/usr/bin/podman").as_path(), "job")
+                .expect("Podman cleanup"),
+            ["container", "rm", "--force", "--time", "0", "job"]
+        );
+        assert_eq!(
+            oci_remove_arguments(PathBuf::from("/usr/bin/podman-remote").as_path(), "job")
+                .expect("Podman remote cleanup"),
+            ["container", "rm", "--force", "--time", "0", "job"]
+        );
+        assert!(oci_remove_arguments(PathBuf::from("/usr/bin/unknown").as_path(), "job").is_none());
     }
 
     #[cfg(unix)]

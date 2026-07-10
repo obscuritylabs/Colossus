@@ -74,6 +74,11 @@ timeouts below five seconds fail before execution because they cannot reserve en
 cleanup time. If absence cannot be confirmed, the gateway records `outcome_unknown`
 rather than claiming failure or retrying.
 
+The configured OCI executable must resolve exactly to Docker, Podman, or the official
+`podman-remote` client; arbitrary wrapper executables are rejected. Podman cleanup uses
+an explicit zero-second stop timeout before absence verification, while Docker retains
+its force-removal semantics. Both runtimes execute the same live acceptance suite.
+
 The `windows_job` backend is reserved and currently fails closed because a Job Object
 alone does not isolate filesystem or network access. Windows execution remains disabled
 until OCI path mapping and its live platform suite pass; compilation alone does not
@@ -84,8 +89,8 @@ explicitly authorize a downgrade.
 The native process-count and memory ceilings are supervisor-enforced; OCI supplies hard
 kernel/container ceilings. `sandbox doctor` reports the selected backend and available
 isolation mechanism so operators can reject an unsuitable deployment before effects run.
-The opt-in live security suites exercise Docker and a real OPA process, including mTLS;
-normal workspace tests remain credential-free and network-free.
+The opt-in live security suites exercise Docker, Podman, and a real OPA process,
+including mTLS; normal workspace tests remain credential-free and network-free.
 
 The sections below describe the frozen Python 0.5 implementation. They remain relevant
 to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.

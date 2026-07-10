@@ -41,7 +41,7 @@ obsolete Go launcher.
   ownership; exact-origin network policy; a loopback allowlist proxy; bounded output and
   resources; post-effect HTTP/file quarantine; and hardened network-off OCI command
   construction. Broker downgrades require an explicit configuration and policy grant.
-- Live Docker acceptance for bind mounts, immutable/preloaded images, environment
+- Live Docker and Podman acceptance for bind mounts, immutable/preloaded images, environment
   clearing, read-only roots, network denial, timeouts, cancellation cleanup, and audited
   unknown outcomes. Live OPA acceptance covers readiness, allow/deny, approval proof
   re-evaluation, post-effect denial, invalid decisions, outages, decision-log warnings,
@@ -94,7 +94,7 @@ cutover. The following planned work remains:
 - Chroma semantic candidates, embedding providers, queued index lag operations, and
   application-layer policy re-filtering of canonical memory records.
 - Windows filesystem/network runtime acceptance and OCI allowlist-proxy injection. Native
-  macOS/Linux isolation, live network-off OCI execution/recovery, OCI command hardening,
+  macOS/Linux isolation, live network-off Docker/Podman execution/recovery, OCI command hardening,
   the native allowlist proxy, authenticated helper, explicit broker downgrade rules,
   resource supervision, and native/OCI escape tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.

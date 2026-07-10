@@ -25,7 +25,7 @@ The external-runtime acceptance suites are ignored during ordinary offline tests
 them explicitly with a preloaded immutable image and local OPA/OpenSSL binaries:
 
 ```sh
-COLOSSUS_OCI_RUNTIME=/absolute/path/to/docker \
+COLOSSUS_OCI_RUNTIME=/absolute/path/to/docker-or-podman \
 COLOSSUS_OCI_IMAGE='python:3.13-slim@sha256:...' \
 cargo test -p colossus-cli --test oci_sandbox -- --ignored
 
@@ -34,7 +34,8 @@ COLOSSUS_OPENSSL_BIN=/absolute/path/to/openssl \
 cargo test -p colossus-policy --test opa_live -- --ignored
 ```
 
-CI runs these live suites separately and compiles all targets on macOS and Windows.
+CI runs the OCI suite against both Docker and Podman, runs live OPA/mTLS separately,
+and compiles all targets on macOS and Windows.
 
 ```sh
 cargo fmt --all -- --check

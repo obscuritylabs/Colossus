@@ -122,7 +122,7 @@ jobs:
         run: cargo check --locked --workspace --all-targets
 
   rust-live-security:
-    name: Rust live OCI and OPA security
+    name: Rust live OCI (Docker/Podman) and OPA security
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: rust
@@ -150,6 +150,19 @@ jobs:
       - name: Run live OCI escape and recovery suite
         env:
           COLOSSUS_OCI_RUNTIME: /usr/bin/docker
+          COLOSSUS_OCI_IMAGE: python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+        run: cargo test --locked -p colossus-cli --test oci_sandbox -- --ignored
+
+      - name: Install and preload Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman
+          podman version
+          podman pull python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+
+      - name: Run live Podman escape and recovery suite
+        env:
+          COLOSSUS_OCI_RUNTIME: /usr/bin/podman
           COLOSSUS_OCI_IMAGE: python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
         run: cargo test --locked -p colossus-cli --test oci_sandbox -- --ignored
 
