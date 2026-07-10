@@ -11,6 +11,7 @@ members = [
     "crates/colossus-provider",
     "crates/colossus-tools",
     "crates/colossus-agent",
+    "crates/colossus-session",
     "crates/colossus-memory",
     "crates/colossus-workflow",
     "crates/colossus-runtime",
@@ -65,6 +66,7 @@ colossus-policy = { path = "crates/colossus-policy" }
 colossus-provider = { path = "crates/colossus-provider" }
 colossus-tools = { path = "crates/colossus-tools" }
 colossus-agent = { path = "crates/colossus-agent" }
+colossus-session = { path = "crates/colossus-session" }
 colossus-ports = { path = "crates/colossus-ports" }
 colossus-projection = { path = "crates/colossus-projection" }
 colossus-sandbox = { path = "crates/colossus-sandbox" }

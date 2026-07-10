@@ -21,6 +21,8 @@ cargo run -p colossus-cli --bin colossus-rs -- provider doctor
 cargo run -p colossus-cli --bin colossus-rs -- provider models
 cargo run -p colossus-cli --bin colossus-rs -- models routes
 cargo run -p colossus-cli --bin colossus-rs -- tools list
+cargo run -p colossus-cli --bin colossus-rs -- sessions list
+cargo run -p colossus-cli --bin colossus-rs -- run --resume 'Continue the latest session'
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
@@ -36,6 +38,13 @@ Fresh config enables only the pure `echo` tool. Configure `agent.maxTurns` in `1
 and select exact active names from `echo`, `filesystem.read`, and `network.http` under
 `agent.tools`. File and HTTP tools remain subject to the same policy actions, filesystem
 roots, and network destinations as direct runtime calls.
+
+Normal runs create a durable session automatically and return its id. Use
+`run --session ID` for an exact session, `run --resume` for the most recently updated
+session, and `sessions list|show|messages|new` for discovery. The REPL keeps an active session and
+offers `/resume` as a numbered picker while retaining `/session resume ID` as the exact
+escape hatch. Message bodies stay in the encrypted journal; projections contain bounded
+session summaries only.
 
 Inspect sandbox readiness or run an explicitly configured exact executable:
 

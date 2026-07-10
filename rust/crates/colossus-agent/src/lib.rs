@@ -7,8 +7,8 @@ use colossus_contracts::{
     ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, ProviderEvent, ToolCall, ToolResult,
 };
 use colossus_ports::{
-    EventJournal, ModelProvider, ModelProviderError, StoreError, ToolError, ToolExecutor,
-    ToolRegistry,
+    EventJournal, ModelProvider, ModelProviderError, SessionRepository, StoreError, ToolError,
+    ToolExecutor, ToolRegistry,
 };
 use colossus_tools::model_definitions;
 use serde_json::{Value, json};
@@ -61,6 +61,7 @@ pub struct AgentService {
     provider: Arc<dyn ModelProvider>,
     tools: Arc<dyn ToolRegistry>,
     executor: Arc<dyn ToolExecutor>,
+    sessions: Arc<dyn SessionRepository>,
 }
 
 impl AgentService {
@@ -70,12 +71,14 @@ impl AgentService {
         provider: Arc<dyn ModelProvider>,
         tools: Arc<dyn ToolRegistry>,
         executor: Arc<dyn ToolExecutor>,
+        sessions: Arc<dyn SessionRepository>,
     ) -> Self {
         Self {
             journal,
             provider,
             tools,
             executor,
+            sessions,
         }
     }
 
@@ -87,6 +90,19 @@ impl AgentService {
         prompt: &str,
         max_turns: u16,
     ) -> Result<AgentRunResult, AgentError> {
+        self.run_in_session(role, instructions, prompt, max_turns, None)
+            .await
+    }
+
+    /// Execute a run attached to an exact existing session, or create a new session.
+    pub async fn run_in_session(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+    ) -> Result<AgentRunResult, AgentError> {
         if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
                 "role is required and max_turns must be in 1..={MAX_TURNS}"
@@ -94,19 +110,56 @@ impl AgentService {
         }
         let started = Instant::now();
         let run_id = Uuid::now_v7().to_string();
+        let session_id = match requested_session_id {
+            Some(id) => {
+                self.sessions
+                    .get_session(id)?
+                    .ok_or_else(|| StoreError::NotFound(format!("session {id}")))?;
+                id.to_owned()
+            }
+            None => {
+                let id = Uuid::now_v7().to_string();
+                self.sessions.create_session(
+                    &id,
+                    Some(&session_title(prompt)),
+                    Actor {
+                        actor_type: ActorType::User,
+                        id: "terminal-user".into(),
+                    },
+                )?;
+                id
+            }
+        };
         let stream_id = format!("run:{run_id}");
         let route = self.provider.route(role)?;
         let context = ExecutionContext {
             correlation_id: run_id.clone(),
+            session_id: Some(session_id.clone()),
             run_id: Some(run_id.clone()),
             ..ExecutionContext::default()
         };
-        let mut messages = vec![ModelMessage {
+        let mut messages = self
+            .sessions
+            .list_messages(&session_id)?
+            .into_iter()
+            .map(|record| record.message)
+            .collect::<Vec<_>>();
+        let user_message = ModelMessage {
             role: ModelMessageRole::User,
             content: prompt.into(),
             tool_call_id: None,
             tool_calls: Vec::new(),
-        }];
+        };
+        self.sessions.append_message(
+            &session_id,
+            &run_id,
+            user_message.clone(),
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+        )?;
+        messages.push(user_message);
         let definitions = model_definitions(self.tools.as_ref());
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
@@ -221,8 +274,23 @@ impl AgentService {
                 let output = final_output
                     .or_else(|| (!visible_text.is_empty()).then_some(visible_text.clone()));
                 if let Some(output) = output {
+                    self.sessions.append_message(
+                        &session_id,
+                        &run_id,
+                        ModelMessage {
+                            role: ModelMessageRole::Assistant,
+                            content: output.clone(),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                        },
+                        Actor {
+                            actor_type: ActorType::Model,
+                            id: route.profile.clone(),
+                        },
+                    )?;
                     return Ok(AgentRunResult {
                         run_id,
+                        session_id: Some(session_id),
                         role: role.into(),
                         profile: route.profile,
                         model: route.model,
@@ -242,7 +310,7 @@ impl AgentService {
                 return Err(AgentError::EmptyTurn);
             }
 
-            messages.push(ModelMessage {
+            let assistant_message = ModelMessage {
                 role: ModelMessageRole::Assistant,
                 content: visible_text,
                 tool_call_id: None,
@@ -254,7 +322,17 @@ impl AgentService {
                         arguments: call.arguments.clone(),
                     })
                     .collect(),
-            });
+            };
+            self.sessions.append_message(
+                &session_id,
+                &run_id,
+                assistant_message.clone(),
+                Actor {
+                    actor_type: ActorType::Model,
+                    id: route.profile.clone(),
+                },
+            )?;
+            messages.push(assistant_message);
             for call in calls {
                 let result = match self.tools.validate(&call) {
                     Ok(_) => match self.executor.execute(call.clone(), context.clone()).await {
@@ -298,12 +376,19 @@ impl AgentService {
                         "exit_code": result.exit_code,
                     }),
                 )?;
-                messages.push(ModelMessage {
+                let tool_message = ModelMessage {
                     role: ModelMessageRole::Tool,
                     content: result.output,
                     tool_call_id: Some(result.call_id),
                     tool_calls: Vec::new(),
-                });
+                };
+                self.sessions.append_message(
+                    &session_id,
+                    &run_id,
+                    tool_message.clone(),
+                    system_actor(),
+                )?;
+                messages.push(tool_message);
             }
         }
 
@@ -354,6 +439,22 @@ fn recovery_prompt(attempt: u8, definitions: &[colossus_contracts::ModelToolDefi
     )
 }
 
+fn session_title(prompt: &str) -> String {
+    let compact = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut title = String::new();
+    for character in compact.chars().take(80) {
+        if title.len().saturating_add(character.len_utf8()) > 200 {
+            break;
+        }
+        title.push(character);
+    }
+    if title.is_empty() {
+        "New session".into()
+    } else {
+        title
+    }
+}
+
 fn provider_event_payload(event: &ProviderEvent) -> (&'static str, Value) {
     match event {
         ProviderEvent::ModelDelta { text } => ("model.delta.v1", json!({"text": text})),
@@ -401,6 +502,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use colossus_contracts::{ProviderRoute, ProviderTurn};
+    use colossus_session::EventSourcedSessionRepository;
     use colossus_testkit::InMemoryEventJournal;
     use colossus_tools::StaticToolRegistry;
     use std::{
@@ -525,6 +627,7 @@ mod tests {
             Arc::clone(&provider) as Arc<dyn ModelProvider>,
             tools,
             Arc::new(EchoTools),
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
         );
         let result = service
             .run("primary", "test", "use echo", 4)
@@ -570,6 +673,7 @@ mod tests {
             Arc::clone(&provider) as Arc<dyn ModelProvider>,
             Arc::new(StaticToolRegistry::builtins(&[]).expect("empty catalog")),
             Arc::new(EchoTools),
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
         );
         let result = service
             .run("primary", "test", "recover", 4)
@@ -612,11 +716,13 @@ mod tests {
         let executor = Arc::new(CountingTools {
             calls: AtomicUsize::new(0),
         });
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
         let service = AgentService::new(
-            Arc::new(InMemoryEventJournal::default()),
+            Arc::clone(&journal),
             Arc::clone(&provider) as Arc<dyn ModelProvider>,
             Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
             Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+            Arc::new(EventSourcedSessionRepository::new(journal)),
         );
         let result = service
             .run("primary", "test", "invalid tool", 3)
@@ -651,6 +757,7 @@ mod tests {
             provider,
             Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
             Arc::new(EchoTools),
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
         );
         let error = service
             .run("primary", "test", "loop", 1)
@@ -664,5 +771,47 @@ mod tests {
                 .iter()
                 .any(|event| event.event_type == "run.max_turns.v1")
         );
+    }
+
+    #[tokio::test]
+    async fn resumed_session_restores_prior_messages_and_persists_new_turn() {
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            turn(vec![ProviderEvent::FinalOutput {
+                text: "first answer".into(),
+            }]),
+            turn(vec![ProviderEvent::FinalOutput {
+                text: "second answer".into(),
+            }]),
+        ]));
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+        let service = AgentService::new(
+            journal,
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(StaticToolRegistry::builtins(&[]).expect("catalog")),
+            Arc::new(EchoTools),
+            Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+        );
+        let first = service
+            .run("primary", "test", "first question", 3)
+            .await
+            .expect("first run");
+        let session_id = first.session_id.expect("session id");
+        let second = service
+            .run_in_session("primary", "test", "second question", 3, Some(&session_id))
+            .await
+            .expect("resumed run");
+        assert_eq!(second.session_id.as_deref(), Some(session_id.as_str()));
+        let requests = provider.requests.lock().expect("requests");
+        assert_eq!(requests[1].messages.len(), 3);
+        assert_eq!(requests[1].messages[0].content, "first question");
+        assert_eq!(requests[1].messages[1].content, "first answer");
+        assert_eq!(requests[1].messages[2].content, "second question");
+        let summary = sessions
+            .get_session(&session_id)
+            .expect("summary")
+            .expect("session");
+        assert_eq!(summary.message_count, 4);
+        assert_eq!(summary.last_run_id.as_deref(), Some(second.run_id.as_str()));
     }
 }

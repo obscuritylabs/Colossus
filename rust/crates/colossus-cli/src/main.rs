@@ -51,6 +51,8 @@ enum Command {
     Models(ModelsCommand),
     /// Inspect the active strict tool catalog.
     Tools(ToolsCommand),
+    /// Create, inspect, and resume durable sessions.
+    Sessions(SessionsCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -64,6 +66,12 @@ enum Command {
         /// Override the configured bounded model-turn limit.
         #[arg(long)]
         max_turns: Option<u16>,
+        /// Attach to this exact durable session.
+        #[arg(long, conflicts_with = "resume")]
+        session: Option<String>,
+        /// Resume the most recently updated session.
+        #[arg(long, conflicts_with = "session")]
+        resume: bool,
     },
     /// Run the credential-free, network-free echo smoke provider.
     Echo {
@@ -71,7 +79,14 @@ enum Command {
         message: String,
     },
     /// Start the modern interactive terminal.
-    Repl,
+    Repl {
+        /// Start attached to this exact durable session.
+        #[arg(long, conflicts_with = "resume")]
+        session: Option<String>,
+        /// Start attached to the most recently updated session.
+        #[arg(long, conflicts_with = "session")]
+        resume: bool,
+    },
     /// Recover abandoned runs and drain queued resumable work.
     Worker {
         /// Recover state and return without repeatedly polling.
@@ -290,6 +305,27 @@ enum ToolsAction {
     List,
 }
 
+#[derive(Args)]
+struct SessionsCommand {
+    #[command(subcommand)]
+    command: SessionsAction,
+}
+
+#[derive(Subcommand)]
+enum SessionsAction {
+    /// List recent sessions newest first.
+    List {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Show one exact session summary.
+    Show { session_id: String },
+    /// Show append-only messages for one session.
+    Messages { session_id: String },
+    /// Create an empty session.
+    New { title: Option<String> },
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -319,6 +355,10 @@ fn init_config(path: &Path) -> Result<(), Box<dyn Error>> {
 fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Error>> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+fn cli_error(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::other(message.into())
 }
 
 fn parse_environment(entries: Vec<String>) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
@@ -423,10 +463,73 @@ async fn workflow_command(
     Ok(())
 }
 
-async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
+fn choose_session(
+    runtime: &Runtime,
+    editor: &mut Reedline,
+    prompt: &DefaultPrompt,
+    limit: usize,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let mut sessions = runtime
+        .list_sessions(100)?
+        .into_iter()
+        .filter(|session| session.message_count > 0)
+        .collect::<Vec<_>>();
+    sessions.truncate(limit);
+    if sessions.is_empty() {
+        println!("No sessions exist yet.");
+        return Ok(None);
+    }
+    println!("Choose a session to resume:");
+    for (index, session) in sessions.iter().enumerate() {
+        println!(
+            "  {}. {}  {}  messages={}",
+            index + 1,
+            session.id,
+            session.title.as_deref().unwrap_or("Untitled"),
+            session.message_count
+        );
+    }
+    println!("Enter a number or exact session id (blank cancels).");
+    let Signal::Success(choice) = editor.read_line(prompt)? else {
+        return Ok(None);
+    };
+    let choice = choice.trim();
+    if choice.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(index) = choice.parse::<usize>()
+        && let Some(session) = index.checked_sub(1).and_then(|index| sessions.get(index))
+    {
+        return Ok(Some(session.id.clone()));
+    }
+    runtime
+        .get_session(choice)?
+        .map(|session| session.id)
+        .ok_or_else(|| cli_error(format!("session not found: {choice}")))
+        .map_err(Into::into)
+        .map(Some)
+}
+
+async fn repl(
+    runtime: &Runtime,
+    initial_session: Option<String>,
+    resume_latest: bool,
+) -> Result<(), Box<dyn Error>> {
     let mut editor = Reedline::create();
     let prompt = DefaultPrompt::default();
-    println!("Colossus Rust alpha. /help for commands; Ctrl-D to exit.");
+    let mut active_session_id = if resume_latest {
+        runtime.latest_session()?.id
+    } else if let Some(session_id) = initial_session {
+        runtime
+            .get_session(&session_id)?
+            .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?
+            .id
+    } else {
+        runtime.create_session(None)?.id
+    };
+    println!(
+        "Colossus Rust alpha. session={active_session_id}; /help for commands; Ctrl-D to exit."
+    );
     loop {
         match editor.read_line(&prompt)? {
             Signal::Success(line) => {
@@ -439,7 +542,7 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
                 }
                 if line == "/help" {
                     println!(
-                        "/workflow list | /workflow status RUN_ID | /audit verify | /projection status | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -458,9 +561,47 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
                     print_json(&runtime.projection_status()?)?;
                 } else if line == "/tools" {
                     print_json(&runtime.tool_specs())?;
+                } else if line == "/sessions" {
+                    print_json(&runtime.list_sessions(20)?)?;
+                } else if line == "/session" || line == "/session show" {
+                    print_json(
+                        &runtime
+                            .get_session(&active_session_id)?
+                            .ok_or_else(|| cli_error("active session disappeared"))?,
+                    )?;
+                } else if line == "/session new" {
+                    active_session_id = runtime.create_session(None)?.id;
+                    println!("session={active_session_id}");
+                } else if let Some(session_id) = line.strip_prefix("/session resume ") {
+                    let session_id = session_id.trim();
+                    active_session_id = runtime
+                        .get_session(session_id)?
+                        .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?
+                        .id;
+                    println!("session={active_session_id}");
+                } else if line == "/resume" || line.starts_with("/resume ") {
+                    let limit = line
+                        .strip_prefix("/resume ")
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::parse::<usize>)
+                        .transpose()?
+                        .unwrap_or(10)
+                        .clamp(1, 100);
+                    if let Some(session_id) = choose_session(runtime, &mut editor, &prompt, limit)?
+                    {
+                        active_session_id = session_id;
+                        println!("session={active_session_id}");
+                    }
                 } else {
                     let result = runtime
-                        .run_model("primary", "You are Colossus.", line)
+                        .run_model_in_session(
+                            "primary",
+                            "You are Colossus.",
+                            line,
+                            None,
+                            &active_session_id,
+                        )
                         .await?;
                     println!("{}", result.output);
                 }
@@ -561,19 +702,47 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Tools(command) => match command.command {
             ToolsAction::List => print_json(&runtime.tool_specs())?,
         },
+        Command::Sessions(command) => match command.command {
+            SessionsAction::List { limit } => print_json(&runtime.list_sessions(limit)?)?,
+            SessionsAction::Show { session_id } => print_json(
+                &runtime
+                    .get_session(&session_id)?
+                    .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?,
+            )?,
+            SessionsAction::Messages { session_id } => {
+                print_json(&runtime.session_messages(&session_id)?)?;
+            }
+            SessionsAction::New { title } => {
+                print_json(&runtime.create_session(title.as_deref())?)?;
+            }
+        },
         Command::Run {
             prompt,
             role,
             instructions,
             max_turns,
+            session,
+            resume,
         } => {
-            let result = match max_turns {
-                Some(max_turns) => {
+            let session_id = if resume {
+                Some(runtime.latest_session()?.id)
+            } else {
+                session
+            };
+            let result = match session_id {
+                Some(session_id) => {
                     runtime
-                        .run_model_with_max_turns(&role, &instructions, &prompt, max_turns)
+                        .run_model_in_session(&role, &instructions, &prompt, max_turns, &session_id)
                         .await?
                 }
-                None => runtime.run_model(&role, &instructions, &prompt).await?,
+                None => match max_turns {
+                    Some(max_turns) => {
+                        runtime
+                            .run_model_with_max_turns(&role, &instructions, &prompt, max_turns)
+                            .await?
+                    }
+                    None => runtime.run_model(&role, &instructions, &prompt).await?,
+                },
             };
             print_json(&result)?;
         }
@@ -581,7 +750,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let result = runtime.echo(&message).await?;
             println!("{}", String::from_utf8_lossy(&result.bytes));
         }
-        Command::Repl => repl(&runtime).await?,
+        Command::Repl { session, resume } => repl(&runtime, session, resume).await?,
         Command::Worker { once } => {
             let recovered = runtime.workflows().recover_interrupted()?;
             let drained = runtime.workflows().drain().await?;

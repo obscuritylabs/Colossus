@@ -16,6 +16,7 @@ colossus-provider.workspace = true
 colossus-ports.workspace = true
 colossus-projection.workspace = true
 colossus-sandbox.workspace = true
+colossus-session.workspace = true
 colossus-tools.workspace = true
 colossus-workflow.workspace = true
 hex.workspace = true

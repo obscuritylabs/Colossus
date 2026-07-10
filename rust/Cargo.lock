@@ -654,6 +654,7 @@ dependencies = [
  "async-trait",
  "colossus-contracts",
  "colossus-ports",
+ "colossus-session",
  "colossus-testkit",
  "colossus-tools",
  "serde_json",
@@ -807,6 +808,7 @@ dependencies = [
  "colossus-projection",
  "colossus-provider",
  "colossus-sandbox",
+ "colossus-session",
  "colossus-testkit",
  "colossus-tools",
  "colossus-workflow",
@@ -846,6 +848,16 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "colossus-session"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "colossus-contracts",
+ "colossus-ports",
+ "colossus-testkit",
+ "serde_json",
 ]
 
 [[package]]

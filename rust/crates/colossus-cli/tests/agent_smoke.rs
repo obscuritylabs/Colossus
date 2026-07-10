@@ -109,6 +109,47 @@ sandbox:
     assert_eq!(result["output"], "offline agent");
     assert_eq!(result["profile"], "echo");
     assert_eq!(result["event_count"], 3);
+    let session_id = result["session_id"]
+        .as_str()
+        .expect("session id")
+        .to_owned();
+
+    let resumed = run(
+        binary,
+        &config,
+        &["run", "second turn", "--session", &session_id],
+    );
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let resumed: Value = serde_json::from_slice(&resumed.stdout).expect("resumed JSON");
+    assert_eq!(resumed["session_id"], session_id);
+    assert_eq!(resumed["output"], "second turn");
+
+    let latest = run(binary, &config, &["run", "third turn", "--resume"]);
+    assert!(
+        latest.status.success(),
+        "{}",
+        String::from_utf8_lossy(&latest.stderr)
+    );
+    let latest: Value = serde_json::from_slice(&latest.stdout).expect("latest JSON");
+    assert_eq!(latest["session_id"], session_id);
+
+    let sessions = run(binary, &config, &["sessions", "list"]);
+    assert!(sessions.status.success());
+    let sessions: Value = serde_json::from_slice(&sessions.stdout).expect("sessions JSON");
+    assert_eq!(sessions[0]["id"], session_id);
+    assert_eq!(sessions[0]["message_count"], 6);
+    assert_eq!(sessions[0]["last_user_preview"], "third turn");
+
+    let messages = run(binary, &config, &["sessions", "messages", &session_id]);
+    assert!(messages.status.success());
+    let messages: Value = serde_json::from_slice(&messages.stdout).expect("messages JSON");
+    assert_eq!(messages.as_array().map(Vec::len), Some(6));
+    assert_eq!(messages[0]["message"]["content"], "offline agent");
+    assert_eq!(messages[5]["message"]["content"], "third turn");
 
     let audit = run(binary, &config, &["audit", "show", "--limit", "20"]);
     assert!(audit.status.success());

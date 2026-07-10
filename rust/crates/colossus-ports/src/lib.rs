@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ApprovalProof, EffectRequest, EventEnvelope, ExecutionContext, MemoryRecord,
     ModelRequest, NewEvent, PolicyDecision, ProjectionBatch, ProjectionWorkItem, ProviderRoute,
-    ProviderTurn, SignedCheckpoint, ToolCall, ToolResult, ToolSpec, WorkflowDefinition,
-    WorkflowRun,
+    ProviderTurn, SessionMessage, SessionSummary, SignedCheckpoint, ToolCall, ToolResult, ToolSpec,
+    WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -240,8 +240,34 @@ pub trait AggregateRepository: Send + Sync {
     fn list(&self, limit: usize) -> Result<Vec<Value>, StoreError>;
 }
 
-/// Session aggregate repository.
-pub trait SessionRepository: AggregateRepository {}
+/// Canonical event-sourced session and append-only message repository.
+pub trait SessionRepository: Send + Sync {
+    /// Create an empty durable session with a caller-supplied stable id.
+    fn create_session(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        actor: Actor,
+    ) -> Result<SessionSummary, StoreError>;
+
+    /// Reconstruct one session summary from canonical events.
+    fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError>;
+
+    /// List recent reconstructed sessions, newest first.
+    fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError>;
+
+    /// Append one message using optimistic session-stream concurrency.
+    fn append_message(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        message: colossus_contracts::ModelMessage,
+        actor: Actor,
+    ) -> Result<SessionMessage, StoreError>;
+
+    /// Reconstruct every append-only message in sequence order.
+    fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError>;
+}
 /// Task, decision, plan, and goal repository.
 pub trait WorkRepository: AggregateRepository {}
 /// Canonical event-sourced memory lifecycle repository.

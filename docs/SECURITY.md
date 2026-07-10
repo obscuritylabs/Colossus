@@ -155,6 +155,13 @@ effect requests with model/run provenance and can execute only through the gatew
 policy denial and unknown outcomes stop the loop. Malformed provider argument syntax is
 never repaired locally and can trigger at most two metadata-only correction turns.
 
+Rust session message bodies remain encrypted canonical journal payloads. The disposable
+session projection stores only bounded discovery fields and never copies full assistant
+or tool-result content. Resume resolves an exact existing session stream and restores
+provider-neutral messages without changing policy, filesystem, workspace, approval, or
+network configuration. Every resumed provider and tool effect carries the session and
+run identifiers in its execution context.
+
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
 are validated against the agent allowlist and active tool catalog before provider calls;
 `required_tools` never auto-approves a tool. Skill audit records include names, versions,

@@ -34,6 +34,13 @@ malformed-argument correction turns, and emits a distinct max-turn terminal even
 runtime adapters translate validated effectful tools into normal gateway requests; pure
 computation such as `echo` remains outside the permission boundary by design.
 
+`colossus-session` is the canonical session repository. Session creation and every user,
+assistant, and tool-result message append to one optimistic `session:{id}` journal
+stream. Agent runs restore those canonical messages before composing the next provider
+request and attach the same session id to run/effect provenance. The `sessions-v1`
+projection contains only bounded discovery metadata (counts, last run, title, and recent
+user preview), never full message bodies; it can be deleted and rebuilt from the journal.
+
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
 subprocess specifications are authenticated to a one-shot helper, which clears the
 environment and applies the selected native or OCI isolation profile before spawning.
@@ -50,8 +57,9 @@ suite passes.
 The journal is authoritative. Application state is reconstructed by replay, and redb
 atomically appends events, advances stream/global versions, and queues projection work.
 Named projection workers consume that outbox in global order and atomically commit
-record mutations with an optimistic position. Session and work repositories serve those
-disposable views; reset/rebuild always replays the canonical journal. A cross-process
+record mutations with an optimistic position. Work repositories and session discovery
+serve those disposable views; canonical session messages are reconstructed directly
+from journal streams. Reset/rebuild always replays the canonical journal. A cross-process
 writer lease prevents embedded surfaces and the headless worker from opening concurrent
 redb writers.
 Workflow definitions are exact-content hash pinned and workflow runs are normal journal

@@ -1,5 +1,5 @@
 [package]
-name = "colossus-agent"
+name = "colossus-session"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,16 +8,10 @@ license.workspace = true
 [dependencies]
 colossus-contracts.workspace = true
 colossus-ports.workspace = true
-colossus-tools.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 colossus-testkit = { path = "../colossus-testkit" }
-colossus-session.workspace = true
-tokio.workspace = true
 
 [lints]
 workspace = true

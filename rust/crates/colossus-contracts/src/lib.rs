@@ -321,6 +321,42 @@ pub struct ModelMessage {
     pub tool_calls: Vec<ModelToolCall>,
 }
 
+/// Durable reconstructed local session summary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSummary {
+    /// Stable session identifier.
+    pub id: String,
+    /// Optional bounded human-readable title.
+    pub title: Option<String>,
+    /// UTC creation timestamp from the canonical creation event.
+    pub created_at: String,
+    /// UTC timestamp of the last canonical session event.
+    pub updated_at: String,
+    /// Number of persisted conversation messages.
+    pub message_count: u64,
+    /// Last attached run identifier.
+    pub last_run_id: Option<String>,
+    /// Bounded recent user-message preview.
+    pub last_user_preview: Option<String>,
+}
+
+/// Durable append-only session message record.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionMessage {
+    /// Owning session identifier.
+    pub session_id: String,
+    /// Run that produced or consumed the message.
+    pub run_id: String,
+    /// One-based sequence within the session conversation.
+    pub sequence: u64,
+    /// Provider-neutral message content and tool correlation.
+    pub message: ModelMessage,
+    /// UTC timestamp from the canonical message event.
+    pub created_at: String,
+}
+
 /// Provider-neutral assistant tool call preserved between turns.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -511,6 +547,8 @@ pub struct ProviderReadiness {
 pub struct AgentRunResult {
     /// Stable UUIDv7 run identifier.
     pub run_id: String,
+    /// Durable session containing this run's conversation messages.
+    pub session_id: Option<String>,
     /// Selected model role.
     pub role: String,
     /// Resolved provider profile.

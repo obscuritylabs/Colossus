@@ -7,7 +7,7 @@ use colossus_contracts::{
     Actor, ActorType, AgentRunResult, DecisionOutcome, EffectRequest, EventClassification,
     ExecutionContext, FilesystemGrant, NewEvent, ProjectionStatus, ProviderModelInfo,
     ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
-    QuarantinedEffectResult, ToolCall, ToolResult, ToolSpec,
+    QuarantinedEffectResult, SessionMessage, SessionSummary, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -24,8 +24,7 @@ use colossus_ports::{
     WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{
-    ProjectedSessionRepository, ProjectedWorkRepository, ProjectionRunReport, ProjectionWorker,
-    default_handlers,
+    ProjectedWorkRepository, ProjectionRunReport, ProjectionWorker, default_handlers,
 };
 use colossus_provider::{
     ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind, ProviderProfile,
@@ -35,6 +34,7 @@ use colossus_sandbox::{
     FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig,
     SandboxProcessExecutor, sandbox_doctor,
 };
+use colossus_session::EventSourcedSessionRepository;
 use colossus_tools::{StaticToolRegistry, ToolCatalogError};
 use colossus_workflow::{
     EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,
@@ -688,9 +688,8 @@ impl Runtime {
             Arc::clone(&projection_store),
             default_handlers(),
         )?);
-        let sessions: Arc<dyn SessionRepository> = Arc::new(ProjectedSessionRepository::new(
-            Arc::clone(&projection_store),
-        ));
+        let sessions: Arc<dyn SessionRepository> =
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
             Arc::new(ProjectedWorkRepository::new(Arc::clone(&projection_store)));
         if !journal.is_recovery_mode() {
@@ -844,6 +843,7 @@ impl Runtime {
             model_provider,
             Arc::clone(&tool_registry),
             tool_executor,
+            Arc::clone(&sessions),
         ));
         let workflow_repository: Arc<dyn WorkflowRepository> =
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
@@ -902,6 +902,45 @@ impl Runtime {
         Arc::clone(&self.sessions)
     }
 
+    /// Create a durable empty session.
+    pub fn create_session(&self, title: Option<&str>) -> Result<SessionSummary, RuntimeError> {
+        let id = Uuid::now_v7().to_string();
+        self.sessions
+            .create_session(
+                &id,
+                title,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "terminal-user".into(),
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    /// Reconstruct one exact session summary.
+    pub fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, RuntimeError> {
+        self.sessions.get_session(id).map_err(Into::into)
+    }
+
+    /// List recent sessions newest first.
+    pub fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, RuntimeError> {
+        self.sessions.list_sessions(limit).map_err(Into::into)
+    }
+
+    /// Resolve the most recently updated session.
+    pub fn latest_session(&self) -> Result<SessionSummary, RuntimeError> {
+        self.sessions
+            .list_sessions(1)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::Store(StoreError::NotFound("no sessions exist".into())))
+    }
+
+    /// Reconstruct append-only messages for an exact session.
+    pub fn session_messages(&self, id: &str) -> Result<Vec<SessionMessage>, RuntimeError> {
+        self.sessions.list_messages(id).map_err(Into::into)
+    }
+
     /// Current task, decision, plan, and goal snapshots.
     pub fn work_repository(&self) -> Arc<dyn WorkRepository> {
         Arc::clone(&self.work)
@@ -946,7 +985,7 @@ impl Runtime {
                 "positions": self.projection_status()?,
             },
             "repository_adapters": {
-                "sessions": "redb-projection:sessions-v1",
+                "sessions": "event-journal:sessions-v1+messages-v1",
                 "work": "redb-projection:work-v1",
                 "memory": "event-journal+redb-projection:memory-v1",
                 "workflows": "event-journal+redb-projection:workflows-v1",
@@ -1080,6 +1119,27 @@ impl Runtime {
     ) -> Result<AgentRunResult, RuntimeError> {
         self.agent
             .run(role, instructions, prompt, max_turns)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Execute a run while restoring and appending one exact durable session.
+    pub async fn run_model_in_session(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: &str,
+    ) -> Result<AgentRunResult, RuntimeError> {
+        self.agent
+            .run_in_session(
+                role,
+                instructions,
+                prompt,
+                max_turns.unwrap_or(self.agent_max_turns),
+                Some(session_id),
+            )
             .await
             .map_err(Into::into)
     }

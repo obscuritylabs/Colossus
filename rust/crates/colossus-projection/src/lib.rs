@@ -4,8 +4,7 @@
 
 use colossus_contracts::{EventEnvelope, ProjectionBatch, ProjectionMutation, ProjectionStatus};
 use colossus_ports::{
-    AggregateRepository, EventJournal, ProjectionStore, SessionRepository, StoreError,
-    WorkRepository,
+    AggregateRepository, EventJournal, ProjectionStore, StoreError, WorkRepository,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -241,10 +240,51 @@ impl ProjectionHandler for SessionProjection {
         let Some(id) = event.stream_id.strip_prefix("session:") else {
             return Ok(Vec::new());
         };
-        Ok(upsert(
-            id,
-            merge_event(store, self.name(), id, event, payload)?,
-        ))
+        let mut current = store.get(self.name(), id)?.map(object).unwrap_or_default();
+        match event.event_type.as_str() {
+            "session.created.v1" => {
+                current.insert(
+                    "title".into(),
+                    payload.get("title").cloned().unwrap_or(Value::Null),
+                );
+                current.insert("created_at".into(), json!(event.occurred_at));
+                current.insert("message_count".into(), json!(0));
+                current.insert("last_run_id".into(), Value::Null);
+                current.insert("last_user_preview".into(), Value::Null);
+            }
+            "session.message.appended.v1" => {
+                let message_count = current
+                    .get("message_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                current.insert("message_count".into(), json!(message_count));
+                current.insert(
+                    "last_run_id".into(),
+                    payload.get("run_id").cloned().unwrap_or(Value::Null),
+                );
+                if payload.pointer("/message/role").and_then(Value::as_str) == Some("user") {
+                    let preview = payload
+                        .pointer("/message/content")
+                        .and_then(Value::as_str)
+                        .map(|content| content.chars().take(160).collect::<String>());
+                    current.insert(
+                        "last_user_preview".into(),
+                        preview.map_or(Value::Null, Value::String),
+                    );
+                }
+            }
+            _ => {}
+        }
+        current.insert("id".into(), Value::String(id.into()));
+        current.insert("stream_id".into(), Value::String(event.stream_id.clone()));
+        current.insert("stream_version".into(), json!(event.stream_version));
+        current.insert(
+            "last_event_type".into(),
+            Value::String(event.event_type.clone()),
+        );
+        current.insert("updated_at".into(), json!(event.occurred_at));
+        Ok(upsert(id, Value::Object(current)))
     }
 }
 
@@ -425,8 +465,6 @@ impl AggregateRepository for ProjectedSessionRepository {
             .collect())
     }
 }
-
-impl SessionRepository for ProjectedSessionRepository {}
 
 /// Work repository served from task/decision/plan/goal projections.
 pub struct ProjectedWorkRepository {
@@ -618,16 +656,34 @@ mod tests {
                 json!({"title": "Session"}),
             ))
             .expect("append");
+        journal
+            .append(event(
+                "session:one",
+                1,
+                "session.message.appended.v1",
+                json!({
+                    "run_id": "run-1",
+                    "sequence": 1,
+                    "message": {
+                        "role": "user",
+                        "content": "private message",
+                        "tool_call_id": null,
+                        "tool_calls": [],
+                    }
+                }),
+            ))
+            .expect("message");
         worker(journal, Arc::clone(&store))
             .drain(8, 8)
             .expect("drain");
         let store_port: Arc<dyn ProjectionStore> = store;
         let repository = ProjectedSessionRepository::new(store_port);
         assert_eq!(repository.list(10).expect("list").len(), 1);
-        assert_eq!(
-            repository.get("one").expect("get").expect("record")["title"],
-            json!("Session")
-        );
+        let record = repository.get("one").expect("get").expect("record");
+        assert_eq!(record["title"], json!("Session"));
+        assert_eq!(record["message_count"], json!(1));
+        assert_eq!(record["last_user_preview"], json!("private message"));
+        assert!(record.get("message").is_none());
     }
 
     #[test]

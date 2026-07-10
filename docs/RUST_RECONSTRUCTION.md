@@ -71,6 +71,11 @@ obsolete Go launcher.
   max-turn exhaustion, and model-visible `echo`, `filesystem.read`, and `network.http`
   tools. Effectful tools execute through the existing gateway; only `echo` is active by
   default.
+- Canonical event-sourced sessions with stable UUIDv7 ids, bounded titles and previews,
+  append-only user/assistant/tool messages, optimistic stream versions, newest-first
+  discovery, exact and latest resume, provider-history restoration, and restart
+  acceptance across separate CLI processes. The REPL maintains one active session and
+  exposes `/sessions`, exact resume, new session, and a numbered `/resume` picker.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
 
@@ -87,6 +92,8 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- p
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider models
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- models routes
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tools list
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sessions list
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
@@ -121,7 +128,7 @@ cutover. The following planned work remains:
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
 - Incremental provider transport streaming, remaining core filesystem/search/write/git/
-  process tools, sessions, usage accounting, and context compaction. The durable
+  process tools, usage accounting, and context compaction. The durable
   multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
   permit-bound file reads, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
