@@ -8,6 +8,7 @@ members = [
     "crates/colossus-projection",
     "crates/colossus-sandbox",
     "crates/colossus-policy",
+    "crates/colossus-provider",
     "crates/colossus-memory",
     "crates/colossus-workflow",
     "crates/colossus-runtime",
@@ -52,12 +53,14 @@ thiserror = "2.0.18"
 time = { version = "0.3.53", features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 uuid = { version = "1.23.4", features = ["serde", "v7"] }
+url = "2.5.8"
 
 colossus-contracts = { path = "crates/colossus-contracts" }
 colossus-domain = { path = "crates/colossus-domain" }
 colossus-journal-redb = { path = "crates/colossus-journal-redb" }
 colossus-memory = { path = "crates/colossus-memory" }
 colossus-policy = { path = "crates/colossus-policy" }
+colossus-provider = { path = "crates/colossus-provider" }
 colossus-ports = { path = "crates/colossus-ports" }
 colossus-projection = { path = "crates/colossus-projection" }
 colossus-sandbox = { path = "crates/colossus-sandbox" }

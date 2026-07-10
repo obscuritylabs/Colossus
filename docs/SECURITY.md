@@ -136,6 +136,16 @@ lockfiles, SBOM, manifests, signatures, and skills.
 Changes to subprocess execution, approval policy, audit records, bundle handling, or
 skill loading should include security-focused tests.
 
+Rust provider profiles store credential references such as `env:OPENAI_API_KEY`, never
+credential values. The complete logical model request and those references cross the
+effect gateway before execution. A provider adapter resolves the referenced value only
+after receiving a valid one-use permit, and the adapter rejects mismatched profile,
+endpoint, credential disclosure, or network-origin obligations. Responses remain in a
+bounded quarantine until optional post-effect policy allows release. Only normalized
+visible text, strict object-shaped tool calls, and explicitly typed safe reasoning
+summaries enter the model event stream; raw response chunks and hidden reasoning fields
+are discarded.
+
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
 are validated against the agent allowlist and active tool catalog before provider calls;
 `required_tools` never auto-approves a tool. Skill audit records include names, versions,

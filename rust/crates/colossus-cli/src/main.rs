@@ -45,6 +45,21 @@ enum Command {
     Network(NetworkCommand),
     /// Validate and operate durable workflows.
     Workflow(WorkflowCommand),
+    /// Inspect and diagnose configured model providers.
+    Provider(ProviderCommand),
+    /// Inspect model role routing.
+    Models(ModelsCommand),
+    /// Execute one audited model turn through the configured role.
+    Run {
+        /// User prompt sent as the complete logical request content.
+        prompt: String,
+        /// Configured model role.
+        #[arg(long, default_value = "primary")]
+        role: String,
+        /// System/developer instructions for this turn.
+        #[arg(long, default_value = "You are Colossus.")]
+        instructions: String,
+    },
     /// Run the credential-free, network-free echo smoke provider.
     Echo {
         /// Text returned by the deterministic provider.
@@ -230,6 +245,34 @@ enum WorkflowAction {
     Cancel { run_id: String },
 }
 
+#[derive(Args)]
+struct ProviderCommand {
+    #[command(subcommand)]
+    command: ProviderAction,
+}
+
+#[derive(Subcommand)]
+enum ProviderAction {
+    /// Show configured profiles without resolving credentials.
+    Profiles,
+    /// Exercise the profile model-catalog endpoint through policy.
+    Doctor { profile: Option<String> },
+    /// List normalized models through policy.
+    Models { profile: Option<String> },
+}
+
+#[derive(Args)]
+struct ModelsCommand {
+    #[command(subcommand)]
+    command: ModelsAction,
+}
+
+#[derive(Subcommand)]
+enum ModelsAction {
+    /// Show role-to-profile mappings.
+    Routes,
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -381,7 +424,7 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
                     println!(
                         "/workflow list | /workflow status RUN_ID | /audit verify | /projection status | /exit"
                     );
-                    println!("Any other line is sent to the offline echo provider.");
+                    println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
                     workflow_command(runtime, WorkflowAction::List).await?;
                 } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
@@ -397,8 +440,10 @@ async fn repl(runtime: &Runtime) -> Result<(), Box<dyn Error>> {
                 } else if line == "/projection status" {
                     print_json(&runtime.projection_status()?)?;
                 } else {
-                    let result = runtime.echo(line).await?;
-                    println!("{}", String::from_utf8_lossy(&result.bytes));
+                    let result = runtime
+                        .run_model("primary", "You are Colossus.", line)
+                        .await?;
+                    println!("{}", result.output);
                 }
             }
             Signal::CtrlD | Signal::CtrlC => break,
@@ -482,6 +527,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         },
         Command::Workflow(command) => workflow_command(&runtime, command.command).await?,
+        Command::Provider(command) => match command.command {
+            ProviderAction::Profiles => print_json(&runtime.provider_profiles())?,
+            ProviderAction::Doctor { profile } => {
+                print_json(&runtime.provider_doctor(profile.as_deref()).await?)?;
+            }
+            ProviderAction::Models { profile } => {
+                print_json(&runtime.provider_models(profile.as_deref()).await?)?;
+            }
+        },
+        Command::Models(command) => match command.command {
+            ModelsAction::Routes => print_json(&runtime.provider_routes())?,
+        },
+        Command::Run {
+            prompt,
+            role,
+            instructions,
+        } => print_json(&runtime.run_model(&role, &instructions, &prompt).await?)?,
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;
             println!("{}", String::from_utf8_lossy(&result.bytes));

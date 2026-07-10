@@ -330,7 +330,13 @@ impl SafetyKernel {
         if decision.outcome == DecisionOutcome::Allow && request.action == "process.spawn" {
             validate_process_obligations(request, obligations)?;
         }
-        if decision.outcome == DecisionOutcome::Allow && request.action == "network.http" {
+        if decision.outcome == DecisionOutcome::Allow
+            && (request.action == "network.http"
+                || matches!(
+                    request.action.as_str(),
+                    "provider.openai.responses" | "provider.openai.chat" | "provider.models"
+                ))
+        {
             let origin = canonical_network_origin(&request.resource)?;
             if !obligations
                 .network_destinations

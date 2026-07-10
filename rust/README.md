@@ -6,9 +6,28 @@ at the `python-v0.5.0` tag and `python-legacy` branch.
 
 The initial alpha implements the contracts, encrypted redb journal, exclusive writer
 lease, restartable redb projections and projected repositories, policy gateway, durable
-workflow core, and permit-bound filesystem/process/HTTP adapters. macOS and Linux use a
-one-shot authenticated Seatbelt/Landlock helper. Windows process execution remains
-fail-closed until OCI path mapping and the live Windows acceptance suite are complete.
+workflow core, and permit-bound filesystem/process/HTTP/provider adapters. macOS and
+Linux use a one-shot authenticated Seatbelt/Landlock helper. Windows process execution
+remains fail-closed until OCI path mapping and the live Windows acceptance suite are
+complete.
+
+The default fresh configuration routes `primary` to the credential-free echo profile,
+so the full one-shot agent path is available offline:
+
+```sh
+cargo run -p colossus-cli --bin colossus-rs -- run 'Reply with exactly: ok'
+cargo run -p colossus-cli --bin colossus-rs -- provider profiles
+cargo run -p colossus-cli --bin colossus-rs -- provider doctor
+cargo run -p colossus-cli --bin colossus-rs -- provider models
+cargo run -p colossus-cli --bin colossus-rs -- models routes
+```
+
+Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
+`baseUrl`, an optional `env:VARIABLE` credential reference (required for Responses), and
+an exact canonical origin in `sandbox.networkDestinations`. Their generation action and
+`provider.models` must also be explicitly allowed by the built-in policy. Credentials
+are resolved only inside the adapter after authorization. The current slice is one
+bounded request; incremental streaming and multi-turn tool execution remain pending.
 
 Inspect sandbox readiness or run an explicitly configured exact executable:
 

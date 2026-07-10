@@ -3,8 +3,10 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
-    Actor, ActorType, DecisionOutcome, EffectRequest, EventClassification, ExecutionContext,
-    FilesystemGrant, NewEvent, ProjectionStatus, QuarantinedEffectResult,
+    Actor, ActorType, AgentRunResult, DecisionOutcome, EffectRequest, EventClassification,
+    ExecutionContext, FilesystemGrant, ModelMessage, ModelMessageRole, ModelRequest, NewEvent,
+    ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck,
+    ProviderTurn, QuarantinedEffectResult,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -23,6 +25,10 @@ use colossus_projection::{
     ProjectedSessionRepository, ProjectedWorkRepository, ProjectionRunReport, ProjectionWorker,
     default_handlers,
 };
+use colossus_provider::{
+    ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind, ProviderProfile,
+    ProviderRegistry,
+};
 use colossus_sandbox::{
     FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig,
     SandboxProcessExecutor, sandbox_doctor,
@@ -34,10 +40,11 @@ use colossus_workflow::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -54,9 +61,61 @@ pub struct RuntimeConfig {
     pub policy: PolicyConfig,
     /// Workflow definition libraries.
     pub workflows: WorkflowLibraryConfig,
+    /// Provider profiles and role routing.
+    #[serde(default)]
+    pub providers: ProvidersConfig,
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
+}
+
+/// Strict provider profiles and role routing.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProvidersConfig {
+    /// Named provider profiles.
+    pub profiles: BTreeMap<String, ProviderProfileConfig>,
+    /// Named model roles mapped to profiles. Specialized roles fall back to `primary`.
+    pub roles: BTreeMap<String, String>,
+}
+
+impl Default for ProvidersConfig {
+    fn default() -> Self {
+        Self {
+            profiles: BTreeMap::from([(
+                "echo".into(),
+                ProviderProfileConfig {
+                    kind: ProviderKind::Echo,
+                    model: "echo".into(),
+                    base_url: None,
+                    credential_reference: None,
+                    timeout_ms: default_provider_timeout_ms(),
+                },
+            )]),
+            roles: BTreeMap::from([("primary".into(), "echo".into())]),
+        }
+    }
+}
+
+/// One strict provider profile. Kind-specific invariants are validated at startup.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderProfileConfig {
+    /// Provider adapter kind.
+    pub kind: ProviderKind,
+    /// Default model identifier.
+    pub model: String,
+    /// API version base URL for network providers.
+    pub base_url: Option<String>,
+    /// Credential reference such as `env:OPENAI_API_KEY`.
+    pub credential_reference: Option<String>,
+    /// Provider transport timeout.
+    #[serde(default = "default_provider_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+const fn default_provider_timeout_ms() -> u64 {
+    120_000
 }
 
 /// Strict sandbox composition and built-in-policy defaults.
@@ -340,6 +399,7 @@ impl RuntimeConfig {
                 "networked OCI sandboxing requires ociProxyImage".into(),
             ));
         }
+        validate_provider_config(&config)?;
         Ok(config)
     }
 
@@ -370,6 +430,7 @@ impl RuntimeConfig {
                 repository: PathBuf::from(".colossus/workflows"),
                 user: PathBuf::from("workflows"),
             },
+            providers: ProvidersConfig::default(),
             sandbox: SandboxConfig::default(),
         }
     }
@@ -421,6 +482,64 @@ fn normalized_oci_path(value: &str) -> bool {
             .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
 }
 
+fn provider_profile(
+    name: &str,
+    config: &ProviderProfileConfig,
+) -> Result<ProviderProfile, RuntimeError> {
+    ProviderProfile::new(
+        name,
+        config.kind,
+        config.model.clone(),
+        config.base_url.clone(),
+        config.credential_reference.clone(),
+        config.timeout_ms,
+    )
+    .map_err(Into::into)
+}
+
+fn provider_registry(config: &ProvidersConfig) -> Result<ProviderRegistry, RuntimeError> {
+    let profiles = config
+        .profiles
+        .iter()
+        .map(|(name, profile)| provider_profile(name, profile).map(ProviderExecutor::new))
+        .collect::<Result<Vec<_>, _>>()?;
+    ProviderRegistry::new(profiles, config.roles.clone()).map_err(Into::into)
+}
+
+fn validate_provider_config(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    const ROLES: [&str; 7] = [
+        "primary",
+        "risk_evaluator",
+        "context_summarizer",
+        "subagent_default",
+        "research_planner",
+        "research_worker",
+        "research_synthesizer",
+    ];
+    if config
+        .providers
+        .roles
+        .keys()
+        .any(|role| !ROLES.contains(&role.as_str()))
+    {
+        return Err(RuntimeError::Config(
+            "provider roles contain an unknown role name".into(),
+        ));
+    }
+    let _ = provider_registry(&config.providers)?;
+    for (name, profile) in &config.providers.profiles {
+        let profile = provider_profile(name, profile)?;
+        if let Some(origin) = profile.network_origin()?
+            && !config.sandbox.network_destinations.contains(&origin)
+        {
+            return Err(RuntimeError::Config(format!(
+                "provider profile {name} origin {origin} is absent from sandbox.networkDestinations"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Runtime construction or application failure.
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -436,6 +555,9 @@ pub enum RuntimeError {
     /// Effect authorization or execution failed.
     #[error(transparent)]
     Gateway(#[from] GatewayError),
+    /// Provider configuration or normalized output failed.
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
     /// Workflow validation or execution failed.
     #[error(transparent)]
     Workflow(#[from] WorkflowError),
@@ -472,6 +594,7 @@ pub struct Runtime {
     work: Arc<dyn WorkRepository>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
+    providers: Arc<ProviderRegistry>,
     filesystem_executor: Arc<FilesystemExecutor>,
     process_executor: Arc<SandboxProcessExecutor>,
     http_executor: Arc<HttpExecutor>,
@@ -532,6 +655,7 @@ impl Runtime {
         if !journal.is_recovery_mode() {
             recover_unknown_effects(journal.as_ref())?;
         }
+        let providers = Arc::new(provider_registry(&config.providers)?);
         let policy: Arc<dyn PolicyDecisionPoint> = match &config.policy {
             PolicyConfig::BuiltIn {
                 allow_actions,
@@ -649,6 +773,10 @@ impl Runtime {
             Arc::new(DenyApproval),
             SafetyKernel::new([
                 "provider.echo".to_owned(),
+                "provider.openai.responses".to_owned(),
+                "provider.openai.chat".to_owned(),
+                "provider.models".to_owned(),
+                "provider.call".to_owned(),
                 "workflow.execute".to_owned(),
                 "filesystem.read".to_owned(),
                 "filesystem.list".to_owned(),
@@ -682,6 +810,7 @@ impl Runtime {
             work,
             policy,
             gateway,
+            providers,
             filesystem_executor,
             process_executor,
             http_executor,
@@ -776,6 +905,243 @@ impl Runtime {
     /// Native/OCI helper readiness and configured fallback status.
     pub fn sandbox_doctor(&self) -> SandboxDoctorReport {
         sandbox_doctor(&self.sandbox_executor_config)
+    }
+
+    /// Provider profile readiness without performing network effects.
+    pub fn provider_profiles(&self) -> Vec<ProviderReadiness> {
+        self.providers.profiles()
+    }
+
+    /// Role-to-profile routing with specialized-role fallback handled by the registry.
+    pub fn provider_routes(&self) -> Value {
+        json!(self.providers.routes())
+    }
+
+    /// List models for a profile through the universal effect boundary.
+    pub async fn provider_models(
+        &self,
+        profile: Option<&str>,
+    ) -> Result<Vec<ProviderModelInfo>, RuntimeError> {
+        let provider = profile.map_or_else(
+            || self.providers.resolve("primary"),
+            |profile| self.providers.profile(profile),
+        )?;
+        if provider.profile().kind == ProviderKind::Echo {
+            return Ok(vec![ProviderModelInfo {
+                id: provider.profile().model.clone(),
+                object: Some("model".into()),
+                owned_by: Some("colossus".into()),
+            }]);
+        }
+        let endpoint = provider
+            .profile()
+            .models_endpoint()?
+            .ok_or_else(|| RuntimeError::Config("provider has no models endpoint".into()))?;
+        let mut request = effect_request(
+            system_actor("provider-diagnostics"),
+            "provider.models",
+            endpoint,
+            serde_json::to_value(ProviderEffectInput {
+                profile: provider.profile().name.clone(),
+                request: None,
+            })
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec!["provider.call".into()];
+        request.credential_references = provider.credential_reference().into_iter().collect();
+        let result = self.gateway.execute(request, provider.as_ref()).await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Check a provider profile by exercising its models endpoint through policy.
+    pub async fn provider_doctor(
+        &self,
+        profile: Option<&str>,
+    ) -> Result<ProviderReadiness, RuntimeError> {
+        let provider = profile.map_or_else(
+            || self.providers.resolve("primary"),
+            |profile| self.providers.profile(profile),
+        )?;
+        let mut readiness = provider.static_readiness();
+        if provider.profile().kind == ProviderKind::Echo {
+            return Ok(readiness);
+        }
+        match self.provider_models(Some(&provider.profile().name)).await {
+            Ok(models) => {
+                readiness.ready = true;
+                readiness.checks = vec![ProviderReadinessCheck {
+                    name: "models_endpoint".into(),
+                    status: "pass".into(),
+                    detail: format!(
+                        "Reached the configured models endpoint and normalized {} model records.",
+                        models.len()
+                    ),
+                }];
+            }
+            Err(error) => {
+                readiness.ready = false;
+                readiness.checks = vec![ProviderReadinessCheck {
+                    name: "models_endpoint".into(),
+                    status: "fail".into(),
+                    detail: error.to_string(),
+                }];
+            }
+        }
+        Ok(readiness)
+    }
+
+    /// Execute one provider turn and durably record normalized safe events.
+    pub async fn run_model(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+    ) -> Result<AgentRunResult, RuntimeError> {
+        let started = Instant::now();
+        let run_id = Uuid::now_v7().to_string();
+        let stream_id = format!("run:{run_id}");
+        let provider = self.providers.resolve(role)?;
+        let model_request = ModelRequest {
+            model: provider.profile().model.clone(),
+            instructions: instructions.into(),
+            messages: vec![ModelMessage {
+                role: ModelMessageRole::User,
+                content: prompt.into(),
+                tool_call_id: None,
+            }],
+            tools: Vec::new(),
+        };
+        let context = ExecutionContext {
+            correlation_id: run_id.clone(),
+            run_id: Some(run_id.clone()),
+            ..ExecutionContext::default()
+        };
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id: stream_id.clone(),
+            expected_stream_version: 0,
+            classification: EventClassification::Domain,
+            event_type: "model.request.prepared.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            context: context.clone(),
+            payload: json!({
+                "role": role,
+                "profile": provider.profile().name,
+                "provider": provider.profile().kind.as_str(),
+                "model": provider.profile().model,
+                "message_count": model_request.messages.len(),
+                "tool_count": model_request.tools.len(),
+                "prompt_bytes": prompt.len(),
+            }),
+        })?;
+        let input = ProviderEffectInput {
+            profile: provider.profile().name.clone(),
+            request: Some(model_request),
+        };
+        let mut effect = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            provider.profile().kind.generation_action(),
+            provider.profile().generation_endpoint()?,
+            serde_json::to_value(input).map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        effect.capabilities = vec!["provider.call".into()];
+        effect.context = context.clone();
+        effect.credential_references = provider.credential_reference().into_iter().collect();
+        let released = match self.gateway.execute(effect, provider.as_ref()).await {
+            Ok(released) => released,
+            Err(error) => {
+                self.journal.append(NewEvent {
+                    event_version: 1,
+                    stream_id,
+                    expected_stream_version: 1,
+                    classification: EventClassification::Domain,
+                    event_type: "error.v1".into(),
+                    actor: system_actor("provider-runtime"),
+                    context,
+                    payload: json!({"message": error.to_string(), "recoverable": false}),
+                })?;
+                return Err(error.into());
+            }
+        };
+        let turn: ProviderTurn = match serde_json::from_slice(&released.bytes) {
+            Ok(turn) => turn,
+            Err(error) => {
+                self.journal.append(NewEvent {
+                    event_version: 1,
+                    stream_id,
+                    expected_stream_version: 1,
+                    classification: EventClassification::Domain,
+                    event_type: "error.v1".into(),
+                    actor: system_actor("provider-runtime"),
+                    context,
+                    payload: json!({
+                        "message": "released provider output violated the normalized turn contract",
+                        "detail": error.to_string(),
+                        "recoverable": false,
+                    }),
+                })?;
+                return Err(RuntimeError::Provider(ProviderError::Malformed(
+                    "released provider output violated the normalized turn contract".into(),
+                )));
+            }
+        };
+        let mut stream_version = 1_u64;
+        let mut final_output = None;
+        for event in &turn.events {
+            let (event_type, payload) = provider_event_payload(event);
+            self.journal.append(NewEvent {
+                event_version: 1,
+                stream_id: stream_id.clone(),
+                expected_stream_version: stream_version,
+                classification: EventClassification::Domain,
+                event_type,
+                actor: Actor {
+                    actor_type: ActorType::Model,
+                    id: provider.profile().name.clone(),
+                },
+                context: context.clone(),
+                payload,
+            })?;
+            stream_version = stream_version.saturating_add(1);
+            if let ProviderEvent::FinalOutput { text } = event {
+                final_output = Some(text.clone());
+            }
+        }
+        let output = match final_output {
+            Some(output) => output,
+            None => {
+                let message = "provider turn produced no final visible output; tool-loop continuation is not implemented in this slice";
+                self.journal.append(NewEvent {
+                    event_version: 1,
+                    stream_id,
+                    expected_stream_version: stream_version,
+                    classification: EventClassification::Domain,
+                    event_type: "error.v1".into(),
+                    actor: system_actor("provider-runtime"),
+                    context,
+                    payload: json!({"message": message, "recoverable": false}),
+                })?;
+                return Err(RuntimeError::Provider(ProviderError::Malformed(
+                    message.into(),
+                )));
+            }
+        };
+        Ok(AgentRunResult {
+            run_id,
+            role: role.into(),
+            profile: turn.profile,
+            model: turn.model,
+            output,
+            event_count: stream_version,
+            elapsed_seconds: started.elapsed().as_secs_f64(),
+        })
     }
 
     /// Credential-free, network-free smoke provider routed through policy and journal.
@@ -977,6 +1343,24 @@ fn recover_unknown_effects(journal: &dyn EventJournal) -> Result<u64, StoreError
     Ok(recovered)
 }
 
+fn provider_event_payload(event: &ProviderEvent) -> (String, Value) {
+    match event {
+        ProviderEvent::ModelDelta { text } => ("model.delta.v1".into(), json!({"text": text})),
+        ProviderEvent::ReasoningSummary { summary } => {
+            ("reasoning.summary.v1".into(), json!({"summary": summary}))
+        }
+        ProviderEvent::ToolCallRequested {
+            call_id,
+            name,
+            arguments,
+        } => (
+            "tool.call.requested.v1".into(),
+            json!({"call_id": call_id, "name": name, "arguments": arguments}),
+        ),
+        ProviderEvent::FinalOutput { text } => ("final.output.v1".into(), json!({"text": text})),
+    }
+}
+
 fn sha2_compat(secret: &[u8; 32], label: &[u8]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     // The journal signing secret is already random. This local KDF only domain-separates
@@ -1078,11 +1462,12 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeConfig, recover_unknown_effects};
+    use super::{ProviderProfileConfig, RuntimeConfig, recover_unknown_effects};
     use colossus_contracts::{
         Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, NewEvent,
     };
     use colossus_ports::EventJournal;
+    use colossus_provider::ProviderKind;
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
     use std::{fs, sync::Arc};
@@ -1110,6 +1495,90 @@ workflows:
 surprise: true
 "#;
         assert!(RuntimeConfig::from_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn provider_config_requires_secure_origin_grants_and_known_roles() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        config.providers.profiles.insert(
+            "local".into(),
+            ProviderProfileConfig {
+                kind: ProviderKind::OpenAiCompatible,
+                model: "local-model".into(),
+                base_url: Some("http://127.0.0.1:12434/v1".into()),
+                credential_reference: None,
+                timeout_ms: 5_000,
+            },
+        );
+        config
+            .providers
+            .roles
+            .insert("primary".into(), "local".into());
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "provider origin without a sandbox grant was accepted"
+        );
+
+        config
+            .sandbox
+            .network_destinations
+            .push("http://127.0.0.1:12434".into());
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
+            "loopback provider with an exact origin grant was rejected"
+        );
+
+        config
+            .providers
+            .roles
+            .insert("surprise".into(), "local".into());
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "unknown provider role was accepted"
+        );
+    }
+
+    #[test]
+    fn remote_provider_http_and_responses_without_credentials_fail_closed() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        config.providers.profiles.insert(
+            "remote".into(),
+            ProviderProfileConfig {
+                kind: ProviderKind::OpenAiCompatible,
+                model: "remote-model".into(),
+                base_url: Some("http://example.com/v1".into()),
+                credential_reference: None,
+                timeout_ms: 5_000,
+            },
+        );
+        config
+            .providers
+            .roles
+            .insert("primary".into(), "remote".into());
+        config
+            .sandbox
+            .network_destinations
+            .push("http://example.com".into());
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "remote plaintext provider URL was accepted"
+        );
+
+        config.providers.profiles.insert(
+            "remote".into(),
+            ProviderProfileConfig {
+                kind: ProviderKind::OpenAiResponses,
+                model: "gpt-test".into(),
+                base_url: Some("https://api.openai.com/v1".into()),
+                credential_reference: None,
+                timeout_ms: 5_000,
+            },
+        );
+        config.sandbox.network_destinations = vec!["https://api.openai.com".into()];
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "OpenAI Responses profile without a credential reference was accepted"
+        );
     }
 
     #[test]

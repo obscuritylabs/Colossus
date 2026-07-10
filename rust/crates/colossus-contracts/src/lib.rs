@@ -292,6 +292,166 @@ pub struct CredentialReference {
     pub value_hash: Option<String>,
 }
 
+/// Provider-neutral message role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelMessageRole {
+    /// Trusted run instructions.
+    System,
+    /// Human or application input.
+    User,
+    /// Prior visible model output.
+    Assistant,
+    /// Result of an explicitly authorized tool call.
+    Tool,
+}
+
+/// One provider-neutral model message.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelMessage {
+    /// Message provenance role.
+    pub role: ModelMessageRole,
+    /// Visible bounded text.
+    pub content: String,
+    /// Tool-call identifier for tool results.
+    pub tool_call_id: Option<String>,
+}
+
+/// One strict function tool exposed to a provider.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelToolDefinition {
+    /// Stable tool name.
+    pub name: String,
+    /// Bounded human-readable description.
+    pub description: String,
+    /// JSON Schema for object arguments.
+    pub input_schema: Value,
+}
+
+/// Provider-neutral request for one model turn.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelRequest {
+    /// Selected model identifier.
+    pub model: String,
+    /// Trusted instructions supplied separately from conversation messages.
+    pub instructions: String,
+    /// Ordered conversation messages.
+    pub messages: Vec<ModelMessage>,
+    /// Strict tools available for this turn.
+    pub tools: Vec<ModelToolDefinition>,
+}
+
+/// Provider-neutral safe event produced by one model turn.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProviderEvent {
+    /// Visible text delta. Non-streaming providers emit one complete delta.
+    ModelDelta {
+        /// Visible text.
+        text: String,
+    },
+    /// Provider-declared safe reasoning summary, never hidden reasoning.
+    ReasoningSummary {
+        /// Bounded safe summary.
+        summary: String,
+    },
+    /// Strict validated tool call request.
+    ToolCallRequested {
+        /// Provider call identifier.
+        call_id: String,
+        /// Registered tool name.
+        name: String,
+        /// Parsed JSON object arguments.
+        arguments: Value,
+    },
+    /// Final visible assistant text.
+    FinalOutput {
+        /// Complete visible output.
+        text: String,
+    },
+}
+
+/// Normalized result of one provider turn.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderTurn {
+    /// Configured profile name.
+    pub profile: String,
+    /// Provider adapter kind.
+    pub provider: String,
+    /// Model identifier used by the request.
+    pub model: String,
+    /// Provider response identifier when supplied.
+    pub response_id: Option<String>,
+    /// Ordered safe normalized events.
+    pub events: Vec<ProviderEvent>,
+}
+
+/// One model visible through a provider catalog endpoint.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderModelInfo {
+    /// Provider model identifier.
+    pub id: String,
+    /// Provider object/type label when supplied.
+    pub object: Option<String>,
+    /// Owning organization when supplied.
+    pub owned_by: Option<String>,
+}
+
+/// One bounded provider readiness check.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderReadinessCheck {
+    /// Stable check name.
+    pub name: String,
+    /// `pass`, `fail`, `not_checked`, or `not_applicable`.
+    pub status: String,
+    /// Bounded detail without credentials or response bodies.
+    pub detail: String,
+}
+
+/// Provider profile readiness and capability report.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderReadiness {
+    /// Profile name.
+    pub profile: String,
+    /// Adapter kind.
+    pub provider: String,
+    /// Whether every required check passed.
+    pub ready: bool,
+    /// Whether the provider supports strict tool calls.
+    pub tool_calls: bool,
+    /// Whether the provider supports transport streaming.
+    pub streaming: bool,
+    /// Ordered bounded checks.
+    pub checks: Vec<ProviderReadinessCheck>,
+}
+
+/// Result of one application-level model run.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRunResult {
+    /// Stable UUIDv7 run identifier.
+    pub run_id: String,
+    /// Selected model role.
+    pub role: String,
+    /// Resolved provider profile.
+    pub profile: String,
+    /// Model used for the turn.
+    pub model: String,
+    /// Complete visible assistant output.
+    pub output: String,
+    /// Number of events durably recorded on the run stream, including preparation.
+    pub event_count: u64,
+    /// Elapsed wall time in fractional seconds.
+    pub elapsed_seconds: f64,
+}
+
 /// Complete, versioned request sent to a policy decision point.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

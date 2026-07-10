@@ -56,9 +56,14 @@ obsolete Go launcher.
 - Canonical event-sourced memory create/archive/supersede reconstruction plus a
   disposable Tantivy lexical index with event-id idempotency, candidate-id search,
   removal, status, and rebuild behavior.
-- A composition root, strict YAML config, credential-free/network-free echo provider,
-  Reedline REPL, audit and policy diagnostics, workflow CLI surface, and one-shot worker
-  recovery/drain entry point.
+- A composition root and strict YAML config with role-routed echo, OpenAI Responses, and
+  OpenAI-compatible provider profiles. Provider generation and model-catalog calls use
+  permit-bound adapters, disclose credential references (never values) to policy, resolve
+  credentials only after authorization, quarantine and normalize responses, discard raw
+  hidden reasoning, and durably append safe typed model events.
+- One-shot `run`, provider profile/doctor/model diagnostics, role-route inspection, a
+  Reedline REPL using the same primary-role application path, audit and policy diagnostics,
+  workflow CLI surface, and one-shot worker recovery/drain entry point.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
 
@@ -69,6 +74,11 @@ From the repository root:
 ```bash
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- config init
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- echo hello
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run 'Reply with exactly: ok'
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider profiles
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider doctor
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider models
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- models routes
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
@@ -102,8 +112,11 @@ cutover. The following planned work remains:
   helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
-- OpenAI Responses and OpenAI-compatible providers, the core tool catalog, provider
-  diagnostics/routing, sessions, streaming, and context compaction.
+- Incremental provider streaming, the multi-turn tool-execution loop, bounded malformed
+  tool-call recovery, the core tool catalog, sessions, usage accounting, and context
+  compaction. The current provider slice performs one bounded request and persists its
+  normalized event list; a tool request is audited and then fails explicitly until the
+  continuation loop lands.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
 - Goals, durable subagents, research/citations, skills/resources, telemetry, packs,

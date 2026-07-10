@@ -761,6 +761,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-provider"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "colossus-policy",
+ "colossus-ports",
+ "colossus-testkit",
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "colossus-runtime"
 version = "0.6.0-alpha.1"
 dependencies = [
@@ -771,6 +789,7 @@ dependencies = [
  "colossus-policy",
  "colossus-ports",
  "colossus-projection",
+ "colossus-provider",
  "colossus-sandbox",
  "colossus-testkit",
  "colossus-workflow",
