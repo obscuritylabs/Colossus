@@ -23,6 +23,9 @@ cargo run -p colossus-cli --bin colossus-rs -- models routes
 cargo run -p colossus-cli --bin colossus-rs -- tools list
 cargo run -p colossus-cli --bin colossus-rs -- sessions list
 cargo run -p colossus-cli --bin colossus-rs -- run --resume 'Continue the latest session'
+cargo run -p colossus-cli --bin colossus-rs -- research run \
+  'Summarize the audit architecture' --depth quick --source repo
+cargo run -p colossus-cli --bin colossus-rs -- research list
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
@@ -35,9 +38,15 @@ correction turns, and distinct max-turn exhaustion. Incremental transport stream
 remains pending.
 
 Fresh config enables only the pure `echo` tool. Configure `agent.maxTurns` in `1..=100`
-and select exact active names from `echo`, `filesystem.read`, and `network.http` under
-`agent.tools`. File and HTTP tools remain subject to the same policy actions, filesystem
-roots, and network destinations as direct runtime calls.
+and select exact active names with `tools list`. File, process, HTTP, memory, work, and
+subagent tools remain subject to their policy actions and resource obligations.
+
+Durable research uses `research.maxSources` (1..=100) and `research.maxWorkers`
+(1..=16). Add `research.run` to the built-in policy before invoking it. Repository
+collection is read-only and each search independently crosses the gateway and
+post-effect release check. Unconfigured web and MCP lanes are retained as explicit
+limitations; source labels, claims, lane outcomes, and the final cited report are
+reconstructed from the encrypted journal. The report is also appended to its session.
 
 Normal runs create a durable session automatically and return its id. Use
 `run --session ID` for an exact session, `run --resume` for the most recently updated

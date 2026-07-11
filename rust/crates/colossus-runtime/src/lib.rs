@@ -11,8 +11,9 @@ use colossus_contracts::{
     KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, NewEvent, PlanRecord, PlanStatus,
     PlanStep, PreparedContext, ProjectionStatus, ProviderModelInfo, ProviderReadiness,
     ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, ResearchClaim,
-    ResearchRun, ResearchSource, SessionMessage, SessionSummary, SubagentJob, SubagentQueueStatus,
-    SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
+    ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind, SessionMessage, SessionSummary,
+    SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult,
+    ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -37,7 +38,10 @@ use colossus_provider::{
     ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind, ProviderProfile,
     ProviderRegistry,
 };
-use colossus_research::EventSourcedResearchRepository;
+use colossus_research::{
+    EventSourcedResearchRepository, ResearchCollection, ResearchCollector, ResearchLimits,
+    ResearchService, ResearchSourceDraft,
+};
 use colossus_sandbox::{
     FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig,
     SandboxProcessExecutor, sandbox_doctor,
@@ -52,7 +56,7 @@ use colossus_workflow::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -89,6 +93,9 @@ pub struct RuntimeConfig {
     /// Canonical memory and disposable lexical-index settings.
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Durable research collection and worker bounds.
+    #[serde(default)]
+    pub research: ResearchConfig,
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
@@ -145,6 +152,25 @@ impl Default for MemoryConfig {
             index_enabled: true,
             index_path: None,
             retrieval_limit: 6,
+        }
+    }
+}
+
+/// Bounded durable research orchestration configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResearchConfig {
+    /// Maximum canonical evidence sources in one run.
+    pub max_sources: usize,
+    /// Maximum query/lane collection jobs in one run.
+    pub max_workers: usize,
+}
+
+impl Default for ResearchConfig {
+    fn default() -> Self {
+        Self {
+            max_sources: 20,
+            max_workers: 4,
         }
     }
 }
@@ -523,6 +549,13 @@ impl RuntimeConfig {
                 "memory.retrievalLimit must be in 1..=100".into(),
             ));
         }
+        if !(1..=100).contains(&config.research.max_sources)
+            || !(1..=16).contains(&config.research.max_workers)
+        {
+            return Err(RuntimeError::Config(
+                "research.maxSources must be in 1..=100 and research.maxWorkers in 1..=16".into(),
+            ));
+        }
         validate_provider_config(&config)?;
         Ok(config)
     }
@@ -559,6 +592,7 @@ impl RuntimeConfig {
             subagents: SubagentConfig::default(),
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
+            research: ResearchConfig::default(),
             sandbox: SandboxConfig::default(),
         }
     }
@@ -981,6 +1015,29 @@ impl MemoryOperation {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum ResearchOperation {
+    Run {
+        session_id: String,
+        question: String,
+        depth: ResearchDepth,
+        source_kinds: Vec<ResearchSourceKind>,
+    },
+}
+
+impl ResearchOperation {
+    fn action(&self) -> &'static str {
+        "research.run"
+    }
+
+    fn session_id(&self) -> &str {
+        match self {
+            Self::Run { session_id, .. } => session_id,
+        }
+    }
+}
+
 /// Fully composed auditable runtime.
 pub struct Runtime {
     writer_lease: RedbWriterLease,
@@ -993,6 +1050,7 @@ pub struct Runtime {
     work_executor: Arc<WorkEffectExecutor>,
     memory_executor: Arc<MemoryEffectExecutor>,
     research: Arc<dyn ResearchRepository>,
+    research_executor: Arc<ResearchEffectExecutor>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
@@ -1276,6 +1334,7 @@ impl Runtime {
                 "memory.index.status".to_owned(),
                 "memory.index.sync".to_owned(),
                 "memory.index.rebuild".to_owned(),
+                "research.run".to_owned(),
             ]),
             permit_key,
         ));
@@ -1286,6 +1345,23 @@ impl Runtime {
         let memory_executor = Arc::new(MemoryEffectExecutor {
             service: Arc::clone(&memory_service),
             repository_id: repository_id.clone(),
+        });
+        let research_collector: Arc<dyn ResearchCollector> = Arc::new(GatewayResearchCollector {
+            gateway: Arc::clone(&gateway),
+            filesystem: Arc::clone(&filesystem_executor),
+            workspace: workspace.clone(),
+        });
+        let research_service = Arc::new(ResearchService::new(
+            Arc::clone(&research),
+            Arc::clone(&sessions),
+            research_collector,
+            ResearchLimits {
+                max_sources: config.research.max_sources,
+                max_workers: config.research.max_workers,
+            },
+        )?);
+        let research_executor = Arc::new(ResearchEffectExecutor {
+            service: research_service,
         });
         let memory_retriever: Arc<dyn MemoryRetriever> = Arc::new(GatewayMemoryRetriever {
             gateway: Arc::clone(&gateway),
@@ -1374,6 +1450,7 @@ impl Runtime {
             work_executor,
             memory_executor,
             research,
+            research_executor,
             policy,
             gateway,
             providers,
@@ -1440,6 +1517,37 @@ impl Runtime {
     /// List canonical source-backed claims for one run.
     pub fn research_claims(&self, run_id: &str) -> Result<Vec<ResearchClaim>, RuntimeError> {
         self.research.list_claims(run_id).map_err(Into::into)
+    }
+
+    /// Run bounded durable research through the policy gateway.
+    pub async fn run_research(
+        &self,
+        session_id: &str,
+        question: &str,
+        depth: ResearchDepth,
+        source_kinds: Vec<ResearchSourceKind>,
+    ) -> Result<ResearchRun, RuntimeError> {
+        let operation = ResearchOperation::Run {
+            session_id: session_id.into(),
+            question: question.into(),
+            depth,
+            source_kinds,
+        };
+        let mut request = effect_request(
+            terminal_actor(),
+            operation.action(),
+            format!("session:{session_id}"),
+            serde_json::to_value(&operation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![operation.action().into()];
+        request.context.session_id = Some(session_id.into());
+        let result = self
+            .gateway
+            .execute(request, self.research_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Create a durable empty session.
@@ -4333,6 +4441,190 @@ impl MemoryRetriever for GatewayMemoryRetriever {
                 "memory retrieval failed: {error}"
             ))),
         }
+    }
+}
+
+struct GatewayResearchCollector {
+    gateway: Arc<EffectGateway>,
+    filesystem: Arc<FilesystemExecutor>,
+    workspace: PathBuf,
+}
+
+#[async_trait]
+impl ResearchCollector for GatewayResearchCollector {
+    async fn collect(
+        &self,
+        run: &ResearchRun,
+        kind: ResearchSourceKind,
+        query: &str,
+        limit: usize,
+    ) -> ResearchCollection {
+        if kind != ResearchSourceKind::Repo {
+            return ResearchCollection {
+                status: colossus_contracts::ResearchLaneStatus::Disabled,
+                message: format!("{kind:?} research adapter is not configured"),
+                sources: Vec::new(),
+            };
+        }
+        let tokens = research_search_tokens(query);
+        let mut evidence = BTreeMap::<String, Vec<String>>::new();
+        for token in tokens {
+            let mut request = effect_request(
+                Actor {
+                    actor_type: ActorType::System,
+                    id: "research-repo-collector".into(),
+                },
+                "filesystem.search",
+                self.workspace.display().to_string(),
+                json!({
+                    "pattern": token,
+                    "regex": false,
+                    "case_sensitive": false,
+                    "max_matches": limit.clamp(1, 100).saturating_mul(4).min(1000),
+                }),
+            );
+            request.capabilities = vec!["filesystem.search".into()];
+            request.context.session_id = Some(run.session_id.clone());
+            request.context.run_id = Some(run.id.clone());
+            let released = match self
+                .gateway
+                .execute(request, self.filesystem.as_ref())
+                .await
+            {
+                Ok(released) => released,
+                Err(GatewayError::Denied(error) | GatewayError::Approval(error)) => {
+                    return ResearchCollection {
+                        status: colossus_contracts::ResearchLaneStatus::Denied,
+                        message: bounded_error(&error.to_string()),
+                        sources: Vec::new(),
+                    };
+                }
+                Err(error) => {
+                    return ResearchCollection {
+                        status: colossus_contracts::ResearchLaneStatus::Failed,
+                        message: bounded_error(&error.to_string()),
+                        sources: Vec::new(),
+                    };
+                }
+            };
+            let value: Value = match serde_json::from_slice(&released.bytes) {
+                Ok(value) => value,
+                Err(error) => {
+                    return ResearchCollection {
+                        status: colossus_contracts::ResearchLaneStatus::Failed,
+                        message: bounded_error(&error.to_string()),
+                        sources: Vec::new(),
+                    };
+                }
+            };
+            for matched in value
+                .get("matches")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(path) = matched.get("path").and_then(Value::as_str) else {
+                    continue;
+                };
+                let line = matched.get("line").and_then(Value::as_u64).unwrap_or(0);
+                let text = matched.get("text").and_then(Value::as_str).unwrap_or("");
+                evidence
+                    .entry(path.into())
+                    .or_default()
+                    .push(format!("{path}:{line}: {text}"));
+            }
+            if evidence.len() >= limit {
+                break;
+            }
+        }
+        let sources = evidence
+            .into_iter()
+            .take(limit)
+            .map(|(path, lines)| ResearchSourceDraft {
+                kind,
+                title: path.clone(),
+                uri: path,
+                content: lines.join("\n"),
+                metadata: BTreeMap::from([("collector".into(), "filesystem.search".into())]),
+            })
+            .collect::<Vec<_>>();
+        ResearchCollection {
+            status: colossus_contracts::ResearchLaneStatus::Completed,
+            message: format!("released {} repository source(s)", sources.len()),
+            sources,
+        }
+    }
+}
+
+fn research_search_tokens(query: &str) -> Vec<String> {
+    let mut tokens = query
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|token| token.len() >= 4)
+        .map(str::to_ascii_lowercase)
+        .filter(|token| {
+            !matches!(
+                token.as_str(),
+                "what" | "when" | "where" | "which" | "with" | "does" | "implementation"
+            )
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    tokens.sort_by_key(|token| std::cmp::Reverse(token.len()));
+    tokens.truncate(3);
+    if tokens.is_empty() {
+        tokens.push(query.chars().take(128).collect());
+    }
+    tokens
+}
+
+fn bounded_error(error: &str) -> String {
+    error.chars().take(2_000).collect()
+}
+
+struct ResearchEffectExecutor {
+    service: Arc<ResearchService>,
+}
+
+#[async_trait]
+impl EffectExecutor for ResearchEffectExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let operation: ResearchOperation = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if request.action != operation.action()
+            || request.context.session_id.as_deref() != Some(operation.session_id())
+        {
+            return Err(ExecutionError::Failed(
+                "research operation does not match its authorized session context".into(),
+            ));
+        }
+        let ResearchOperation::Run {
+            session_id,
+            question,
+            depth,
+            source_kinds,
+        } = operation;
+        let run = self
+            .service
+            .run(
+                &session_id,
+                &question,
+                depth,
+                source_kinds,
+                request.actor.clone(),
+            )
+            .await
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&run)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
     }
 }
 

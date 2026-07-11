@@ -50,7 +50,8 @@ uv run colossus repl --resume
 Run deep research:
 
 ```bash
-uv run colossus research "Summarize the local tool security posture" --source repo
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- \
+  research run "Summarize the local tool security posture" --source repo
 ```
 
 Connect an integration without exposing raw secrets to the model:

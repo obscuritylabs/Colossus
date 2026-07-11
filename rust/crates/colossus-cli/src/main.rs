@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, MemoryScope,
-    MemoryStatus, PlanStatus, PlanStep, PolicyDecision, SubagentStatus, TaskStatus,
+    MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ResearchDepth, ResearchSourceKind,
+    SubagentStatus, TaskStatus,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{ApprovalProvider, PolicyError};
@@ -169,6 +170,8 @@ enum Command {
     Agents(AgentsCommand),
     /// Create, search, archive, and supersede durable memories.
     Memories(MemoriesCommand),
+    /// Run and inspect durable source-backed research.
+    Research(ResearchCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -893,6 +896,79 @@ enum MemoryIndexAction {
     Rebuild,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum ResearchDepthArg {
+    Quick,
+    Standard,
+    Deep,
+}
+
+impl From<ResearchDepthArg> for ResearchDepth {
+    fn from(value: ResearchDepthArg) -> Self {
+        match value {
+            ResearchDepthArg::Quick => Self::Quick,
+            ResearchDepthArg::Standard => Self::Standard,
+            ResearchDepthArg::Deep => Self::Deep,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ResearchSourceArg {
+    Repo,
+    Web,
+    Mcp,
+}
+
+impl From<ResearchSourceArg> for ResearchSourceKind {
+    fn from(value: ResearchSourceArg) -> Self {
+        match value {
+            ResearchSourceArg::Repo => Self::Repo,
+            ResearchSourceArg::Web => Self::Web,
+            ResearchSourceArg::Mcp => Self::Mcp,
+        }
+    }
+}
+
+#[derive(Args)]
+struct ResearchCommand {
+    #[command(subcommand)]
+    command: ResearchAction,
+}
+
+#[derive(Subcommand)]
+enum ResearchAction {
+    /// Execute bounded durable research and emit a cited report.
+    Run {
+        question: String,
+        /// Existing session; a fresh session is created when omitted.
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "standard")]
+        depth: ResearchDepthArg,
+        #[arg(
+            long = "source",
+            value_enum,
+            value_delimiter = ',',
+            default_value = "repo,web,mcp"
+        )]
+        sources: Vec<ResearchSourceArg>,
+    },
+    /// List bounded canonical research runs.
+    List {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Show one exact canonical research run.
+    Show { run_id: String },
+    /// Show stable source labels and released evidence.
+    Sources { run_id: String },
+    /// Show extracted source-backed claims.
+    Claims { run_id: String },
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -1130,7 +1206,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1183,6 +1259,23 @@ async fn repl(
                     print_json(
                         &runtime
                             .search_memories(query.trim(), Some(&active_session_id), None, 8)
+                            .await?,
+                    )?;
+                } else if line == "/research list" {
+                    print_json(&runtime.list_research_runs(Some(&active_session_id), 20)?)?;
+                } else if let Some(question) = line.strip_prefix("/research ") {
+                    print_json(
+                        &runtime
+                            .run_research(
+                                &active_session_id,
+                                question.trim(),
+                                ResearchDepth::Standard,
+                                vec![
+                                    ResearchSourceKind::Repo,
+                                    ResearchSourceKind::Web,
+                                    ResearchSourceKind::Mcp,
+                                ],
+                            )
                             .await?,
                     )?;
                 } else if line == "/context" || line == "/context status" {
@@ -1659,6 +1752,48 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     print_json(&runtime.rebuild_memory_index().await?)?;
                 }
             },
+        },
+        Command::Research(command) => match command.command {
+            ResearchAction::Run {
+                question,
+                session,
+                depth,
+                sources,
+            } => {
+                let session_id = match session {
+                    Some(session_id) => {
+                        runtime
+                            .get_session(&session_id)?
+                            .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?
+                            .id
+                    }
+                    None => runtime.create_session(Some("Research"))?.id,
+                };
+                print_json(
+                    &runtime
+                        .run_research(
+                            &session_id,
+                            &question,
+                            depth.into(),
+                            sources.into_iter().map(Into::into).collect(),
+                        )
+                        .await?,
+                )?;
+            }
+            ResearchAction::List { session, limit } => {
+                print_json(&runtime.list_research_runs(session.as_deref(), limit)?)?;
+            }
+            ResearchAction::Show { run_id } => print_json(
+                &runtime
+                    .get_research_run(&run_id)?
+                    .ok_or_else(|| cli_error(format!("research run not found: {run_id}")))?,
+            )?,
+            ResearchAction::Sources { run_id } => {
+                print_json(&runtime.research_sources(&run_id)?)?;
+            }
+            ResearchAction::Claims { run_id } => {
+                print_json(&runtime.research_claims(&run_id)?)?;
+            }
         },
         Command::Run {
             prompt,
