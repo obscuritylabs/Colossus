@@ -512,8 +512,10 @@ lease. Reedline is hydrated into bounded memory and never receives a plaintext h
 file; audit envelopes and projections do not disclose entry contents. Preferences control
 display behavior only and do not change provider, policy, tool, approval, capability, or
 prompt decisions. Built-in themes are data-only identities; executable plugins are not
-loaded through the presentation path, and unknown schemas fail closed. The frozen Python
-implementation retains its legacy SQLite preferences and plaintext history separately.
+loaded through the presentation path, and unknown schemas fail closed. Their fixed Rust
+palettes can add ANSI styling only after the terminal interface confirms an interactive
+terminal; redirected output remains control-sequence-free. The frozen Python implementation
+retains its legacy SQLite preferences and plaintext history separately.
 
 ## Audit Logs
 

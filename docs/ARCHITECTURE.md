@@ -361,6 +361,12 @@ operations after status-affecting commands rather than querying repositories or 
 per-keystroke audit traffic. The interface must continue to call application services
 for orchestration and context data rather than owning those behaviors.
 
+`TerminalPalette` is a pure data-only presentation mapping for the five built-in theme
+identities. It supplies Reedline prompt colors, semantic ANSI styles, assistant styling,
+and bounded activity frames. ANSI emission is selected only by the terminal interface
+after an `IsTerminal` check; the renderer defaults to unstyled text so workers, pipes,
+logs, and embedded callers cannot receive accidental control sequences.
+
 ## Telemetry And Observability
 
 `TelemetryService` is an application service that derives operational summaries from

@@ -801,6 +801,8 @@ failure from blocking the requested command.
 - Safe reasoning summaries can be toggled independently from tool/activity events.
 - Errors clearly identify whether they are recoverable.
 - Long-running activity shows current phase/action and elapsed time.
+- Five built-in data-only palettes MUST style interactive prompts, assistant text,
+  semantic labels, and activity frames while redirected output remains ANSI-free.
 
 ## 19. Configuration And Local Storage
 
@@ -965,6 +967,8 @@ A reconstruction is complete only when all applicable checks pass:
 - [ ] Compact and verbose renderers cover every event type and every tool family.
 - [x] Embedded and worker REPL history has bounded hydration, encrypted permit-bound
   persistence, restart parity, consecutive deduplication, and redacted audit envelopes.
+- [x] Built-in theme palettes cover prompt, assistant, semantic event, and activity-frame
+  styling without emitting ANSI sequences to redirected output.
 - [x] Telemetry derives correct duration and counts from persisted event timestamps.
 - [ ] Credentials remain references until adapter execution and never appear in model or
   user-visible diagnostic payloads.

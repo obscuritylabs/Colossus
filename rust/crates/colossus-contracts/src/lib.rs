@@ -711,10 +711,15 @@ pub enum ThemeName {
     /// Balanced terminal labels.
     #[default]
     Default,
+    /// Color-free terminal rendering.
+    #[serde(alias = "plain")]
+    Mono,
     /// Strong uppercase labels without relying on color perception.
     HighContrast,
-    /// Minimal unadorned labels.
-    Plain,
+    /// Warm orange terminal palette.
+    Carrot,
+    /// Green-on-dark terminal palette.
+    Hacker,
 }
 
 impl ThemeName {
@@ -722,8 +727,10 @@ impl ThemeName {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Default => "default",
+            Self::Mono => "mono",
             Self::HighContrast => "high_contrast",
-            Self::Plain => "plain",
+            Self::Carrot => "carrot",
+            Self::Hacker => "hacker",
         }
     }
 }
@@ -2539,7 +2546,7 @@ pub struct WorkflowRun {
 
 #[cfg(test)]
 mod tests {
-    use super::{PolicyDecision, RunEvent};
+    use super::{PolicyDecision, RunEvent, ThemeName};
 
     #[test]
     fn policy_decision_rejects_unknown_fields() {
@@ -2563,5 +2570,26 @@ mod tests {
             "elapsed_seconds":0.1,"surprise":true
         }"#;
         assert!(serde_json::from_str::<RunEvent>(document).is_err());
+    }
+
+    #[test]
+    fn theme_names_are_stable_and_plain_migrates_to_mono() {
+        for (theme, name) in [
+            (ThemeName::Default, "default"),
+            (ThemeName::Mono, "mono"),
+            (ThemeName::HighContrast, "high_contrast"),
+            (ThemeName::Carrot, "carrot"),
+            (ThemeName::Hacker, "hacker"),
+        ] {
+            assert_eq!(theme.as_str(), name);
+            assert_eq!(
+                serde_json::to_string(&theme).expect("theme"),
+                format!("\"{name}\"")
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<ThemeName>("\"plain\"").expect("legacy plain theme"),
+            ThemeName::Mono
+        );
     }
 }

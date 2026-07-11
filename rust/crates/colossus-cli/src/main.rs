@@ -15,11 +15,12 @@ use colossus_ports::{
     UserPromptProvider,
 };
 use colossus_presentation::{
-    EventDisplayMode, ReplPreferences, SemanticRenderer, StreamDisplayMode, ThemeName,
-    TranscriptDensity,
+    EventDisplayMode, ReplPreferences, RgbColor, SemanticRenderer, StreamDisplayMode,
+    TerminalPalette, ThemeName, TranscriptDensity,
 };
 use colossus_runtime::{Runtime, RuntimeConfig};
 use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
+use crossterm::style::Color as CrosstermColor;
 use reedline::{
     EditCommand, Emacs, FileBackedHistory, History, HistoryItem, KeyCode, KeyModifiers, Prompt,
     PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline, ReedlineEvent,
@@ -277,13 +278,14 @@ impl TerminalStreamObserver {
         let target = self.target;
         let output_lock = Arc::clone(&self.output_lock);
         let template = line.to_owned();
-        write_transient_line(target, &output_lock, &template, elapsed_seconds)?;
+        let theme = self.preferences.theme;
+        write_transient_line(target, &output_lock, &template, elapsed_seconds, theme)?;
         let started = std::time::Instant::now();
         self.activity = Some(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 let elapsed = elapsed_seconds + started.elapsed().as_secs_f64();
-                if write_transient_line(target, &output_lock, &template, elapsed).is_err() {
+                if write_transient_line(target, &output_lock, &template, elapsed, theme).is_err() {
                     break;
                 }
             }
@@ -357,8 +359,11 @@ fn write_transient_line(
     output_lock: &Mutex<()>,
     template: &str,
     elapsed_seconds: f64,
+    theme: ThemeName,
 ) -> io::Result<()> {
-    let rendered = activity_line_at(template, elapsed_seconds);
+    let line = activity_line_at(template, elapsed_seconds);
+    let spinner = TerminalPalette::for_theme(theme).activity_frame(elapsed_seconds, true);
+    let rendered = format!("{spinner} {line}");
     let _guard = output_lock
         .lock()
         .map_err(|error| io::Error::other(error.to_string()))?;
@@ -390,6 +395,9 @@ impl RunEventObserver for TerminalStreamObserver {
                 .output_lock
                 .lock()
                 .map_err(|error| ModelProviderError::Failed(error.to_string()))?;
+            let text = SemanticRenderer::new(self.preferences.clone())
+                .with_color(self.is_terminal())
+                .assistant_text(text);
             let result = match self.target {
                 StreamTarget::Stdout => {
                     print!("{text}");
@@ -405,6 +413,7 @@ impl RunEventObserver for TerminalStreamObserver {
             return Ok(());
         }
         if let Some(line) = SemanticRenderer::new(self.preferences.clone())
+            .with_color(self.is_terminal())
             .run_event_envelope(&envelope)
             .map_err(|error| ModelProviderError::Failed(error.to_string()))?
         {
@@ -1709,19 +1718,27 @@ fn handle_presentation_command(
             changed = true;
         }
         "/theme" => println!(
-            "theme={}; available=default,high_contrast,plain",
+            "theme={}; available=default,mono,high_contrast,carrot,hacker",
             preferences.theme.as_str()
         ),
         "/theme default" => {
             preferences.theme = ThemeName::Default;
             changed = true;
         }
-        "/theme high_contrast" => {
+        "/theme mono" | "/theme plain" => {
+            preferences.theme = ThemeName::Mono;
+            changed = true;
+        }
+        "/theme high_contrast" | "/theme high-contrast" => {
             preferences.theme = ThemeName::HighContrast;
             changed = true;
         }
-        "/theme plain" => {
-            preferences.theme = ThemeName::Plain;
+        "/theme carrot" => {
+            preferences.theme = ThemeName::Carrot;
+            changed = true;
+        }
+        "/theme hacker" => {
+            preferences.theme = ThemeName::Hacker;
             changed = true;
         }
         "/theme reset" => {
@@ -2007,6 +2024,7 @@ struct ColossusPrompt {
     left: String,
     right: String,
     multiline: bool,
+    palette: TerminalPalette,
 }
 
 impl ColossusPrompt {
@@ -2049,8 +2067,23 @@ impl ColossusPrompt {
                 state.last_status,
             ),
             multiline: preferences.multiline,
+            palette: TerminalPalette::for_theme(preferences.theme),
         }
     }
+}
+
+fn crossterm_color(color: Option<RgbColor>) -> CrosstermColor {
+    color.map_or(CrosstermColor::Reset, |color| CrosstermColor::Rgb {
+        r: color.red,
+        g: color.green,
+        b: color.blue,
+    })
+}
+
+fn nu_color(color: Option<RgbColor>) -> nu_ansi_term::Color {
+    color.map_or(nu_ansi_term::Color::Default, |color| {
+        nu_ansi_term::Color::Rgb(color.red, color.green, color.blue)
+    })
 }
 
 impl Prompt for ColossusPrompt {
@@ -2082,6 +2115,22 @@ impl Prompt for ColossusPrompt {
             "({prefix}reverse-search: {}) ",
             history_search.term
         ))
+    }
+
+    fn get_prompt_color(&self) -> CrosstermColor {
+        crossterm_color(self.palette.prompt_left())
+    }
+
+    fn get_prompt_multiline_color(&self) -> nu_ansi_term::Color {
+        nu_color(self.palette.continuation())
+    }
+
+    fn get_indicator_color(&self) -> CrosstermColor {
+        crossterm_color(self.palette.indicator())
+    }
+
+    fn get_prompt_right_color(&self) -> CrosstermColor {
+        crossterm_color(self.palette.prompt_right())
     }
 }
 
@@ -2242,7 +2291,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/repl [prefs|reset] | /theme [default|high_contrast|plain] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/repl [prefs|reset] | /theme [default|mono|high_contrast|carrot|hacker] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -2267,6 +2316,7 @@ async fn repl(
                     println!(
                         "{}",
                         SemanticRenderer::new(preferences.clone())
+                            .with_color(io::stdout().is_terminal())
                             .work_state(&runtime.work_state(&active_session_id)?)
                     );
                 } else if line == "/tasks" {
@@ -2454,6 +2504,7 @@ async fn repl(
                     println!(
                         "{}",
                         SemanticRenderer::new(preferences.clone())
+                            .with_color(io::stdout().is_terminal())
                             .context_status(&runtime.context_status(&active_session_id).await?)
                     );
                 } else if line == "/context list" {
@@ -3531,7 +3582,7 @@ async fn worker_repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/repl [prefs|reset] | /theme [default|high_contrast|plain] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/repl [prefs|reset] | /theme [default|mono|high_contrast|carrot|hacker] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -3566,7 +3617,9 @@ async fn worker_repl(
                     )?;
                     println!(
                         "{}",
-                        SemanticRenderer::new(preferences.clone()).work_state(&state)
+                        SemanticRenderer::new(preferences.clone())
+                            .with_color(io::stdout().is_terminal())
+                            .work_state(&state)
                     );
                 } else if line == "/tasks" {
                     print_json(
@@ -3956,7 +4009,9 @@ async fn worker_repl(
                     )?;
                     println!(
                         "{}",
-                        SemanticRenderer::new(preferences.clone()).context_status(&status)
+                        SemanticRenderer::new(preferences.clone())
+                            .with_color(io::stdout().is_terminal())
+                            .context_status(&status)
                     );
                 } else if line == "/context list" {
                     print_json(
@@ -5040,5 +5095,36 @@ mod tests {
         assert!(!repl_line_changes_status("/help"));
         assert!(!repl_line_changes_status("/theme plain"));
         assert!(!repl_line_changes_status("/tools"));
+    }
+
+    #[test]
+    fn builtin_theme_commands_drive_reedline_prompt_colors() {
+        let mut preferences = ReplPreferences::default();
+        assert_eq!(
+            handle_presentation_command("/theme hacker", &mut preferences).expect("hacker theme"),
+            PresentationCommandResult::Save
+        );
+        assert_eq!(preferences.theme, ThemeName::Hacker);
+        let prompt = ColossusPrompt::new(
+            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
+            &ReplPromptState::new(),
+            &preferences,
+            "ask",
+        );
+        assert_ne!(prompt.get_prompt_color(), CrosstermColor::Reset);
+        assert_ne!(prompt.get_indicator_color(), CrosstermColor::Reset);
+
+        assert_eq!(
+            handle_presentation_command("/theme plain", &mut preferences).expect("plain alias"),
+            PresentationCommandResult::Save
+        );
+        assert_eq!(preferences.theme, ThemeName::Mono);
+        let mono = ColossusPrompt::new(
+            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
+            &ReplPromptState::new(),
+            &preferences,
+            "ask",
+        );
+        assert_eq!(mono.get_prompt_color(), CrosstermColor::Reset);
     }
 }

@@ -480,7 +480,7 @@ sandbox:
         binary,
         &config,
         &["repl", "--session", session_id],
-        "/theme high_contrast\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/repl prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
+        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/repl prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
     );
     assert!(
         repl.status.success(),
@@ -515,6 +515,7 @@ sandbox:
     );
     let history: Vec<String> = serde_json::from_slice(&history.stdout).expect("REPL history JSON");
     assert!(history.iter().any(|entry| entry == "tasks-through-worker"));
+    assert!(history.iter().any(|entry| entry == "/theme hacker"));
     assert!(history.iter().any(|entry| entry == "/context status"));
     assert_eq!(history.last().map(String::as_str), Some("/exit"));
 

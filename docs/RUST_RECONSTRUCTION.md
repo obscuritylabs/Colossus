@@ -280,11 +280,11 @@ cutover. The following planned work remains:
   strict catalog validation, and the complete P0 offline/network tool surface are
   implemented through the normal permission, quarantine, and audit boundaries.
 - Live Windows named-pipe acceptance.
-- Full theme palettes, editor-buffer counters, and broader live provider/tool-use terminal
-  acceptance. Encrypted REPL history with bounded hydration, prompt-safe in-place activity
-  refresh, a cached embedded/worker status prompt, durable correlated run envelopes,
-  semantic tool-family results, recoverability labels, and phase/action elapsed lines are
-  implemented.
+- User-authored theme files, editor-buffer counters, and broader live provider/tool-use
+  terminal acceptance. Five typed built-in palettes, encrypted REPL history with bounded
+  hydration, prompt-safe in-place activity refresh, a cached embedded/worker status prompt,
+  durable correlated run envelopes, semantic tool-family results, recoverability labels,
+  and phase/action elapsed lines are implemented.
 - Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,

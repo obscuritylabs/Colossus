@@ -29,6 +29,219 @@ pub enum PresentationError {
     Invalid(String),
 }
 
+/// Terminal RGB value shared by Reedline prompts and semantic transcript palettes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RgbColor {
+    /// Red channel.
+    pub red: u8,
+    /// Green channel.
+    pub green: u8,
+    /// Blue channel.
+    pub blue: u8,
+}
+
+impl RgbColor {
+    const fn new(red: u8, green: u8, blue: u8) -> Self {
+        Self { red, green, blue }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TextStyle {
+    foreground: Option<RgbColor>,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+}
+
+impl TextStyle {
+    const fn color(foreground: RgbColor) -> Self {
+        Self {
+            foreground: Some(foreground),
+            bold: false,
+            dim: false,
+            italic: false,
+        }
+    }
+
+    const fn plain() -> Self {
+        Self {
+            foreground: None,
+            bold: false,
+            dim: false,
+            italic: false,
+        }
+    }
+
+    const fn bold(mut self) -> Self {
+        self.bold = true;
+        self
+    }
+
+    const fn dim(mut self) -> Self {
+        self.dim = true;
+        self
+    }
+
+    const fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+
+    fn paint(self, text: &str, enabled: bool) -> String {
+        if !enabled {
+            return text.into();
+        }
+        let mut codes = Vec::with_capacity(4);
+        if self.bold {
+            codes.push("1".into());
+        }
+        if self.dim {
+            codes.push("2".into());
+        }
+        if self.italic {
+            codes.push("3".into());
+        }
+        if let Some(color) = self.foreground {
+            codes.push(format!("38;2;{};{};{}", color.red, color.green, color.blue));
+        }
+        if codes.is_empty() {
+            text.into()
+        } else {
+            format!("\x1b[{}m{text}\x1b[0m", codes.join(";"))
+        }
+    }
+}
+
+/// Complete built-in data-only palette for one terminal theme.
+#[derive(Clone, Copy)]
+pub struct TerminalPalette {
+    prompt_left: Option<RgbColor>,
+    prompt_right: Option<RgbColor>,
+    indicator: Option<RgbColor>,
+    continuation: Option<RgbColor>,
+    assistant: TextStyle,
+    activity: TextStyle,
+    thinking: TextStyle,
+    tool: TextStyle,
+    success: TextStyle,
+    warning: TextStyle,
+    error: TextStyle,
+    meta: TextStyle,
+    spinner_frames: &'static [&'static str],
+}
+
+impl TerminalPalette {
+    /// Resolve one strict built-in palette.
+    pub const fn for_theme(theme: ThemeName) -> Self {
+        match theme {
+            ThemeName::Default => Self {
+                prompt_left: Some(RgbColor::new(95, 215, 255)),
+                prompt_right: Some(RgbColor::new(127, 135, 144)),
+                indicator: Some(RgbColor::new(95, 215, 255)),
+                continuation: Some(RgbColor::new(127, 135, 144)),
+                assistant: TextStyle::color(RgbColor::new(230, 237, 243)),
+                activity: TextStyle::color(RgbColor::new(127, 135, 144)).dim(),
+                thinking: TextStyle::color(RgbColor::new(95, 215, 255)).italic(),
+                tool: TextStyle::color(RgbColor::new(88, 166, 255)).bold(),
+                success: TextStyle::color(RgbColor::new(158, 206, 106)),
+                warning: TextStyle::color(RgbColor::new(255, 223, 93)).bold(),
+                error: TextStyle::color(RgbColor::new(255, 95, 95)).bold(),
+                meta: TextStyle::color(RgbColor::new(127, 135, 144)).dim(),
+                spinner_frames: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+            },
+            ThemeName::Mono => Self {
+                prompt_left: None,
+                prompt_right: None,
+                indicator: None,
+                continuation: None,
+                assistant: TextStyle::plain(),
+                activity: TextStyle::plain().dim(),
+                thinking: TextStyle::plain().italic().dim(),
+                tool: TextStyle::plain().bold(),
+                success: TextStyle::plain(),
+                warning: TextStyle::plain().bold(),
+                error: TextStyle::plain().bold(),
+                meta: TextStyle::plain().dim(),
+                spinner_frames: &["-", "\\", "|", "/"],
+            },
+            ThemeName::HighContrast => Self {
+                prompt_left: Some(RgbColor::new(255, 255, 0)),
+                prompt_right: Some(RgbColor::new(255, 255, 255)),
+                indicator: Some(RgbColor::new(255, 255, 0)),
+                continuation: Some(RgbColor::new(255, 255, 0)),
+                assistant: TextStyle::color(RgbColor::new(255, 255, 255)),
+                activity: TextStyle::color(RgbColor::new(255, 255, 255)).bold(),
+                thinking: TextStyle::color(RgbColor::new(255, 255, 0)).bold(),
+                tool: TextStyle::color(RgbColor::new(0, 255, 255)).bold(),
+                success: TextStyle::color(RgbColor::new(255, 255, 255)).bold(),
+                warning: TextStyle::color(RgbColor::new(255, 255, 0)).bold(),
+                error: TextStyle::color(RgbColor::new(255, 0, 0)).bold(),
+                meta: TextStyle::color(RgbColor::new(255, 255, 255)),
+                spinner_frames: &["◜", "◠", "◝", "◞", "◡", "◟"],
+            },
+            ThemeName::Carrot => Self {
+                prompt_left: Some(RgbColor::new(255, 175, 95)),
+                prompt_right: Some(RgbColor::new(184, 139, 106)),
+                indicator: Some(RgbColor::new(255, 135, 0)),
+                continuation: Some(RgbColor::new(215, 135, 95)),
+                assistant: TextStyle::color(RgbColor::new(255, 240, 223)),
+                activity: TextStyle::color(RgbColor::new(184, 139, 106)).dim(),
+                thinking: TextStyle::color(RgbColor::new(255, 175, 95)).italic(),
+                tool: TextStyle::color(RgbColor::new(255, 135, 0)).bold(),
+                success: TextStyle::color(RgbColor::new(159, 215, 122)),
+                warning: TextStyle::color(RgbColor::new(255, 223, 93)).bold(),
+                error: TextStyle::color(RgbColor::new(255, 95, 95)).bold(),
+                meta: TextStyle::color(RgbColor::new(184, 139, 106)).dim(),
+                spinner_frames: &[
+                    "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█", "▉", "▊", "▋", "▌", "▍", "▎",
+                ],
+            },
+            ThemeName::Hacker => Self {
+                prompt_left: Some(RgbColor::new(0, 255, 102)),
+                prompt_right: Some(RgbColor::new(63, 191, 106)),
+                indicator: Some(RgbColor::new(0, 255, 102)),
+                continuation: Some(RgbColor::new(0, 170, 68)),
+                assistant: TextStyle::color(RgbColor::new(215, 255, 215)),
+                activity: TextStyle::color(RgbColor::new(63, 191, 106)).dim(),
+                thinking: TextStyle::color(RgbColor::new(0, 255, 102)).italic(),
+                tool: TextStyle::color(RgbColor::new(0, 215, 255)).bold(),
+                success: TextStyle::color(RgbColor::new(0, 255, 102)),
+                warning: TextStyle::color(RgbColor::new(255, 215, 95)).bold(),
+                error: TextStyle::color(RgbColor::new(255, 95, 95)).bold(),
+                meta: TextStyle::color(RgbColor::new(63, 191, 106)).dim(),
+                spinner_frames: &["░", "▒", "▓", "█", "▓", "▒"],
+            },
+        }
+    }
+
+    /// Left-prompt color, or reset for the mono palette.
+    pub const fn prompt_left(self) -> Option<RgbColor> {
+        self.prompt_left
+    }
+
+    /// Right-prompt color, or reset for the mono palette.
+    pub const fn prompt_right(self) -> Option<RgbColor> {
+        self.prompt_right
+    }
+
+    /// Primary prompt-indicator color, or reset for the mono palette.
+    pub const fn indicator(self) -> Option<RgbColor> {
+        self.indicator
+    }
+
+    /// Continuation-indicator color, or reset for the mono palette.
+    pub const fn continuation(self) -> Option<RgbColor> {
+        self.continuation
+    }
+
+    /// Render the theme's bounded spinner frame for one elapsed duration.
+    pub fn activity_frame(self, elapsed_seconds: f64, color: bool) -> String {
+        let index = ((elapsed_seconds.max(0.0) * 10.0) as usize) % self.spinner_frames.len();
+        self.activity.paint(self.spinner_frames[index], color)
+    }
+}
+
 fn validate_preferences(preferences: &ReplPreferences) -> Result<(), StoreError> {
     if preferences.schema_version != 1 {
         return Err(StoreError::Adapter("schema_version must be 1".into()));
@@ -171,19 +384,50 @@ fn validate_history_entry(entry: &str) -> Result<(), StoreError> {
 /// Pure semantic renderer over already released contracts.
 pub struct SemanticRenderer {
     preferences: ReplPreferences,
+    color: bool,
 }
 
 impl SemanticRenderer {
     /// Create a renderer for one immutable preference snapshot.
     pub fn new(preferences: ReplPreferences) -> Self {
-        Self { preferences }
+        Self {
+            preferences,
+            color: false,
+        }
+    }
+
+    /// Enable or disable ANSI styling without changing semantic content.
+    pub const fn with_color(mut self, color: bool) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Apply the active assistant palette to released model text.
+    pub fn assistant_text(&self, text: &str) -> String {
+        TerminalPalette::for_theme(self.preferences.theme)
+            .assistant
+            .paint(text, self.color)
     }
 
     fn label(&self, name: &str) -> String {
-        match self.preferences.theme {
-            ThemeName::Default => format!("[{name}]"),
+        let text = match self.preferences.theme {
+            ThemeName::Default | ThemeName::Carrot | ThemeName::Hacker => format!("[{name}]"),
+            ThemeName::Mono => format!("{name}:"),
             ThemeName::HighContrast => format!("{}:", name.to_ascii_uppercase()),
-            ThemeName::Plain => format!("{name}:"),
+        };
+        self.label_style(name).paint(&text, self.color)
+    }
+
+    fn label_style(&self, name: &str) -> TextStyle {
+        let palette = TerminalPalette::for_theme(self.preferences.theme);
+        match name {
+            "activity" => palette.activity,
+            "thinking" => palette.thinking,
+            "usage" => palette.meta,
+            "approval" => palette.warning,
+            "risk" | "error" => palette.error,
+            "done" => palette.success,
+            _ => palette.tool,
         }
     }
 
@@ -634,7 +878,7 @@ fn scalar_summary(value: &Value) -> String {
 mod tests {
     use super::{
         EventDisplayMode, EventSourcedPresentationRepository, ReplPreferences, SemanticRenderer,
-        StreamDisplayMode, ThemeName, TranscriptDensity,
+        StreamDisplayMode, TerminalPalette, ThemeName, TranscriptDensity,
     };
     use colossus_contracts::{
         Actor, ActorType, ProviderEvent, ProviderUsage, RunEvent, RunEventEnvelope, RunPhase,
@@ -753,7 +997,7 @@ mod tests {
         );
 
         let verbose = SemanticRenderer::new(ReplPreferences {
-            theme: ThemeName::Plain,
+            theme: ThemeName::Mono,
             events_mode: EventDisplayMode::Verbose,
             ..ReplPreferences::default()
         });
@@ -886,5 +1130,58 @@ mod tests {
             .expect("phase")
             .expect("activity remains visible");
         assert!(phase.contains("waiting_for_model model-x elapsed=3.50s"));
+    }
+
+    #[test]
+    fn every_builtin_palette_styles_tty_output_without_touching_redirected_text() {
+        for theme in [
+            ThemeName::Default,
+            ThemeName::Mono,
+            ThemeName::HighContrast,
+            ThemeName::Carrot,
+            ThemeName::Hacker,
+        ] {
+            let preferences = ReplPreferences {
+                theme,
+                ..ReplPreferences::default()
+            };
+            let event = RunEvent::Phase {
+                phase: RunPhase::Preparing,
+                turn: Some(1),
+                action: None,
+                elapsed_seconds: 0.5,
+            };
+            let redirected = SemanticRenderer::new(preferences.clone())
+                .run_event(&event)
+                .expect("redirected render")
+                .expect("visible");
+            assert!(!redirected.contains("\x1b["), "{}", theme.as_str());
+            assert!(
+                !SemanticRenderer::new(preferences.clone())
+                    .assistant_text("connected")
+                    .contains("\x1b[")
+            );
+            let terminal = SemanticRenderer::new(preferences)
+                .with_color(true)
+                .run_event(&event)
+                .expect("terminal render")
+                .expect("visible");
+            assert!(terminal.contains("\x1b["), "{}", theme.as_str());
+            let palette = TerminalPalette::for_theme(theme);
+            assert_ne!(
+                palette.activity_frame(0.0, false),
+                palette.activity_frame(0.1, false),
+                "{}",
+                theme.as_str()
+            );
+        }
+        let assistant = SemanticRenderer::new(ReplPreferences {
+            theme: ThemeName::Hacker,
+            ..ReplPreferences::default()
+        })
+        .with_color(true)
+        .assistant_text("connected");
+        assert!(assistant.contains("\x1b["));
+        assert!(assistant.contains("connected"));
     }
 }

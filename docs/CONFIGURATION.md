@@ -448,8 +448,12 @@ authenticated-worker REPL prompts share a cached status line with the active ses
 resolved primary model/profile, context and message budget, open/total work, approval
 mode, display preferences, and last run status. Reedline history is hydrated from the
 newest 1,000 encrypted journal entries and persists through the authenticated worker or
-embedded runtime. Full theme palettes and cursor/draft counters remain cutover UX work;
-Reedline's prompt contract does not currently expose editor-buffer counters.
+embedded runtime. Rust ships typed `default`, `mono`, `high_contrast`, `carrot`, and
+`hacker` palettes for Reedline prompts, assistant text, semantic labels, and activity
+frames; `plain` remains a migration alias for `mono`. Colors and animated frames are
+terminal-only, so redirected output stays ANSI-free. User-authored theme files and
+cursor/draft counters remain cutover UX work; Reedline's prompt contract does not
+currently expose editor-buffer counters.
 
 ## Agent telemetry
 
