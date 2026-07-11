@@ -167,6 +167,7 @@ sandbox:
             .any(|item| { item["phase"] == "synthesis" && item["status"] == "fallback" })
     );
     let run_id = research["id"].as_str().expect("run id");
+    let session_id = research["session_id"].as_str().expect("session id");
 
     let sources = run(
         binary,
@@ -181,6 +182,26 @@ sandbox:
     assert_eq!(sources[1]["label"], "R2");
     assert_eq!(sources[1]["kind"], "web");
     assert_eq!(sources[1]["uri"], "https://example.test/audit");
+
+    let telemetry = run(
+        binary,
+        &config,
+        directory.path(),
+        &["telemetry", "runs", "--session", session_id],
+    );
+    assert!(telemetry.status.success());
+    let telemetry: Value = serde_json::from_slice(&telemetry.stdout).expect("telemetry JSON");
+    assert_eq!(telemetry[0]["run_id"], run_id);
+    assert!(
+        telemetry[0]["research_events"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+    assert!(
+        !serde_json::to_string(&telemetry)
+            .expect("telemetry serialization")
+            .contains("Audit records are chained")
+    );
 
     let verify = run(binary, &config, directory.path(), &["audit", "verify"]);
     assert!(verify.status.success());

@@ -849,6 +849,7 @@ dependencies = [
  "colossus-research",
  "colossus-sandbox",
  "colossus-session",
+ "colossus-telemetry",
  "colossus-testkit",
  "colossus-tools",
  "colossus-work",
@@ -903,6 +904,17 @@ dependencies = [
  "colossus-ports",
  "colossus-testkit",
  "serde_json",
+]
+
+[[package]]
+name = "colossus-telemetry"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "colossus-contracts",
+ "colossus-ports",
+ "colossus-testkit",
+ "serde_json",
+ "time",
 ]
 
 [[package]]

@@ -890,6 +890,126 @@ pub struct ResearchRun {
     pub completed_at: Option<String>,
 }
 
+/// Metadata-only persisted event reference used by telemetry details.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryEventRecord {
+    /// Durable global journal sequence.
+    pub sequence: u64,
+    /// Stable journal event identifier.
+    pub event_id: String,
+    /// Derived run identifier.
+    pub run_id: String,
+    /// Typed persisted event name.
+    pub event_type: String,
+    /// Event classification without payload disclosure.
+    pub classification: EventClassification,
+    /// Actor provenance type.
+    pub actor_type: ActorType,
+    /// Bounded actor identifier.
+    pub actor_id: String,
+    /// Correlation and lineage identifiers only.
+    pub context: ExecutionContext,
+    /// UTC persisted timestamp.
+    pub created_at: String,
+    /// Hash of the encrypted event's plaintext payload.
+    pub payload_hash: String,
+    /// Encrypted payload byte estimate, never plaintext.
+    pub encrypted_payload_bytes: usize,
+}
+
+/// Metadata-only telemetry summary derived from persisted run events.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunTelemetrySummary {
+    /// Stable run identifier.
+    pub run_id: String,
+    /// Owning session when present.
+    pub session_id: Option<String>,
+    /// First persisted run event timestamp.
+    pub started_at: String,
+    /// Last persisted run event timestamp.
+    pub last_event_at: String,
+    /// Non-negative timestamp-derived wall duration.
+    pub duration_seconds: f64,
+    /// Total matching persisted events.
+    pub events: usize,
+    /// Stable event-type histogram.
+    pub event_types: std::collections::BTreeMap<String, usize>,
+    /// Visible model output character count derived only from typed output events.
+    pub model_output_chars: usize,
+    /// Requested tool-call count.
+    pub tool_calls: usize,
+    /// Nonzero tool results plus terminal tool errors.
+    pub tool_errors: usize,
+    /// Approval decisions requested from an operator.
+    pub approval_requests: usize,
+    /// Explicit automatic/full-access approval proofs.
+    pub auto_approvals: usize,
+    /// Persisted risk assessment events.
+    pub risk_assessments: usize,
+    /// Persisted research lifecycle events.
+    pub research_events: usize,
+    /// Persisted subagent lifecycle events.
+    pub subagent_events: usize,
+    /// Context preparations that created or used compaction.
+    pub context_compactions: usize,
+    /// Recoverable, terminal, failed, denied-release, or unknown errors.
+    pub error_events: usize,
+    /// Final visible outputs.
+    pub final_outputs: usize,
+}
+
+/// Bounded telemetry timeline and its summary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunTelemetryDetail {
+    /// Aggregate summary.
+    pub summary: RunTelemetrySummary,
+    /// Metadata-only records in durable sequence order.
+    pub records: Vec<TelemetryEventRecord>,
+    /// True when the configured record bound omitted later records.
+    pub truncated: bool,
+}
+
+/// Aggregate metadata-only metrics over bounded recent runs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryMetrics {
+    /// Included run count.
+    pub run_count: usize,
+    /// Included event count.
+    pub event_count: usize,
+    /// Mean timestamp-derived duration.
+    pub average_duration_seconds: f64,
+    /// Maximum timestamp-derived duration.
+    pub max_duration_seconds: f64,
+    /// Visible output character total.
+    pub model_output_chars: usize,
+    /// Tool-call total.
+    pub tool_calls: usize,
+    /// Tool-error total.
+    pub tool_errors: usize,
+    /// Approval-request total.
+    pub approval_requests: usize,
+    /// Automatic-approval total.
+    pub auto_approvals: usize,
+    /// Risk-assessment total.
+    pub risk_assessments: usize,
+    /// Research-event total.
+    pub research_events: usize,
+    /// Subagent-event total.
+    pub subagent_events: usize,
+    /// Context-compaction total.
+    pub context_compactions: usize,
+    /// Error-event total.
+    pub error_events: usize,
+    /// Final-output total.
+    pub final_outputs: usize,
+    /// Aggregate stable event-type histogram.
+    pub event_types: std::collections::BTreeMap<String, usize>,
+}
+
 /// Provenance for a durable key decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

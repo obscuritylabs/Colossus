@@ -12,8 +12,9 @@ use colossus_contracts::{
     ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep, PreparedContext, ProjectionStatus,
     ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute,
     ProviderTurn, QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun,
-    ResearchSource, ResearchSourceKind, SessionMessage, SessionSummary, SubagentJob,
-    SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
+    ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
+    SessionSummary, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
+    TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -47,6 +48,7 @@ use colossus_sandbox::{
     SandboxProcessExecutor, sandbox_doctor,
 };
 use colossus_session::EventSourcedSessionRepository;
+use colossus_telemetry::TelemetryService;
 use colossus_tools::{StaticToolRegistry, ToolCatalogError};
 use colossus_work::{EventSourcedWorkRepository, WorkService};
 use colossus_workflow::{
@@ -1112,6 +1114,7 @@ pub struct Runtime {
     journal: Arc<dyn EventJournal>,
     recovery_reason: Option<String>,
     projections: Arc<ProjectionWorker>,
+    telemetry: Arc<TelemetryService>,
     sessions: Arc<dyn SessionRepository>,
     context: Arc<ContextService>,
     work: Arc<dyn WorkRepository>,
@@ -1188,6 +1191,7 @@ impl Runtime {
             Arc::clone(&projection_store),
             default_handlers(),
         )?);
+        let telemetry = Arc::new(TelemetryService::new(Arc::clone(&journal)));
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
@@ -1521,6 +1525,7 @@ impl Runtime {
             journal,
             recovery_reason,
             projections,
+            telemetry,
             sessions,
             context,
             work,
@@ -1548,6 +1553,39 @@ impl Runtime {
     /// Authoritative event journal for bounded audit views.
     pub fn journal(&self) -> Arc<dyn EventJournal> {
         Arc::clone(&self.journal)
+    }
+
+    /// List recent metadata-only run telemetry.
+    pub fn telemetry_runs(
+        &self,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RunTelemetrySummary>, RuntimeError> {
+        self.telemetry
+            .list_runs(session_id, limit)
+            .map_err(Into::into)
+    }
+
+    /// Inspect a full or uniquely prefixed run without exposing event payloads.
+    pub fn telemetry_run(
+        &self,
+        id_or_prefix: &str,
+        limit: usize,
+    ) -> Result<RunTelemetryDetail, RuntimeError> {
+        self.telemetry
+            .get_run(id_or_prefix, limit)
+            .map_err(Into::into)
+    }
+
+    /// Aggregate metadata-only counters over recent runs.
+    pub fn telemetry_metrics(
+        &self,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<TelemetryMetrics, RuntimeError> {
+        self.telemetry
+            .metrics(session_id, limit)
+            .map_err(Into::into)
     }
 
     /// Durable workflow application API.
@@ -2251,6 +2289,7 @@ impl Runtime {
                 "memory_projection": "redb-projection:memory-v1",
                 "memory_index": "tantivy-or-degraded",
                 "research": "event-journal:research-runs-v1+sources-v1+claims-v1",
+                "telemetry": "derived:journal-envelopes+typed-safe-counters",
                 "workflows": "event-journal+redb-projection:workflows-v1",
             }
         }))

@@ -20,6 +20,7 @@ colossus-ports.workspace = true
 colossus-projection.workspace = true
 colossus-sandbox.workspace = true
 colossus-session.workspace = true
+colossus-telemetry.workspace = true
 colossus-tools.workspace = true
 colossus-workflow.workspace = true
 colossus-work.workspace = true

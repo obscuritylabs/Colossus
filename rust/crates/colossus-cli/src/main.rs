@@ -172,6 +172,8 @@ enum Command {
     Memories(MemoriesCommand),
     /// Run and inspect durable source-backed research.
     Research(ResearchCommand),
+    /// Inspect metadata-only persisted run telemetry.
+    Telemetry(TelemetryCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -969,6 +971,36 @@ enum ResearchAction {
     Claims { run_id: String },
 }
 
+#[derive(Args)]
+struct TelemetryCommand {
+    #[command(subcommand)]
+    command: TelemetryAction,
+}
+
+#[derive(Subcommand)]
+enum TelemetryAction {
+    /// List recent run summaries newest first.
+    Runs {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Show a bounded metadata-only timeline by full id or unique prefix.
+    Show {
+        run_id: String,
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
+    /// Aggregate metrics over recent runs.
+    Metrics {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -1206,7 +1238,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1278,6 +1310,12 @@ async fn repl(
                             )
                             .await?,
                     )?;
+                } else if line == "/telemetry" {
+                    print_json(&runtime.telemetry_runs(Some(&active_session_id), 20)?)?;
+                } else if line == "/telemetry metrics" {
+                    print_json(&runtime.telemetry_metrics(Some(&active_session_id), 100)?)?;
+                } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
+                    print_json(&runtime.telemetry_run(run_id.trim(), 500)?)?;
                 } else if line == "/context" || line == "/context status" {
                     print_json(&runtime.context_status(&active_session_id)?)?;
                 } else if line == "/context list" {
@@ -1793,6 +1831,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             ResearchAction::Claims { run_id } => {
                 print_json(&runtime.research_claims(&run_id)?)?;
+            }
+        },
+        Command::Telemetry(command) => match command.command {
+            TelemetryAction::Runs { session, limit } => {
+                print_json(&runtime.telemetry_runs(session.as_deref(), limit)?)?;
+            }
+            TelemetryAction::Show { run_id, limit } => {
+                print_json(&runtime.telemetry_run(&run_id, limit)?)?;
+            }
+            TelemetryAction::Metrics { session, limit } => {
+                print_json(&runtime.telemetry_metrics(session.as_deref(), limit)?)?;
             }
         },
         Command::Run {

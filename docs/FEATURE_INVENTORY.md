@@ -931,7 +931,7 @@ A reconstruction is complete only when all applicable checks pass:
 - [x] Research records planned queries, lane decisions, source labels, worker progress,
   citations, synthesis choice, and limitations.
 - [ ] Compact and verbose renderers cover every event type and every tool family.
-- [ ] Telemetry derives correct duration and counts from persisted event timestamps.
+- [x] Telemetry derives correct duration and counts from persisted event timestamps.
 - [ ] Credentials remain references until adapter execution and never appear in model or
   user-visible diagnostic payloads.
 - [ ] Skills cannot gain executable privilege; packs cannot activate before verification.

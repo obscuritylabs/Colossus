@@ -120,6 +120,7 @@ sandbox:
     assert_eq!(result["output"], "offline agent");
     assert_eq!(result["profile"], "echo");
     assert_eq!(result["event_count"], 4);
+    let first_run_id = result["run_id"].as_str().expect("run id").to_owned();
     let session_id = result["session_id"]
         .as_str()
         .expect("session id")
@@ -161,6 +162,53 @@ sandbox:
     assert_eq!(messages.as_array().map(Vec::len), Some(6));
     assert_eq!(messages[0]["message"]["content"], "offline agent");
     assert_eq!(messages[5]["message"]["content"], "third turn");
+
+    let telemetry = run(
+        binary,
+        &config,
+        &["telemetry", "runs", "--session", &session_id],
+    );
+    assert!(telemetry.status.success());
+    let telemetry: Value = serde_json::from_slice(&telemetry.stdout).expect("telemetry JSON");
+    assert_eq!(telemetry.as_array().map(Vec::len), Some(3));
+    assert!(
+        telemetry
+            .as_array()
+            .is_some_and(|runs| runs.iter().any(|run| run["run_id"] == first_run_id))
+    );
+
+    let prefix = &first_run_id[..20];
+    let detail = run(
+        binary,
+        &config,
+        &["telemetry", "show", prefix, "--limit", "3"],
+    );
+    assert!(
+        detail.status.success(),
+        "{}",
+        String::from_utf8_lossy(&detail.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&detail.stdout).contains("offline agent"));
+    let detail: Value = serde_json::from_slice(&detail.stdout).expect("telemetry detail JSON");
+    assert_eq!(detail["summary"]["run_id"], first_run_id);
+    assert_eq!(detail["summary"]["final_outputs"], 1);
+    assert!(
+        detail["summary"]["model_output_chars"]
+            .as_u64()
+            .is_some_and(|value| value > 0)
+    );
+    assert_eq!(detail["records"].as_array().map(Vec::len), Some(3));
+    assert_eq!(detail["truncated"], true);
+
+    let metrics = run(
+        binary,
+        &config,
+        &["telemetry", "metrics", "--session", &session_id],
+    );
+    assert!(metrics.status.success());
+    let metrics: Value = serde_json::from_slice(&metrics.stdout).expect("telemetry metrics JSON");
+    assert_eq!(metrics["run_count"], 3);
+    assert_eq!(metrics["final_outputs"], 3);
 
     let status = run(binary, &config, &["context", "status", &session_id]);
     assert!(status.status.success());

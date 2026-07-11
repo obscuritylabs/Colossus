@@ -26,6 +26,8 @@ cargo run -p colossus-cli --bin colossus-rs -- run --resume 'Continue the latest
 cargo run -p colossus-cli --bin colossus-rs -- research run \
   'Summarize the audit architecture' --depth quick --source repo
 cargo run -p colossus-cli --bin colossus-rs -- research list
+cargo run -p colossus-cli --bin colossus-rs -- telemetry runs
+cargo run -p colossus-cli --bin colossus-rs -- telemetry metrics
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
@@ -54,6 +56,11 @@ deterministic fallback instead of weakening citation checks. Source labels, clai
 lane/progress outcomes, and the final cited report are reconstructed from the encrypted
 journal. The report is also appended to its session, and abandoned runs become
 `interrupted` on restart without implicit retry.
+
+`telemetry runs`, `telemetry show RUN_OR_UNIQUE_PREFIX`, and `telemetry metrics` derive
+duration and operational counters from persisted typed events. Timelines expose only
+envelope metadata, lineage ids, hashes, and encrypted sizes; raw prompts, model text,
+tool output, and decrypted research evidence are never returned.
 
 Normal runs create a durable session automatically and return its id. Use
 `run --session ID` for an exact session, `run --resume` for the most recently updated
