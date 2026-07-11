@@ -212,6 +212,21 @@ post-effect decision. Search does not follow symlinks, skips `.colossus` and `.g
 ignores binary/non-UTF-8 or oversized files, and caps both match count and released
 output.
 
+Rust one-shot commands deny approval obligations unless `--approval-mode ask`,
+`risk-auto`, or `full-access` is selected; the REPL defaults to `ask`. Ask mode shows a
+bounded, hard-redacted proposed-content preview and accepts only an explicit `y`/`yes`.
+`full-access` can produce a proof for `require_approval`, but cannot convert a policy deny
+to allow, add a filesystem root, or mint an adapter permit itself. `risk-auto` currently
+records risk as unavailable and prompts rather than silently auto-approving. Declined and
+failed prompts append approval and effect denial events before returning.
+
+Filesystem mutation requests disclose the full proposed UTF-8 content before execution.
+The adapter performs create/overwrite/append/replace checks and the atomic write under one
+consumed permit, bounds existing and resulting content, rejects non-UTF-8 replacement
+targets and ambiguous single replacements, and constructs the diff evidence before the
+rename. Mutation result diffs are quarantined and post-authorized because they may reveal
+pre-existing text.
+
 Packs are the executable distribution boundary. Skills can include code files as
 resources, but Colossus does not execute scripts directly from skill directories.
 Executable tools, MCP servers, binaries, Docker assets, docs, and tests must be declared

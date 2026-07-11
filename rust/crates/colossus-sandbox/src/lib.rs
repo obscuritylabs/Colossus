@@ -210,14 +210,7 @@ impl EffectExecutor for FilesystemExecutor {
                 bounded_json(json!({"entries": entries}), max_output)
             }
             "filesystem.search" => search_files(&target, &request.content, max_output),
-            "filesystem.write" => {
-                let bytes = proposed_write_bytes(&request.content, max_output)?;
-                atomic_write(&target, &bytes)?;
-                bounded_json(
-                    json!({"bytes_written": bytes.len(), "sha256": sha256_hex(&bytes)}),
-                    max_output,
-                )
-            }
+            "filesystem.write" => write_file(&target, &request.content, max_output),
             _ => Err(adapter_failure("unsupported filesystem action")),
         }
     }
@@ -469,6 +462,255 @@ fn proposed_write_bytes(content: &Value, limit: usize) -> Result<Vec<u8>, Execut
     Ok(bytes)
 }
 
+fn write_file(
+    target: &Path,
+    content: &Value,
+    max_output: usize,
+) -> Result<QuarantinedEffectResult, ExecutionError> {
+    if content.get("content_base64").is_some() {
+        let bytes = proposed_write_bytes(content, max_output)?;
+        let result = json!({
+            "bytes_written": bytes.len(),
+            "sha256": sha256_hex(&bytes),
+        });
+        let encoded = bounded_json_bytes(&result, max_output)?;
+        atomic_write(target, &bytes)?;
+        return Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: encoded,
+            effect_succeeded: true,
+        });
+    }
+
+    let operation = content
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("write");
+    let existing = existing_text(target, max_output)?;
+    let (updated, replacements, create_only) = match operation {
+        "write" => {
+            let supplied = content
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| adapter_failure("filesystem.write text is absent"))?;
+            let mode = content
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("overwrite");
+            match mode {
+                "create" if existing.is_some() => {
+                    return Err(adapter_failure(
+                        "filesystem.write create mode refuses an existing file",
+                    ));
+                }
+                "create" => (supplied.to_owned(), None, true),
+                "overwrite" => (supplied.to_owned(), None, false),
+                "append" => (
+                    format!("{}{}", existing.as_deref().unwrap_or_default(), supplied),
+                    None,
+                    false,
+                ),
+                _ => {
+                    return Err(adapter_failure(
+                        "filesystem.write mode must be create, overwrite, or append",
+                    ));
+                }
+            }
+        }
+        "replace" => {
+            let original = existing
+                .as_deref()
+                .ok_or_else(|| adapter_failure("filesystem.replace requires an existing file"))?;
+            let old = content
+                .get("old")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| adapter_failure("filesystem.replace old text is absent"))?;
+            let new = content
+                .get("new")
+                .and_then(Value::as_str)
+                .ok_or_else(|| adapter_failure("filesystem.replace new text is absent"))?;
+            let replace_all = content
+                .get("replace_all")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let occurrences = original.matches(old).count();
+            if occurrences == 0 {
+                return Err(adapter_failure("filesystem.replace old text was not found"));
+            }
+            if occurrences > 1 && !replace_all {
+                return Err(adapter_failure("filesystem.replace old text is ambiguous"));
+            }
+            (
+                if replace_all {
+                    original.replace(old, new)
+                } else {
+                    original.replacen(old, new, 1)
+                },
+                Some(if replace_all { occurrences } else { 1 }),
+                false,
+            )
+        }
+        _ => return Err(adapter_failure("unknown filesystem mutation operation")),
+    };
+    if updated.len() > max_output {
+        return Err(adapter_failure(
+            "filesystem mutation content exceeds the permitted bound",
+        ));
+    }
+    let original = existing.as_deref().unwrap_or_default();
+    let display_path = mutation_display_path(content, target);
+    let mut result = json!({
+        "path": display_path,
+        "bytes_written": updated.len(),
+        "sha256": sha256_hex(updated.as_bytes()),
+        "diff": compact_unified_diff(display_path, original, &updated, max_output / 2),
+        "changed_line_ranges": changed_line_ranges(original, &updated),
+    });
+    if let Some(replacements) = replacements {
+        result["replacements"] = json!(replacements);
+    }
+    let encoded = bounded_json_bytes(&result, max_output)?;
+    if create_only {
+        atomic_create(target, updated.as_bytes())?;
+    } else {
+        atomic_write(target, updated.as_bytes())?;
+    }
+    Ok(QuarantinedEffectResult {
+        media_type: "application/json".into(),
+        bytes: encoded,
+        effect_succeeded: true,
+    })
+}
+
+fn existing_text(target: &Path, max_bytes: usize) -> Result<Option<String>, ExecutionError> {
+    match fs::metadata(target) {
+        Ok(metadata) if !metadata.is_file() => Err(adapter_failure(
+            "filesystem mutation requires a regular file target",
+        )),
+        Ok(metadata) if metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX) => Err(
+            adapter_failure("existing file exceeds the permitted mutation bound"),
+        ),
+        Ok(_) => fs::read_to_string(target)
+            .map(Some)
+            .map_err(adapter_failure),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(adapter_failure(error)),
+    }
+}
+
+fn mutation_display_path<'a>(content: &'a Value, target: &'a Path) -> &'a str {
+    content
+        .get("display_path")
+        .and_then(Value::as_str)
+        .filter(|value| !value.contains('\n') && !value.contains('\r'))
+        .or_else(|| target.file_name().and_then(|name| name.to_str()))
+        .unwrap_or("file")
+}
+
+fn compact_unified_diff(path: &str, old: &str, new: &str, max_bytes: usize) -> String {
+    if old == new {
+        return String::new();
+    }
+    let old_lines = old.lines().collect::<Vec<_>>();
+    let new_lines = new.lines().collect::<Vec<_>>();
+    let prefix = old_lines
+        .iter()
+        .zip(&new_lines)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = old_lines[prefix..]
+        .iter()
+        .rev()
+        .zip(new_lines[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let context_start = prefix.saturating_sub(3);
+    let old_end = old_lines.len().saturating_sub(suffix);
+    let new_end = new_lines.len().saturating_sub(suffix);
+    let context_end_old = old_end.saturating_add(3).min(old_lines.len());
+    let context_end_new = new_end.saturating_add(3).min(new_lines.len());
+    let mut diff = format!(
+        "--- a/{path}\n+++ b/{path}\n@@ -{},{} +{},{} @@\n",
+        context_start.saturating_add(1),
+        context_end_old.saturating_sub(context_start),
+        context_start.saturating_add(1),
+        context_end_new.saturating_sub(context_start),
+    );
+    for line in &old_lines[context_start..prefix] {
+        diff.push(' ');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    for line in &old_lines[prefix..old_end] {
+        diff.push('-');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    for line in &new_lines[prefix..new_end] {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    for line in &new_lines[new_end..context_end_new] {
+        diff.push(' ');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    truncate_diff(diff, max_bytes.max(256))
+}
+
+fn truncate_diff(mut diff: String, max_bytes: usize) -> String {
+    if diff.len() <= max_bytes {
+        return diff;
+    }
+    let marker = "\n... diff truncated ...\n";
+    let mut end = max_bytes.saturating_sub(marker.len()).min(diff.len());
+    while !diff.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    diff.truncate(end);
+    diff.push_str(marker);
+    diff
+}
+
+fn changed_line_ranges(old: &str, new: &str) -> Vec<Value> {
+    if old == new {
+        return Vec::new();
+    }
+    let old_lines = old.lines().collect::<Vec<_>>();
+    let new_lines = new.lines().collect::<Vec<_>>();
+    let prefix = old_lines
+        .iter()
+        .zip(&new_lines)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = old_lines[prefix..]
+        .iter()
+        .rev()
+        .zip(new_lines[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let new_end = new_lines.len().saturating_sub(suffix);
+    let start = prefix.saturating_add(1);
+    let end = if new_end == prefix {
+        start.min(new_lines.len().max(1))
+    } else {
+        new_end
+    };
+    vec![json!({"start": start, "end": end})]
+}
+
+fn bounded_json_bytes(value: &Value, limit: usize) -> Result<Vec<u8>, ExecutionError> {
+    let bytes = serde_json::to_vec(value).map_err(adapter_failure)?;
+    if bytes.len() > limit {
+        return Err(adapter_failure(
+            "adapter output exceeds the permitted bound",
+        ));
+    }
+    Ok(bytes)
+}
+
 fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), ExecutionError> {
     let parent = target
         .parent()
@@ -483,6 +725,30 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), ExecutionError> {
         file.write_all(bytes).map_err(adapter_failure)?;
         file.sync_all().map_err(adapter_failure)?;
         fs::rename(&temporary, target).map_err(adapter_failure)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn atomic_create(target: &Path, bytes: &[u8]) -> Result<(), ExecutionError> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| adapter_failure("create target has no parent"))?;
+    let temporary = parent.join(format!(".colossus-create-{}.tmp", Uuid::now_v7()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(adapter_failure)?;
+        file.write_all(bytes).map_err(adapter_failure)?;
+        file.sync_all().map_err(adapter_failure)?;
+        drop(file);
+        fs::hard_link(&temporary, target).map_err(adapter_failure)?;
+        let _ = fs::remove_file(&temporary);
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -2628,7 +2894,7 @@ fn canonical_origin(scheme: &str, host: &str, port: u16) -> Result<String, Execu
 mod tests {
     use super::{
         AllowlistProxy, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
-        atomic_write, authority, non_public_ip, oci_command, oci_remove_arguments,
+        atomic_create, atomic_write, authority, non_public_ip, oci_command, oci_remove_arguments,
         proposed_write_bytes, resolve_oci_origins, tls_server_name, validate_process_spec,
     };
     use colossus_contracts::{DecisionOutcome, PolicyObligations};
@@ -2657,6 +2923,15 @@ mod tests {
         atomic_write(&target, b"first").expect("first");
         atomic_write(&target, b"second").expect("second");
         assert_eq!(std::fs::read(target).expect("read"), b"second");
+    }
+
+    #[test]
+    fn atomic_create_never_clobbers_a_concurrent_target() {
+        let directory = tempdir().expect("tempdir");
+        let target = directory.path().join("target");
+        atomic_create(&target, b"first").expect("create");
+        assert!(atomic_create(&target, b"second").is_err());
+        assert_eq!(std::fs::read(target).expect("read"), b"first");
     }
 
     #[test]
@@ -2941,14 +3216,54 @@ mod tests {
             system_actor("test"),
             "filesystem.write",
             target.display().to_string(),
-            json!({"text": "durable"}),
+            json!({
+                "operation": "write",
+                "display_path": "created.txt",
+                "text": "hello hello",
+                "mode": "create",
+            }),
         );
         request.capabilities = vec!["filesystem.write".into()];
-        gateway
+        let written = gateway
             .execute(request, &FilesystemExecutor::new())
             .await
             .expect("write");
-        assert_eq!(std::fs::read_to_string(target).expect("read"), "durable");
+        let written: serde_json::Value =
+            serde_json::from_slice(&written.bytes).expect("write JSON");
+        assert_eq!(written["path"], "created.txt");
+        assert_eq!(written["changed_line_ranges"][0]["start"], 1);
+        assert!(
+            written["diff"]
+                .as_str()
+                .is_some_and(|diff| diff.contains("+hello hello"))
+        );
+
+        let mut request = effect_request(
+            system_actor("test"),
+            "filesystem.write",
+            target.display().to_string(),
+            json!({
+                "operation": "replace",
+                "display_path": "created.txt",
+                "old": "hello",
+                "new": "hi",
+                "replace_all": true,
+            }),
+        );
+        request.capabilities = vec!["filesystem.write".into()];
+        let replaced = gateway
+            .execute(request, &FilesystemExecutor::new())
+            .await
+            .expect("replace");
+        let replaced: serde_json::Value =
+            serde_json::from_slice(&replaced.bytes).expect("replace JSON");
+        assert_eq!(replaced["replacements"], 2);
+        assert!(
+            replaced["diff"]
+                .as_str()
+                .is_some_and(|diff| { diff.contains("-hello hello") && diff.contains("+hi hi") })
+        );
+        assert_eq!(std::fs::read_to_string(target).expect("read"), "hi hi");
     }
 
     #[tokio::test]

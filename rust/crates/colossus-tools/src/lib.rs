@@ -190,6 +190,37 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "filesystem.write".into(),
+            description: "Create, overwrite, or append bounded UTF-8 workspace text.".into(),
+            input_schema: object_schema(
+                json!({
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "content": {"type": "string", "maxLength": 1048576},
+                    "mode": {"type": "string", "enum": ["create", "overwrite", "append"]}
+                }),
+                &["path", "content", "mode"],
+            ),
+            effect_action: Some("filesystem.write".into()),
+            capability: Some("filesystem.write".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "filesystem.replace".into(),
+            description: "Replace exact bounded text in one UTF-8 workspace file.".into(),
+            input_schema: object_schema(
+                json!({
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "old": {"type": "string", "minLength": 1, "maxLength": 1048576},
+                    "new": {"type": "string", "maxLength": 1048576},
+                    "replace_all": {"type": "boolean", "default": false}
+                }),
+                &["path", "old", "new"],
+            ),
+            effect_action: Some("filesystem.write".into()),
+            capability: Some("filesystem.write".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "network.http".into(),
             description: "Fetch one exact policy-permitted HTTP(S) URL with GET.".into(),
             input_schema: object_schema(
@@ -291,5 +322,48 @@ mod tests {
             }),
             Err(ToolError::InvalidArguments { .. })
         ));
+    }
+
+    #[test]
+    fn workspace_mutation_tools_share_the_write_capability_and_reject_loose_arguments() {
+        let registry =
+            StaticToolRegistry::builtins(&["filesystem.write".into(), "filesystem.replace".into()])
+                .expect("catalog");
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some("filesystem.write"));
+            assert_eq!(spec.capability.as_deref(), Some("filesystem.write"));
+        }
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "write".into(),
+                    name: "filesystem.write".into(),
+                    arguments: json!({
+                        "path": "note.txt",
+                        "content": "hello",
+                        "mode": "create",
+                    }),
+                })
+                .is_ok()
+        );
+        for arguments in [
+            json!({"path": "note.txt", "content": "hello", "mode": "unsafe"}),
+            json!({"path": "note.txt", "old": "", "new": "hello"}),
+            json!({"path": "note.txt", "old": "hello", "new": "hi", "count": 1}),
+        ] {
+            let name = if arguments.get("mode").is_some() {
+                "filesystem.write"
+            } else {
+                "filesystem.replace"
+            };
+            assert!(matches!(
+                registry.validate(&ToolCall {
+                    call_id: "mutation".into(),
+                    name: name.into(),
+                    arguments,
+                }),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
     }
 }

@@ -667,9 +667,12 @@ dependencies = [
 name = "colossus-cli"
 version = "0.6.0-alpha.1"
 dependencies = [
+ "async-trait",
  "base64",
  "clap",
  "colossus-contracts",
+ "colossus-policy",
+ "colossus-ports",
  "colossus-runtime",
  "colossus-sandbox",
  "colossus-workflow",

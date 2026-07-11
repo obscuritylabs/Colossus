@@ -25,10 +25,10 @@ use colossus_policy::{
     OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
-    ContextError, ContextPreparer, ContextRepository, EventJournal, KeyProvider, MemoryIndex,
-    MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError, PolicyDecisionPoint,
-    ProjectionStore, SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
-    WorkRepository, WorkflowRepository,
+    ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EventJournal, KeyProvider,
+    MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
+    PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError, ToolError, ToolExecutor,
+    ToolRegistry, WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
@@ -838,6 +838,14 @@ pub struct Runtime {
 impl Runtime {
     /// Compose mandatory encryption, journal verification, policy, gateway, and workflows.
     pub fn open(config: &RuntimeConfig) -> Result<Self, RuntimeError> {
+        Self::open_with_approval(config, Arc::new(DenyApproval))
+    }
+
+    /// Compose the runtime with an explicit terminal or embedded approval provider.
+    pub fn open_with_approval(
+        config: &RuntimeConfig,
+        approvals: Arc<dyn ApprovalProvider>,
+    ) -> Result<Self, RuntimeError> {
         if let Some(parent) = config.storage.path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -1034,7 +1042,7 @@ impl Runtime {
         let gateway = Arc::new(EffectGateway::new(
             Arc::clone(&journal),
             Arc::clone(&policy),
-            Arc::new(DenyApproval),
+            approvals,
             SafetyKernel::new([
                 "provider.echo".to_owned(),
                 "provider.openai.responses".to_owned(),
@@ -2104,6 +2112,35 @@ struct GatewayToolExecutor {
     workspace: PathBuf,
 }
 
+impl GatewayToolExecutor {
+    async fn execute_filesystem_mutation(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+        path: PathBuf,
+        content: Value,
+    ) -> Result<String, ToolError> {
+        let mut request = effect_request(
+            model_actor(call),
+            "filesystem.write",
+            path.display().to_string(),
+            content,
+        );
+        request.capabilities = vec!["filesystem.write".into()];
+        request.context = context;
+        let result = self
+            .gateway
+            .execute(request, self.filesystem.as_ref())
+            .await
+            .map_err(tool_gateway_error)?;
+        let output = String::from_utf8(result.bytes)
+            .map_err(|_| ToolError::Failed("filesystem mutation returned non-UTF-8".into()))?;
+        serde_json::from_str::<Value>(&output)
+            .map_err(|error| ToolError::Failed(format!("invalid mutation result: {error}")))?;
+        Ok(bounded_tool_text(&output, 1024 * 1024))
+    }
+}
+
 #[async_trait]
 impl ToolExecutor for GatewayToolExecutor {
     async fn execute(
@@ -2225,6 +2262,41 @@ impl ToolExecutor for GatewayToolExecutor {
                 }
                 serde_json::to_string(&value)
                     .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
+            "filesystem.write" => {
+                let path =
+                    model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
+                let display_path = workspace_relative(&self.workspace, &path)?;
+                self.execute_filesystem_mutation(
+                    &call,
+                    context,
+                    path,
+                    json!({
+                        "operation": "write",
+                        "display_path": display_path,
+                        "text": required_tool_string(&call, "content")?,
+                        "mode": required_tool_string(&call, "mode")?,
+                    }),
+                )
+                .await?
+            }
+            "filesystem.replace" => {
+                let path =
+                    model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
+                let display_path = workspace_relative(&self.workspace, &path)?;
+                self.execute_filesystem_mutation(
+                    &call,
+                    context,
+                    path,
+                    json!({
+                        "operation": "replace",
+                        "display_path": display_path,
+                        "old": required_tool_string(&call, "old")?,
+                        "new": required_tool_string(&call, "new")?,
+                        "replace_all": optional_tool_bool(&call, "replace_all")?.unwrap_or(false),
+                    }),
+                )
+                .await?
             }
             "network.http" => {
                 let url = required_tool_string(&call, "url")?;
@@ -3167,5 +3239,118 @@ surprise: true
             .await
             .expect_err("control directory denied");
         assert!(matches!(denied, colossus_ports::ToolError::Denied(_)));
+    }
+
+    #[tokio::test]
+    async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
+        let workspace = tempdir().expect("workspace");
+        let target = workspace.path().join("note.txt");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let denied_gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("filesystem.write", DecisionOutcome::RequireApproval)
+                    .with_filesystem_root(workspace.path().display().to_string(), "write"),
+            ),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["filesystem.write".into()]),
+            [7_u8; 32],
+        ));
+        let denied_executor = GatewayToolExecutor {
+            gateway: denied_gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            workspace: workspace.path().to_path_buf(),
+        };
+        let denied = denied_executor
+            .execute(
+                ToolCall {
+                    call_id: "write-denied".into(),
+                    name: "filesystem.write".into(),
+                    arguments: json!({
+                        "path": "note.txt",
+                        "content": "hello hello",
+                        "mode": "create",
+                    }),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect_err("approval denied");
+        assert!(matches!(denied, colossus_ports::ToolError::Denied(_)));
+        assert!(!target.exists());
+
+        let allowed_gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("filesystem.write", DecisionOutcome::RequireApproval)
+                    .with_filesystem_root(workspace.path().display().to_string(), "write"),
+            ),
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test-operator".into(),
+            }),
+            colossus_policy::SafetyKernel::new(["filesystem.write".into()]),
+            [8_u8; 32],
+        ));
+        let allowed_executor = GatewayToolExecutor {
+            gateway: allowed_gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            workspace: workspace.path().to_path_buf(),
+        };
+        let written = allowed_executor
+            .execute(
+                ToolCall {
+                    call_id: "write-allowed".into(),
+                    name: "filesystem.write".into(),
+                    arguments: json!({
+                        "path": "note.txt",
+                        "content": "hello hello",
+                        "mode": "create",
+                    }),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("approved write");
+        let written: serde_json::Value = serde_json::from_str(&written.output).expect("write JSON");
+        assert!(
+            written["diff"]
+                .as_str()
+                .is_some_and(|diff| diff.contains("+hello hello"))
+        );
+
+        let replaced = allowed_executor
+            .execute(
+                ToolCall {
+                    call_id: "replace-allowed".into(),
+                    name: "filesystem.replace".into(),
+                    arguments: json!({
+                        "path": "note.txt",
+                        "old": "hello",
+                        "new": "hi",
+                        "replace_all": true,
+                    }),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("approved replace");
+        let replaced: serde_json::Value =
+            serde_json::from_str(&replaced.output).expect("replace JSON");
+        assert_eq!(replaced["replacements"], 2);
+        assert_eq!(fs::read_to_string(target).expect("read"), "hi hi");
+
+        let names = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"approval.denied.v1".into()));
+        assert!(names.contains(&"approval.granted.v1".into()));
+        assert!(names.contains(&"effect.release_requested.v1".into()));
     }
 }

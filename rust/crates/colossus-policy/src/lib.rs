@@ -752,9 +752,13 @@ impl EffectGateway {
         if self.journal.is_recovery_mode() {
             return Err(GatewayError::Journal(StoreError::RecoveryMode));
         }
-        if request.schema_version != 1 || request.request_id.is_empty() {
+        if request.schema_version != 1
+            || request.request_id.is_empty()
+            || request.phase != EffectPhase::PreEffect
+        {
             return Err(GatewayError::Safety(
-                "unsupported schema version or empty request id".into(),
+                "unsupported schema version, empty request id, or caller-supplied post-effect phase"
+                    .into(),
             ));
         }
         self.event(
@@ -778,11 +782,43 @@ impl EffectGateway {
         let request_hash = sha256_hex(&canonical_bytes(&request)?);
         let mut decision = self.decide(&request).await?;
         if decision.outcome == DecisionOutcome::RequireApproval {
-            let proof = self
+            let proof = match self
                 .approvals
                 .request_approval(&request, &request_hash, &decision)
-                .await?
-                .ok_or_else(|| GatewayError::Approval("operator declined".into()))?;
+                .await
+            {
+                Ok(Some(proof)) => proof,
+                Ok(None) => {
+                    self.event(
+                        &request,
+                        "approval.denied.v1",
+                        EventClassification::Approval,
+                        json!({"decision_id": decision.decision_id, "reason": "operator declined"}),
+                    )?;
+                    self.event(
+                        &request,
+                        "effect.denied.v1",
+                        EventClassification::Effect,
+                        json!({"decision_id": decision.decision_id, "reason": "operator declined"}),
+                    )?;
+                    return Err(GatewayError::Approval("operator declined".into()));
+                }
+                Err(error) => {
+                    self.event(
+                        &request,
+                        "approval.error.v1",
+                        EventClassification::Approval,
+                        json!({"decision_id": decision.decision_id, "message": error.to_string()}),
+                    )?;
+                    self.event(
+                        &request,
+                        "effect.denied.v1",
+                        EventClassification::Effect,
+                        json!({"decision_id": decision.decision_id, "reason": "approval provider failed"}),
+                    )?;
+                    return Err(GatewayError::Policy(error));
+                }
+            };
             if proof.request_hash != request_hash {
                 return Err(GatewayError::Approval(
                     "approval proof is bound to a different request".into(),
@@ -1069,11 +1105,13 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             .get(&request.action)
             .copied()
             .unwrap_or(DecisionOutcome::Deny);
-        if outcome == DecisionOutcome::RequireApproval && request.approval.is_some() {
+        if outcome == DecisionOutcome::RequireApproval
+            && (request.approval.is_some() || request.phase == EffectPhase::PostEffect)
+        {
             outcome = DecisionOutcome::Allow;
         }
         let mut obligations = self.obligations.clone();
-        if (request.action.starts_with("filesystem.") && request.action != "filesystem.write")
+        if request.action.starts_with("filesystem.")
             || request.action == "network.http"
             || matches!(
                 request.action.as_str(),
@@ -1694,8 +1732,39 @@ mod tests {
                 .iter()
                 .filter(|name| name.as_str() == "policy.decided.v1")
                 .count(),
-            2
+            3
         );
+    }
+
+    #[tokio::test]
+    async fn callers_cannot_spoof_post_effect_phase_to_bypass_approval() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("filesystem.write", DecisionOutcome::RequireApproval)
+            .with_filesystem_root("/tmp", "write");
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(super::DenyApproval),
+            SafetyKernel::new([]),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let mut request = effect_request(
+            system_actor("test"),
+            "filesystem.write",
+            "/tmp/x",
+            serde_json::json!({"content":"x"}),
+        );
+        request.phase = colossus_contracts::EffectPhase::PostEffect;
+        assert!(matches!(
+            gateway.execute(request, &executor).await,
+            Err(GatewayError::Safety(_))
+        ));
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+        assert!(journal.read_global(1, 10).expect("events").is_empty());
     }
 
     struct PostDenyPolicy;

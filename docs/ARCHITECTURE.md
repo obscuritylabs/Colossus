@@ -148,6 +148,14 @@ Recursive search is an in-process adapter rather than an implicit subprocess, re
 ignore files, does not follow links, skips runtime/VCS control directories, and returns
 only bounded UTF-8 matches through the post-effect release gate.
 
+Mutation tools send the complete proposed text and mode through the pre-effect decision,
+then the permit-bound filesystem adapter evaluates create/overwrite/append or exact
+replacement and commits with an atomic rename. The adapter prepares bounded diff evidence
+before committing so an oversized result cannot turn a successful write into an
+ambiguous adapter failure. Terminal and embedded callers inject an `ApprovalProvider`
+when composing the runtime; approval remains an obligation that triggers policy
+re-evaluation, never an alternate execution route.
+
 Provider adapters remain strict about malformed tool-call argument payloads. When a
 provider raises the standard invalid tool-argument `ProviderError`, the orchestrator may
 perform a bounded recovery turn by emitting a recoverable `ErrorEvent`, appending a

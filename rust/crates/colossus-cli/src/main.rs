@@ -1,7 +1,13 @@
 //! Thin terminal interface for the Rust runtime.
 
+use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use colossus_contracts::{DecisionPriority, DecisionStatus, MemoryScope, MemoryStatus, TaskStatus};
+use colossus_contracts::{
+    ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, MemoryScope, MemoryStatus,
+    PolicyDecision, TaskStatus,
+};
+use colossus_policy::{AllowApproval, DenyApproval};
+use colossus_ports::{ApprovalProvider, PolicyError};
 use colossus_runtime::{Runtime, RuntimeConfig};
 use reedline::{DefaultPrompt, Reedline, Signal};
 use serde_json::{Value, json};
@@ -9,7 +15,9 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fs,
+    io::{self, Write as _},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 #[derive(Parser)]
@@ -22,8 +30,101 @@ struct Cli {
     /// Fresh Rust YAML configuration path.
     #[arg(long, default_value = ".colossus/config.yaml")]
     config: PathBuf,
+    /// Handling for policy decisions that require operator approval.
+    #[arg(long, value_enum)]
+    approval_mode: Option<ApprovalMode>,
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ApprovalMode {
+    /// Fail closed without prompting (default outside the REPL).
+    Deny,
+    /// Prompt on the terminal for every approval obligation.
+    Ask,
+    /// Prompt explicitly while risk-model evaluation is not yet configured.
+    RiskAuto,
+    /// Grant approval obligations automatically without expanding policy permissions.
+    FullAccess,
+}
+
+struct TerminalApproval {
+    risk_unavailable: bool,
+    lock: Mutex<()>,
+}
+
+#[async_trait]
+impl ApprovalProvider for TerminalApproval {
+    async fn request_approval(
+        &self,
+        request: &EffectRequest,
+        request_hash: &str,
+        decision: &PolicyDecision,
+    ) -> Result<Option<ApprovalProof>, PolicyError> {
+        let guard = self
+            .lock
+            .lock()
+            .map_err(|_| PolicyError::Unavailable("approval terminal lock is poisoned".into()))?;
+        eprintln!("approval required: {} {}", request.action, request.resource);
+        eprintln!("reason: {}", decision.reason);
+        if self.risk_unavailable {
+            eprintln!("risk status: unavailable; explicit approval is required");
+        }
+        let content = serde_json::to_string_pretty(&request.content)
+            .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+        eprintln!("proposed content: {}", bounded_preview(&content, 1200));
+        eprint!("Approve this effect? [y/N] ");
+        io::stderr()
+            .flush()
+            .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+        let approved = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+        drop(guard);
+        if !approved {
+            return Ok(None);
+        }
+        ApprovalProvider::request_approval(
+            &AllowApproval {
+                approved_by: "terminal-user".into(),
+            },
+            request,
+            request_hash,
+            decision,
+        )
+        .await
+    }
+}
+
+fn bounded_preview(value: &str, max_chars: usize) -> &str {
+    value
+        .char_indices()
+        .nth(max_chars)
+        .map_or(value, |(end, _)| &value[..end])
+}
+
+fn approval_provider(
+    command: &Command,
+    configured: Option<ApprovalMode>,
+) -> Arc<dyn ApprovalProvider> {
+    let mode = configured.unwrap_or(if matches!(command, Command::Repl { .. }) {
+        ApprovalMode::Ask
+    } else {
+        ApprovalMode::Deny
+    });
+    match mode {
+        ApprovalMode::Deny => Arc::new(DenyApproval),
+        ApprovalMode::Ask | ApprovalMode::RiskAuto => Arc::new(TerminalApproval {
+            risk_unavailable: mode == ApprovalMode::RiskAuto,
+            lock: Mutex::new(()),
+        }),
+        ApprovalMode::FullAccess => Arc::new(AllowApproval {
+            approved_by: "terminal-user:full-access".into(),
+        }),
+    }
 }
 
 #[derive(Subcommand)]
@@ -982,7 +1083,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         print!("{}", config.to_yaml()?);
         return Ok(());
     }
-    let runtime = Runtime::open(&config)?;
+    let approvals = approval_provider(&cli.command, cli.approval_mode);
+    let runtime = Runtime::open_with_approval(&config, approvals)?;
     match cli.command {
         Command::Config(_) => unreachable!("handled before runtime construction"),
         Command::Audit(command) => match command.command {

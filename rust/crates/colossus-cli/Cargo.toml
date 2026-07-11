@@ -10,8 +10,11 @@ name = "colossus-rs"
 path = "src/main.rs"
 
 [dependencies]
+async-trait.workspace = true
 clap.workspace = true
 colossus-contracts.workspace = true
+colossus-policy.workspace = true
+colossus-ports.workspace = true
 colossus-runtime.workspace = true
 colossus-sandbox.workspace = true
 colossus-workflow.workspace = true
