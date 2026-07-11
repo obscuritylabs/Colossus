@@ -68,6 +68,12 @@ obsolete Go launcher.
   cascade. Repeated and parallel steps use durable scoped execution identities, so
   per-item inputs, effects, idempotency keys, retries, and child links reconstruct without
   cross-iteration reuse.
+- Shared factory-based conformance suites reopen the event-sourced research and extension
+  repositories against the same journal. Research acceptance covers provenance, sequential
+  source labels, citation integrity, terminal immutability, session filtering, and source/
+  claim reconstruction. Extension acceptance covers integration reconnect/disconnect,
+  immutable connection identity, bounded lists, pack install/disable/uninstall/reinstall,
+  publisher trust, aggregate compatibility, and restart reconstruction.
 - A bounded session work-state snapshot composes tasks, active decisions, actionable
   plans, current goals, and nonterminal subagents for `work`, embedded `/work`, and the
   authenticated worker REPL without duplicating repository logic in interfaces.
@@ -260,9 +266,6 @@ obligations to be present in the YAML configuration.
 This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
 cutover. The following planned work remains:
 
-- Extension repositories plus their shared conformance suites. Canonical research runs,
-  sources, claims, citations, phase progress, deterministic/model fallbacks, restart
-  interruption, repository collection, and configured SearXNG collection are implemented.
 - A durable external-work queue that can advance Tantivy and Chroma independently,
   live Chroma version compatibility, and richer retry/backoff telemetry. Selectable
   Chroma semantic candidates plus local/OpenAI-compatible embedding profiles are

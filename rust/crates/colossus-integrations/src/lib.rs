@@ -2466,9 +2466,17 @@ mod tests {
     use colossus_contracts::{DecisionOutcome, IntegrationAuth, IntegrationStatus};
     use colossus_policy::{EffectExecutor, system_actor};
     use colossus_ports::{EventJournal, ExtensionRepository};
-    use colossus_testkit::InMemoryEventJournal;
+    use colossus_testkit::{InMemoryEventJournal, assert_extension_repository_conformance};
     use serde_json::json;
     use std::{collections::BTreeMap, sync::Arc};
+
+    #[test]
+    fn event_sourced_extension_repository_passes_shared_conformance() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        assert_extension_repository_conformance(|| {
+            Box::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)))
+        });
+    }
 
     fn document() -> serde_json::Value {
         json!({

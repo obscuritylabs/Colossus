@@ -1109,14 +1109,22 @@ mod tests {
         ResearchPhase, ResearchProgressStatus, ResearchRun, ResearchSource, ResearchSourceKind,
         ResearchStatus,
     };
-    use colossus_ports::{ResearchRepository, SessionRepository};
+    use colossus_ports::{EventJournal, ResearchRepository, SessionRepository};
     use colossus_session::EventSourcedSessionRepository;
-    use colossus_testkit::InMemoryEventJournal;
+    use colossus_testkit::{InMemoryEventJournal, assert_research_repository_conformance};
     use std::{collections::BTreeMap, sync::Arc};
 
     struct OfflineCollector;
 
     struct StructuredModel;
+
+    #[test]
+    fn event_sourced_research_repository_passes_shared_conformance() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        assert_research_repository_conformance(|| {
+            Box::new(EventSourcedResearchRepository::new(Arc::clone(&journal)))
+        });
+    }
 
     #[async_trait]
     impl ResearchModel for StructuredModel {

@@ -985,6 +985,8 @@ A reconstruction is complete only when all applicable checks pass:
   never reaches the requester.
 - [ ] In-memory and embedded journals/repositories plus Tantivy and Chroma indexes pass
   the shared conformance contract; canonical memory works during index outage/rebuild.
+- [x] Research and extension adapters pass shared factory-reopen conformance for canonical
+  citations, integration state, pack lifecycle, publisher trust, bounds, and reconstruction.
 - [ ] Workflow schema, trust invalidation, restart, bounded parallelism, cycles, input
   waits, explicit idempotent retries, compensation, cancellation, and unknown outcomes
   pass durable acceptance tests.

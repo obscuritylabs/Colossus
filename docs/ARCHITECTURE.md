@@ -118,6 +118,13 @@ transport and OpenAI-compatible embedding transport are permit-bound, exact-orig
 bounded effects. The offline local embedding profile uses deterministic token/bigram
 feature hashing and does not claim model-quality semantic understanding.
 
+Repository adapters are verified through shared port-level conformance factories rather
+than implementation-specific happy paths. The research suite reopens the adapter and
+checks immutable provenance, sequential evidence, citation resolution, terminal state,
+filtering, and reconstruction. The extension suite does the same for integration state,
+pack lifecycle, publisher trust, aggregate access, deterministic bounds, and restart
+reconstruction. A future adapter must pass these suites without weakening its port.
+
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
 subprocess specifications are authenticated to a one-shot helper, which clears the
 environment and applies the selected native or OCI isolation profile before spawning.

@@ -1,12 +1,16 @@
 //! Shared adapter conformance fixtures.
 
 use colossus_contracts::{
-    Actor, ActorType, EncryptedPayload, EventDisplayMode, EventEnvelope, NewEvent, ProjectionBatch,
-    ProjectionMutation, ProjectionWorkItem, ReplPreferences, SignedCheckpoint, StreamDisplayMode,
-    ThemeName, TranscriptDensity,
+    Actor, ActorType, EncryptedPayload, EventDisplayMode, EventEnvelope, IntegrationAuth,
+    IntegrationConnection, IntegrationKind, IntegrationOperation, IntegrationStatus, NewEvent,
+    PackInstallation, PackManifest, PackStatus, ProjectionBatch, ProjectionMutation,
+    ProjectionWorkItem, PublisherTrust, ReplPreferences, ResearchClaim, ResearchDepth, ResearchRun,
+    ResearchSource, ResearchSourceKind, ResearchStatus, SignedCheckpoint, StreamDisplayMode,
+    ThemeName, ToolSpec, TranscriptDensity,
 };
 use colossus_ports::{
-    EventJournal, PresentationRepository, ProjectionStore, StoreError, VerificationReport,
+    EventJournal, ExtensionRepository, PresentationRepository, ProjectionStore, ResearchRepository,
+    StoreError, VerificationReport,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -463,5 +467,370 @@ pub fn assert_presentation_repository_conformance(repository: &dyn PresentationR
             )
             .is_err(),
         "unknown presentation schema must fail closed"
+    );
+}
+
+fn conformance_actor(id: &str) -> Actor {
+    Actor {
+        actor_type: ActorType::User,
+        id: id.into(),
+    }
+}
+
+/// Shared lifecycle, citation, validation, and reconstruction checks for research adapters.
+pub fn assert_research_repository_conformance<F>(factory: F)
+where
+    F: Fn() -> Box<dyn ResearchRepository>,
+{
+    let repository = factory();
+    assert!(
+        repository
+            .get_run("research-conformance")
+            .expect("missing run")
+            .is_none()
+    );
+    let mut run = ResearchRun {
+        id: "research-conformance".into(),
+        session_id: "session-conformance".into(),
+        question: "What is reconstructed?".into(),
+        depth: ResearchDepth::Standard,
+        source_kinds: vec![ResearchSourceKind::Repo],
+        status: ResearchStatus::Running,
+        queries: Vec::new(),
+        lanes: Vec::new(),
+        progress: Vec::new(),
+        limitations: Vec::new(),
+        report: String::new(),
+        error: String::new(),
+        created_at: "2026-07-11T12:00:00Z".into(),
+        updated_at: "2026-07-11T12:00:00Z".into(),
+        completed_at: None,
+    };
+    assert_eq!(
+        repository
+            .create_run(run.clone(), conformance_actor("research-user"))
+            .expect("create run"),
+        run
+    );
+    assert!(
+        repository
+            .create_run(run.clone(), conformance_actor("research-user"))
+            .is_err(),
+        "duplicate creation must fail"
+    );
+    let mut changed_provenance = run.clone();
+    changed_provenance.question = "Changed".into();
+    assert!(
+        repository
+            .update_run(changed_provenance, conformance_actor("research-user"))
+            .is_err(),
+        "research provenance must be immutable"
+    );
+    let source = ResearchSource {
+        id: "source-conformance".into(),
+        run_id: run.id.clone(),
+        label: "R1".into(),
+        kind: ResearchSourceKind::Repo,
+        title: "Architecture".into(),
+        uri: "docs/ARCHITECTURE.md".into(),
+        content: "The runtime is event sourced.".into(),
+        query: "architecture".into(),
+        metadata: BTreeMap::new(),
+        created_at: "2026-07-11T12:01:00Z".into(),
+    };
+    let mut skipped_label = source.clone();
+    skipped_label.label = "R2".into();
+    assert!(
+        repository
+            .add_source(skipped_label, conformance_actor("research-user"))
+            .is_err(),
+        "source labels must be sequential"
+    );
+    repository
+        .add_source(source.clone(), conformance_actor("research-user"))
+        .expect("add source");
+    assert!(
+        repository
+            .add_source(source, conformance_actor("research-user"))
+            .is_err(),
+        "source identity and URI must be unique"
+    );
+    let claim = ResearchClaim {
+        id: "claim-conformance".into(),
+        run_id: run.id.clone(),
+        text: "The runtime is event sourced.".into(),
+        source_labels: vec!["R1".into()],
+        created_at: "2026-07-11T12:02:00Z".into(),
+    };
+    let mut dangling = claim.clone();
+    dangling.source_labels = vec!["R2".into()];
+    assert!(
+        repository
+            .add_claim(dangling, conformance_actor("research-user"))
+            .is_err(),
+        "claim labels must resolve"
+    );
+    repository
+        .add_claim(claim.clone(), conformance_actor("research-user"))
+        .expect("add claim");
+    assert!(
+        repository
+            .add_claim(claim, conformance_actor("research-user"))
+            .is_err(),
+        "claim identity must be unique"
+    );
+    run.status = ResearchStatus::Completed;
+    run.report = "The runtime is event sourced [R1].".into();
+    run.updated_at = "2026-07-11T12:03:00Z".into();
+    run.completed_at = Some(run.updated_at.clone());
+    repository
+        .update_run(run.clone(), conformance_actor("research-user"))
+        .expect("complete run");
+    assert!(
+        repository
+            .update_run(run.clone(), conformance_actor("research-user"))
+            .is_err(),
+        "terminal runs must be immutable"
+    );
+    drop(repository);
+
+    let reopened = factory();
+    assert_eq!(reopened.get_run(&run.id).expect("reopened run"), Some(run));
+    assert_eq!(
+        reopened
+            .list_sources("research-conformance")
+            .expect("sources")
+            .len(),
+        1
+    );
+    assert_eq!(
+        reopened
+            .list_claims("research-conformance")
+            .expect("claims")
+            .len(),
+        1
+    );
+    assert_eq!(
+        reopened
+            .list_runs(Some("session-conformance"), 10)
+            .expect("session runs")
+            .len(),
+        1
+    );
+    assert!(
+        reopened
+            .list_runs(Some("another-session"), 10)
+            .expect("filtered runs")
+            .is_empty()
+    );
+}
+
+/// Shared integration, pack, trust, bounds, and reconstruction checks for extension adapters.
+pub fn assert_extension_repository_conformance<F>(factory: F)
+where
+    F: Fn() -> Box<dyn ExtensionRepository>,
+{
+    let repository = factory();
+    let operation = IntegrationOperation {
+        tool: ToolSpec {
+            name: "openapi.demo.read".into(),
+            description: "Read a demo record.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            effect_action: Some("openapi.demo.read".into()),
+            capability: Some("integration.invoke".into()),
+            max_output_bytes: 1024,
+        },
+        operation_id: "read".into(),
+        method: "GET".into(),
+        path: "/records".into(),
+        path_parameters: Vec::new(),
+        query_parameters: Vec::new(),
+        accepts_body: false,
+    };
+    let mut connection = IntegrationConnection {
+        name: "demo".into(),
+        kind: IntegrationKind::OpenApi,
+        status: IntegrationStatus::Connected,
+        title: "Demo".into(),
+        description: "Conformance connection.".into(),
+        base_url: "https://example.com".into(),
+        auth: IntegrationAuth::None,
+        credential_reference: None,
+        credential_references: BTreeMap::new(),
+        scopes: Vec::new(),
+        operations: vec![operation],
+        manifest_sha256: "0".repeat(64),
+        connected_at: "2026-07-11T12:00:00Z".into(),
+        updated_at: "2026-07-11T12:00:00Z".into(),
+    };
+    assert!(
+        repository
+            .get_integration("demo")
+            .expect("missing integration")
+            .is_none()
+    );
+    repository
+        .save_integration(connection.clone(), conformance_actor("extension-user"))
+        .expect("save integration");
+    connection.description = "Updated connection.".into();
+    connection.updated_at = "2026-07-11T12:01:00Z".into();
+    repository
+        .save_integration(connection.clone(), conformance_actor("extension-user"))
+        .expect("update integration");
+    let mut changed_identity = connection.clone();
+    changed_identity.connected_at = "2026-07-12T00:00:00Z".into();
+    assert!(
+        repository
+            .save_integration(changed_identity, conformance_actor("extension-user"))
+            .is_err(),
+        "connected_at must be immutable"
+    );
+    let disconnected = repository
+        .disconnect_integration(
+            "demo",
+            conformance_actor("extension-user"),
+            "2026-07-11T12:02:00Z",
+        )
+        .expect("disconnect integration");
+    assert_eq!(disconnected.status, IntegrationStatus::Disconnected);
+    connection.updated_at = "2026-07-11T12:03:00Z".into();
+    repository
+        .save_integration(connection.clone(), conformance_actor("extension-user"))
+        .expect("reconnect integration");
+    assert!(repository.list_integrations(0).is_err());
+    assert!(repository.list_integrations(1_001).is_err());
+
+    let manifest = PackManifest {
+        format_version: 1,
+        name: "demo-pack".into(),
+        version: "1.0.0".into(),
+        description: "Conformance pack.".into(),
+        publisher: "example".into(),
+        license: "Apache-2.0".into(),
+        homepage: String::new(),
+        capabilities: Vec::new(),
+        permissions: Vec::new(),
+        files: Vec::new(),
+        integrations: Vec::new(),
+        skills: Vec::new(),
+        tools: Vec::new(),
+        mcp_servers: Vec::new(),
+        binaries: Vec::new(),
+        docker: Vec::new(),
+        docs: Vec::new(),
+        tests: Vec::new(),
+        dependencies: Vec::new(),
+        signatures: Vec::new(),
+    };
+    let mut installation = PackInstallation {
+        manifest,
+        status: PackStatus::Enabled,
+        source: "conformance".into(),
+        installed_path: "/tmp/colossus-conformance-pack".into(),
+        manifest_sha256: "1".repeat(64),
+        trust_key_id: None,
+        installed_at: "2026-07-11T12:00:00Z".into(),
+        updated_at: "2026-07-11T12:00:00Z".into(),
+    };
+    repository
+        .install_pack(installation.clone(), conformance_actor("extension-user"))
+        .expect("install pack");
+    assert!(
+        repository
+            .install_pack(installation.clone(), conformance_actor("extension-user"))
+            .is_err(),
+        "installed pack cannot be overwritten"
+    );
+    assert_eq!(
+        repository
+            .set_pack_status(
+                "demo-pack",
+                PackStatus::Disabled,
+                conformance_actor("extension-user"),
+                "2026-07-11T12:01:00Z",
+            )
+            .expect("disable pack")
+            .status,
+        PackStatus::Disabled
+    );
+    repository
+        .set_pack_status(
+            "demo-pack",
+            PackStatus::Uninstalled,
+            conformance_actor("extension-user"),
+            "2026-07-11T12:02:00Z",
+        )
+        .expect("uninstall pack");
+    assert!(
+        repository
+            .set_pack_status(
+                "demo-pack",
+                PackStatus::Enabled,
+                conformance_actor("extension-user"),
+                "2026-07-11T12:03:00Z",
+            )
+            .is_err(),
+        "uninstalled pack cannot transition without reinstall"
+    );
+    installation.updated_at = "2026-07-11T12:04:00Z".into();
+    repository
+        .install_pack(installation.clone(), conformance_actor("extension-user"))
+        .expect("reinstall pack");
+    assert!(repository.list_packs(0).is_err());
+    assert!(repository.list_packs(1_001).is_err());
+
+    let trust = PublisherTrust {
+        publisher: "example".into(),
+        key_id: "2".repeat(64),
+        public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
+        added_at: "2026-07-11T12:00:00Z".into(),
+    };
+    repository
+        .add_publisher_trust(trust.clone(), conformance_actor("extension-user"))
+        .expect("add publisher trust");
+    assert!(
+        repository
+            .add_publisher_trust(trust.clone(), conformance_actor("extension-user"))
+            .is_err(),
+        "publisher/key trust binding is immutable"
+    );
+    assert!(repository.list_publisher_trust(0).is_err());
+    assert!(repository.list_publisher_trust(1_001).is_err());
+    drop(repository);
+
+    let reopened = factory();
+    assert_eq!(
+        reopened
+            .get_integration("demo")
+            .expect("reopened integration"),
+        Some(connection)
+    );
+    assert_eq!(
+        reopened.list_integrations(10).expect("integrations").len(),
+        1
+    );
+    assert!(reopened.get("demo").expect("aggregate get").is_some());
+    assert_eq!(reopened.list(10).expect("aggregate list").len(), 1);
+    assert_eq!(
+        reopened.get_pack("demo-pack").expect("reopened pack"),
+        Some(installation)
+    );
+    assert_eq!(reopened.list_packs(10).expect("packs").len(), 1);
+    assert_eq!(
+        reopened
+            .get_publisher_trust(&trust.publisher, &trust.key_id)
+            .expect("publisher trust"),
+        Some(trust)
+    );
+    assert_eq!(
+        reopened
+            .list_publisher_trust(10)
+            .expect("publisher trust list")
+            .len(),
+        1
     );
 }
