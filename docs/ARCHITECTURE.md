@@ -101,7 +101,10 @@ source, and creation time. The journal atomically enqueues every event into a du
 external-work outbox. Tantivy and optional Chroma consumers hold independent optimistic
 checkpoints in redb, persist their adapter position before acknowledging a contiguous batch,
 and replay safely by event id after a crash. A failed consumer retains its own work
-without blocking canonical reads or another index. Search merges available candidate ids
+without blocking canonical reads or another index. Consecutive failures persist a
+consumer-local attempt count, stable error category, bounded diagnostic, and exponential
+retry deadline from one to 300 seconds. Non-retryable and unknown outcomes remain blocked
+until an explicit rebuild. Search merges available candidate ids
 from every healthy index, reloads them from the repository, and reapplies active status,
 expiry, and global/repository/session scope. Every lifecycle,
 read, search, and index operation crosses the gateway. Context composition receives only

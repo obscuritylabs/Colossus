@@ -857,7 +857,7 @@ impl MemoryService {
         }
         let mut candidates = BTreeMap::<String, f32>::new();
         for registration in &self.indexes {
-            if let Err(error) = self.sync_one(registration).await {
+            if let Err(error) = self.sync_with_retry(registration).await {
                 self.record_index_error(registration, &error);
                 continue;
             }
@@ -907,7 +907,7 @@ impl MemoryService {
         let (head, _) = self.journal.head()?;
         let mut first_error = None;
         for registration in &self.indexes {
-            if let Err(error) = self.sync_one(registration).await {
+            if let Err(error) = self.sync_with_retry(registration).await {
                 self.record_index_error(registration, &error);
                 if first_error.is_none() {
                     first_error = Some(error);
@@ -915,6 +915,69 @@ impl MemoryService {
             }
         }
         first_error.map_or(Ok(head), Err)
+    }
+
+    async fn sync_with_retry(
+        &self,
+        registration: &MemoryIndexRegistration,
+    ) -> Result<u64, StoreError> {
+        self.enforce_retry_gate(registration)?;
+        match self.sync_one(registration).await {
+            Ok(position) => {
+                self.queue.clear_failure(&registration.consumer)?;
+                Ok(position)
+            }
+            Err(error) => {
+                let pending = self
+                    .queue
+                    .pending(&registration.consumer, 1)
+                    .ok()
+                    .and_then(|items| items.into_iter().next());
+                let (retryable, error_code) = retry_classification(&error);
+                let diagnostic = bounded_retry_error(&error);
+                let failed_at = now()?;
+                if let Err(telemetry_error) = self.queue.record_failure(
+                    &registration.consumer,
+                    pending.as_ref(),
+                    &failed_at,
+                    retryable,
+                    error_code,
+                    &diagnostic,
+                ) {
+                    return Err(StoreError::Adapter(format!(
+                        "{diagnostic}; durable retry telemetry failed: {telemetry_error}"
+                    )));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn enforce_retry_gate(&self, registration: &MemoryIndexRegistration) -> Result<(), StoreError> {
+        let Some(state) = self.queue.retry_state(&registration.consumer)? else {
+            return Ok(());
+        };
+        if !state.retryable {
+            return Err(StoreError::OutcomeUnknown(format!(
+                "memory index {} is blocked at sequence {} after {} attempt(s); operator-authorized rebuild required",
+                registration.consumer, state.global_sequence, state.attempts
+            )));
+        }
+        if let Some(next_retry_at) = state.next_retry_at.as_deref() {
+            let next_retry = OffsetDateTime::parse(next_retry_at, &Rfc3339).map_err(|_| {
+                StoreError::Verification(format!(
+                    "memory index {} has an invalid retry timestamp",
+                    registration.consumer
+                ))
+            })?;
+            if OffsetDateTime::now_utc() < next_retry {
+                return Err(StoreError::Adapter(format!(
+                    "memory index {} retry is deferred until {next_retry_at}",
+                    registration.consumer
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn sync_one(&self, registration: &MemoryIndexRegistration) -> Result<u64, StoreError> {
@@ -1021,6 +1084,11 @@ impl MemoryService {
                 first_error.get_or_insert(error);
                 continue;
             }
+            if let Err(error) = self.queue.clear_failure(&registration.consumer) {
+                self.record_index_error(registration, &error);
+                first_error.get_or_insert(error);
+                continue;
+            }
             if let Err(error) = registration.index.set_position(0).await {
                 self.record_index_error(registration, &error);
                 first_error.get_or_insert(error);
@@ -1032,6 +1100,9 @@ impl MemoryService {
                 continue;
             }
             if let Err(error) = self.sync_one(registration).await {
+                self.record_index_error(registration, &error);
+                first_error.get_or_insert(error);
+            } else if let Err(error) = self.queue.clear_failure(&registration.consumer) {
                 self.record_index_error(registration, &error);
                 first_error.get_or_insert(error);
             }
@@ -1053,6 +1124,7 @@ impl MemoryService {
         let mut first_adapter = None;
         for registration in &self.indexes {
             let position = self.queue.position(&registration.consumer)?;
+            let retry = self.queue.retry_state(&registration.consumer)?;
             let adapter_status = match registration.index.status().await {
                 Ok(status) => status,
                 Err(error) => {
@@ -1068,9 +1140,14 @@ impl MemoryService {
                 .get("ready")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let error = registration.last_error.lock().map_err(adapter)?.clone();
+            let error = registration
+                .last_error
+                .lock()
+                .map_err(adapter)?
+                .clone()
+                .or_else(|| retry.as_ref().map(|state| state.error.clone()));
             let lag = head.saturating_sub(position);
-            let ready = adapter_ready && error.is_none() && position == head;
+            let ready = adapter_ready && error.is_none() && retry.is_none() && position == head;
             minimum_position = minimum_position.min(position);
             maximum_lag = maximum_lag.max(lag);
             all_ready &= ready;
@@ -1087,6 +1164,7 @@ impl MemoryService {
                 "journal_head": head,
                 "lag": lag,
                 "last_error": error,
+                "retry": retry,
                 "adapter": adapter_status,
             }));
         }
@@ -1157,6 +1235,31 @@ impl MemoryService {
         records.truncate(limit);
         Ok(records.into_iter().map(|(record, _)| record).collect())
     }
+}
+
+fn retry_classification(error: &StoreError) -> (bool, &'static str) {
+    match error {
+        StoreError::Conflict { .. } => (true, "external_work.conflict"),
+        StoreError::KeyUnavailable(_) => (true, "external_work.key_unavailable"),
+        StoreError::Adapter(_) => (true, "external_work.adapter"),
+        StoreError::NotFound(_) => (false, "external_work.not_found"),
+        StoreError::Verification(_) => (false, "external_work.verification"),
+        StoreError::OutcomeUnknown(_) => (false, "external_work.outcome_unknown"),
+        StoreError::RecoveryMode => (false, "external_work.recovery_mode"),
+    }
+}
+
+fn bounded_retry_error(error: &StoreError) -> String {
+    const MAX_BYTES: usize = 2_048;
+    let source = error.to_string();
+    let mut bounded = String::with_capacity(source.len().min(MAX_BYTES));
+    for character in source.chars() {
+        if bounded.len().saturating_add(character.len_utf8()) > MAX_BYTES {
+            break;
+        }
+        bounded.push(character);
+    }
+    bounded
 }
 
 fn source_for_actor(actor: &Actor) -> &'static str {
@@ -1532,6 +1635,129 @@ mod tests {
         assert_eq!(lexical["lag"], 0);
         assert_eq!(semantic["ready"], false);
         assert!(semantic["lag"].as_u64().is_some_and(|lag| lag > 0));
+    }
+
+    struct CountingFailureIndex {
+        position: AtomicU64,
+        attempts: AtomicU64,
+        outcome_unknown: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoryIndex for CountingFailureIndex {
+        fn position(&self) -> Result<u64, colossus_ports::StoreError> {
+            Ok(self.position.load(Ordering::Acquire))
+        }
+
+        async fn set_position(&self, position: u64) -> Result<(), colossus_ports::StoreError> {
+            self.position.store(position, Ordering::Release);
+            Ok(())
+        }
+
+        async fn upsert(
+            &self,
+            _event_id: &str,
+            _memory_id: &str,
+            _text: &str,
+            _metadata: &serde_json::Value,
+            _embedding: Option<&[f32]>,
+        ) -> Result<(), colossus_ports::StoreError> {
+            self.attempts.fetch_add(1, Ordering::AcqRel);
+            if self.outcome_unknown {
+                Err(colossus_ports::StoreError::OutcomeUnknown(
+                    "fixture mutation outcome is unknown".into(),
+                ))
+            } else {
+                Err(colossus_ports::StoreError::Adapter(
+                    "fixture adapter is temporarily unavailable".into(),
+                ))
+            }
+        }
+
+        async fn remove(
+            &self,
+            _event_id: &str,
+            _memory_id: &str,
+        ) -> Result<(), colossus_ports::StoreError> {
+            self.upsert("remove", "remove", "remove", &json!({}), None)
+                .await
+        }
+
+        async fn search(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Vec<(String, f32)>, colossus_ports::StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn status(&self) -> Result<serde_json::Value, colossus_ports::StoreError> {
+            Ok(json!({"ready": false, "kind": "counting-failure-fixture"}))
+        }
+
+        async fn rebuild(
+            &self,
+            _records: &[(String, String, serde_json::Value)],
+        ) -> Result<(), colossus_ports::StoreError> {
+            Ok(())
+        }
+    }
+
+    async fn failure_service(outcome_unknown: bool) -> (MemoryService, Arc<CountingFailureIndex>) {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn SessionRepository> =
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+        let repository: Arc<dyn MemoryRepository> =
+            Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
+        let queue = work_queue(Arc::clone(&journal));
+        let fixture = Arc::new(CountingFailureIndex {
+            position: AtomicU64::new(0),
+            attempts: AtomicU64::new(0),
+            outcome_unknown,
+        });
+        let index: Arc<dyn MemoryIndex> = fixture.clone();
+        let service = MemoryService::new(journal, repository, queue, index, sessions)
+            .expect("failure service");
+        service
+            .create(
+                MemoryScope::Global,
+                "fact",
+                0.9,
+                "Retry telemetry fixture",
+                "retry test",
+                None,
+                actor(),
+            )
+            .await
+            .expect("canonical create");
+        (service, fixture)
+    }
+
+    #[tokio::test]
+    async fn retryable_failure_is_durable_and_immediate_retry_is_suppressed() {
+        let (service, fixture) = failure_service(false).await;
+        assert_eq!(fixture.attempts.load(Ordering::Acquire), 1);
+        let error = service.sync_index().await.expect_err("backoff");
+        assert!(error.to_string().contains("retry is deferred until"));
+        assert_eq!(fixture.attempts.load(Ordering::Acquire), 1);
+        let status = service.index_status().await.expect("status");
+        assert_eq!(status["consumers"][0]["retry"]["attempts"], 1);
+        assert_eq!(status["consumers"][0]["retry"]["retryable"], true);
+        assert!(status["consumers"][0]["retry"]["next_retry_at"].is_string());
+    }
+
+    #[tokio::test]
+    async fn unknown_outcome_is_durably_blocked_without_automatic_retry() {
+        let (service, fixture) = failure_service(true).await;
+        assert_eq!(fixture.attempts.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            service.sync_index().await,
+            Err(colossus_ports::StoreError::OutcomeUnknown(_))
+        ));
+        assert_eq!(fixture.attempts.load(Ordering::Acquire), 1);
+        let status = service.index_status().await.expect("status");
+        assert_eq!(status["consumers"][0]["retry"]["retryable"], false);
+        assert!(status["consumers"][0]["retry"]["next_retry_at"].is_null());
     }
 
     struct FailingRebuildIndex {

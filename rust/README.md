@@ -257,6 +257,9 @@ cargo test -p colossus-cli --test oci_sandbox -- --ignored
 COLOSSUS_OPA_BIN=/absolute/path/to/opa \
 COLOSSUS_OPENSSL_BIN=/absolute/path/to/openssl \
 cargo test -p colossus-policy --test opa_live -- --ignored
+
+COLOSSUS_CHROMA_URL=http://127.0.0.1:8000 \
+cargo test -p colossus-memory-chroma --test chroma_live -- --ignored
 ```
 
 `COLOSSUS_OCI_PROXY_IMAGE` is the immutable ID of the preloaded scratch image built from
@@ -269,7 +272,8 @@ use `sandbox.timeoutMs: 10000` or higher. Network-free OCI configurations may le
 `ociProxyImage` null and retain the five-second minimum.
 
 CI runs the network-off and proxy-only OCI suite against both Docker and Podman, runs
-live OPA/mTLS separately, and compiles all targets on macOS and Windows.
+live OPA/mTLS separately, checks the Chroma v2 lifecycle against pinned current and
+previous releases, and compiles all targets on macOS and Windows.
 
 ```sh
 cargo fmt --all -- --check

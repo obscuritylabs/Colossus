@@ -231,6 +231,32 @@ pub struct ProjectionWorkItem {
     pub event_id: String,
 }
 
+/// Durable retry and readiness state for one external-work consumer.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalWorkRetryState {
+    /// Stable versioned consumer identity.
+    pub consumer: String,
+    /// Global sequence whose processing failed.
+    pub global_sequence: u64,
+    /// Event identifier at that sequence, when it was available.
+    pub event_id: Option<String>,
+    /// Consecutive failures for this sequence.
+    pub attempts: u32,
+    /// Whether automatic retry is permitted.
+    pub retryable: bool,
+    /// UTC RFC3339 timestamp of the first consecutive failure.
+    pub first_failed_at: String,
+    /// UTC RFC3339 timestamp of the latest failure.
+    pub last_failed_at: String,
+    /// UTC RFC3339 time before which automatic retry is suppressed.
+    pub next_retry_at: Option<String>,
+    /// Stable bounded error category with no sensitive values.
+    pub error_code: String,
+    /// Bounded redacted diagnostic.
+    pub error: String,
+}
+
 /// One atomic projection record change.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]

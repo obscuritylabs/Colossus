@@ -532,9 +532,12 @@ and `rebuild`. The offline lexical default is Tantivy; Chroma is an optional sem
 adapter that stores candidate ids, caller-supplied embeddings, bounded searchable text,
 and bounded metadata, never canonical lifecycle state. Search results are reloaded from
 the repository and re-filtered for scope, status, expiry, supersession, and policy.
-Index work is queued with event ids as idempotency keys; lag and failures are visible,
-and canonical memory remains usable while any index is unavailable. Chroma, embeddings,
-and remote index operations cross the effect gateway.
+Index work is queued with event ids as idempotency keys. Each adapter has an independent
+durable position and retry record; transient failures back off exponentially while
+unknown outcomes require operator-authorized rebuild. Lag, attempt count, next retry,
+and bounded redacted errors are visible, and canonical memory remains usable while any
+index is unavailable. Chroma, embeddings, and remote index operations cross the effect
+gateway.
 
 ### 12.6 Plans
 

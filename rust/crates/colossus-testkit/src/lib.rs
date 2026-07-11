@@ -389,6 +389,49 @@ pub fn assert_external_work_queue_conformance(
     assert_eq!(left[0].event_id, first.event_id);
     assert_eq!(left[1].event_id, second.event_id);
 
+    let retry = queue
+        .record_failure(
+            "conformance.left-v1",
+            Some(&left[0]),
+            "2026-07-11T00:00:00Z",
+            true,
+            "external_work.test",
+            "bounded test failure",
+        )
+        .expect("retry state");
+    assert_eq!(retry.attempts, 1);
+    assert_eq!(retry.next_retry_at.as_deref(), Some("2026-07-11T00:00:01Z"));
+    assert_eq!(
+        queue
+            .retry_state("conformance.left-v1")
+            .expect("durable retry state"),
+        Some(retry.clone())
+    );
+    assert!(
+        queue
+            .retry_state("conformance.right-v1")
+            .expect("isolated retry state")
+            .is_none()
+    );
+    let mut capped = retry;
+    for _ in 1..10 {
+        capped = queue
+            .record_failure(
+                "conformance.left-v1",
+                Some(&left[0]),
+                "2026-07-11T00:00:00Z",
+                true,
+                "external_work.test",
+                "bounded test failure",
+            )
+            .expect("increment retry state");
+    }
+    assert_eq!(capped.attempts, 10);
+    assert_eq!(
+        capped.next_retry_at.as_deref(),
+        Some("2026-07-11T00:05:00Z")
+    );
+
     queue
         .acknowledge("conformance.left-v1", 0, &left[0])
         .expect("left acknowledge");
@@ -400,6 +443,12 @@ pub fn assert_external_work_queue_conformance(
     ));
 
     queue.reset("conformance.left-v1").expect("left reset");
+    assert!(
+        queue
+            .retry_state("conformance.left-v1")
+            .expect("cleared retry state")
+            .is_none()
+    );
     assert_eq!(
         queue.pending("conformance.left-v1", 8).expect("replay"),
         left

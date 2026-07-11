@@ -562,7 +562,6 @@ impl ChromaOperation {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CollectionResponse {
     id: String,
     name: String,
@@ -575,7 +574,6 @@ struct CollectionResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct QueryResponse {
     ids: Vec<Vec<String>>,
     distances: Option<Vec<Vec<Option<f32>>>>,
@@ -755,10 +753,11 @@ impl ChromaExecutor {
                 Ok(json!({"ready": true, "kind": "chroma", "documents": documents}))
             }
             ChromaOperation::Reset => {
-                let id = self.get_collection(permit).await?;
                 send_http(
                     Method::DELETE,
-                    &self.profile.collection_url(&id, None)?,
+                    &self
+                        .profile
+                        .collection_url(&self.profile.collection, None)?,
                     None,
                     self.profile.credential_reference(),
                     "x-chroma-token",
@@ -838,8 +837,9 @@ impl ChromaMemoryIndex {
 
     fn ensure_known_outcome(&self) -> Result<(), StoreError> {
         if self.state.lock().map_err(adapter)?.outcome_unknown {
-            Err(adapter(
-                "Chroma mutation outcome is unknown; an operator-authorized rebuild is required",
+            Err(StoreError::OutcomeUnknown(
+                "Chroma mutation outcome is unknown; an operator-authorized rebuild is required"
+                    .into(),
             ))
         } else {
             Ok(())
@@ -879,7 +879,7 @@ impl ChromaMemoryIndex {
             Ok(result) => result,
             Err(GatewayError::OutcomeUnknown(message)) => {
                 self.mark_outcome_unknown()?;
-                return Err(adapter(format!(
+                return Err(StoreError::OutcomeUnknown(format!(
                     "Chroma mutation outcome is unknown and automatic retry is blocked: {message}"
                 )));
             }
@@ -1319,7 +1319,7 @@ mod tests {
             .count();
         assert_eq!(requested, 6);
         let requests = fixture.requests.lock().expect("requests").clone();
-        assert_eq!(requests.len(), 12);
+        assert_eq!(requests.len(), 11);
         assert!(requests.iter().any(|request| request.starts_with(
             "POST /api/v2/tenants/default_tenant/databases/default_database/collections HTTP/1.1"
         )));
@@ -1647,7 +1647,7 @@ mod tests {
         } else if request_line.ends_with("/collections HTTP/1.1")
             || request_line.contains("/collections/colossus-memory HTTP/1.1")
         {
-            r#"{"id":"collection-id","name":"colossus-memory","tenant":"default_tenant","database":"default_database","dimension":128}"#
+            r#"{"id":"collection-id","name":"colossus-memory","tenant":"default_tenant","database":"default_database","dimension":128,"configuration_json":{"hnsw":{"space":"l2"}}}"#
         } else if request_line.contains("/delete HTTP/1.1") {
             r#"{"deleted":1}"#
         } else {

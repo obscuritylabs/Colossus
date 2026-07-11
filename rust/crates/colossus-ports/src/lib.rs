@@ -5,14 +5,14 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ApprovalProof, ContextSnapshot, DecisionStatus, EffectRequest, EventEnvelope,
-    ExecutionContext, GoalRecord, GoalStatus, IntegrationConnection, KeyDecision, MemoryRecord,
-    ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PackInstallation, PackStatus,
-    PlanRecord, PlanStatus, PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem,
-    ProviderEvent, ProviderRoute, ProviderTurn, PublisherTrust, ReplPreferences, ResearchClaim,
-    ResearchRun, ResearchSource, RunEventEnvelope, SessionMessage, SessionSummary,
-    SignedCheckpoint, SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord,
-    TaskStatus, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
-    WorkflowDefinition, WorkflowRun,
+    ExecutionContext, ExternalWorkRetryState, GoalRecord, GoalStatus, IntegrationConnection,
+    KeyDecision, MemoryRecord, ModelMessage, ModelRequest, ModelToolDefinition, NewEvent,
+    PackInstallation, PackStatus, PlanRecord, PlanStatus, PolicyDecision, PreparedContext,
+    ProjectionBatch, ProjectionWorkItem, ProviderEvent, ProviderRoute, ProviderTurn,
+    PublisherTrust, ReplPreferences, ResearchClaim, ResearchRun, ResearchSource, RunEventEnvelope,
+    SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord, SubagentJob,
+    SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
+    UserPromptResponse, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,6 +45,9 @@ pub enum StoreError {
     /// Adapter-specific failure with secrets removed.
     #[error("storage adapter failure: {0}")]
     Adapter(String),
+    /// An external mutation may have occurred and must not be retried automatically.
+    #[error("external storage outcome is unknown: {0}")]
+    OutcomeUnknown(String),
     /// Writes are disabled because startup verification failed.
     #[error("runtime is in read-only recovery mode")]
     RecoveryMode,
@@ -318,6 +321,23 @@ pub trait ExternalWorkQueue: Send + Sync {
 
     /// Reset one consumer checkpoint so all journal work is replayed.
     fn reset(&self, consumer: &str) -> Result<(), StoreError>;
+
+    /// Load durable retry state when the failure still applies to pending work.
+    fn retry_state(&self, consumer: &str) -> Result<Option<ExternalWorkRetryState>, StoreError>;
+
+    /// Persist one failed attempt and compute bounded exponential backoff.
+    fn record_failure(
+        &self,
+        consumer: &str,
+        item: Option<&ProjectionWorkItem>,
+        failed_at: &str,
+        retryable: bool,
+        error_code: &str,
+        error: &str,
+    ) -> Result<ExternalWorkRetryState, StoreError>;
+
+    /// Clear retry state after successful adapter progress or operator reset.
+    fn clear_failure(&self, consumer: &str) -> Result<(), StoreError>;
 }
 
 /// Shared behavior for aggregate repositories reconstructed from events.

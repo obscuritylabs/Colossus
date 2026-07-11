@@ -279,6 +279,10 @@ can cause only an idempotent replay, not silent work loss. An adapter position b
 acknowledged consumer position is treated as a verification failure requiring rebuild.
 Unknown Chroma mutation outcomes remain unacknowledged and cannot be retried until an
 authorized rebuild clears the adapter's durable unknown-outcome marker.
+Retry telemetry contains only a stable category and a redacted diagnostic capped at 2 KiB.
+Transient failures use durable exponential backoff capped at five minutes, so repeated
+searches cannot hammer an unavailable remote adapter. Verification, recovery-mode,
+not-found, and unknown-outcome failures are non-retryable and require operator action.
 Memory injected on a later turn is explicitly labeled as background context rather than
 instructions.
 

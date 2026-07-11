@@ -104,7 +104,10 @@ obsolete Go launcher.
   OpenAI-compatible embedding HTTP calls each cross the effect gateway; a deterministic
   local feature-hashing embedding profile remains available offline. Unknown Chroma
   mutation outcomes are durably marked and block automatic retry until an independently
-  authorized rebuild resets and reconstructs the disposable projection.
+  authorized rebuild resets and reconstructs the disposable projection. Per-consumer
+  retry state, bounded exponential backoff, stable redacted errors, and readiness details
+  survive restart. CI exercises the permit-bound v2 lifecycle against pinned current and
+  previous Chroma releases.
 - A composition root and strict YAML config with role-routed echo, OpenAI Responses, and
   OpenAI-compatible provider profiles. Provider generation and model-catalog calls use
   permit-bound adapters, disclose credential references (never values) to policy, resolve
@@ -268,10 +271,6 @@ obligations to be present in the YAML configuration.
 This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
 cutover. The following planned work remains:
 
-- Live Chroma version compatibility and richer external-work retry/backoff telemetry.
-  The durable multi-consumer queue, independent Tantivy/Chroma progress, semantic
-  candidates, local/OpenAI-compatible embedding profiles, and canonical re-filtering are
-  implemented.
 - Podman revalidation of the new proxy-only network path and Windows filesystem/network
   runtime acceptance. Native macOS/Linux isolation, live Docker execution/recovery, OCI
   command and allowlist-proxy hardening, the native allowlist proxy, authenticated

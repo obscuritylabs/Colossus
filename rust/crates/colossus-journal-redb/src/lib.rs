@@ -1313,6 +1313,16 @@ mod tests {
                 .acknowledge("memory.tantivy-v1", 0, &pending[0])
                 .expect("acknowledge");
             assert_eq!(queue.position("memory.chroma-v1").expect("chroma"), 0);
+            queue
+                .record_failure(
+                    "memory.chroma-v1",
+                    Some(&pending[0]),
+                    "2026-07-11T00:00:00Z",
+                    true,
+                    "external_work.test",
+                    "temporary Chroma failure",
+                )
+                .expect("retry state");
         }
 
         let journal = Arc::new(journal_with_keys(&path, keys));
@@ -1328,6 +1338,12 @@ mod tests {
             queue.pending("memory.chroma-v1", 8).expect("chroma")[0].event_id,
             first_event_id
         );
+        let retry = queue
+            .retry_state("memory.chroma-v1")
+            .expect("retry state")
+            .expect("persisted retry state");
+        assert_eq!(retry.attempts, 1);
+        assert_eq!(retry.error_code, "external_work.test");
     }
 
     #[test]
