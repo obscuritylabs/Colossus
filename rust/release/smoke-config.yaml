@@ -1,0 +1,49 @@
+schemaVersion: 1
+storage:
+  path: state.redb
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_RELEASE_JOURNAL_KEY
+    journal_key_id: release-smoke-journal-v1
+    signing_variable: COLOSSUS_RELEASE_SIGNING_KEY
+    anchor_path: anchor.json
+policy:
+  kind: built_in
+  allow_actions: []
+  approval_actions: []
+  require_post_effect: false
+workflows:
+  repository: workflows
+  user: workflows
+providers:
+  profiles:
+    echo:
+      kind: echo
+      model: echo
+      baseUrl: null
+      credentialReference: null
+      timeoutMs: 5000
+  roles:
+    primary: echo
+agent:
+  maxTurns: 1
+  tools: [echo]
+subagents:
+  maxConcurrent: 1
+sandbox:
+  backend: native
+  profile: release-smoke-v1
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem: []
+  executables: []
+  environment: []
+  networkDestinations: []
+  timeoutMs: 5000
+  maxOutputBytes: 1048576
+  maxProcesses: 1
+  maxMemoryBytes: 67108864
+  maxConcurrency: 1

@@ -39,7 +39,7 @@ use std::{
 
 #[derive(Parser)]
 #[command(
-    name = "colossus-rs",
+    name = "colossus",
     version,
     about = "Auditable Colossus workflow runtime"
 )]

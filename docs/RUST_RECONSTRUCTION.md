@@ -212,6 +212,11 @@ obsolete Go launcher.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, workspace tests, and pinned `cargo-deny`/`cargo-audit` policy for both the
   production and independent fuzz lockfiles while the frozen Python job remains green.
+- A six-target native release-artifact matrix for macOS, static Linux, and Windows on
+  arm64 and x64. Every job executes version/config parsing, a credential-free echo turn,
+  and encrypted audit verification before packaging a user-facing `colossus` binary,
+  license, README, and SHA-256 sidecar. Artifacts are uploaded independently so one
+  platform cannot hide another platform's failure.
 - Configured stdio MCP integration using the official Rust SDK protocol models, exact
   sandbox executable identities, environment-only credential references, deterministic
   paginated discovery, strict server/tool allowlists, live JSON Schema validation,
@@ -315,6 +320,7 @@ cutover. The following planned work remains:
   implemented; skill resources remain non-executable. Configured stdio MCP discovery,
   invocation, and research collection are implemented through the normal sandbox and
   gateway boundaries.
-- The full Windows/Linux sandbox runtime matrix and six-target release smoke tests.
+- The full Windows/Linux sandbox runtime matrix and the first fully green remote run of
+  the implemented six-target native release-artifact matrix.
 
 Rust is promoted to the repository root only after those P0+P1 acceptance checks pass.

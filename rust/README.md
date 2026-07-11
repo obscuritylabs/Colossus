@@ -307,6 +307,24 @@ CI runs the network-off and proxy-only OCI suite against both Docker and Podman,
 live OPA/mTLS separately, checks the Chroma v2 lifecycle against pinned current and
 previous releases, and compiles all targets on macOS and Windows.
 
+### Release artifacts
+
+The `rust-release-smoke` CI matrix produces these native artifacts:
+
+| Platform | Targets | Archive |
+| --- | --- | --- |
+| macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | `.tar.gz` |
+| Linux (static musl) | `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-musl` | `.tar.gz` |
+| Windows | `aarch64-pc-windows-msvc`, `x86_64-pc-windows-msvc` | `.zip` |
+
+Every target is built and executed on a matching native runner. Before upload, CI runs
+`--version`, strict config parsing, a credential-free echo turn, and `audit verify` using
+[`release/smoke-config.yaml`](release/smoke-config.yaml). It then packages the executable
+as `colossus`/`colossus.exe` with the license and this README and writes a SHA-256 sidecar.
+The Linux jobs also reject artifacts that `file` does not identify as statically linked.
+Checksums detect transfer corruption; use signed bundle verification when authenticity is
+required.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings

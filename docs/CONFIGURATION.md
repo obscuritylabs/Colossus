@@ -483,7 +483,7 @@ worker; `/repl save` is therefore explicit but normally unnecessary because each
 command persists its replacement profile. Submitted REPL entries use the same encrypted,
 permit-bound presentation repository rather than a plaintext sidecar; consecutive
 duplicates are suppressed and oversized entries fail history persistence without blocking
-the requested command. Use `colossus-rs preferences show|history|reset` for non-interactive
+the requested command. Use `colossus preferences show|history|reset` for non-interactive
 inspection or reset. The frozen Python implementation keeps its legacy SQLite preferences
 and plaintext history separately, and Rust does not import them.
 

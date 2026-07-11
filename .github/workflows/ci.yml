@@ -213,6 +213,199 @@ jobs:
           cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
           cargo audit -D warnings --file fuzz/Cargo.lock
 
+  rust-release-smoke:
+    name: Rust release artifact (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    needs: [rust, rust-supply-chain]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: zip
+    defaults:
+      run:
+        working-directory: rust
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.96 and target
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.target }}
+
+      - name: Install musl linker
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools file
+
+      - name: Cache release target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          key: release-${{ matrix.target }}
+
+      - name: Build locked release binary
+        run: >-
+          cargo build --locked --release --target ${{ matrix.target }}
+          --package colossus-cli --bin colossus-rs
+
+      - name: Prove static Linux linkage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          file target/${{ matrix.target }}/release/colossus-rs | tee binary-file.txt
+          grep -Eq 'static(-pie)? linked|statically linked' binary-file.txt
+
+      - name: Execute offline artifact smoke on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          COLOSSUS_RELEASE_JOURNAL_KEY: "5555555555555555555555555555555555555555555555555555555555555555"
+          COLOSSUS_RELEASE_SIGNING_KEY: "6666666666666666666666666666666666666666666666666666666666666666"
+        run: |
+          set -euo pipefail
+          binary="$GITHUB_WORKSPACE/rust/target/${{ matrix.target }}/release/colossus-rs"
+          smoke="$RUNNER_TEMP/colossus-release-smoke-${{ matrix.target }}"
+          rm -rf "$smoke"
+          mkdir -p "$smoke/workflows"
+          cp release/smoke-config.yaml "$smoke/config.yaml"
+          cd "$smoke"
+          version_output=$("$binary" --version)
+          case "$version_output" in
+            "colossus "*) ;;
+            *) echo "unexpected command identity: $version_output" >&2; exit 1 ;;
+          esac
+          "$binary" --config config.yaml config show >/dev/null
+          "$binary" --config config.yaml run connected >result.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(Path("result.json").read_text())
+          assert result["output"] == "connected", result
+          assert result["profile"] == "echo", result
+          assert result["event_count"] >= 3, result
+          PY
+          "$binary" --config config.yaml audit verify >audit.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          audit = json.loads(Path("audit.json").read_text())
+          assert audit["last_sequence"] >= 1, audit
+          assert audit["checkpoint"]["global_sequence"] == audit["last_sequence"], audit
+          PY
+
+      - name: Execute offline artifact smoke on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          COLOSSUS_RELEASE_JOURNAL_KEY: "5555555555555555555555555555555555555555555555555555555555555555"
+          COLOSSUS_RELEASE_SIGNING_KEY: "6666666666666666666666666666666666666666666666666666666666666666"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $binary = Join-Path $env:GITHUB_WORKSPACE "rust/target/${{ matrix.target }}/release/colossus-rs.exe"
+          $smoke = Join-Path $env:RUNNER_TEMP "colossus-release-smoke-${{ matrix.target }}"
+          Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force (Join-Path $smoke "workflows") | Out-Null
+          Copy-Item release/smoke-config.yaml (Join-Path $smoke "config.yaml")
+          Push-Location $smoke
+          try {
+            $versionOutput = (& $binary --version | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "version command failed" }
+            if (-not $versionOutput.StartsWith("colossus ")) {
+              throw "unexpected command identity: $versionOutput"
+            }
+            & $binary --config config.yaml config show | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "config validation failed" }
+            & $binary --config config.yaml run connected | Set-Content -Encoding utf8 result.json
+            if ($LASTEXITCODE -ne 0) { throw "offline run failed" }
+            $result = Get-Content -Raw result.json | ConvertFrom-Json
+            if ($result.output -ne "connected" -or $result.profile -ne "echo" -or $result.event_count -lt 3) {
+              throw "unexpected run result: $($result | ConvertTo-Json -Compress)"
+            }
+            & $binary --config config.yaml audit verify | Set-Content -Encoding utf8 audit.json
+            if ($LASTEXITCODE -ne 0) { throw "audit verification failed" }
+            $audit = Get-Content -Raw audit.json | ConvertFrom-Json
+            if ($audit.last_sequence -lt 1 -or $audit.checkpoint.global_sequence -ne $audit.last_sequence) {
+              throw "unexpected audit result: $($audit | ConvertTo-Json -Compress)"
+            }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Package checksummed Unix artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "colossus-cli"))')
+          package="colossus-$version-${{ matrix.target }}"
+          stage="$RUNNER_TEMP/$package"
+          rm -rf "$stage"
+          mkdir -p "$stage" dist
+          install -m 0755 target/${{ matrix.target }}/release/colossus-rs "$stage/colossus"
+          cp ../LICENSE "$stage/LICENSE"
+          cp README.md "$stage/README.md"
+          tar -C "$RUNNER_TEMP" -czf "dist/$package.tar.gz" "$package"
+          cd dist
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$package.tar.gz" >"$package.tar.gz.sha256"
+          else
+            shasum -a 256 "$package.tar.gz" >"$package.tar.gz.sha256"
+          fi
+
+      - name: Package checksummed Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object name -eq "colossus-cli").version
+          $package = "colossus-$version-${{ matrix.target }}"
+          $stage = Join-Path $env:RUNNER_TEMP $package
+          $dist = Join-Path $PWD "dist"
+          Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $stage, $dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/colossus-rs.exe" (Join-Path $stage "colossus.exe")
+          Copy-Item ../LICENSE (Join-Path $stage "LICENSE")
+          Copy-Item README.md (Join-Path $stage "README.md")
+          $archive = Join-Path $dist "$package.zip"
+          Compress-Archive -Path $stage -DestinationPath $archive -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "$hash  $package.zip" | Set-Content -Encoding ascii "${archive}.sha256"
+
+      - name: Upload release artifact and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: colossus-${{ matrix.target }}
+          path: rust/dist/colossus-*-${{ matrix.target }}.${{ matrix.archive }}*
+          if-no-files-found: error
+          compression-level: 0
+
   rust-live-chroma:
     name: Rust live Chroma ${{ matrix.chroma }} compatibility
     runs-on: ubuntu-latest

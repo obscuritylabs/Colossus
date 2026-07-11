@@ -48,6 +48,15 @@ blocking an otherwise safe graph. `cargo-deny` advisory checks and an independen
 `cargo-audit` scan both deny RustSec warnings for `Cargo.lock` and `fuzz/Cargo.lock`; there
 are no advisory exceptions or silent vulnerability downgrades.
 
+Release artifacts are built and executed on native arm64 and x64 runners for macOS,
+Linux, and Windows. The smoke configuration uses explicit environment keys, no external
+credential, no network grant, and the echo provider; it proves that the packaged binary
+can parse strict configuration, create an encrypted journal, complete an agent turn, and
+verify the resulting chain and signed checkpoint. Linux artifacts must report static
+musl linkage before packaging. Each archive has a SHA-256 sidecar for transport-integrity
+checking. A checksum alone is not publisher authentication; signed release/offline-bundle
+verification remains the authority for trusted distribution.
+
 Configured external audit export is itself an effect; it never receives a trusted-service
 bypass. The exporter discloses only ciphertext-free `AuditEvidence` envelope metadata and
 hashes. Every directory write requires `audit.export.write`, a matching sandbox write

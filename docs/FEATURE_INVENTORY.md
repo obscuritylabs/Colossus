@@ -1009,6 +1009,8 @@ A reconstruction is complete only when all applicable checks pass:
   explicit licenses and versions, banned crates, and warnings-denied RustSec audits.
 - [ ] Formatting, warnings-denied lint, workspace tests, fuzzing, dependency/license and
   vulnerability policy, and macOS/Linux/Windows arm64/x64 release smoke tests pass.
+  The six-target native runner/build/execute/package matrix is implemented; this remains
+  open until one remote run is green for every target.
 - [ ] Strict configuration rejects unknown fields and safely redacts displayed secrets.
 - [ ] Unit, integration, boundary, security, type, lint, and packaging checks pass.
 

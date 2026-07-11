@@ -233,7 +233,7 @@ sandbox:
     assert!(
         call["stdout"]
             .as_str()
-            .is_some_and(|output| output.contains("colossus-rs"))
+            .is_some_and(|output| output.starts_with("colossus "))
     );
 
     let servers = run(binary, &config, directory.path(), &["mcp", "servers"]);
