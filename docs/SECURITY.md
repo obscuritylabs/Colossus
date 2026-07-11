@@ -227,6 +227,21 @@ targets and ambiguous single replacements, and constructs the diff evidence befo
 rename. Mutation result diffs are quarantined and post-authorized because they may reveal
 pre-existing text.
 
+Model process tools cannot select from ambient `PATH`: `shell.run` resolves `argv[0]`
+against exact configured executable identities, and Git tools require exactly one
+configured executable named `git`. Shell interpreters are rejected even if configured.
+Git diff/show disable external diff and text-conversion helpers; pathspecs must be
+workspace-relative and cannot enter `.git`/`.colossus`, while revisions cannot begin with
+an option or contain unsupported characters. Git inspection and `shell.run` have distinct
+policy identities so allowing read-only Git does not authorize arbitrary commands.
+
+Every model process result is quarantined and post-authorized. Exit code, bounded lossy
+UTF-8 stdout/stderr, cwd, and truncation state are returned to the model. A nonzero exit
+does not mean the adapter lost control or the outcome is unknown; it is journaled as a
+completed process effect with the nonzero code in the released tool result. Timeouts,
+resource-limit enforcement, helper failure, and unconfirmed OCI cleanup retain their
+failure or `outcome_unknown` handling.
+
 Packs are the executable distribution boundary. Skills can include code files as
 resources, but Colossus does not execute scripts directly from skill directories.
 Executable tools, MCP servers, binaries, Docker assets, docs, and tests must be declared

@@ -156,6 +156,14 @@ ambiguous adapter failure. Terminal and embedded callers inject an `ApprovalProv
 when composing the runtime; approval remains an obligation that triggers policy
 re-evaluation, never an alternate execution route.
 
+Rust Git and structured-command tools translate to the same `ProcessSpec` and
+authenticated helper, but preserve `git.status`, `git.diff`, `git.show`, and `shell.run`
+as separate policy/capability identities. The runtime resolves only exact configured
+executables and builds literal argv; the policy kernel applies the same executable, cwd,
+environment, backend, resource, and network obligations to every process identity. The
+sandbox treats a returned nonzero exit as a completed, known process outcome and reserves
+failed/unknown effect terminals for execution, timeout, resource, or cleanup failures.
+
 Provider adapters remain strict about malformed tool-call argument payloads. When a
 provider raises the standard invalid tool-argument `ProviderError`, the orchestrator may
 perform a bounded recovery turn by emitting a recoverable `ErrorEvent`, appending a

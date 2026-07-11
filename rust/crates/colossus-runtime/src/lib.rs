@@ -355,13 +355,14 @@ impl RuntimeConfig {
         }
         if config.sandbox.profile.is_empty()
             || config.sandbox.timeout_ms == 0
-            || config.sandbox.max_output_bytes == 0
+            || config.sandbox.max_output_bytes < 1024
             || config.sandbox.max_processes == 0
             || config.sandbox.max_memory_bytes == 0
             || config.sandbox.max_concurrency == 0
         {
             return Err(RuntimeError::Config(
-                "sandbox profile and resource limits must be nonempty/nonzero".into(),
+                "sandbox profile and resource limits must be nonempty; maxOutputBytes must be at least 1024"
+                    .into(),
             ));
         }
         #[cfg(target_os = "windows")]
@@ -464,6 +465,32 @@ impl RuntimeConfig {
             )));
         }
         StaticToolRegistry::builtins(&config.agent.tools)?;
+        let git_tools_active = config
+            .agent
+            .tools
+            .iter()
+            .any(|tool| matches!(tool.as_str(), "git.status" | "git.diff" | "git.show"));
+        let configured_git_executables = config
+            .sandbox
+            .executables
+            .iter()
+            .filter(|path| {
+                path.file_stem()
+                    .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("git"))
+            })
+            .count();
+        if git_tools_active && configured_git_executables != 1 {
+            return Err(RuntimeError::Config(
+                "active Git tools require exactly one sandbox executable named git".into(),
+            ));
+        }
+        if config.agent.tools.iter().any(|tool| tool == "shell.run")
+            && config.sandbox.executables.is_empty()
+        {
+            return Err(RuntimeError::Config(
+                "active shell.run requires at least one exact sandbox executable".into(),
+            ));
+        }
         config.context.validate()?;
         if !(1..=100).contains(&config.memory.retrieval_limit) {
             return Err(RuntimeError::Config(
@@ -1056,6 +1083,10 @@ impl Runtime {
                 "filesystem.search".to_owned(),
                 "filesystem.write".to_owned(),
                 "process.spawn".to_owned(),
+                "shell.run".to_owned(),
+                "git.status".to_owned(),
+                "git.diff".to_owned(),
+                "git.show".to_owned(),
                 "network.http".to_owned(),
                 "task.create".to_owned(),
                 "task.update".to_owned(),
@@ -1095,8 +1126,21 @@ impl Runtime {
         let tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
+            process: Some(Arc::clone(&process_executor) as Arc<dyn EffectExecutor>),
             http: Arc::clone(&http_executor),
             workspace: fs::canonicalize(std::env::current_dir()?)?,
+            executables: config
+                .sandbox
+                .executables
+                .iter()
+                .map(|path| {
+                    if config.sandbox.backend == "oci" {
+                        Ok(path.clone())
+                    } else {
+                        fs::canonicalize(path)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         });
         let context_repository: Arc<dyn ContextRepository> =
             Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
@@ -1910,6 +1954,8 @@ impl Runtime {
             args,
             environment,
             stdin_base64: None,
+            timeout_ms: None,
+            max_output_bytes: None,
         };
         let mut request = effect_request(
             Actor {
@@ -2108,8 +2154,20 @@ fn model_gateway_error(error: GatewayError) -> ModelProviderError {
 struct GatewayToolExecutor {
     gateway: Arc<EffectGateway>,
     filesystem: Arc<FilesystemExecutor>,
+    process: Option<Arc<dyn EffectExecutor>>,
     http: Arc<HttpExecutor>,
     workspace: PathBuf,
+    executables: Vec<PathBuf>,
+}
+
+struct ProcessToolOutput {
+    executable: PathBuf,
+    cwd: PathBuf,
+    args: Vec<String>,
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+    truncated: bool,
 }
 
 impl GatewayToolExecutor {
@@ -2139,6 +2197,114 @@ impl GatewayToolExecutor {
             .map_err(|error| ToolError::Failed(format!("invalid mutation result: {error}")))?;
         Ok(bounded_tool_text(&output, 1024 * 1024))
     }
+
+    fn resolve_executable(&self, requested: &str) -> Result<PathBuf, ToolError> {
+        if requested.is_empty() || requested.contains('\0') {
+            return Err(ToolError::InvalidArguments {
+                tool: "shell.run".into(),
+                message: "argv[0] must name one configured executable".into(),
+            });
+        }
+        let requested_path = Path::new(requested);
+        let matches = self
+            .executables
+            .iter()
+            .filter(|candidate| {
+                candidate == &requested_path
+                    || candidate
+                        .file_name()
+                        .is_some_and(|name| name == requested_path.as_os_str())
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [executable] => Ok((*executable).clone()),
+            [] => Err(ToolError::Denied(format!(
+                "executable {requested} is not explicitly configured"
+            ))),
+            _ => Err(ToolError::Denied(format!(
+                "executable name {requested} is ambiguous; use its configured absolute path"
+            ))),
+        }
+    }
+
+    fn git_executable(&self) -> Result<PathBuf, ToolError> {
+        let matches = self
+            .executables
+            .iter()
+            .filter(|candidate| {
+                candidate
+                    .file_stem()
+                    .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("git"))
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [executable] => Ok((*executable).clone()),
+            [] => Err(ToolError::Denied(
+                "Git tools require one explicitly configured git executable".into(),
+            )),
+            _ => Err(ToolError::Denied(
+                "multiple git executables are configured; keep one exact identity".into(),
+            )),
+        }
+    }
+
+    async fn execute_process_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+        action: &str,
+        executable: PathBuf,
+        spec: ProcessSpec,
+    ) -> Result<ProcessToolOutput, ToolError> {
+        let cwd = spec.cwd.clone();
+        let args = spec.args.clone();
+        let mut request = effect_request(
+            model_actor(call),
+            action,
+            executable.display().to_string(),
+            serde_json::to_value(spec).map_err(|error| ToolError::Failed(error.to_string()))?,
+        );
+        request.capabilities = vec![action.into()];
+        request.context = context;
+        let result = self
+            .gateway
+            .execute(
+                request,
+                self.process
+                    .as_deref()
+                    .ok_or_else(|| ToolError::Failed("process adapter is unavailable".into()))?,
+            )
+            .await
+            .map_err(tool_gateway_error)?;
+        let value: Value = serde_json::from_slice(&result.bytes)
+            .map_err(|error| ToolError::Failed(format!("invalid process result: {error}")))?;
+        let decode = |field: &str| -> Result<String, ToolError> {
+            let encoded = value.get(field).and_then(Value::as_str).ok_or_else(|| {
+                ToolError::Failed(format!("process result field {field} is absent"))
+            })?;
+            let bytes = BASE64
+                .decode(encoded)
+                .map_err(|error| ToolError::Failed(format!("invalid process output: {error}")))?;
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        };
+        let exit_code = value
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .and_then(|code| i32::try_from(code).ok())
+            .unwrap_or(-1);
+        Ok(ProcessToolOutput {
+            executable,
+            cwd,
+            args,
+            stdout: decode("stdout_base64")?,
+            stderr: decode("stderr_base64")?,
+            exit_code,
+            truncated: value
+                .get("output_truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
 }
 
 #[async_trait]
@@ -2148,6 +2314,7 @@ impl ToolExecutor for GatewayToolExecutor {
         call: ToolCall,
         context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
+        let mut exit_code = 0;
         let output = match call.name.as_str() {
             "echo" => bounded_tool_text(required_tool_string(&call, "text")?, 32_768),
             "filesystem.list" => {
@@ -2298,6 +2465,166 @@ impl ToolExecutor for GatewayToolExecutor {
                 )
                 .await?
             }
+            "git.status" => {
+                let process = self
+                    .execute_process_tool(
+                        &call,
+                        context,
+                        "git.status",
+                        self.git_executable()?,
+                        tool_process_spec(
+                            self.workspace.clone(),
+                            vec!["status".into(), "--porcelain=v1".into()],
+                            BTreeMap::new(),
+                            None,
+                            Some(64 * 1024),
+                        ),
+                    )
+                    .await?;
+                exit_code = process.exit_code;
+                let entries = process
+                    .stdout
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .map(|line| {
+                        json!({
+                            "status": line.get(..2).unwrap_or(line),
+                            "path": line.get(3..).unwrap_or_default(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::to_string(&json!({
+                    "entries": entries,
+                    "raw": process.stdout,
+                    "stderr": process.stderr,
+                    "exit_code": process.exit_code,
+                    "truncated": process.truncated,
+                }))
+                .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
+            "git.diff" => {
+                let paths = optional_tool_string_array(&call, "paths")?.unwrap_or_default();
+                let mut args = vec![
+                    "diff".into(),
+                    "--no-ext-diff".into(),
+                    "--no-textconv".into(),
+                ];
+                if !paths.is_empty() {
+                    args.push("--".into());
+                    args.extend(
+                        paths
+                            .iter()
+                            .map(|path| safe_git_path(path))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    );
+                }
+                let process = self
+                    .execute_process_tool(
+                        &call,
+                        context,
+                        "git.diff",
+                        self.git_executable()?,
+                        tool_process_spec(
+                            self.workspace.clone(),
+                            args,
+                            BTreeMap::new(),
+                            None,
+                            Some(64 * 1024),
+                        ),
+                    )
+                    .await?;
+                exit_code = process.exit_code;
+                serde_json::to_string(&json!({
+                    "diff": process.stdout,
+                    "stderr": process.stderr,
+                    "exit_code": process.exit_code,
+                    "truncated": process.truncated,
+                }))
+                .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
+            "git.show" => {
+                let revision = optional_tool_string(&call, "rev")?.unwrap_or("HEAD");
+                validate_git_revision(revision)?;
+                let mut args = vec![
+                    "show".into(),
+                    "--no-ext-diff".into(),
+                    "--no-textconv".into(),
+                    "--stat".into(),
+                    "--patch".into(),
+                    revision.into(),
+                ];
+                if let Some(path) = optional_tool_string(&call, "path")? {
+                    args.push("--".into());
+                    args.push(safe_git_path(path)?);
+                }
+                let process = self
+                    .execute_process_tool(
+                        &call,
+                        context,
+                        "git.show",
+                        self.git_executable()?,
+                        tool_process_spec(
+                            self.workspace.clone(),
+                            args,
+                            BTreeMap::new(),
+                            None,
+                            Some(64 * 1024),
+                        ),
+                    )
+                    .await?;
+                exit_code = process.exit_code;
+                serde_json::to_string(&json!({
+                    "output": process.stdout,
+                    "stderr": process.stderr,
+                    "exit_code": process.exit_code,
+                    "truncated": process.truncated,
+                }))
+                .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
+            "shell.run" => {
+                let argv = required_tool_string_array(&call, "argv")?;
+                let requested = argv.first().ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "argv must not be empty".into(),
+                })?;
+                if is_shell_wrapper(requested) {
+                    return Err(ToolError::Denied(format!(
+                        "shell wrapper execution is denied: {requested}"
+                    )));
+                }
+                let executable = self.resolve_executable(requested)?;
+                let cwd = model_workspace_path(
+                    &self.workspace,
+                    optional_tool_string(&call, "cwd")?.unwrap_or("."),
+                )?;
+                let process = self
+                    .execute_process_tool(
+                        &call,
+                        context,
+                        "shell.run",
+                        executable,
+                        tool_process_spec(
+                            cwd,
+                            argv.into_iter().skip(1).collect(),
+                            optional_tool_environment(&call, "env")?,
+                            optional_tool_u64(&call, "timeout_ms")?,
+                            optional_tool_u64(&call, "max_output_bytes")?,
+                        ),
+                    )
+                    .await?;
+                exit_code = process.exit_code;
+                let mut command = vec![process.executable.display().to_string()];
+                command.extend(process.args.clone());
+                serde_json::to_string(&json!({
+                    "command": command,
+                    "exit_code": process.exit_code,
+                    "stdout": process.stdout,
+                    "stderr": process.stderr,
+                    "cwd": workspace_relative(&self.workspace, &process.cwd)?,
+                    "truncated": process.truncated,
+                }))
+                .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
             "network.http" => {
                 let url = required_tool_string(&call, "url")?;
                 let mut request = effect_request(
@@ -2325,7 +2652,7 @@ impl ToolExecutor for GatewayToolExecutor {
             call_id: call.call_id,
             name: call.name,
             output,
-            exit_code: 0,
+            exit_code,
         })
     }
 }
@@ -2379,6 +2706,139 @@ fn optional_tool_u64(call: &ToolCall, field: &str) -> Result<Option<u64>, ToolEr
             message: format!("{field} must be an integer"),
         }),
     }
+}
+
+fn required_tool_string_array(call: &ToolCall, field: &str) -> Result<Vec<String>, ToolError> {
+    optional_tool_string_array(call, field)?.ok_or_else(|| ToolError::InvalidArguments {
+        tool: call.name.clone(),
+        message: format!("{field} must be an array of strings"),
+    })
+}
+
+fn optional_tool_string_array(
+    call: &ToolCall,
+    field: &str,
+) -> Result<Option<Vec<String>>, ToolError> {
+    let Some(value) = call.arguments.get(field) else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be an array"),
+        })?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: format!("{field} entries must be strings"),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(values))
+}
+
+fn optional_tool_environment(
+    call: &ToolCall,
+    field: &str,
+) -> Result<BTreeMap<String, String>, ToolError> {
+    let Some(value) = call.arguments.get(field) else {
+        return Ok(BTreeMap::new());
+    };
+    value
+        .as_object()
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be an object"),
+        })?
+        .iter()
+        .map(|(name, value)| {
+            value
+                .as_str()
+                .map(|value| (name.clone(), value.to_owned()))
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: format!("{field}.{name} must be a string"),
+                })
+        })
+        .collect()
+}
+
+fn tool_process_spec(
+    cwd: PathBuf,
+    args: Vec<String>,
+    environment: BTreeMap<String, String>,
+    timeout_ms: Option<u64>,
+    max_output_bytes: Option<u64>,
+) -> ProcessSpec {
+    ProcessSpec {
+        cwd,
+        args,
+        environment,
+        stdin_base64: None,
+        timeout_ms,
+        max_output_bytes,
+    }
+}
+
+fn safe_git_path(value: &str) -> Result<String, ToolError> {
+    let path = Path::new(value);
+    if value.starts_with(':')
+        || value.contains('\0')
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(component, std::path::Component::ParentDir)
+                || matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
+        })
+    {
+        return Err(ToolError::Denied(
+            "Git pathspecs must stay inside the workspace and outside control state".into(),
+        ));
+    }
+    Ok(value.into())
+}
+
+fn validate_git_revision(value: &str) -> Result<(), ToolError> {
+    if value.starts_with('-')
+        || value.contains('\0')
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'.' | b'_' | b'/' | b'-' | b'^' | b'~' | b':' | b'@' | b'{' | b'}'
+                )
+        })
+    {
+        return Err(ToolError::Denied(
+            "Git revision contains an option or unsupported character".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_shell_wrapper(value: &str) -> bool {
+    Path::new(value)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "sh" | "bash"
+                    | "zsh"
+                    | "fish"
+                    | "dash"
+                    | "ksh"
+                    | "cmd"
+                    | "powershell"
+                    | "pwsh"
+                    | "wscript"
+                    | "cscript"
+            )
+        })
 }
 
 fn model_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf, ToolError> {
@@ -2819,7 +3279,10 @@ mod tests {
     use colossus_provider::ProviderKind;
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
-    use std::{fs, sync::Arc};
+    use std::{
+        fs,
+        sync::{Arc, Mutex},
+    };
     use tempfile::tempdir;
 
     #[test]
@@ -2863,6 +3326,19 @@ surprise: true
         );
 
         config.agent.max_turns = 24;
+        config.agent.tools = vec!["git.status".into()];
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "Git tool without an exact git executable was accepted"
+        );
+
+        config.agent.tools = vec!["shell.run".into()];
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "shell.run without an exact executable was accepted"
+        );
+
+        config.agent.tools = vec!["echo".into()];
         config.memory.retrieval_limit = 0;
         assert!(
             RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
@@ -3122,8 +3598,10 @@ surprise: true
         let executor = GatewayToolExecutor {
             gateway,
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             workspace: allowed.path().to_path_buf(),
+            executables: Vec::new(),
         };
         let result = executor
             .execute(
@@ -3183,8 +3661,10 @@ surprise: true
         let executor = GatewayToolExecutor {
             gateway,
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             workspace: allowed.path().to_path_buf(),
+            executables: Vec::new(),
         };
         let context = ExecutionContext {
             correlation_id: "run-1".into(),
@@ -3260,8 +3740,10 @@ surprise: true
         let denied_executor = GatewayToolExecutor {
             gateway: denied_gateway,
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             workspace: workspace.path().to_path_buf(),
+            executables: Vec::new(),
         };
         let denied = denied_executor
             .execute(
@@ -3297,8 +3779,10 @@ surprise: true
         let allowed_executor = GatewayToolExecutor {
             gateway: allowed_gateway,
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             workspace: workspace.path().to_path_buf(),
+            executables: Vec::new(),
         };
         let written = allowed_executor
             .execute(
@@ -3350,6 +3834,148 @@ surprise: true
             .map(|event| event.event_type)
             .collect::<Vec<_>>();
         assert!(names.contains(&"approval.denied.v1".into()));
+        assert!(names.contains(&"approval.granted.v1".into()));
+        assert!(names.contains(&"effect.release_requested.v1".into()));
+    }
+
+    struct FakeProcessExecutor {
+        actions: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl colossus_policy::EffectExecutor for FakeProcessExecutor {
+        async fn execute(
+            &self,
+            request: &colossus_contracts::EffectRequest,
+            _permit: colossus_policy::ExecutionPermit,
+        ) -> Result<colossus_contracts::QuarantinedEffectResult, colossus_policy::ExecutionError>
+        {
+            self.actions
+                .lock()
+                .expect("actions")
+                .push(request.action.clone());
+            let (exit_code, stdout, stderr) = if request.action == "shell.run" {
+                (7, "", "command failed")
+            } else {
+                (0, " M note.txt\n", "")
+            };
+            Ok(colossus_contracts::QuarantinedEffectResult {
+                media_type: "application/json".into(),
+                bytes: serde_json::to_vec(&json!({
+                    "backend": "test",
+                    "exit_code": exit_code,
+                    "success": exit_code == 0,
+                    "timed_out": false,
+                    "resource_limit_exceeded": null,
+                    "output_truncated": false,
+                    "stdout_base64": base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        stdout,
+                    ),
+                    "stderr_base64": base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        stderr,
+                    ),
+                }))
+                .expect("result JSON"),
+                effect_succeeded: true,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn git_and_shell_tools_keep_distinct_policy_and_nonzero_exit_semantics() {
+        let workspace = tempdir().expect("workspace");
+        let executable = workspace.path().join("git");
+        fs::write(&executable, "test executable identity").expect("executable");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = colossus_policy::BuiltInPolicy::offline_default()
+            .with_action("git.status", DecisionOutcome::Allow)
+            .with_action("shell.run", DecisionOutcome::RequireApproval)
+            .with_sandbox("native", "test", false)
+            .with_filesystem_root(workspace.path().display().to_string(), "read")
+            .with_filesystem_root(executable.display().to_string(), "execute");
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test-operator".into(),
+            }),
+            colossus_policy::SafetyKernel::new(["git.status".into(), "shell.run".into()]),
+            [9_u8; 32],
+        ));
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: Some(Arc::new(FakeProcessExecutor {
+                actions: Arc::clone(&actions),
+            })),
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            workspace: workspace.path().to_path_buf(),
+            executables: vec![executable],
+        };
+        let status = executor
+            .execute(
+                ToolCall {
+                    call_id: "git-status".into(),
+                    name: "git.status".into(),
+                    arguments: json!({}),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("git status");
+        let status: serde_json::Value = serde_json::from_str(&status.output).expect("status JSON");
+        assert_eq!(status["entries"][0]["status"], " M");
+        assert_eq!(status["entries"][0]["path"], "note.txt");
+
+        let shell = executor
+            .execute(
+                ToolCall {
+                    call_id: "shell".into(),
+                    name: "shell.run".into(),
+                    arguments: json!({"argv": ["git", "bad-command"]}),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("known nonzero outcome");
+        assert_eq!(shell.exit_code, 7);
+        let shell: serde_json::Value = serde_json::from_str(&shell.output).expect("shell JSON");
+        assert_eq!(shell["exit_code"], 7);
+        assert_eq!(shell["stderr"], "command failed");
+        assert_eq!(
+            actions.lock().expect("actions").as_slice(),
+            ["git.status", "shell.run"]
+        );
+
+        for (name, arguments) in [
+            ("git.diff", json!({"paths": ["../outside"]})),
+            ("git.show", json!({"rev": "--exec-path=/tmp"})),
+            ("shell.run", json!({"argv": ["sh", "-c", "id"]})),
+        ] {
+            assert!(
+                executor
+                    .execute(
+                        ToolCall {
+                            call_id: format!("denied-{name}"),
+                            name: name.into(),
+                            arguments,
+                        },
+                        ExecutionContext::default(),
+                    )
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(actions.lock().expect("actions").len(), 2);
+        let names = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
         assert!(names.contains(&"approval.granted.v1".into()));
         assert!(names.contains(&"effect.release_requested.v1".into()));
     }

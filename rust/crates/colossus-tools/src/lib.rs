@@ -221,6 +221,72 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "git.status".into(),
+            description: "Inspect bounded Git porcelain status for the active workspace.".into(),
+            input_schema: object_schema(json!({}), &[]),
+            effect_action: Some("git.status".into()),
+            capability: Some("git.status".into()),
+            max_output_bytes: 64 * 1024,
+        },
+        ToolSpec {
+            name: "git.diff".into(),
+            description: "Inspect a bounded Git diff without external diff helpers.".into(),
+            input_schema: object_schema(
+                json!({
+                    "paths": {
+                        "type": "array",
+                        "maxItems": 128,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+                    }
+                }),
+                &[],
+            ),
+            effect_action: Some("git.diff".into()),
+            capability: Some("git.diff".into()),
+            max_output_bytes: 64 * 1024,
+        },
+        ToolSpec {
+            name: "git.show".into(),
+            description: "Inspect one bounded Git revision and optional workspace path.".into(),
+            input_schema: object_schema(
+                json!({
+                    "rev": {"type": "string", "minLength": 1, "maxLength": 256, "default": "HEAD"},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096}
+                }),
+                &[],
+            ),
+            effect_action: Some("git.show".into()),
+            capability: Some("git.show".into()),
+            max_output_bytes: 64 * 1024,
+        },
+        ToolSpec {
+            name: "shell.run".into(),
+            description: "Run structured argv in the workspace without shell parsing.".into(),
+            input_schema: object_schema(
+                json!({
+                    "argv": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 256,
+                        "items": {"type": "string", "maxLength": 65536}
+                    },
+                    "cwd": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "."},
+                    "env": {
+                        "type": "object",
+                        "maxProperties": 128,
+                        "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+                        "additionalProperties": {"type": "string", "maxLength": 65536}
+                    },
+                    "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000},
+                    "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576}
+                }),
+                &["argv"],
+            ),
+            effect_action: Some("shell.run".into()),
+            capability: Some("shell.run".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "network.http".into(),
             description: "Fetch one exact policy-permitted HTTP(S) URL with GET.".into(),
             input_schema: object_schema(
@@ -365,5 +431,42 @@ mod tests {
                 Err(ToolError::InvalidArguments { .. })
             ));
         }
+    }
+
+    #[test]
+    fn process_tools_keep_distinct_policy_identities_and_structured_argv() {
+        let registry = StaticToolRegistry::builtins(&[
+            "git.status".into(),
+            "git.diff".into(),
+            "git.show".into(),
+            "shell.run".into(),
+        ])
+        .expect("catalog");
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
+            assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+        }
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "shell".into(),
+                    name: "shell.run".into(),
+                    arguments: json!({
+                        "argv": ["cargo", "test", "--workspace"],
+                        "cwd": ".",
+                        "timeout_ms": 30000,
+                        "max_output_bytes": 64000,
+                    }),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "shell".into(),
+                name: "shell.run".into(),
+                arguments: json!({"argv": []}),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
     }
 }

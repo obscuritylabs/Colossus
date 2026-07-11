@@ -82,6 +82,12 @@ pub struct ProcessSpec {
     pub environment: BTreeMap<String, String>,
     /// Optional base64-encoded standard input.
     pub stdin_base64: Option<String>,
+    /// Optional caller-requested timeout, bounded by the policy maximum.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Optional caller-requested output cap, bounded by the policy maximum.
+    #[serde(default)]
+    pub max_output_bytes: Option<u64>,
 }
 
 /// Local helper and OCI settings that policy may select by backend obligation.
@@ -855,6 +861,13 @@ impl SandboxProcessExecutor {
     }
 }
 
+fn is_sandbox_process_action(action: &str) -> bool {
+    matches!(
+        action,
+        "process.spawn" | "shell.run" | "git.status" | "git.diff" | "git.show"
+    )
+}
+
 #[async_trait]
 impl EffectExecutor for SandboxProcessExecutor {
     async fn execute(
@@ -862,15 +875,19 @@ impl EffectExecutor for SandboxProcessExecutor {
         request: &EffectRequest,
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        if request.action != "process.spawn" {
+        if !is_sandbox_process_action(&request.action) {
             return Err(adapter_failure("process executor received another action"));
         }
         let mut spec: ProcessSpec = serde_json::from_value(request.content.clone())
             .map_err(|error| adapter_failure(format!("invalid process request: {error}")))?;
         validate_process_spec(&spec, &request.resource, permit.obligations())?;
         normalize_path_arguments(&mut spec, permit.obligations())?;
+        let effective_timeout_ms = spec.timeout_ms.unwrap_or(permit.obligations().timeout_ms);
+        let effective_output_bytes = spec
+            .max_output_bytes
+            .unwrap_or(permit.obligations().max_output_bytes);
         if permit.obligations().sandbox_backend == "oci"
-            && permit.obligations().timeout_ms < MIN_OCI_EFFECT_TIMEOUT_MS
+            && effective_timeout_ms < MIN_OCI_EFFECT_TIMEOUT_MS
         {
             return Err(adapter_failure(format!(
                 "OCI process execution requires at least {MIN_OCI_EFFECT_TIMEOUT_MS}ms"
@@ -878,7 +895,7 @@ impl EffectExecutor for SandboxProcessExecutor {
         }
         if permit.obligations().sandbox_backend == "oci"
             && !permit.obligations().network_destinations.is_empty()
-            && permit.obligations().timeout_ms < MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS
+            && effective_timeout_ms < MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS
         {
             return Err(adapter_failure(format!(
                 "networked OCI process execution requires at least {MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS}ms"
@@ -912,8 +929,12 @@ impl EffectExecutor for SandboxProcessExecutor {
         let helper_budget = permit
             .obligations()
             .timeout_ms
+            .min(effective_timeout_ms)
             .saturating_sub(helper_reserve)
             .max(1);
+        let mut job_obligations = permit.obligations().clone();
+        job_obligations.timeout_ms = effective_timeout_ms;
+        job_obligations.max_output_bytes = effective_output_bytes;
         let job = SandboxJob {
             schema_version: 1,
             job_id: Uuid::now_v7().to_string(),
@@ -924,7 +945,7 @@ impl EffectExecutor for SandboxProcessExecutor {
             permit_expires_at_unix_ms: permit.expires_at_unix_ms(),
             executable: PathBuf::from(&request.resource),
             process: spec,
-            obligations: permit.obligations().clone(),
+            obligations: job_obligations,
             timeout_ms: helper_budget,
             proxy_port: proxy.as_ref().map(AllowlistProxy::port),
             oci_runtime: self.config.oci_runtime.clone(),
@@ -1020,18 +1041,9 @@ impl EffectExecutor for SandboxProcessExecutor {
                 "sandboxed process exceeded its {limit} limit"
             )));
         }
-        if !result.success {
-            let stderr = BASE64.decode(&result.stderr_base64).unwrap_or_default();
-            return Err(adapter_failure(format!(
-                "sandboxed process exited with {:?}; stderr_bytes={}; stderr_sha256={}",
-                result.exit_code,
-                stderr.len(),
-                sha256_hex(&stderr),
-            )));
-        }
         bounded_json(
             serde_json::to_value(result).map_err(adapter_failure)?,
-            usize::try_from(permit.obligations().max_output_bytes).map_err(adapter_failure)?,
+            usize::try_from(effective_output_bytes).map_err(adapter_failure)?,
         )
     }
 }
@@ -1074,6 +1086,17 @@ fn validate_process_spec(
     {
         return Err(adapter_failure(
             "process argv exceeds bounds or contains NUL",
+        ));
+    }
+    if spec
+        .timeout_ms
+        .is_some_and(|timeout| timeout == 0 || timeout > obligations.timeout_ms)
+        || spec
+            .max_output_bytes
+            .is_some_and(|limit| limit < 1024 || limit > obligations.max_output_bytes)
+    {
+        return Err(adapter_failure(
+            "requested process timeout or output cap exceeds policy bounds",
         ));
     }
     if spec.environment.len() > 128 {
@@ -2960,6 +2983,8 @@ mod tests {
                 args: Vec::new(),
                 environment: BTreeMap::new(),
                 stdin_base64: None,
+                timeout_ms: None,
+                max_output_bytes: None,
             },
             obligations: PolicyObligations::default(),
             timeout_ms: 1,
@@ -3093,6 +3118,8 @@ mod tests {
                 args: vec!["check".into()],
                 environment: BTreeMap::from([("TOKEN".into(), "secret-value".into())]),
                 stdin_base64: None,
+                timeout_ms: None,
+                max_output_bytes: None,
             },
             obligations,
             timeout_ms: 1000,
@@ -3103,6 +3130,19 @@ mod tests {
         };
         validate_process_spec(&job.process, "/usr/bin/example", &job.obligations)
             .expect("exact OCI image executable");
+        let mut oversized_request = job.process.clone();
+        oversized_request.timeout_ms = Some(job.obligations.timeout_ms.saturating_add(1));
+        assert!(
+            validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations,)
+                .is_err()
+        );
+        oversized_request.timeout_ms = None;
+        oversized_request.max_output_bytes =
+            Some(job.obligations.max_output_bytes.saturating_add(1));
+        assert!(
+            validate_process_spec(&oversized_request, "/usr/bin/example", &job.obligations,)
+                .is_err()
+        );
         let command = oci_command(&job, None).expect("OCI command");
         let args = command
             .get_args()

@@ -274,7 +274,7 @@ impl SafetyKernel {
             )));
         }
         if obligations.sandbox_backend == "broker"
-            && request.action == "process.spawn"
+            && is_process_action(&request.action)
             && !obligations.allow_sandbox_downgrade
         {
             return Err(GatewayError::Safety(
@@ -282,14 +282,14 @@ impl SafetyKernel {
                     .into(),
             ));
         }
-        if obligations.sandbox_backend == "windows_job" && request.action == "process.spawn" {
+        if obligations.sandbox_backend == "windows_job" && is_process_action(&request.action) {
             return Err(GatewayError::Safety(
                 "windows_job process execution is reserved and currently fail-closed".into(),
             ));
         }
         if cfg!(target_os = "windows")
             && obligations.sandbox_backend == "oci"
-            && request.action == "process.spawn"
+            && is_process_action(&request.action)
         {
             return Err(GatewayError::Safety(
                 "OCI process execution is disabled on Windows until path mapping passes live acceptance"
@@ -297,7 +297,7 @@ impl SafetyKernel {
             ));
         }
         if obligations.sandbox_backend == "oci"
-            && request.action == "process.spawn"
+            && is_process_action(&request.action)
             && obligations.timeout_ms < MIN_OCI_EFFECT_TIMEOUT_MS
         {
             return Err(GatewayError::Safety(format!(
@@ -305,7 +305,7 @@ impl SafetyKernel {
             )));
         }
         if obligations.sandbox_backend == "oci"
-            && request.action == "process.spawn"
+            && is_process_action(&request.action)
             && !obligations.network_destinations.is_empty()
             && obligations.timeout_ms < MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS
         {
@@ -343,7 +343,10 @@ impl SafetyKernel {
         if decision.outcome == DecisionOutcome::Allow && request.action.starts_with("filesystem.") {
             validate_filesystem_containment(request, obligations)?;
         }
-        if decision.outcome == DecisionOutcome::Allow && request.action == "process.spawn" {
+        if decision.outcome == DecisionOutcome::Allow
+            && request.phase == EffectPhase::PreEffect
+            && is_process_action(&request.action)
+        {
             validate_process_obligations(request, obligations)?;
         }
         if decision.outcome == DecisionOutcome::Allow
@@ -374,6 +377,13 @@ fn valid_environment_name(name: &str) -> bool {
         .next()
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+fn is_process_action(action: &str) -> bool {
+    matches!(
+        action,
+        "process.spawn" | "shell.run" | "git.status" | "git.diff" | "git.show"
+    )
 }
 
 fn canonical_network_origin(resource: &str) -> Result<String, GatewayError> {
@@ -1112,6 +1122,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
         }
         let mut obligations = self.obligations.clone();
         if request.action.starts_with("filesystem.")
+            || is_process_action(&request.action)
             || request.action == "network.http"
             || matches!(
                 request.action.as_str(),

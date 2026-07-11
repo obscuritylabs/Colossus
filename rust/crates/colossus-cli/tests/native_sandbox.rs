@@ -90,6 +90,7 @@ sandbox:
   executables:
     - /bin/cat
     - /usr/bin/env
+    - /usr/bin/false
     - /bin/sh
     - /bin/sleep
     - /usr/bin/curl
@@ -120,6 +121,26 @@ sandbox:
     if doctor["native_supported"] != Value::Bool(true) {
         return;
     }
+
+    let nonzero = run(
+        binary,
+        &config,
+        &[
+            "process",
+            "run",
+            "/usr/bin/false",
+            "--cwd",
+            allowed.to_str().expect("allowed path"),
+        ],
+    );
+    assert!(
+        nonzero.status.success(),
+        "a known nonzero exit is a completed process outcome: {}",
+        String::from_utf8_lossy(&nonzero.stderr)
+    );
+    let nonzero: Value = serde_json::from_slice(&nonzero.stdout).expect("nonzero JSON");
+    assert_eq!(nonzero["success"], false);
+    assert_eq!(nonzero["exit_code"], 1);
 
     let allowed_output = run(
         binary,
@@ -307,9 +328,14 @@ sandbox:
             ],
         );
         assert!(
-            !denied_network.status.success(),
-            "unlisted network destination unexpectedly succeeded"
+            denied_network.status.success(),
+            "blocked network command did not return a known process outcome: {}",
+            String::from_utf8_lossy(&denied_network.stderr)
         );
+        let denied_network: Value =
+            serde_json::from_slice(&denied_network.stdout).expect("denied network JSON");
+        assert_eq!(denied_network["success"], false);
+        assert_ne!(denied_network["exit_code"], 0);
         let allowed_url = format!("{origin}/");
         let allowed_network = run(
             binary,
