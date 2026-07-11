@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ApprovalProof, ContextSnapshot, DecisionStatus, EffectRequest, EventEnvelope,
     ExecutionContext, KeyDecision, MemoryRecord, ModelMessage, ModelRequest, ModelToolDefinition,
-    NewEvent, PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute,
-    ProviderTurn, SessionMessage, SessionSummary, SignedCheckpoint, TaskRecord, TaskStatus,
-    ToolCall, ToolResult, ToolSpec, WorkflowDefinition, WorkflowRun,
+    NewEvent, PlanRecord, PlanStatus, PolicyDecision, PreparedContext, ProjectionBatch,
+    ProjectionWorkItem, ProviderRoute, ProviderTurn, SessionMessage, SessionSummary,
+    SignedCheckpoint, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec, WorkflowDefinition,
+    WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -376,6 +377,23 @@ pub trait WorkRepository: Send + Sync {
         replacement: KeyDecision,
         actor: Actor,
     ) -> Result<(KeyDecision, KeyDecision), StoreError>;
+
+    /// Create a new draft plan.
+    fn create_plan(&self, plan: PlanRecord, actor: Actor) -> Result<PlanRecord, StoreError>;
+
+    /// Append a validated draft edit or lifecycle transition.
+    fn update_plan(&self, plan: PlanRecord, actor: Actor) -> Result<PlanRecord, StoreError>;
+
+    /// Reconstruct one canonical plan.
+    fn get_plan(&self, id: &str) -> Result<Option<PlanRecord>, StoreError>;
+
+    /// List bounded plans with optional session and status filters.
+    fn list_plans(
+        &self,
+        session_id: Option<&str>,
+        status: Option<PlanStatus>,
+        limit: usize,
+    ) -> Result<Vec<PlanRecord>, StoreError>;
 }
 /// Canonical event-sourced memory lifecycle repository.
 pub trait MemoryRepository: Send + Sync {

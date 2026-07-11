@@ -383,6 +383,57 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "plan.create".into(),
+            description: "Create a durable draft plan in the current session.".into(),
+            input_schema: object_schema(
+                json!({
+                    "prompt": {"type": "string", "minLength": 1, "maxLength": 65536},
+                    "content": {"type": "string", "maxLength": 65536, "default": ""},
+                    "steps": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "title": {"type": "string", "minLength": 1, "maxLength": 512},
+                                "detail": {"type": "string", "maxLength": 65536, "default": ""},
+                                "requires_mutation": {"type": "boolean", "default": false}
+                            },
+                            "required": ["title"]
+                        }
+                    }
+                }),
+                &["prompt", "steps"],
+            ),
+            effect_action: Some("plan.create".into()),
+            capability: Some("plan.create".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "plan.show".into(),
+            description: "Show one durable plan owned by the current session.".into(),
+            input_schema: object_schema(
+                json!({"id": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["id"],
+            ),
+            effect_action: Some("plan.show".into()),
+            capability: Some("plan.show".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "plan.approve_request".into(),
+            description: "Request operator approval for one current-session draft plan.".into(),
+            input_schema: object_schema(
+                json!({"id": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["id"],
+            ),
+            effect_action: Some("plan.approve_request".into()),
+            capability: Some("plan.approve_request".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "memory.create".into(),
             description: "Create a durable scoped memory after secret validation.".into(),
             input_schema: object_schema(
@@ -827,6 +878,50 @@ mod tests {
             }),
             Err(ToolError::InvalidArguments { .. })
         ));
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
+            assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+        }
+    }
+
+    #[test]
+    fn plan_tools_require_ordered_structured_steps_and_exact_arguments() {
+        let registry = StaticToolRegistry::builtins(&[
+            "plan.create".into(),
+            "plan.show".into(),
+            "plan.approve_request".into(),
+        ])
+        .expect("catalog");
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "plan-create".into(),
+                    name: "plan.create".into(),
+                    arguments: json!({
+                        "prompt": "Finish the Rust transition",
+                        "steps": [{
+                            "title": "Implement",
+                            "detail": "Make the scoped change",
+                            "requires_mutation": true,
+                        }],
+                    }),
+                })
+                .is_ok()
+        );
+        for arguments in [
+            json!({"prompt": "missing steps"}),
+            json!({"prompt": "empty", "steps": []}),
+            json!({"prompt": "unknown", "steps": [{"title": "x", "code": "rm -rf"}]}),
+        ] {
+            assert!(matches!(
+                registry.validate(&ToolCall {
+                    call_id: "plan-create".into(),
+                    name: "plan.create".into(),
+                    arguments,
+                }),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
         for spec in registry.list_specs() {
             assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
             assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));

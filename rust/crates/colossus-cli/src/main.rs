@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, MemoryScope, MemoryStatus,
-    PolicyDecision, TaskStatus,
+    PlanStatus, PlanStep, PolicyDecision, TaskStatus,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{ApprovalProvider, PolicyError};
@@ -161,6 +161,8 @@ enum Command {
     Tasks(TasksCommand),
     /// Create and inspect binding key decisions.
     Decisions(DecisionsCommand),
+    /// Create, inspect, and approve durable plans.
+    Plans(PlansCommand),
     /// Create, search, archive, and supersede durable memories.
     Memories(MemoriesCommand),
     /// Execute one audited model turn through the configured role.
@@ -626,6 +628,57 @@ enum DecisionsAction {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum PlanStatusArg {
+    Draft,
+    Approved,
+    Executed,
+    Discarded,
+}
+
+impl From<PlanStatusArg> for PlanStatus {
+    fn from(value: PlanStatusArg) -> Self {
+        match value {
+            PlanStatusArg::Draft => Self::Draft,
+            PlanStatusArg::Approved => Self::Approved,
+            PlanStatusArg::Executed => Self::Executed,
+            PlanStatusArg::Discarded => Self::Discarded,
+        }
+    }
+}
+
+#[derive(Args)]
+struct PlansCommand {
+    #[command(subcommand)]
+    command: PlansAction,
+}
+
+#[derive(Subcommand)]
+enum PlansAction {
+    /// List bounded canonical plans.
+    List {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum)]
+        status: Option<PlanStatusArg>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one exact plan.
+    Show { plan_id: String },
+    /// Create a draft plan with ordered title-only steps.
+    Create {
+        session_id: String,
+        prompt: String,
+        #[arg(long, default_value = "")]
+        content: String,
+        #[arg(long = "step", required = true)]
+        steps: Vec<String>,
+    },
+    /// Request operator approval for one draft plan.
+    Approve { plan_id: String },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum MemoryScopeArg {
     Global,
     Repository,
@@ -961,7 +1014,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /memories | /memory search QUERY | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /memories | /memory search QUERY | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -990,6 +1043,8 @@ async fn repl(
                         Some(DecisionStatus::Active),
                         100,
                     )?)?;
+                } else if line == "/plans" {
+                    print_json(&runtime.list_plans(Some(&active_session_id), None, 100)?)?;
                 } else if line == "/memories" {
                     print_json(
                         &runtime
@@ -1307,6 +1362,47 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     )
                     .await?,
             )?,
+        },
+        Command::Plans(command) => match command.command {
+            PlansAction::List {
+                session,
+                status,
+                limit,
+            } => print_json(&runtime.list_plans(
+                session.as_deref(),
+                status.map(Into::into),
+                limit,
+            )?)?,
+            PlansAction::Show { plan_id } => print_json(
+                &runtime
+                    .get_plan(&plan_id)?
+                    .ok_or_else(|| cli_error(format!("plan not found: {plan_id}")))?,
+            )?,
+            PlansAction::Create {
+                session_id,
+                prompt,
+                content,
+                steps,
+            } => {
+                let steps = steps
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, title)| PlanStep {
+                        index: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                        title,
+                        detail: String::new(),
+                        requires_mutation: false,
+                    })
+                    .collect();
+                print_json(
+                    &runtime
+                        .create_plan(&session_id, &prompt, &content, steps)
+                        .await?,
+                )?;
+            }
+            PlansAction::Approve { plan_id } => {
+                print_json(&runtime.approve_plan(&plan_id).await?)?;
+            }
         },
         Command::Memories(command) => match command.command {
             MemoriesAction::List { status, limit } => {

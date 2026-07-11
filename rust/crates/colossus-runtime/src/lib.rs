@@ -8,9 +8,10 @@ use colossus_contracts::{
     Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, DecisionOutcome,
     DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
     ExecutionContext, FilesystemGrant, KeyDecision, MemoryRecord, MemoryScope, MemoryStatus,
-    NewEvent, PreparedContext, ProjectionStatus, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, SessionMessage,
-    SessionSummary, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
+    NewEvent, PlanRecord, PlanStatus, PlanStep, PreparedContext, ProjectionStatus,
+    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
+    QuarantinedEffectResult, SessionMessage, SessionSummary, TaskRecord, TaskStatus, ToolCall,
+    ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -754,6 +755,18 @@ enum WorkOperation {
         status: Option<DecisionStatus>,
         limit: usize,
     },
+    PlanCreate {
+        session_id: String,
+        prompt: String,
+        content: String,
+        steps: Vec<PlanStep>,
+    },
+    PlanShow {
+        id: String,
+    },
+    PlanApprove {
+        id: String,
+    },
 }
 
 impl WorkOperation {
@@ -767,6 +780,9 @@ impl WorkOperation {
             Self::DecisionArchive { .. } => "decision.archive",
             Self::DecisionSupersede { .. } => "decision.supersede",
             Self::DecisionList { .. } => "decision.list",
+            Self::PlanCreate { .. } => "plan.create",
+            Self::PlanShow { .. } => "plan.show",
+            Self::PlanApprove { .. } => "plan.approve_request",
         }
     }
 
@@ -775,11 +791,14 @@ impl WorkOperation {
             Self::TaskCreate { session_id, .. }
             | Self::TaskList { session_id, .. }
             | Self::DecisionCreate { session_id, .. }
-            | Self::DecisionList { session_id, .. } => session_id,
+            | Self::DecisionList { session_id, .. }
+            | Self::PlanCreate { session_id, .. } => session_id,
             Self::TaskUpdate { id, .. }
             | Self::DecisionUpdate { id, .. }
             | Self::DecisionArchive { id }
-            | Self::DecisionSupersede { id, .. } => id,
+            | Self::DecisionSupersede { id, .. }
+            | Self::PlanShow { id }
+            | Self::PlanApprove { id } => id,
         }
     }
 }
@@ -1123,6 +1142,9 @@ impl Runtime {
                 "decision.archive".to_owned(),
                 "decision.supersede".to_owned(),
                 "decision.list".to_owned(),
+                "plan.create".to_owned(),
+                "plan.show".to_owned(),
+                "plan.approve_request".to_owned(),
                 "memory.create".to_owned(),
                 "memory.update".to_owned(),
                 "memory.archive".to_owned(),
@@ -1344,7 +1366,8 @@ impl Runtime {
             WorkOperation::TaskCreate { session_id, .. }
             | WorkOperation::TaskList { session_id, .. }
             | WorkOperation::DecisionCreate { session_id, .. }
-            | WorkOperation::DecisionList { session_id, .. } => session_id.clone(),
+            | WorkOperation::DecisionList { session_id, .. }
+            | WorkOperation::PlanCreate { session_id, .. } => session_id.clone(),
             WorkOperation::TaskUpdate { id, .. } => {
                 self.work
                     .get_task(id)?
@@ -1357,6 +1380,12 @@ impl Runtime {
                 self.work
                     .get_decision(id)?
                     .ok_or_else(|| StoreError::NotFound(format!("decision {id}")))?
+                    .session_id
+            }
+            WorkOperation::PlanShow { id } | WorkOperation::PlanApprove { id } => {
+                self.work
+                    .get_plan(id)?
+                    .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?
                     .session_id
             }
         };
@@ -1508,6 +1537,52 @@ impl Runtime {
         self.work
             .list_decisions(session_id, status, limit)
             .map_err(Into::into)
+    }
+
+    /// Reconstruct one canonical durable plan.
+    pub fn get_plan(&self, id: &str) -> Result<Option<PlanRecord>, RuntimeError> {
+        self.work.get_plan(id).map_err(Into::into)
+    }
+
+    /// List bounded canonical plans.
+    pub fn list_plans(
+        &self,
+        session_id: Option<&str>,
+        status: Option<PlanStatus>,
+        limit: usize,
+    ) -> Result<Vec<PlanRecord>, RuntimeError> {
+        self.work
+            .list_plans(session_id, status, limit)
+            .map_err(Into::into)
+    }
+
+    /// Create a durable draft plan through the effect gateway.
+    pub async fn create_plan(
+        &self,
+        session_id: &str,
+        prompt: &str,
+        content: &str,
+        steps: Vec<PlanStep>,
+    ) -> Result<PlanRecord, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_operation(WorkOperation::PlanCreate {
+                session_id: session_id.into(),
+                prompt: prompt.into(),
+                content: content.into(),
+                steps,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Approve one draft plan through the configured approval obligation.
+    pub async fn approve_plan(&self, id: &str) -> Result<PlanRecord, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_operation(WorkOperation::PlanApprove { id: id.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Archive one active decision while retaining its complete history.
@@ -2915,6 +2990,42 @@ impl ToolExecutor for GatewayToolExecutor {
                 )
                 .await?
             }
+            "plan.create" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::PlanCreate {
+                        session_id,
+                        prompt: required_tool_string(&call, "prompt")?.into(),
+                        content: optional_tool_string(&call, "content")?
+                            .unwrap_or_default()
+                            .into(),
+                        steps: tool_plan_steps(&call)?,
+                    },
+                )
+                .await?
+            }
+            "plan.show" => {
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::PlanShow {
+                        id: required_tool_string(&call, "id")?.into(),
+                    },
+                )
+                .await?
+            }
+            "plan.approve_request" => {
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::PlanApprove {
+                        id: required_tool_string(&call, "id")?.into(),
+                    },
+                )
+                .await?
+            }
             "memory.create" => {
                 let session_id = Self::current_session(&context)?;
                 let scope = match optional_tool_string(&call, "scope")?.unwrap_or("session") {
@@ -3071,6 +3182,52 @@ fn optional_tool_bool(call: &ToolCall, field: &str) -> Result<Option<bool>, Tool
             message: format!("{field} must be a boolean"),
         }),
     }
+}
+
+fn tool_plan_steps(call: &ToolCall) -> Result<Vec<PlanStep>, ToolError> {
+    let values = call
+        .arguments
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: "steps must be an array".into(),
+        })?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let object = value
+                .as_object()
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "each plan step must be an object".into(),
+                })?;
+            let title = object.get("title").and_then(Value::as_str).ok_or_else(|| {
+                ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "each plan step title must be a string".into(),
+                }
+            })?;
+            let detail = object
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let requires_mutation = object
+                .get("requires_mutation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Ok(PlanStep {
+                index: u32::try_from(index + 1).map_err(|_| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "too many plan steps".into(),
+                })?,
+                title: title.into(),
+                detail: detail.into(),
+                requires_mutation,
+            })
+        })
+        .collect()
 }
 
 fn optional_tool_u64(call: &ToolCall, field: &str) -> Result<Option<u64>, ToolError> {
@@ -3577,12 +3734,20 @@ impl WorkEffectExecutor {
             WorkOperation::TaskCreate { session_id, .. }
             | WorkOperation::TaskList { session_id, .. }
             | WorkOperation::DecisionCreate { session_id, .. }
-            | WorkOperation::DecisionList { session_id, .. } => session_id.clone(),
+            | WorkOperation::DecisionList { session_id, .. }
+            | WorkOperation::PlanCreate { session_id, .. } => session_id.clone(),
             WorkOperation::TaskUpdate { id, .. } => {
                 self.repository
                     .get_task(id)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?
                     .ok_or_else(|| ExecutionError::Failed(format!("task {id} was not found")))?
+                    .session_id
+            }
+            WorkOperation::PlanShow { id } | WorkOperation::PlanApprove { id } => {
+                self.repository
+                    .get_plan(id)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?
+                    .ok_or_else(|| ExecutionError::Failed(format!("plan {id} was not found")))?
                     .session_id
             }
             WorkOperation::DecisionUpdate { id, .. }
@@ -3734,6 +3899,23 @@ impl EffectExecutor for WorkEffectExecutor {
                 self.repository
                     .list_decisions(Some(&session_id), status, limit),
             ),
+            WorkOperation::PlanCreate {
+                session_id,
+                prompt,
+                content,
+                steps,
+            } => {
+                work_result(
+                    self.service
+                        .create_plan(&session_id, &prompt, &content, steps, actor),
+                )
+            }
+            WorkOperation::PlanShow { id } => {
+                work_result(self.repository.get_plan(&id).and_then(|plan| {
+                    plan.ok_or_else(|| StoreError::NotFound(format!("plan {id}")))
+                }))
+            }
+            WorkOperation::PlanApprove { id } => work_result(self.service.approve_plan(&id, actor)),
         }?;
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
@@ -3859,8 +4041,8 @@ mod tests {
     };
     use colossus_contracts::{
         Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, MemoryScope,
-        MemoryStatus, ModelRequest, NewEvent, ProviderEvent, ProviderRoute, ProviderTurn,
-        TaskStatus, ToolCall,
+        MemoryStatus, ModelRequest, NewEvent, PlanStatus, ProviderEvent, ProviderRoute,
+        ProviderTurn, TaskStatus, ToolCall,
     };
     use colossus_ports::{EventJournal, ModelProvider, ModelProviderError, ToolExecutor};
     use colossus_provider::ProviderKind;
@@ -4810,6 +4992,139 @@ surprise: true
                 .count()
                 >= 6
         );
+    }
+
+    #[tokio::test]
+    async fn model_plans_are_session_confined_and_approval_obligated() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        for id in ["session-a", "session-b"] {
+            sessions
+                .create_session(
+                    id,
+                    Some(id),
+                    Actor {
+                        actor_type: ActorType::User,
+                        id: "test-user".into(),
+                    },
+                )
+                .expect("session");
+        }
+        let repository: Arc<dyn colossus_ports::WorkRepository> = Arc::new(
+            colossus_work::EventSourcedWorkRepository::new(Arc::clone(&journal)),
+        );
+        let work = Arc::new(WorkEffectExecutor {
+            service: Arc::new(colossus_work::WorkService::new(
+                Arc::clone(&repository),
+                sessions,
+            )),
+            repository: Arc::clone(&repository),
+        });
+        let policy = colossus_policy::BuiltInPolicy::offline_default()
+            .with_action("plan.create", DecisionOutcome::Allow)
+            .with_action("plan.show", DecisionOutcome::Allow)
+            .with_action("plan.approve_request", DecisionOutcome::RequireApproval);
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test-operator".into(),
+            }),
+            colossus_policy::SafetyKernel::new([
+                "plan.create".into(),
+                "plan.show".into(),
+                "plan.approve_request".into(),
+            ]),
+            [14_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: Some(work),
+            memory: None,
+            workspace: std::env::current_dir().expect("cwd"),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        };
+        let context = |session: &str| ExecutionContext {
+            correlation_id: format!("run-{session}"),
+            session_id: Some(session.into()),
+            run_id: Some(format!("run-{session}")),
+            ..ExecutionContext::default()
+        };
+        let created = executor
+            .execute(
+                ToolCall {
+                    call_id: "plan-create".into(),
+                    name: "plan.create".into(),
+                    arguments: json!({
+                        "prompt": "Finish the Rust transition",
+                        "content": "# Durable plan",
+                        "steps": [
+                            {"title": "Inspect", "detail": "Read the contracts"},
+                            {"title": "Implement", "requires_mutation": true}
+                        ],
+                    }),
+                },
+                context("session-a"),
+            )
+            .await
+            .expect("plan create");
+        let created: serde_json::Value = serde_json::from_str(&created.output).expect("plan JSON");
+        let plan_id = created["id"].as_str().expect("plan id").to_owned();
+        assert_eq!(created["session_id"], "session-a");
+        assert_eq!(created["status"], "draft");
+        assert_eq!(created["steps"][1]["index"], 2);
+
+        let denied = executor
+            .execute(
+                ToolCall {
+                    call_id: "plan-show-cross-session".into(),
+                    name: "plan.show".into(),
+                    arguments: json!({"id": plan_id}),
+                },
+                context("session-b"),
+            )
+            .await
+            .expect_err("cross-session plan read denied");
+        assert!(matches!(denied, colossus_ports::ToolError::Failed(_)));
+
+        let approved = executor
+            .execute(
+                ToolCall {
+                    call_id: "plan-approve".into(),
+                    name: "plan.approve_request".into(),
+                    arguments: json!({"id": plan_id}),
+                },
+                context("session-a"),
+            )
+            .await
+            .expect("plan approved");
+        let approved: serde_json::Value =
+            serde_json::from_str(&approved.output).expect("approved JSON");
+        assert_eq!(approved["status"], "approved");
+        assert!(approved["approved_at"].as_str().is_some());
+        assert_eq!(
+            repository
+                .get_plan(&plan_id)
+                .expect("get")
+                .expect("plan")
+                .status,
+            PlanStatus::Approved
+        );
+        let event_types = journal
+            .read_global(1, 300)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"approval.granted.v1".into()));
+        assert!(event_types.contains(&"plan.approved.v1".into()));
+        assert!(event_types.contains(&"effect.release_requested.v1".into()));
     }
 
     struct WorkScriptedProvider {

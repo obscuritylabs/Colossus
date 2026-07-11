@@ -4,7 +4,7 @@
 
 use colossus_contracts::{
     Actor, DecisionPriority, DecisionSource, DecisionStatus, EventClassification, ExecutionContext,
-    KeyDecision, NewEvent, TaskRecord, TaskStatus,
+    KeyDecision, NewEvent, PlanRecord, PlanStatus, PlanStep, TaskRecord, TaskStatus,
 };
 use colossus_ports::{EventJournal, SessionRepository, StoreError, WorkRepository};
 use serde_json::{Value, json};
@@ -18,6 +18,11 @@ const DECISION_CREATED: &str = "decision.created.v1";
 const DECISION_UPDATED: &str = "decision.updated.v1";
 const DECISION_ARCHIVED: &str = "decision.archived.v1";
 const DECISION_SUPERSEDED: &str = "decision.superseded.v1";
+const PLAN_CREATED: &str = "plan.created.v1";
+const PLAN_UPDATED: &str = "plan.updated.v1";
+const PLAN_APPROVED: &str = "plan.approved.v1";
+const PLAN_EXECUTED: &str = "plan.executed.v1";
+const PLAN_DISCARDED: &str = "plan.discarded.v1";
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const MAX_LIST: usize = 1_000;
@@ -78,6 +83,38 @@ fn validate_decision(decision: &KeyDecision) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn validate_plan(plan: &PlanRecord) -> Result<(), StoreError> {
+    let ordered = !plan.steps.is_empty()
+        && plan.steps.len() <= 100
+        && plan.steps.iter().enumerate().all(|(index, step)| {
+            step.index == u32::try_from(index + 1).unwrap_or(u32::MAX)
+                && !step.title.trim().is_empty()
+                && step.title.len() <= MAX_TITLE_BYTES
+                && step.detail.len() <= MAX_TEXT_BYTES
+        });
+    let lifecycle_valid = match plan.status {
+        PlanStatus::Draft => plan.approved_at.is_none() && plan.executed_run_id.is_none(),
+        PlanStatus::Approved => plan.approved_at.is_some() && plan.executed_run_id.is_none(),
+        PlanStatus::Executed => plan.approved_at.is_some() && plan.executed_run_id.is_some(),
+        PlanStatus::Discarded => plan.executed_run_id.is_none(),
+    };
+    if !valid_id(&plan.id)
+        || !valid_id(&plan.session_id)
+        || plan.prompt.trim().is_empty()
+        || plan.prompt.len() > MAX_TEXT_BYTES
+        || plan.content.len() > MAX_TEXT_BYTES
+        || plan.created_at.is_empty()
+        || plan.updated_at.is_empty()
+        || !ordered
+        || !lifecycle_valid
+    {
+        return Err(StoreError::Adapter(
+            "invalid plan identity, content, steps, lifecycle, or timestamp".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Immutable-journal implementation of the work lifecycle port.
 pub struct EventSourcedWorkRepository {
     journal: Arc<dyn EventJournal>,
@@ -95,6 +132,10 @@ impl EventSourcedWorkRepository {
 
     fn decision_stream(id: &str) -> String {
         format!("decision:{id}")
+    }
+
+    fn plan_stream(id: &str) -> String {
+        format!("plan:{id}")
     }
 
     fn event(
@@ -396,6 +437,111 @@ impl WorkRepository for EventSourcedWorkRepository {
         ])?;
         Ok((old, replacement))
     }
+
+    fn create_plan(&self, plan: PlanRecord, actor: Actor) -> Result<PlanRecord, StoreError> {
+        validate_plan(&plan)?;
+        if plan.status != PlanStatus::Draft {
+            return Err(StoreError::Adapter("new plans must be drafts".into()));
+        }
+        self.journal.append(Self::event(
+            Self::plan_stream(&plan.id),
+            0,
+            PLAN_CREATED,
+            actor,
+            &plan.session_id,
+            json!({"record": &plan}),
+        ))?;
+        Ok(plan)
+    }
+
+    fn update_plan(&self, plan: PlanRecord, actor: Actor) -> Result<PlanRecord, StoreError> {
+        validate_plan(&plan)?;
+        let current = self
+            .get_plan(&plan.id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {}", plan.id)))?;
+        if current.session_id != plan.session_id || current.created_at != plan.created_at {
+            return Err(StoreError::Adapter(
+                "plan session and creation timestamp are immutable".into(),
+            ));
+        }
+        let transition = (current.status, plan.status);
+        let event_type = match transition {
+            (PlanStatus::Draft, PlanStatus::Draft) => PLAN_UPDATED,
+            (PlanStatus::Draft, PlanStatus::Approved) => PLAN_APPROVED,
+            (PlanStatus::Approved, PlanStatus::Executed) => PLAN_EXECUTED,
+            (PlanStatus::Draft | PlanStatus::Approved, PlanStatus::Discarded) => PLAN_DISCARDED,
+            _ => {
+                return Err(StoreError::Adapter(format!(
+                    "invalid plan transition from {:?} to {:?}",
+                    current.status, plan.status
+                )));
+            }
+        };
+        let approval_lineage_valid = match transition {
+            (PlanStatus::Draft, PlanStatus::Draft | PlanStatus::Discarded) => {
+                plan.approved_at.is_none()
+            }
+            (PlanStatus::Draft, PlanStatus::Approved) => plan.approved_at.is_some(),
+            (PlanStatus::Approved, PlanStatus::Executed | PlanStatus::Discarded) => {
+                plan.approved_at == current.approved_at
+            }
+            _ => false,
+        };
+        if !approval_lineage_valid {
+            return Err(StoreError::Adapter(
+                "plan approval lineage is immutable".into(),
+            ));
+        }
+        if (current.status != PlanStatus::Draft || plan.status != PlanStatus::Draft)
+            && (current.prompt != plan.prompt
+                || current.content != plan.content
+                || current.steps != plan.steps)
+        {
+            return Err(StoreError::Adapter(
+                "plan content is immutable during lifecycle transitions".into(),
+            ));
+        }
+        let stream = Self::plan_stream(&plan.id);
+        let expected = u64::try_from(self.journal.read_stream(&stream)?.len()).map_err(adapter)?;
+        self.journal.append(Self::event(
+            stream,
+            expected,
+            event_type,
+            actor,
+            &plan.session_id,
+            json!({"record": &plan}),
+        ))?;
+        Ok(plan)
+    }
+
+    fn get_plan(&self, id: &str) -> Result<Option<PlanRecord>, StoreError> {
+        self.record(&Self::plan_stream(id), PLAN_CREATED)
+    }
+
+    fn list_plans(
+        &self,
+        session_id: Option<&str>,
+        status: Option<PlanStatus>,
+        limit: usize,
+    ) -> Result<Vec<PlanRecord>, StoreError> {
+        let mut records = self
+            .ids("plan:", PLAN_CREATED)?
+            .into_iter()
+            .filter_map(|id| self.get_plan(&id).transpose())
+            .collect::<Result<Vec<_>, _>>()?;
+        records.retain(|record| {
+            session_id.is_none_or(|id| record.session_id == id)
+                && status.is_none_or(|status| record.status == status)
+        });
+        records.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        records.truncate(limit.clamp(1, MAX_LIST));
+        Ok(records)
+    }
 }
 
 /// Validated application service shared by CLI, REPL, tools, and embedded callers.
@@ -603,6 +749,119 @@ impl WorkService {
         self.repository.supersede_decision(id, replacement, actor)
     }
 
+    /// Create a draft plan with ordered steps in one session.
+    pub fn create_plan(
+        &self,
+        session_id: &str,
+        prompt: &str,
+        content: &str,
+        steps: Vec<PlanStep>,
+        actor: Actor,
+    ) -> Result<PlanRecord, StoreError> {
+        self.require_session(session_id)?;
+        let timestamp = now()?;
+        self.repository.create_plan(
+            PlanRecord {
+                id: format!("plan-{}", Uuid::now_v7()),
+                session_id: session_id.into(),
+                prompt: prompt.trim().into(),
+                status: PlanStatus::Draft,
+                content: content.into(),
+                steps,
+                created_at: timestamp.clone(),
+                updated_at: timestamp,
+                approved_at: None,
+                executed_run_id: None,
+            },
+            actor,
+        )
+    }
+
+    /// Replace editable draft content while preserving identity and lineage.
+    pub fn update_draft_plan(
+        &self,
+        id: &str,
+        prompt: Option<&str>,
+        content: Option<&str>,
+        steps: Option<Vec<PlanStep>>,
+        actor: Actor,
+    ) -> Result<PlanRecord, StoreError> {
+        let mut plan = self
+            .repository
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        if plan.status != PlanStatus::Draft {
+            return Err(StoreError::Adapter("only draft plans can be edited".into()));
+        }
+        if let Some(prompt) = prompt {
+            plan.prompt = prompt.trim().into();
+        }
+        if let Some(content) = content {
+            plan.content = content.into();
+        }
+        if let Some(steps) = steps {
+            plan.steps = steps;
+        }
+        plan.updated_at = now()?;
+        self.repository.update_plan(plan, actor)
+    }
+
+    /// Approve one draft exactly once.
+    pub fn approve_plan(&self, id: &str, actor: Actor) -> Result<PlanRecord, StoreError> {
+        let mut plan = self
+            .repository
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        if plan.status != PlanStatus::Draft {
+            return Err(StoreError::Adapter(
+                "only draft plans can be approved".into(),
+            ));
+        }
+        let timestamp = now()?;
+        plan.status = PlanStatus::Approved;
+        plan.updated_at = timestamp.clone();
+        plan.approved_at = Some(timestamp);
+        self.repository.update_plan(plan, actor)
+    }
+
+    /// Consume one approved plan for a single execution run.
+    pub fn execute_plan(
+        &self,
+        id: &str,
+        run_id: &str,
+        actor: Actor,
+    ) -> Result<PlanRecord, StoreError> {
+        let mut plan = self
+            .repository
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        if plan.status != PlanStatus::Approved || !valid_id(run_id) {
+            return Err(StoreError::Adapter(
+                "plan execution requires one approved plan and a valid run id".into(),
+            ));
+        }
+        plan.status = PlanStatus::Executed;
+        plan.updated_at = now()?;
+        plan.executed_run_id = Some(run_id.into());
+        self.repository.update_plan(plan, actor)
+    }
+
+    /// Discard a draft or approved plan without deleting history.
+    pub fn discard_plan(&self, id: &str, actor: Actor) -> Result<PlanRecord, StoreError> {
+        let mut plan = self
+            .repository
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        if !matches!(plan.status, PlanStatus::Draft | PlanStatus::Approved) {
+            return Err(StoreError::Adapter(
+                "only draft or approved plans can be discarded".into(),
+            ));
+        }
+        plan.status = PlanStatus::Discarded;
+        plan.updated_at = now()?;
+        self.repository.update_plan(plan, actor)
+    }
+
     /// Canonical repository for bounded query surfaces.
     pub fn repository(&self) -> Arc<dyn WorkRepository> {
         Arc::clone(&self.repository)
@@ -788,5 +1047,62 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn plans_reconstruct_and_enforce_single_execution_lifecycle() {
+        let (journal, repository, service) = fixture();
+        let steps = vec![PlanStep {
+            index: 1,
+            title: "Implement".into(),
+            detail: "Make the scoped Rust change.".into(),
+            requires_mutation: true,
+        }];
+        let draft = service
+            .create_plan(
+                "session-1",
+                "Finish the Rust transition",
+                "# Plan",
+                steps,
+                user_actor(),
+            )
+            .expect("create");
+        let edited = service
+            .update_draft_plan(&draft.id, None, Some("# Updated plan"), None, user_actor())
+            .expect("edit");
+        let approved = service
+            .approve_plan(&draft.id, user_actor())
+            .expect("approve");
+        assert_eq!(approved.status, PlanStatus::Approved);
+        assert!(approved.approved_at.is_some());
+        assert!(
+            service
+                .update_draft_plan(&draft.id, Some("changed"), None, None, user_actor())
+                .is_err()
+        );
+        let mut forged = approved.clone();
+        forged.status = PlanStatus::Executed;
+        forged.approved_at = Some("forged".into());
+        forged.executed_run_id = Some("run-forged".into());
+        assert!(repository.update_plan(forged, user_actor()).is_err());
+        let executed = service
+            .execute_plan(&draft.id, "run-1", user_actor())
+            .expect("execute");
+        assert_eq!(executed.status, PlanStatus::Executed);
+        assert_eq!(executed.executed_run_id.as_deref(), Some("run-1"));
+        assert!(
+            service
+                .execute_plan(&draft.id, "run-2", user_actor())
+                .is_err()
+        );
+        assert_eq!(
+            repository
+                .list_plans(Some("session-1"), Some(PlanStatus::Executed), 10)
+                .expect("list"),
+            vec![executed.clone()]
+        );
+        let reopened = EventSourcedWorkRepository::new(journal);
+        assert_eq!(reopened.get_plan(&draft.id).expect("get"), Some(executed));
+        assert_eq!(edited.content, "# Updated plan");
     }
 }

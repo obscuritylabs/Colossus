@@ -51,11 +51,11 @@ through the normal provider gateway when available; invalid, failed, or echo sum
 fall back to deterministic extraction. Every turn records `context.prepared.v1` on its
 run stream.
 
-`colossus-work` owns typed task and key-decision lifecycles. Each task and decision has
+`colossus-work` owns typed task, key-decision, and plan lifecycles. Each record has
 its own optimistic journal stream; updates append complete validated next-state records,
 and decision supersession atomically closes the old stream state while creating its
 linked replacement. Mutation adapters are private to the runtime and receive one-use
-permits only after `task.*` or `decision.*` authorization. The `work-v1` projection is
+permits only after `task.*`, `decision.*`, or `plan.*` authorization. The `work-v1` projection is
 disposable discovery state, not the write model. Active decisions are loaded from the
 canonical repository and injected as
 bounded binding system context before snapshots on every provider turn; archived and
@@ -64,6 +64,13 @@ and decision tools derive the session from the execution context rather than acc
 one from model arguments. The permit-bound executor rechecks that same session against
 canonical target records, derives decision source from the model actor, and rejects
 cross-session access before repository mutation or release.
+
+Plans are session-scoped canonical records with ordered typed steps and explicit
+`draft`, `approved`, `executed`, or `discarded` state. Only drafts can change content;
+approval, execution, and discard are append-only transitions, and an approved plan can
+be consumed by only one run. Model schemas omit the session id, `plan.approve_request`
+uses the ordinary approval-proof re-evaluation path, and `plan.show` rechecks canonical
+session ownership before releasing content.
 
 `colossus-memory` separates canonical lifecycle state from disposable retrieval. Memory
 create/update/archive/supersede events remain authoritative in the encrypted journal.
@@ -151,7 +158,7 @@ arguments before policy and approval handling, then records policy and completio
 events. CLI and REPL code may list or render tools, but must not implement model, tool,
 policy, or state behavior.
 
-Durable `task.*`, `decision.*`, and `memory.*` model tools use the same composition.
+Durable `task.*`, `decision.*`, `plan.*`, and `memory.*` model tools use the same composition.
 Their public schemas omit session and repository identifiers, the runtime constructs
 typed operations with trusted context, and private work/memory executors perform a final
 canonical scope check while consuming the permit. Their JSON results remain quarantined

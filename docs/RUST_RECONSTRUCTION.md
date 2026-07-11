@@ -119,6 +119,12 @@ obsolete Go launcher.
   restart-safe CLI operations, and disposable `work-v1` projections. Active decisions
   are injected as binding context ahead of snapshots; archived and superseded records
   remain auditable without steering future turns.
+- Durable session-scoped plans with ordered typed steps, immutable post-draft content,
+  append-only draft/approve/execute/discard transitions, single-run execution guards,
+  restart reconstruction, `work-v1` projection compatibility, strict model-visible
+  `plan.create/show/approve_request` tools, canonical cross-session checks, and normal
+  approval-proof re-evaluation. CLI list/show/create/approve and `/plans` inspect the
+  same repository.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
 
@@ -141,6 +147,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- c
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- context compact SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tasks list --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- decisions list --session SESSION_ID
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- plans list --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories search 'query' --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories index status
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
@@ -177,9 +184,9 @@ cutover. The following planned work remains:
   helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
-- Incremental provider transport streaming, usage accounting, and plans. The durable
-  memory, task/decision, and
-  context budget/snapshot boundaries, durable
+- Incremental provider transport streaming, usage accounting, Plan Mode execution, and
+  plan-to-goal handoff. Durable plan storage, strict tools, and approval are implemented.
+  The durable memory, task/decision, and context budget/snapshot boundaries, durable
   multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
   permit-bound file list/read/search/write/replace, Git inspection, structured shell
   execution, and permit-bound HTTP GET are implemented.

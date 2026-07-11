@@ -473,6 +473,60 @@ pub struct TaskRecord {
     pub updated_at: String,
 }
 
+/// Durable plan lifecycle status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStatus {
+    /// Proposed work that may still be edited or discarded.
+    Draft,
+    /// Explicitly approved for one execution or goal handoff.
+    Approved,
+    /// Consumed by an execution run.
+    Executed,
+    /// Retained for audit but intentionally abandoned.
+    Discarded,
+}
+
+/// One ordered, bounded plan step.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanStep {
+    /// One-based stable order within the plan.
+    pub index: u32,
+    /// Short human-readable action label.
+    pub title: String,
+    /// Supporting implementation or verification detail.
+    pub detail: String,
+    /// Whether executing this step may mutate external state.
+    pub requires_mutation: bool,
+}
+
+/// Canonical session-scoped plan reconstructed from immutable events.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanRecord {
+    /// Stable plan identifier.
+    pub id: String,
+    /// Owning session identifier.
+    pub session_id: String,
+    /// Original objective that produced the plan.
+    pub prompt: String,
+    /// Current lifecycle status.
+    pub status: PlanStatus,
+    /// Optional bounded Markdown overview.
+    pub content: String,
+    /// Ordered executable intent without inline code semantics.
+    pub steps: Vec<PlanStep>,
+    /// UTC creation timestamp.
+    pub created_at: String,
+    /// UTC last-update timestamp.
+    pub updated_at: String,
+    /// Approval timestamp when approved.
+    pub approved_at: Option<String>,
+    /// Run that consumed the approved plan.
+    pub executed_run_id: Option<String>,
+}
+
 /// Provenance for a durable key decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

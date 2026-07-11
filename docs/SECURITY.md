@@ -183,6 +183,14 @@ identifier. The runtime derives it from the authenticated execution context and 
 permit-bound executor checks canonical target ownership, so guessed task or decision ids
 cannot cross session boundaries.
 
+Rust plans use the same encrypted canonical work repository. Plan creation derives its
+session from execution context, ordered steps contain data rather than executable code,
+and content becomes immutable after leaving draft state. `plan.approve_request` cannot
+directly set approval: the policy decision must impose approval, the gateway records and
+re-evaluates the proof, and only then can the private work adapter append
+`plan.approved.v1`. Canonical ownership checks prevent cross-session show or approval,
+and an approved plan can transition to executed only once.
+
 Rust memory lifecycle events are encrypted canonical state. Memory operations and index
 administration require one-use permits; reads, lists, and searches always require a
 post-effect content decision before records can reach a model or user. Tantivy results
@@ -289,8 +297,8 @@ Security-sensitive defaults:
 | `decision.*` | None | Denied | Mutations | Enabled, session-persisted |
 | `memory.*` | None | Denied | No | Enabled, global/repo/session persisted |
 | `goal.show/update` | None | Denied | No | Enabled only inside active goal-mode provider turns |
-| `plan.create/show` | None | Denied | No | Enabled, runtime-local |
-| `plan.approve_request` | None | Denied | Yes | Enabled, runtime-local |
+| `plan.create/show` | None | Denied | No | Enabled, session-persisted |
+| `plan.approve_request` | None | Denied | Yes | Enabled, session-persisted |
 | `patch.preview` | Read | Denied | No | Enabled |
 | `patch.apply/reverse` | Write | Denied | Yes | Enabled |
 | `repo.*` | Read | Denied | No | Enabled |
