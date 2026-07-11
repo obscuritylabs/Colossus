@@ -5,11 +5,11 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ApprovalProof, ContextSnapshot, DecisionStatus, EffectRequest, EventEnvelope,
-    ExecutionContext, KeyDecision, MemoryRecord, ModelMessage, ModelRequest, ModelToolDefinition,
-    NewEvent, PlanRecord, PlanStatus, PolicyDecision, PreparedContext, ProjectionBatch,
-    ProjectionWorkItem, ProviderRoute, ProviderTurn, SessionMessage, SessionSummary,
-    SignedCheckpoint, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec, WorkflowDefinition,
-    WorkflowRun,
+    ExecutionContext, GoalRecord, GoalStatus, KeyDecision, MemoryRecord, ModelMessage,
+    ModelRequest, ModelToolDefinition, NewEvent, PlanRecord, PlanStatus, PolicyDecision,
+    PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute, ProviderTurn,
+    SessionMessage, SessionSummary, SignedCheckpoint, TaskRecord, TaskStatus, ToolCall, ToolResult,
+    ToolSpec, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -394,6 +394,31 @@ pub trait WorkRepository: Send + Sync {
         status: Option<PlanStatus>,
         limit: usize,
     ) -> Result<Vec<PlanRecord>, StoreError>;
+
+    /// Create a new active bounded-autonomy goal.
+    fn create_goal(&self, goal: GoalRecord, actor: Actor) -> Result<GoalRecord, StoreError>;
+
+    /// Atomically consume one approved plan and create its linked active goal.
+    fn create_goal_from_plan(
+        &self,
+        goal: GoalRecord,
+        executed_plan: PlanRecord,
+        actor: Actor,
+    ) -> Result<(GoalRecord, PlanRecord), StoreError>;
+
+    /// Append an iteration or terminal goal state transition.
+    fn update_goal(&self, goal: GoalRecord, actor: Actor) -> Result<GoalRecord, StoreError>;
+
+    /// Reconstruct one canonical goal.
+    fn get_goal(&self, id: &str) -> Result<Option<GoalRecord>, StoreError>;
+
+    /// List bounded goals with optional session and status filters.
+    fn list_goals(
+        &self,
+        session_id: Option<&str>,
+        status: Option<GoalStatus>,
+        limit: usize,
+    ) -> Result<Vec<GoalRecord>, StoreError>;
 }
 /// Canonical event-sourced memory lifecycle repository.
 pub trait MemoryRepository: Send + Sync {

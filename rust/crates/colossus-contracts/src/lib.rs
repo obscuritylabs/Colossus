@@ -112,6 +112,10 @@ pub struct ExecutionContext {
     pub session_id: Option<String>,
     /// Active run identifier.
     pub run_id: Option<String>,
+    /// Active bounded-autonomy goal.
+    pub goal_id: Option<String>,
+    /// Approved plan lineage for this run.
+    pub plan_id: Option<String>,
     /// Pinned workflow identifier.
     pub workflow_id: Option<String>,
     /// Pinned workflow content hash.
@@ -525,6 +529,76 @@ pub struct PlanRecord {
     pub approved_at: Option<String>,
     /// Run that consumed the approved plan.
     pub executed_run_id: Option<String>,
+}
+
+/// Durable bounded-autonomy goal status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalStatus {
+    /// Further bounded iterations may run.
+    Active,
+    /// Objective was genuinely achieved.
+    Complete,
+    /// Progress requires user input or an external state change.
+    Blocked,
+}
+
+/// Canonical goal state reconstructed from immutable events.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalRecord {
+    /// Stable goal identifier.
+    pub id: String,
+    /// Owning session identifier.
+    pub session_id: String,
+    /// Bounded objective preserved across iterations.
+    pub objective: String,
+    /// Optional approved plan that originated this goal.
+    pub source_plan_id: Option<String>,
+    /// Current terminal or active state.
+    pub status: GoalStatus,
+    /// Concise completion or progress summary.
+    pub summary: String,
+    /// Required explanation when blocked.
+    pub blocked_reason: String,
+    /// Maximum autonomous iterations.
+    pub iteration_budget: u16,
+    /// Completed iterations, never greater than the budget.
+    pub iterations_completed: u16,
+    /// UTC creation timestamp.
+    pub created_at: String,
+    /// UTC last-update timestamp.
+    pub updated_at: String,
+}
+
+/// One completed bounded Goal Mode iteration.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalIterationResult {
+    /// One-based iteration number.
+    pub iteration: u16,
+    /// Normal agent run identifier.
+    pub run_id: String,
+    /// Visible final output for this iteration.
+    pub output: String,
+    /// Durable run event count.
+    pub event_count: u64,
+    /// Iteration wall time.
+    pub elapsed_seconds: f64,
+}
+
+/// Result of a bounded Goal Mode loop.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalRunResult {
+    /// Final reconstructed goal state.
+    pub goal: GoalRecord,
+    /// Completed normal agent runs.
+    pub iterations: Vec<GoalIterationResult>,
+    /// True when the budget ended while the goal remained active.
+    pub iteration_budget_exhausted: bool,
+    /// Total loop wall time.
+    pub elapsed_seconds: f64,
 }
 
 /// Provenance for a durable key decision.

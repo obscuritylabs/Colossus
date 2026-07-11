@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
-    ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, MemoryScope, MemoryStatus,
-    PlanStatus, PlanStep, PolicyDecision, TaskStatus,
+    ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, MemoryScope,
+    MemoryStatus, PlanStatus, PlanStep, PolicyDecision, TaskStatus,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{ApprovalProvider, PolicyError};
@@ -163,6 +163,8 @@ enum Command {
     Decisions(DecisionsCommand),
     /// Create, inspect, and approve durable plans.
     Plans(PlansCommand),
+    /// Run and inspect bounded durable goals.
+    Goals(GoalsCommand),
     /// Create, search, archive, and supersede durable memories.
     Memories(MemoriesCommand),
     /// Execute one audited model turn through the configured role.
@@ -679,6 +681,56 @@ enum PlansAction {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum GoalStatusArg {
+    Active,
+    Complete,
+    Blocked,
+}
+
+impl From<GoalStatusArg> for GoalStatus {
+    fn from(value: GoalStatusArg) -> Self {
+        match value {
+            GoalStatusArg::Active => Self::Active,
+            GoalStatusArg::Complete => Self::Complete,
+            GoalStatusArg::Blocked => Self::Blocked,
+        }
+    }
+}
+
+#[derive(Args)]
+struct GoalsCommand {
+    #[command(subcommand)]
+    command: GoalsAction,
+}
+
+#[derive(Subcommand)]
+enum GoalsAction {
+    /// List bounded canonical goals.
+    List {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum)]
+        status: Option<GoalStatusArg>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one exact goal.
+    Show { goal_id: String },
+    /// Start a bounded Goal Mode loop in an existing session.
+    Run {
+        objective: String,
+        #[arg(long)]
+        session: String,
+        #[arg(long, default_value = "primary")]
+        role: String,
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u16).range(1..=50))]
+        max_iterations: u16,
+        #[arg(long)]
+        source_plan: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum MemoryScopeArg {
     Global,
     Repository,
@@ -1014,7 +1066,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /memories | /memory search QUERY | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /memories | /memory search QUERY | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1045,6 +1097,14 @@ async fn repl(
                     )?)?;
                 } else if line == "/plans" {
                     print_json(&runtime.list_plans(Some(&active_session_id), None, 100)?)?;
+                } else if line == "/goals" {
+                    print_json(&runtime.list_goals(Some(&active_session_id), None, 100)?)?;
+                } else if let Some(objective) = line.strip_prefix("/goal ") {
+                    print_json(
+                        &runtime
+                            .run_goal("primary", objective.trim(), &active_session_id, 5, None)
+                            .await?,
+                    )?;
                 } else if line == "/memories" {
                     print_json(
                         &runtime
@@ -1403,6 +1463,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
             PlansAction::Approve { plan_id } => {
                 print_json(&runtime.approve_plan(&plan_id).await?)?;
             }
+        },
+        Command::Goals(command) => match command.command {
+            GoalsAction::List {
+                session,
+                status,
+                limit,
+            } => print_json(&runtime.list_goals(
+                session.as_deref(),
+                status.map(Into::into),
+                limit,
+            )?)?,
+            GoalsAction::Show { goal_id } => print_json(
+                &runtime
+                    .get_goal(&goal_id)?
+                    .ok_or_else(|| cli_error(format!("goal not found: {goal_id}")))?,
+            )?,
+            GoalsAction::Run {
+                objective,
+                session,
+                role,
+                max_iterations,
+                source_plan,
+            } => print_json(
+                &runtime
+                    .run_goal(
+                        &role,
+                        &objective,
+                        &session,
+                        max_iterations,
+                        source_plan.as_deref(),
+                    )
+                    .await?,
+            )?,
         },
         Command::Memories(command) => match command.command {
             MemoriesAction::List { status, limit } => {

@@ -114,6 +114,53 @@ impl AgentService {
         max_turns: u16,
         requested_session_id: Option<&str>,
     ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Execute one goal-mode iteration with goal-only tools and durable lineage.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_goal_iteration(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        session_id: &str,
+        goal_id: &str,
+        plan_id: Option<&str>,
+    ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            Some(session_id),
+            Some(goal_id),
+            plan_id,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with_lineage(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        goal_id: Option<&str>,
+        plan_id: Option<&str>,
+    ) -> Result<AgentRunResult, AgentError> {
         if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
                 "role is required and max_turns must be in 1..={MAX_TURNS}"
@@ -147,6 +194,8 @@ impl AgentService {
             correlation_id: run_id.clone(),
             session_id: Some(session_id.clone()),
             run_id: Some(run_id.clone()),
+            goal_id: goal_id.map(str::to_owned),
+            plan_id: plan_id.map(str::to_owned),
             ..ExecutionContext::default()
         };
         let mut messages = self
@@ -171,7 +220,10 @@ impl AgentService {
             },
         )?;
         messages.push(user_message);
-        let definitions = model_definitions(self.tools.as_ref());
+        let mut definitions = model_definitions(self.tools.as_ref());
+        definitions.retain(|definition| {
+            goal_id.is_some() || !matches!(definition.name.as_str(), "goal.show" | "goal.update")
+        });
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
 
@@ -708,6 +760,66 @@ mod tests {
         assert_eq!(payload["snapshot_id"], "snapshot-1");
         assert_eq!(payload["original_token_estimate"], 100);
         assert_eq!(payload["token_estimate"], 10);
+    }
+
+    #[tokio::test]
+    async fn goal_tools_are_visible_only_on_goal_lineage_runs() {
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            turn(vec![ProviderEvent::FinalOutput {
+                text: "plain".into(),
+            }]),
+            turn(vec![ProviderEvent::FinalOutput {
+                text: "goal".into(),
+            }]),
+        ]));
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let service = AgentService::new(
+            Arc::clone(&journal),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(
+                StaticToolRegistry::builtins(&[
+                    "echo".into(),
+                    "goal.show".into(),
+                    "goal.update".into(),
+                ])
+                .expect("catalog"),
+            ),
+            Arc::new(EchoTools),
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+        );
+        let plain = service
+            .run("primary", "test", "plain", 1)
+            .await
+            .expect("plain");
+        service
+            .run_goal_iteration(
+                "primary",
+                "goal instructions",
+                "goal turn",
+                1,
+                plain.session_id.as_deref().expect("session"),
+                "goal-1",
+                Some("plan-1"),
+            )
+            .await
+            .expect("goal");
+        let requests = provider.requests.lock().expect("requests");
+        assert_eq!(
+            requests[0]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["echo"]
+        );
+        assert_eq!(
+            requests[1]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["echo", "goal.show", "goal.update"]
+        );
     }
 
     #[tokio::test]

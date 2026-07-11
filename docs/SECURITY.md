@@ -191,6 +191,15 @@ re-evaluates the proof, and only then can the private work adapter append
 `plan.approved.v1`. Canonical ownership checks prevent cross-session show or approval,
 and an approved plan can transition to executed only once.
 
+Goal Mode does not broaden authority: every iteration uses the same provider, active
+tools, policy channel, approvals, sandbox, context preparation, and journal. Goal ids are
+runtime-injected and cannot be supplied in model arguments. The private work adapter
+checks the active goal and session again after permit minting. Terminal `complete` and
+`blocked` transitions require a summary or blocked reason and cannot be reversed. The
+runtime appends one iteration record after each returned run. The 50-iteration hard maximum and
+persisted per-goal budget prevent unbounded continuation. Approved-plan consumption and
+linked goal creation are one optimistic journal batch.
+
 Rust memory lifecycle events are encrypted canonical state. Memory operations and index
 administration require one-use permits; reads, lists, and searches always require a
 post-effect content decision before records can reach a model or user. Tantivy results

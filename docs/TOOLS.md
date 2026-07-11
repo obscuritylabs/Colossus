@@ -26,7 +26,7 @@ tools, see [Integrations](INTEGRATIONS.md).
 | Key decisions | `decision.create`, `decision.update`, `decision.list`, `decision.archive`, `decision.supersede` | Mutations | Yes | Durable session commitments injected into future context. |
 | Memories | `memory.create`, `memory.update`, `memory.list`, `memory.search`, `memory.archive`, `memory.supersede` | No | Yes | Durable global/repo/session context retrieved through SQLite FTS. |
 | Goal mode | `goal.show`, `goal.update` | No | Active goal runs only | Durable active-goal progress and terminal status, including approved plan lineage when a plan is handed to Goal Mode. |
-| Plan state | `plan.create`, `plan.show`, `plan.approve_request` | Approval request only | Yes | Draft plans are runtime-local; approval is policy-gated; approved plans can execute once or hand off to bounded Goal Mode. |
+| Plan state | `plan.create`, `plan.show`, `plan.approve_request` | Approval request only | Yes | Plans are durable session state; approval is policy-gated; approved plans are atomically consumed once when handed to bounded Goal Mode. |
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Apply/reverse only | Yes | Exact text patch preview and mutation. |
 | Repo context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | No | Yes | Local file map, symbol extraction, references, and summaries. |
 | Subagents | `agent.delegate`, `agent.result`, `agent.list` | No by default | Yes | Durable queued child-agent jobs with bounded local concurrency. |

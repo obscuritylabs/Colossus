@@ -412,6 +412,29 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "goal.show".into(),
+            description: "Show the active bounded-autonomy goal for this run.".into(),
+            input_schema: object_schema(json!({}), &[]),
+            effect_action: Some("goal.show".into()),
+            capability: Some("goal.show".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "goal.update".into(),
+            description: "Mark the active goal complete or blocked with concise evidence.".into(),
+            input_schema: object_schema(
+                json!({
+                    "status": {"type": "string", "enum": ["complete", "blocked"]},
+                    "summary": {"type": "string", "maxLength": 65536, "default": ""},
+                    "blocked_reason": {"type": "string", "maxLength": 65536, "default": ""}
+                }),
+                &["status"],
+            ),
+            effect_action: Some("goal.update".into()),
+            capability: Some("goal.update".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
             name: "plan.show".into(),
             description: "Show one durable plan owned by the current session.".into(),
             input_schema: object_schema(
@@ -925,6 +948,49 @@ mod tests {
         for spec in registry.list_specs() {
             assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
             assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+        }
+    }
+
+    #[test]
+    fn goal_tools_hide_goal_identity_and_require_terminal_evidence_shape() {
+        let registry = StaticToolRegistry::builtins(&["goal.show".into(), "goal.update".into()])
+            .expect("catalog");
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "goal-show".into(),
+                    name: "goal.show".into(),
+                    arguments: json!({}),
+                })
+                .is_ok()
+        );
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "goal-update".into(),
+                    name: "goal.update".into(),
+                    arguments: json!({"status": "complete", "summary": "Verified."}),
+                })
+                .is_ok()
+        );
+        for arguments in [
+            json!({"goal_id": "forged"}),
+            json!({"status": "active"}),
+            json!({"status": "blocked", "surprise": true}),
+        ] {
+            let name = if arguments.get("goal_id").is_some() {
+                "goal.show"
+            } else {
+                "goal.update"
+            };
+            assert!(matches!(
+                registry.validate(&ToolCall {
+                    call_id: "goal-invalid".into(),
+                    name: name.into(),
+                    arguments,
+                }),
+                Err(ToolError::InvalidArguments { .. })
+            ));
         }
     }
 }

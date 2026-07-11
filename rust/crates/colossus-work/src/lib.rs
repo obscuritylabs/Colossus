@@ -4,7 +4,8 @@
 
 use colossus_contracts::{
     Actor, DecisionPriority, DecisionSource, DecisionStatus, EventClassification, ExecutionContext,
-    KeyDecision, NewEvent, PlanRecord, PlanStatus, PlanStep, TaskRecord, TaskStatus,
+    GoalRecord, GoalStatus, KeyDecision, NewEvent, PlanRecord, PlanStatus, PlanStep, TaskRecord,
+    TaskStatus,
 };
 use colossus_ports::{EventJournal, SessionRepository, StoreError, WorkRepository};
 use serde_json::{Value, json};
@@ -23,8 +24,11 @@ const PLAN_UPDATED: &str = "plan.updated.v1";
 const PLAN_APPROVED: &str = "plan.approved.v1";
 const PLAN_EXECUTED: &str = "plan.executed.v1";
 const PLAN_DISCARDED: &str = "plan.discarded.v1";
+const GOAL_CREATED: &str = "goal.created.v1";
+const GOAL_UPDATED: &str = "goal.updated.v1";
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
+const MAX_PLAN_BYTES: usize = 256 * 1024;
 const MAX_LIST: usize = 1_000;
 
 fn adapter(error: impl std::fmt::Display) -> StoreError {
@@ -84,6 +88,14 @@ fn validate_decision(decision: &KeyDecision) -> Result<(), StoreError> {
 }
 
 fn validate_plan(plan: &PlanRecord) -> Result<(), StoreError> {
+    let total_bytes = plan.steps.iter().fold(
+        plan.prompt.len().saturating_add(plan.content.len()),
+        |total, step| {
+            total
+                .saturating_add(step.title.len())
+                .saturating_add(step.detail.len())
+        },
+    );
     let ordered = !plan.steps.is_empty()
         && plan.steps.len() <= 100
         && plan.steps.iter().enumerate().all(|(index, step)| {
@@ -103,6 +115,7 @@ fn validate_plan(plan: &PlanRecord) -> Result<(), StoreError> {
         || plan.prompt.trim().is_empty()
         || plan.prompt.len() > MAX_TEXT_BYTES
         || plan.content.len() > MAX_TEXT_BYTES
+        || total_bytes > MAX_PLAN_BYTES
         || plan.created_at.is_empty()
         || plan.updated_at.is_empty()
         || !ordered
@@ -110,6 +123,31 @@ fn validate_plan(plan: &PlanRecord) -> Result<(), StoreError> {
     {
         return Err(StoreError::Adapter(
             "invalid plan identity, content, steps, lifecycle, or timestamp".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_goal(goal: &GoalRecord) -> Result<(), StoreError> {
+    let terminal_valid = match goal.status {
+        GoalStatus::Active => goal.blocked_reason.is_empty(),
+        GoalStatus::Complete => !goal.summary.trim().is_empty() && goal.blocked_reason.is_empty(),
+        GoalStatus::Blocked => !goal.blocked_reason.trim().is_empty(),
+    };
+    if !valid_id(&goal.id)
+        || !valid_id(&goal.session_id)
+        || goal.objective.trim().is_empty()
+        || goal.objective.len() > MAX_TEXT_BYTES
+        || goal.summary.len() > MAX_TEXT_BYTES
+        || goal.blocked_reason.len() > MAX_TEXT_BYTES
+        || !(1..=50).contains(&goal.iteration_budget)
+        || goal.iterations_completed > goal.iteration_budget
+        || goal.created_at.is_empty()
+        || goal.updated_at.is_empty()
+        || !terminal_valid
+    {
+        return Err(StoreError::Adapter(
+            "invalid goal identity, objective, budget, lifecycle, or timestamp".into(),
         ));
     }
     Ok(())
@@ -136,6 +174,10 @@ impl EventSourcedWorkRepository {
 
     fn plan_stream(id: &str) -> String {
         format!("plan:{id}")
+    }
+
+    fn goal_stream(id: &str) -> String {
+        format!("goal:{id}")
     }
 
     fn event(
@@ -542,6 +584,153 @@ impl WorkRepository for EventSourcedWorkRepository {
         records.truncate(limit.clamp(1, MAX_LIST));
         Ok(records)
     }
+
+    fn create_goal(&self, goal: GoalRecord, actor: Actor) -> Result<GoalRecord, StoreError> {
+        validate_goal(&goal)?;
+        if goal.status != GoalStatus::Active || goal.iterations_completed != 0 {
+            return Err(StoreError::Adapter(
+                "new goals must be active with zero completed iterations".into(),
+            ));
+        }
+        self.journal.append(Self::event(
+            Self::goal_stream(&goal.id),
+            0,
+            GOAL_CREATED,
+            actor,
+            &goal.session_id,
+            json!({"record": &goal}),
+        ))?;
+        Ok(goal)
+    }
+
+    fn create_goal_from_plan(
+        &self,
+        goal: GoalRecord,
+        executed_plan: PlanRecord,
+        actor: Actor,
+    ) -> Result<(GoalRecord, PlanRecord), StoreError> {
+        validate_goal(&goal)?;
+        validate_plan(&executed_plan)?;
+        let plan_id = goal
+            .source_plan_id
+            .as_deref()
+            .ok_or_else(|| StoreError::Adapter("goal plan lineage is absent".into()))?;
+        let current = self
+            .get_plan(plan_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+        if goal.status != GoalStatus::Active
+            || goal.iterations_completed != 0
+            || current.status != PlanStatus::Approved
+            || executed_plan.id != current.id
+            || executed_plan.session_id != goal.session_id
+            || executed_plan.status != PlanStatus::Executed
+            || executed_plan.prompt != current.prompt
+            || executed_plan.content != current.content
+            || executed_plan.steps != current.steps
+            || executed_plan.created_at != current.created_at
+            || executed_plan.approved_at != current.approved_at
+            || executed_plan.executed_run_id.as_deref() != Some(goal.id.as_str())
+        {
+            return Err(StoreError::Adapter(
+                "goal creation requires one unchanged approved same-session plan consumed by the goal id"
+                    .into(),
+            ));
+        }
+        if self.get_goal(&goal.id)?.is_some() {
+            return Err(StoreError::Conflict {
+                stream_id: Self::goal_stream(&goal.id),
+                expected: 0,
+                actual: 1,
+            });
+        }
+        let plan_stream = Self::plan_stream(plan_id);
+        let expected =
+            u64::try_from(self.journal.read_stream(&plan_stream)?.len()).map_err(adapter)?;
+        self.journal.append_batch(vec![
+            Self::event(
+                plan_stream,
+                expected,
+                PLAN_EXECUTED,
+                actor.clone(),
+                &executed_plan.session_id,
+                json!({"record": &executed_plan}),
+            ),
+            Self::event(
+                Self::goal_stream(&goal.id),
+                0,
+                GOAL_CREATED,
+                actor,
+                &goal.session_id,
+                json!({"record": &goal}),
+            ),
+        ])?;
+        Ok((goal, executed_plan))
+    }
+
+    fn update_goal(&self, goal: GoalRecord, actor: Actor) -> Result<GoalRecord, StoreError> {
+        validate_goal(&goal)?;
+        let current = self
+            .get_goal(&goal.id)?
+            .ok_or_else(|| StoreError::NotFound(format!("goal {}", goal.id)))?;
+        let terminal_iteration_only = current.status != GoalStatus::Active
+            && (goal.status != current.status
+                || goal.summary != current.summary
+                || goal.blocked_reason != current.blocked_reason);
+        if terminal_iteration_only
+            || current.session_id != goal.session_id
+            || current.objective != goal.objective
+            || current.source_plan_id != goal.source_plan_id
+            || current.iteration_budget != goal.iteration_budget
+            || current.created_at != goal.created_at
+            || goal.iterations_completed < current.iterations_completed
+            || goal.iterations_completed > current.iterations_completed.saturating_add(1)
+        {
+            return Err(StoreError::Adapter(
+                "goal provenance, budget, terminal state, and iteration progression are immutable"
+                    .into(),
+            ));
+        }
+        let stream = Self::goal_stream(&goal.id);
+        let expected = u64::try_from(self.journal.read_stream(&stream)?.len()).map_err(adapter)?;
+        self.journal.append(Self::event(
+            stream,
+            expected,
+            GOAL_UPDATED,
+            actor,
+            &goal.session_id,
+            json!({"record": &goal}),
+        ))?;
+        Ok(goal)
+    }
+
+    fn get_goal(&self, id: &str) -> Result<Option<GoalRecord>, StoreError> {
+        self.record(&Self::goal_stream(id), GOAL_CREATED)
+    }
+
+    fn list_goals(
+        &self,
+        session_id: Option<&str>,
+        status: Option<GoalStatus>,
+        limit: usize,
+    ) -> Result<Vec<GoalRecord>, StoreError> {
+        let mut records = self
+            .ids("goal:", GOAL_CREATED)?
+            .into_iter()
+            .filter_map(|id| self.get_goal(&id).transpose())
+            .collect::<Result<Vec<_>, _>>()?;
+        records.retain(|record| {
+            session_id.is_none_or(|id| record.session_id == id)
+                && status.is_none_or(|status| record.status == status)
+        });
+        records.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        records.truncate(limit.clamp(1, MAX_LIST));
+        Ok(records)
+    }
 }
 
 /// Validated application service shared by CLI, REPL, tools, and embedded callers.
@@ -862,6 +1051,95 @@ impl WorkService {
         self.repository.update_plan(plan, actor)
     }
 
+    /// Create one active bounded-autonomy goal with optional approved-plan lineage.
+    pub fn create_goal(
+        &self,
+        session_id: &str,
+        objective: &str,
+        iteration_budget: u16,
+        source_plan_id: Option<String>,
+        actor: Actor,
+    ) -> Result<GoalRecord, StoreError> {
+        self.require_session(session_id)?;
+        let timestamp = now()?;
+        let goal = GoalRecord {
+            id: format!("goal-{}", Uuid::now_v7()),
+            session_id: session_id.into(),
+            objective: objective.trim().into(),
+            source_plan_id: source_plan_id.clone(),
+            status: GoalStatus::Active,
+            summary: String::new(),
+            blocked_reason: String::new(),
+            iteration_budget,
+            iterations_completed: 0,
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+        };
+        let Some(plan_id) = source_plan_id else {
+            return self.repository.create_goal(goal, actor);
+        };
+        let mut plan = self
+            .repository
+            .get_plan(&plan_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+        if plan.session_id != session_id || plan.status != PlanStatus::Approved {
+            return Err(StoreError::Adapter(
+                "goal plan lineage requires an approved same-session plan".into(),
+            ));
+        }
+        plan.status = PlanStatus::Executed;
+        plan.updated_at = now()?;
+        plan.executed_run_id = Some(goal.id.clone());
+        self.repository
+            .create_goal_from_plan(goal, plan, actor)
+            .map(|(goal, _)| goal)
+    }
+
+    /// Record one completed iteration without changing a terminal outcome.
+    pub fn record_goal_iteration(&self, id: &str, actor: Actor) -> Result<GoalRecord, StoreError> {
+        let mut goal = self
+            .repository
+            .get_goal(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("goal {id}")))?;
+        if goal.iterations_completed >= goal.iteration_budget {
+            return Err(StoreError::Adapter(
+                "only a goal with remaining budget can record an iteration".into(),
+            ));
+        }
+        goal.iterations_completed = goal.iterations_completed.saturating_add(1);
+        goal.updated_at = now()?;
+        self.repository.update_goal(goal, actor)
+    }
+
+    /// Mark an active goal complete or blocked with required evidence text.
+    pub fn update_goal_status(
+        &self,
+        id: &str,
+        status: GoalStatus,
+        summary: &str,
+        blocked_reason: &str,
+        actor: Actor,
+    ) -> Result<GoalRecord, StoreError> {
+        let mut goal = self
+            .repository
+            .get_goal(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("goal {id}")))?;
+        if goal.status != GoalStatus::Active {
+            return Err(StoreError::Adapter(
+                "terminal goals cannot be updated".into(),
+            ));
+        }
+        goal.status = status;
+        goal.summary = summary.into();
+        goal.blocked_reason = if status == GoalStatus::Blocked {
+            blocked_reason.into()
+        } else {
+            String::new()
+        };
+        goal.updated_at = now()?;
+        self.repository.update_goal(goal, actor)
+    }
+
     /// Canonical repository for bounded query surfaces.
     pub fn repository(&self) -> Arc<dyn WorkRepository> {
         Arc::clone(&self.repository)
@@ -1104,5 +1382,110 @@ mod tests {
         let reopened = EventSourcedWorkRepository::new(journal);
         assert_eq!(reopened.get_plan(&draft.id).expect("get"), Some(executed));
         assert_eq!(edited.content, "# Updated plan");
+    }
+
+    #[test]
+    fn goals_reconstruct_enforce_budget_and_preserve_terminal_evidence() {
+        let (journal, repository, service) = fixture();
+        let goal = service
+            .create_goal(
+                "session-1",
+                "Complete the Rust transition",
+                2,
+                None,
+                user_actor(),
+            )
+            .expect("create");
+        let first = service
+            .record_goal_iteration(&goal.id, user_actor())
+            .expect("iteration");
+        assert_eq!(first.iterations_completed, 1);
+        let complete = service
+            .update_goal_status(
+                &goal.id,
+                GoalStatus::Complete,
+                "Transition verified.",
+                "",
+                user_actor(),
+            )
+            .expect("complete");
+        let final_goal = service
+            .record_goal_iteration(&goal.id, user_actor())
+            .expect("terminal iteration");
+        assert_eq!(final_goal.status, GoalStatus::Complete);
+        assert_eq!(final_goal.iterations_completed, 2);
+        assert_eq!(final_goal.summary, "Transition verified.");
+        assert!(
+            service
+                .record_goal_iteration(&goal.id, user_actor())
+                .is_err()
+        );
+        assert!(
+            service
+                .update_goal_status(&goal.id, GoalStatus::Blocked, "", "late", user_actor(),)
+                .is_err()
+        );
+        assert_eq!(
+            repository
+                .list_goals(Some("session-1"), Some(GoalStatus::Complete), 10)
+                .expect("list"),
+            vec![final_goal.clone()]
+        );
+        let reopened = EventSourcedWorkRepository::new(journal);
+        assert_eq!(reopened.get_goal(&goal.id).expect("get"), Some(final_goal));
+        assert_eq!(complete.iterations_completed, 1);
+    }
+
+    #[test]
+    fn approved_plan_is_atomically_consumed_by_only_one_goal() {
+        let (journal, repository, service) = fixture();
+        let plan = service
+            .create_plan(
+                "session-1",
+                "Ship Rust",
+                "# Approved",
+                vec![PlanStep {
+                    index: 1,
+                    title: "Verify".into(),
+                    detail: String::new(),
+                    requires_mutation: false,
+                }],
+                user_actor(),
+            )
+            .expect("plan");
+        service
+            .approve_plan(&plan.id, user_actor())
+            .expect("approve");
+        let goal = service
+            .create_goal(
+                "session-1",
+                "Execute approved plan",
+                5,
+                Some(plan.id.clone()),
+                user_actor(),
+            )
+            .expect("goal");
+        let consumed = repository
+            .get_plan(&plan.id)
+            .expect("plan")
+            .expect("record");
+        assert_eq!(consumed.status, PlanStatus::Executed);
+        assert_eq!(consumed.executed_run_id.as_deref(), Some(goal.id.as_str()));
+        assert_eq!(goal.source_plan_id.as_deref(), Some(plan.id.as_str()));
+        assert!(
+            service
+                .create_goal(
+                    "session-1",
+                    "Duplicate",
+                    5,
+                    Some(plan.id.clone()),
+                    user_actor(),
+                )
+                .is_err()
+        );
+        let plan_events = journal
+            .read_stream(&format!("plan:{}", plan.id))
+            .expect("plan events");
+        assert_eq!(plan_events.last().expect("event").event_type, PLAN_EXECUTED);
     }
 }

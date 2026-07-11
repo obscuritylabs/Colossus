@@ -7,11 +7,11 @@ use colossus_context::{ContextConfig, ContextService, EventSourcedContextReposit
 use colossus_contracts::{
     Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, DecisionOutcome,
     DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
-    ExecutionContext, FilesystemGrant, KeyDecision, MemoryRecord, MemoryScope, MemoryStatus,
-    NewEvent, PlanRecord, PlanStatus, PlanStep, PreparedContext, ProjectionStatus,
-    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
-    QuarantinedEffectResult, SessionMessage, SessionSummary, TaskRecord, TaskStatus, ToolCall,
-    ToolResult, ToolSpec,
+    ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunResult, GoalStatus,
+    KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, NewEvent, PlanRecord, PlanStatus,
+    PlanStep, PreparedContext, ProjectionStatus, ProviderModelInfo, ProviderReadiness,
+    ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, SessionMessage,
+    SessionSummary, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -54,7 +54,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -767,6 +767,24 @@ enum WorkOperation {
     PlanApprove {
         id: String,
     },
+    GoalCreate {
+        session_id: String,
+        objective: String,
+        iteration_budget: u16,
+        source_plan_id: Option<String>,
+    },
+    GoalShow {
+        id: String,
+    },
+    GoalUpdate {
+        id: String,
+        status: GoalStatus,
+        summary: String,
+        blocked_reason: String,
+    },
+    GoalIteration {
+        id: String,
+    },
 }
 
 impl WorkOperation {
@@ -783,6 +801,10 @@ impl WorkOperation {
             Self::PlanCreate { .. } => "plan.create",
             Self::PlanShow { .. } => "plan.show",
             Self::PlanApprove { .. } => "plan.approve_request",
+            Self::GoalCreate { .. } => "goal.create",
+            Self::GoalShow { .. } => "goal.show",
+            Self::GoalUpdate { .. } => "goal.update",
+            Self::GoalIteration { .. } => "goal.iteration.record",
         }
     }
 
@@ -792,13 +814,17 @@ impl WorkOperation {
             | Self::TaskList { session_id, .. }
             | Self::DecisionCreate { session_id, .. }
             | Self::DecisionList { session_id, .. }
-            | Self::PlanCreate { session_id, .. } => session_id,
+            | Self::PlanCreate { session_id, .. }
+            | Self::GoalCreate { session_id, .. } => session_id,
             Self::TaskUpdate { id, .. }
             | Self::DecisionUpdate { id, .. }
             | Self::DecisionArchive { id }
             | Self::DecisionSupersede { id, .. }
             | Self::PlanShow { id }
-            | Self::PlanApprove { id } => id,
+            | Self::PlanApprove { id }
+            | Self::GoalShow { id }
+            | Self::GoalUpdate { id, .. }
+            | Self::GoalIteration { id } => id,
         }
     }
 }
@@ -1145,6 +1171,10 @@ impl Runtime {
                 "plan.create".to_owned(),
                 "plan.show".to_owned(),
                 "plan.approve_request".to_owned(),
+                "goal.create".to_owned(),
+                "goal.show".to_owned(),
+                "goal.update".to_owned(),
+                "goal.iteration.record".to_owned(),
                 "memory.create".to_owned(),
                 "memory.update".to_owned(),
                 "memory.archive".to_owned(),
@@ -1172,8 +1202,14 @@ impl Runtime {
             limit: config.memory.retrieval_limit,
             repository_id: repository_id.clone(),
         });
+        let mut active_tools = config.agent.tools.clone();
+        for goal_tool in ["goal.show", "goal.update"] {
+            if !active_tools.iter().any(|name| name == goal_tool) {
+                active_tools.push(goal_tool.into());
+            }
+        }
         let tool_registry: Arc<dyn ToolRegistry> =
-            Arc::new(StaticToolRegistry::builtins(&config.agent.tools)?);
+            Arc::new(StaticToolRegistry::builtins(&active_tools)?);
         let model_provider: Arc<dyn ModelProvider> = Arc::new(GatewayModelProvider {
             gateway: Arc::clone(&gateway),
             providers: Arc::clone(&providers),
@@ -1367,7 +1403,8 @@ impl Runtime {
             | WorkOperation::TaskList { session_id, .. }
             | WorkOperation::DecisionCreate { session_id, .. }
             | WorkOperation::DecisionList { session_id, .. }
-            | WorkOperation::PlanCreate { session_id, .. } => session_id.clone(),
+            | WorkOperation::PlanCreate { session_id, .. }
+            | WorkOperation::GoalCreate { session_id, .. } => session_id.clone(),
             WorkOperation::TaskUpdate { id, .. } => {
                 self.work
                     .get_task(id)?
@@ -1388,6 +1425,14 @@ impl Runtime {
                     .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?
                     .session_id
             }
+            WorkOperation::GoalShow { id }
+            | WorkOperation::GoalUpdate { id, .. }
+            | WorkOperation::GoalIteration { id } => {
+                self.work
+                    .get_goal(id)?
+                    .ok_or_else(|| StoreError::NotFound(format!("goal {id}")))?
+                    .session_id
+            }
         };
         let mut request = effect_request(
             terminal_actor(),
@@ -1398,6 +1443,17 @@ impl Runtime {
         );
         request.capabilities = vec![action.into()];
         request.context.session_id = Some(session_id);
+        match &mutation {
+            WorkOperation::GoalCreate { source_plan_id, .. } => {
+                request.context.plan_id = source_plan_id.clone();
+            }
+            WorkOperation::GoalShow { id }
+            | WorkOperation::GoalUpdate { id, .. }
+            | WorkOperation::GoalIteration { id } => {
+                request.context.goal_id = Some(id.clone());
+            }
+            _ => {}
+        }
         let result = self
             .gateway
             .execute(request, self.work_executor.as_ref())
@@ -1553,6 +1609,23 @@ impl Runtime {
     ) -> Result<Vec<PlanRecord>, RuntimeError> {
         self.work
             .list_plans(session_id, status, limit)
+            .map_err(Into::into)
+    }
+
+    /// Reconstruct one canonical bounded-autonomy goal.
+    pub fn get_goal(&self, id: &str) -> Result<Option<GoalRecord>, RuntimeError> {
+        self.work.get_goal(id).map_err(Into::into)
+    }
+
+    /// List bounded canonical goals.
+    pub fn list_goals(
+        &self,
+        session_id: Option<&str>,
+        status: Option<GoalStatus>,
+        limit: usize,
+    ) -> Result<Vec<GoalRecord>, RuntimeError> {
+        self.work
+            .list_goals(session_id, status, limit)
             .map_err(Into::into)
     }
 
@@ -2003,6 +2076,103 @@ impl Runtime {
             )
             .await
             .map_err(Into::into)
+    }
+
+    /// Run bounded autonomous iterations using the normal agent, session, policy, and tools.
+    pub async fn run_goal(
+        &self,
+        role: &str,
+        objective: &str,
+        session_id: &str,
+        max_iterations: u16,
+        source_plan_id: Option<&str>,
+    ) -> Result<GoalRunResult, RuntimeError> {
+        if !(1..=50).contains(&max_iterations) {
+            return Err(RuntimeError::Config(
+                "goal iterations must be in 1..=50".into(),
+            ));
+        }
+        let started = Instant::now();
+        let objective = if let Some(plan_id) = source_plan_id {
+            let plan = self
+                .work
+                .get_plan(plan_id)?
+                .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+            if plan.session_id != session_id || plan.status != PlanStatus::Approved {
+                return Err(RuntimeError::Config(
+                    "goal handoff requires an approved same-session plan".into(),
+                ));
+            }
+            goal_objective_from_plan(&plan)
+        } else {
+            objective.into()
+        };
+        let goal: GoalRecord = serde_json::from_value(
+            self.execute_work_operation(WorkOperation::GoalCreate {
+                session_id: session_id.into(),
+                objective,
+                iteration_budget: max_iterations,
+                source_plan_id: source_plan_id.map(str::to_owned),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let instructions = format!(
+            "You are Colossus running bounded Goal Mode.\n\nActive goal id: {}\nObjective: {}\n\nWork in bounded, useful steps using normal tools and policy. When genuinely finished, call goal.update with status complete and a concise summary. If meaningful progress requires user input or an external state change, call goal.update with status blocked and a reason. Otherwise leave the goal active for the next iteration.",
+            goal.id, goal.objective
+        );
+        let mut iterations = Vec::new();
+        for iteration in 1..=max_iterations {
+            let current = self
+                .work
+                .get_goal(&goal.id)?
+                .ok_or_else(|| StoreError::NotFound(format!("goal {}", goal.id)))?;
+            if current.status != GoalStatus::Active {
+                break;
+            }
+            let prompt = if iteration == 1 {
+                format!("Start Goal Mode for {}: {}", current.id, current.objective)
+            } else {
+                format!(
+                    "Continue Goal Mode for {}. Objective: {}. Use session history and update the goal only when complete or blocked.",
+                    current.id, current.objective
+                )
+            };
+            let result = self
+                .agent
+                .run_goal_iteration(
+                    role,
+                    &instructions,
+                    &prompt,
+                    self.agent_max_turns,
+                    session_id,
+                    &current.id,
+                    current.source_plan_id.as_deref(),
+                )
+                .await?;
+            iterations.push(GoalIterationResult {
+                iteration,
+                run_id: result.run_id,
+                output: result.output,
+                event_count: result.event_count,
+                elapsed_seconds: result.elapsed_seconds,
+            });
+            self.execute_work_operation(WorkOperation::GoalIteration {
+                id: current.id.clone(),
+            })
+            .await?;
+        }
+        let final_goal = self
+            .work
+            .get_goal(&goal.id)?
+            .ok_or_else(|| StoreError::NotFound(format!("goal {}", goal.id)))?;
+        Ok(GoalRunResult {
+            iteration_budget_exhausted: final_goal.status == GoalStatus::Active
+                && final_goal.iterations_completed >= final_goal.iteration_budget,
+            goal: final_goal,
+            iterations,
+            elapsed_seconds: started.elapsed().as_secs_f64(),
+        })
     }
 
     /// Credential-free, network-free smoke provider routed through policy and journal.
@@ -2990,6 +3160,42 @@ impl ToolExecutor for GatewayToolExecutor {
                 )
                 .await?
             }
+            "goal.show" => {
+                let id = context.goal_id.clone().ok_or_else(|| {
+                    ToolError::Denied(
+                        "goal.show is available only during an active goal run".into(),
+                    )
+                })?;
+                self.execute_work_tool(&call, context, WorkOperation::GoalShow { id })
+                    .await?
+            }
+            "goal.update" => {
+                let id = context.goal_id.clone().ok_or_else(|| {
+                    ToolError::Denied(
+                        "goal.update is available only during an active goal run".into(),
+                    )
+                })?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::GoalUpdate {
+                        id,
+                        status: optional_tool_value(&call, "status")?.ok_or_else(|| {
+                            ToolError::InvalidArguments {
+                                tool: call.name.clone(),
+                                message: "status is required".into(),
+                            }
+                        })?,
+                        summary: optional_tool_string(&call, "summary")?
+                            .unwrap_or_default()
+                            .into(),
+                        blocked_reason: optional_tool_string(&call, "blocked_reason")?
+                            .unwrap_or_default()
+                            .into(),
+                    },
+                )
+                .await?
+            }
             "plan.create" => {
                 let session_id = Self::current_session(&context)?;
                 self.execute_work_tool(
@@ -3444,6 +3650,35 @@ fn bounded_tool_text(text: &str, max_bytes: usize) -> String {
     text[..end].into()
 }
 
+fn goal_objective_from_plan(plan: &PlanRecord) -> String {
+    let mut objective = format!(
+        "Execute approved plan {}.\n\nOriginal request:\n{}",
+        plan.id, plan.prompt
+    );
+    if !plan.content.trim().is_empty() {
+        objective.push_str("\n\nApproved plan:\n");
+        objective.push_str(&plan.content);
+    }
+    objective.push_str("\n\nOrdered steps:");
+    for step in &plan.steps {
+        objective.push_str(&format!(
+            "\n{}. {}{}",
+            step.index,
+            step.title,
+            if step.requires_mutation {
+                " [mutation]"
+            } else {
+                ""
+            }
+        ));
+        if !step.detail.is_empty() {
+            objective.push_str(" — ");
+            objective.push_str(&step.detail);
+        }
+    }
+    bounded_tool_text(&objective, 64 * 1024)
+}
+
 fn model_actor(call: &ToolCall) -> Actor {
     Actor {
         actor_type: ActorType::Model,
@@ -3735,7 +3970,8 @@ impl WorkEffectExecutor {
             | WorkOperation::TaskList { session_id, .. }
             | WorkOperation::DecisionCreate { session_id, .. }
             | WorkOperation::DecisionList { session_id, .. }
-            | WorkOperation::PlanCreate { session_id, .. } => session_id.clone(),
+            | WorkOperation::PlanCreate { session_id, .. }
+            | WorkOperation::GoalCreate { session_id, .. } => session_id.clone(),
             WorkOperation::TaskUpdate { id, .. } => {
                 self.repository
                     .get_task(id)
@@ -3748,6 +3984,23 @@ impl WorkEffectExecutor {
                     .get_plan(id)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?
                     .ok_or_else(|| ExecutionError::Failed(format!("plan {id} was not found")))?
+                    .session_id
+            }
+            WorkOperation::GoalShow { id }
+            | WorkOperation::GoalUpdate { id, .. }
+            | WorkOperation::GoalIteration { id } => {
+                let context_goal = request.context.goal_id.as_deref().ok_or_else(|| {
+                    ExecutionError::Failed("goal tools require an active goal context".into())
+                })?;
+                if id != context_goal {
+                    return Err(ExecutionError::Failed(
+                        "goal tool cannot access another active goal".into(),
+                    ));
+                }
+                self.repository
+                    .get_goal(id)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?
+                    .ok_or_else(|| ExecutionError::Failed(format!("goal {id} was not found")))?
                     .session_id
             }
             WorkOperation::DecisionUpdate { id, .. }
@@ -3916,6 +4169,38 @@ impl EffectExecutor for WorkEffectExecutor {
                 }))
             }
             WorkOperation::PlanApprove { id } => work_result(self.service.approve_plan(&id, actor)),
+            WorkOperation::GoalCreate {
+                session_id,
+                objective,
+                iteration_budget,
+                source_plan_id,
+            } => work_result(self.service.create_goal(
+                &session_id,
+                &objective,
+                iteration_budget,
+                source_plan_id,
+                actor,
+            )),
+            WorkOperation::GoalShow { id } => {
+                work_result(self.repository.get_goal(&id).and_then(|goal| {
+                    goal.ok_or_else(|| StoreError::NotFound(format!("goal {id}")))
+                }))
+            }
+            WorkOperation::GoalUpdate {
+                id,
+                status,
+                summary,
+                blocked_reason,
+            } => work_result(self.service.update_goal_status(
+                &id,
+                status,
+                &summary,
+                &blocked_reason,
+                actor,
+            )),
+            WorkOperation::GoalIteration { id } => {
+                work_result(self.service.record_goal_iteration(&id, actor))
+            }
         }?;
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
@@ -4037,12 +4322,12 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 mod tests {
     use super::{
         GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, ProviderProfileConfig,
-        RuntimeConfig, WorkEffectExecutor, recover_unknown_effects,
+        RuntimeConfig, WorkEffectExecutor, goal_objective_from_plan, recover_unknown_effects,
     };
     use colossus_contracts::{
-        Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, MemoryScope,
-        MemoryStatus, ModelRequest, NewEvent, PlanStatus, ProviderEvent, ProviderRoute,
-        ProviderTurn, TaskStatus, ToolCall,
+        Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, GoalStatus,
+        MemoryScope, MemoryStatus, ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep,
+        ProviderEvent, ProviderRoute, ProviderTurn, TaskStatus, ToolCall,
     };
     use colossus_ports::{EventJournal, ModelProvider, ModelProviderError, ToolExecutor};
     use colossus_provider::ProviderKind;
@@ -4077,6 +4362,31 @@ workflows:
 surprise: true
 "#;
         assert!(RuntimeConfig::from_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn approved_plan_goal_objective_preserves_contract_and_mutation_labels() {
+        let objective = goal_objective_from_plan(&PlanRecord {
+            id: "plan-1".into(),
+            session_id: "session-1".into(),
+            prompt: "Ship Rust".into(),
+            status: PlanStatus::Approved,
+            content: "# Plan".into(),
+            steps: vec![PlanStep {
+                index: 1,
+                title: "Implement".into(),
+                detail: "Use the gateway".into(),
+                requires_mutation: true,
+            }],
+            created_at: "created".into(),
+            updated_at: "updated".into(),
+            approved_at: Some("approved".into()),
+            executed_run_id: None,
+        });
+        assert!(objective.contains("Execute approved plan plan-1."));
+        assert!(objective.contains("Original request:\nShip Rust"));
+        assert!(objective.contains("Approved plan:\n# Plan"));
+        assert!(objective.contains("1. Implement [mutation] — Use the gateway"));
     }
 
     #[test]
@@ -5430,6 +5740,151 @@ surprise: true
         assert_eq!(
             records[0].scope,
             MemoryScope::Session(result.session_id.expect("session id"))
+        );
+    }
+
+    #[tokio::test]
+    async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        sessions
+            .create_session(
+                "session-goal",
+                Some("goal"),
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "test-user".into(),
+                },
+            )
+            .expect("session");
+        let repository: Arc<dyn colossus_ports::WorkRepository> = Arc::new(
+            colossus_work::EventSourcedWorkRepository::new(Arc::clone(&journal)),
+        );
+        let service = Arc::new(colossus_work::WorkService::new(
+            Arc::clone(&repository),
+            Arc::clone(&sessions),
+        ));
+        let goal = service
+            .create_goal(
+                "session-goal",
+                "Finish the bounded task",
+                3,
+                None,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "test-user".into(),
+                },
+            )
+            .expect("goal");
+        let work = Arc::new(WorkEffectExecutor {
+            service: Arc::clone(&service),
+            repository: Arc::clone(&repository),
+        });
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("goal.show", DecisionOutcome::Allow)
+                    .with_action("goal.update", DecisionOutcome::Allow),
+            ),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["goal.show".into(), "goal.update".into()]),
+            [15_u8; 32],
+        ));
+        let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: Some(work),
+            memory: None,
+            workspace: std::env::current_dir().expect("cwd"),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        });
+        let provider = Arc::new(WorkScriptedProvider {
+            turns: Mutex::new(VecDeque::from([
+                ProviderTurn {
+                    profile: "scripted".into(),
+                    provider: "test".into(),
+                    model: "test-model".into(),
+                    response_id: None,
+                    events: vec![ProviderEvent::ToolCallRequested {
+                        call_id: "goal-complete".into(),
+                        name: "goal.update".into(),
+                        arguments: json!({
+                            "status": "complete",
+                            "summary": "Bounded task verified.",
+                        }),
+                    }],
+                },
+                ProviderTurn {
+                    profile: "scripted".into(),
+                    provider: "test".into(),
+                    model: "test-model".into(),
+                    response_id: None,
+                    events: vec![ProviderEvent::FinalOutput {
+                        text: "done".into(),
+                    }],
+                },
+            ])),
+            requests: Mutex::new(Vec::new()),
+        });
+        let agent = colossus_agent::AgentService::new(
+            Arc::clone(&journal),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(
+                colossus_tools::StaticToolRegistry::builtins(&[
+                    "goal.show".into(),
+                    "goal.update".into(),
+                ])
+                .expect("tools"),
+            ),
+            executor,
+            sessions,
+        );
+        let result = agent
+            .run_goal_iteration(
+                "primary",
+                "Use goal.update only when done.",
+                "Finish now.",
+                3,
+                "session-goal",
+                &goal.id,
+                None,
+            )
+            .await
+            .expect("goal iteration");
+        assert_eq!(result.output, "done");
+        let completed = repository
+            .get_goal(&goal.id)
+            .expect("goal")
+            .expect("record");
+        assert_eq!(completed.status, GoalStatus::Complete);
+        assert_eq!(completed.summary, "Bounded task verified.");
+        let run_events = journal
+            .read_stream(&format!("run:{}", result.run_id))
+            .expect("run events");
+        assert!(
+            run_events
+                .iter()
+                .all(|event| { event.context.goal_id.as_deref() == Some(goal.id.as_str()) })
+        );
+        assert!(
+            service
+                .update_goal_status(
+                    &goal.id,
+                    GoalStatus::Blocked,
+                    "",
+                    "too late",
+                    Actor {
+                        actor_type: ActorType::User,
+                        id: "test-user".into(),
+                    },
+                )
+                .is_err()
         );
     }
 

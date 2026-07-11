@@ -72,6 +72,17 @@ be consumed by only one run. Model schemas omit the session id, `plan.approve_re
 uses the ordinary approval-proof re-evaluation path, and `plan.show` rechecks canonical
 session ownership before releasing content.
 
+Goal Mode is a bounded loop over the ordinary `colossus-agent` service, not a second
+orchestrator or permission domain. Canonical goals record objective, session, optional
+plan lineage, a 1..=50 iteration budget, completed iterations, terminal evidence, and
+timestamps. Each iteration is a normal session-attached run with goal/plan ids copied
+through `ExecutionContext`. `goal.show` and `goal.update` are removed from ordinary
+provider requests and exposed only when that context names an active goal. Starting a
+goal from an approved plan atomically appends both the plan execution and goal creation,
+so one plan cannot race into multiple autonomous loops.
+The goal objective is rendered from the canonical approved prompt, Markdown, ordered
+steps, and mutation labels rather than accepting a different model-authored handoff.
+
 `colossus-memory` separates canonical lifecycle state from disposable retrieval. Memory
 create/update/archive/supersede events remain authoritative in the encrypted journal.
 Updates append a complete validated next-state record while preserving identity, scope,

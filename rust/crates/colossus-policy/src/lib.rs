@@ -1126,6 +1126,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("task.")
             || request.action.starts_with("decision.")
             || request.action.starts_with("plan.")
+            || request.action.starts_with("goal.")
             || request.action.starts_with("memory.")
             || request.action == "network.http"
         {

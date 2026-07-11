@@ -41,7 +41,7 @@ storage:
     anchor_path: {anchor}
 policy:
   kind: built_in
-  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
+  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, goal.create, goal.show, goal.update, goal.iteration.record, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
   approval_actions: []
   require_post_effect: true
 workflows:
@@ -95,12 +95,14 @@ sandbox:
         String::from_utf8_lossy(&tools.stderr)
     );
     let tools: Value = serde_json::from_slice(&tools.stdout).expect("tool JSON");
-    assert_eq!(tools.as_array().map(Vec::len), Some(4));
+    assert_eq!(tools.as_array().map(Vec::len), Some(6));
     assert_eq!(tools[0]["name"], "echo");
     assert_eq!(tools[0]["effect_action"], Value::Null);
     assert_eq!(tools[1]["name"], "filesystem.list");
     assert_eq!(tools[2]["name"], "filesystem.read");
     assert_eq!(tools[3]["name"], "filesystem.search");
+    assert_eq!(tools[4]["name"], "goal.show");
+    assert_eq!(tools[5]["name"], "goal.update");
 
     let output = run(
         binary,
@@ -245,7 +247,7 @@ sandbox:
         fs::read_to_string(&config)
             .expect("read config")
             .replace(
-                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]",
+                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, goal.create, goal.show, goal.update, goal.iteration.record, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]",
                 "allow_actions: []",
             ),
     )
@@ -422,7 +424,36 @@ sandbox:
     let memories: Value = serde_json::from_slice(&memories.stdout).expect("memories JSON");
     assert_eq!(memories.as_array().map(Vec::len), Some(2));
 
-    let audit = run(binary, &config, &["audit", "show", "--limit", "200"]);
+    let goal = run(
+        binary,
+        &config,
+        &[
+            "goals",
+            "run",
+            "Complete a bounded offline check",
+            "--session",
+            &session_id,
+            "--max-iterations",
+            "2",
+        ],
+    );
+    assert!(
+        goal.status.success(),
+        "{}",
+        String::from_utf8_lossy(&goal.stderr)
+    );
+    let goal: Value = serde_json::from_slice(&goal.stdout).expect("goal JSON");
+    assert_eq!(goal["goal"]["status"], "active");
+    assert_eq!(goal["goal"]["iterations_completed"], 2);
+    assert_eq!(goal["iterations"].as_array().map(Vec::len), Some(2));
+    assert_eq!(goal["iteration_budget_exhausted"], true);
+    let goal_id = goal["goal"]["id"].as_str().expect("goal id");
+    let shown_goal = run(binary, &config, &["goals", "show", goal_id]);
+    assert!(shown_goal.status.success());
+    let shown_goal: Value = serde_json::from_slice(&shown_goal.stdout).expect("shown goal JSON");
+    assert_eq!(shown_goal["id"], goal_id);
+
+    let audit = run(binary, &config, &["audit", "show", "--limit", "1000"]);
     assert!(audit.status.success());
     let events: Vec<Value> = serde_json::from_slice(&audit.stdout).expect("audit JSON");
     let event_types = events
@@ -439,4 +470,6 @@ sandbox:
     assert!(event_types.contains(&"decision.superseded.v1"));
     assert!(event_types.contains(&"memory.created.v1"));
     assert!(event_types.contains(&"memory.superseded.v1"));
+    assert!(event_types.contains(&"goal.created.v1"));
+    assert!(event_types.contains(&"goal.updated.v1"));
 }

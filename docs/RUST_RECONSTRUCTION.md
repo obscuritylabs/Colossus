@@ -125,6 +125,13 @@ obsolete Go launcher.
   `plan.create/show/approve_request` tools, canonical cross-session checks, and normal
   approval-proof re-evaluation. CLI list/show/create/approve and `/plans` inspect the
   same repository.
+- Bounded durable Goal Mode using normal agent runs and the same session, context,
+  provider, tool, policy, approval, sandbox, and audit paths. Goals reconstruct active,
+  complete, or blocked state; enforce 1..=50 iteration budgets; preserve per-iteration
+  run ids/output/timing; expose runtime-injected `goal.show/update` only on goal turns;
+  stop on terminal state or errors; and report budget exhaustion without claiming
+  completion. Approved plan consumption and linked goal creation are atomic and
+  single-use. CLI `goals run/list/show` and REPL `/goal`/`/goals` use the same service.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
 
@@ -148,6 +155,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- c
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tasks list --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- decisions list --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- plans list --session SESSION_ID
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- goals run 'Finish the scoped task' --session SESSION_ID --max-iterations 5
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories search 'query' --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories index status
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
@@ -192,7 +200,7 @@ cutover. The following planned work remains:
   execution, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
-- Goals, durable subagents, research/citations, skills/resources, telemetry, packs,
+- Durable subagents, research/citations, skills/resources, telemetry, packs,
   integrations, offline bundles, and the rest of P1/P2.
 - Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
   runtime matrix, and

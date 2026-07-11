@@ -925,7 +925,7 @@ A reconstruction is complete only when all applicable checks pass:
 - [ ] Automatic compaction is visible, preserves raw history, and has deterministic
   fallback.
 - [ ] Plan Mode cannot mutate; approved plans can execute once or enter Goal Mode.
-- [ ] Goal Mode stops correctly on complete, blocked, error, or budget exhaustion.
+- [x] Goal Mode stops correctly on complete, blocked, error, or budget exhaustion.
 - [ ] Subagents respect configured concurrency, cannot delegate recursively, and can be
   cancelled or resumed after interruption.
 - [ ] Research records planned queries, lane decisions, source labels, worker progress,
