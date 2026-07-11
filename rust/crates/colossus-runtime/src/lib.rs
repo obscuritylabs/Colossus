@@ -10,9 +10,9 @@ use colossus_contracts::{
     ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunResult, GoalStatus,
     KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, NewEvent, PlanRecord, PlanStatus,
     PlanStep, PreparedContext, ProjectionStatus, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, SessionMessage,
-    SessionSummary, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
-    ToolCall, ToolResult, ToolSpec,
+    ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, ResearchClaim,
+    ResearchRun, ResearchSource, SessionMessage, SessionSummary, SubagentJob, SubagentQueueStatus,
+    SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -29,14 +29,15 @@ use colossus_policy::{
 use colossus_ports::{
     ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EventJournal, KeyProvider,
     MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
-    PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError, ToolError, ToolExecutor,
-    ToolRegistry, WorkRepository, WorkflowRepository,
+    PolicyDecisionPoint, ProjectionStore, ResearchRepository, SessionRepository, StoreError,
+    ToolError, ToolExecutor, ToolRegistry, WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
     ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind, ProviderProfile,
     ProviderRegistry,
 };
+use colossus_research::EventSourcedResearchRepository;
 use colossus_sandbox::{
     FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig,
     SandboxProcessExecutor, sandbox_doctor,
@@ -991,6 +992,7 @@ pub struct Runtime {
     work: Arc<dyn WorkRepository>,
     work_executor: Arc<WorkEffectExecutor>,
     memory_executor: Arc<MemoryEffectExecutor>,
+    research: Arc<dyn ResearchRepository>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
@@ -1094,6 +1096,8 @@ impl Runtime {
             memory_index,
             Arc::clone(&sessions),
         ));
+        let research: Arc<dyn ResearchRepository> =
+            Arc::new(EventSourcedResearchRepository::new(Arc::clone(&journal)));
         if !journal.is_recovery_mode() {
             recover_unknown_effects(journal.as_ref())?;
         }
@@ -1369,6 +1373,7 @@ impl Runtime {
             work,
             work_executor,
             memory_executor,
+            research,
             policy,
             gateway,
             providers,
@@ -1404,6 +1409,37 @@ impl Runtime {
     /// Current session snapshots served by the disposable session projection.
     pub fn session_repository(&self) -> Arc<dyn SessionRepository> {
         Arc::clone(&self.sessions)
+    }
+
+    /// Canonical research repository for embedded read-only inspection surfaces.
+    pub fn research_repository(&self) -> Arc<dyn ResearchRepository> {
+        Arc::clone(&self.research)
+    }
+
+    /// Reconstruct one canonical research run.
+    pub fn get_research_run(&self, id: &str) -> Result<Option<ResearchRun>, RuntimeError> {
+        self.research.get_run(id).map_err(Into::into)
+    }
+
+    /// List bounded canonical research runs.
+    pub fn list_research_runs(
+        &self,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ResearchRun>, RuntimeError> {
+        self.research
+            .list_runs(session_id, limit)
+            .map_err(Into::into)
+    }
+
+    /// List canonical evidence sources for one run.
+    pub fn research_sources(&self, run_id: &str) -> Result<Vec<ResearchSource>, RuntimeError> {
+        self.research.list_sources(run_id).map_err(Into::into)
+    }
+
+    /// List canonical source-backed claims for one run.
+    pub fn research_claims(&self, run_id: &str) -> Result<Vec<ResearchClaim>, RuntimeError> {
+        self.research.list_claims(run_id).map_err(Into::into)
     }
 
     /// Create a durable empty session.
@@ -2029,6 +2065,7 @@ impl Runtime {
                 "memory": "event-journal:memory-v1",
                 "memory_projection": "redb-projection:memory-v1",
                 "memory_index": "tantivy-or-degraded",
+                "research": "event-journal:research-runs-v1+sources-v1+claims-v1",
                 "workflows": "event-journal+redb-projection:workflows-v1",
             }
         }))

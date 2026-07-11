@@ -819,12 +819,16 @@ dependencies = [
 name = "colossus-research"
 version = "0.6.0-alpha.1"
 dependencies = [
+ "async-trait",
  "colossus-contracts",
  "colossus-ports",
+ "colossus-session",
  "colossus-testkit",
  "serde",
  "serde_json",
  "time",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -842,6 +846,7 @@ dependencies = [
  "colossus-ports",
  "colossus-projection",
  "colossus-provider",
+ "colossus-research",
  "colossus-sandbox",
  "colossus-session",
  "colossus-testkit",

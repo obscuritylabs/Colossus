@@ -2,13 +2,17 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, EventClassification, ExecutionContext, NewEvent, ResearchClaim, ResearchLaneStatus,
-    ResearchRun, ResearchSource, ResearchStatus,
+    Actor, ActorType, EventClassification, ExecutionContext, ModelMessage, ModelMessageRole,
+    NewEvent, ResearchClaim, ResearchDepth, ResearchLane, ResearchLaneStatus, ResearchRun,
+    ResearchSource, ResearchSourceKind, ResearchStatus,
 };
-use colossus_ports::{EventJournal, ResearchRepository, StoreError};
+use colossus_ports::{EventJournal, ResearchRepository, SessionRepository, StoreError};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeMap, collections::BTreeSet, sync::Arc};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use uuid::Uuid;
 
 const RUN_CREATED: &str = "research.run_created.v1";
 const RUN_UPDATED: &str = "research.run_updated.v1";
@@ -468,16 +472,366 @@ fn citation_labels(report: &str) -> BTreeSet<String> {
     labels
 }
 
+/// Bounded uncommitted evidence returned by a policy-bound collector adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResearchSourceDraft {
+    /// Evidence lane that produced the draft.
+    pub kind: ResearchSourceKind,
+    /// Human-readable title.
+    pub title: String,
+    /// Repository path or external URI.
+    pub uri: String,
+    /// Released bounded evidence content.
+    pub content: String,
+    /// Bounded non-secret metadata.
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Known collector outcome. Denial and unavailability become limitations, not lost work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResearchCollection {
+    /// Durable lane outcome.
+    pub status: ResearchLaneStatus,
+    /// Bounded human-readable outcome or limitation.
+    pub message: String,
+    /// Released candidate evidence, ignored unless the status is completed.
+    pub sources: Vec<ResearchSourceDraft>,
+}
+
+/// Replaceable evidence collector. Implementations must cross the effect gateway themselves.
+#[async_trait]
+pub trait ResearchCollector: Send + Sync {
+    /// Collect bounded released evidence for one query and lane.
+    async fn collect(
+        &self,
+        run: &ResearchRun,
+        kind: ResearchSourceKind,
+        query: &str,
+        limit: usize,
+    ) -> ResearchCollection;
+}
+
+/// Bounds for one durable research orchestration run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResearchLimits {
+    /// Canonical source ceiling.
+    pub max_sources: usize,
+    /// Maximum independent query/lane collection jobs.
+    pub max_workers: usize,
+}
+
+impl Default for ResearchLimits {
+    fn default() -> Self {
+        Self {
+            max_sources: 20,
+            max_workers: 4,
+        }
+    }
+}
+
+/// Durable four-phase research orchestration over replaceable collectors.
+pub struct ResearchService {
+    repository: Arc<dyn ResearchRepository>,
+    sessions: Arc<dyn SessionRepository>,
+    collector: Arc<dyn ResearchCollector>,
+    limits: ResearchLimits,
+}
+
+impl ResearchService {
+    /// Compose canonical state with a gateway-bound collector.
+    pub fn new(
+        repository: Arc<dyn ResearchRepository>,
+        sessions: Arc<dyn SessionRepository>,
+        collector: Arc<dyn ResearchCollector>,
+        limits: ResearchLimits,
+    ) -> Result<Self, StoreError> {
+        if !(1..=100).contains(&limits.max_sources) || !(1..=16).contains(&limits.max_workers) {
+            return Err(StoreError::Adapter(
+                "research limits require max_sources 1..=100 and max_workers 1..=16".into(),
+            ));
+        }
+        Ok(Self {
+            repository,
+            sessions,
+            collector,
+            limits,
+        })
+    }
+
+    /// Execute planning, collection, claim extraction, and cited synthesis durably.
+    pub async fn run(
+        &self,
+        session_id: &str,
+        question: &str,
+        depth: ResearchDepth,
+        source_kinds: Vec<ResearchSourceKind>,
+        actor: Actor,
+    ) -> Result<ResearchRun, StoreError> {
+        if self.sessions.get_session(session_id)?.is_none() {
+            return Err(StoreError::NotFound(format!("session {session_id}")));
+        }
+        let timestamp = now()?;
+        let mut run = ResearchRun {
+            id: Uuid::now_v7().to_string(),
+            session_id: session_id.into(),
+            question: question.trim().into(),
+            depth,
+            source_kinds,
+            status: ResearchStatus::Running,
+            queries: Vec::new(),
+            lanes: Vec::new(),
+            limitations: Vec::new(),
+            report: String::new(),
+            error: String::new(),
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+            completed_at: None,
+        };
+        self.repository.create_run(run.clone(), actor.clone())?;
+        run.queries = plan_queries(&run.question, depth);
+        run.updated_at = now()?;
+        self.repository.update_run(run.clone(), actor.clone())?;
+
+        let mut worker_count = 0_usize;
+        for query in run.queries.clone() {
+            for kind in run.source_kinds.clone() {
+                if worker_count >= self.limits.max_workers
+                    || self.repository.list_sources(&run.id)?.len() >= self.limits.max_sources
+                {
+                    let message = "bounded research worker or source budget exhausted".to_owned();
+                    run.limitations.push(format!("{kind:?}: {message}"));
+                    run.lanes.push(lane(
+                        &query,
+                        kind,
+                        ResearchLaneStatus::Skipped,
+                        &message,
+                        0,
+                    )?);
+                    continue;
+                }
+                worker_count = worker_count.saturating_add(1);
+                let remaining = self
+                    .limits
+                    .max_sources
+                    .saturating_sub(self.repository.list_sources(&run.id)?.len());
+                let collection = self.collector.collect(&run, kind, &query, remaining).await;
+                let mut saved = 0_usize;
+                if collection.status == ResearchLaneStatus::Completed {
+                    for draft in collection.sources.into_iter().take(remaining) {
+                        if draft.kind != kind {
+                            continue;
+                        }
+                        if !draft.uri.is_empty()
+                            && self
+                                .repository
+                                .list_sources(&run.id)?
+                                .iter()
+                                .any(|source| source.uri == draft.uri)
+                        {
+                            continue;
+                        }
+                        let index = self
+                            .repository
+                            .list_sources(&run.id)?
+                            .len()
+                            .saturating_add(1);
+                        let source = ResearchSource {
+                            id: Uuid::now_v7().to_string(),
+                            run_id: run.id.clone(),
+                            label: format!("R{index}"),
+                            kind,
+                            title: draft.title,
+                            uri: draft.uri,
+                            content: draft.content,
+                            query: query.clone(),
+                            metadata: draft.metadata,
+                            created_at: now()?,
+                        };
+                        self.repository.add_source(source, actor.clone())?;
+                        saved = saved.saturating_add(1);
+                    }
+                } else {
+                    run.limitations
+                        .push(format!("{kind:?}: {}", collection.message));
+                }
+                run.lanes.push(lane(
+                    &query,
+                    kind,
+                    collection.status,
+                    &collection.message,
+                    saved,
+                )?);
+                run.updated_at = now()?;
+                self.repository.update_run(run.clone(), actor.clone())?;
+            }
+        }
+
+        let sources = self.repository.list_sources(&run.id)?;
+        for source in &sources {
+            if let Some(text) = first_evidence_sentence(&source.content) {
+                self.repository.add_claim(
+                    ResearchClaim {
+                        id: Uuid::now_v7().to_string(),
+                        run_id: run.id.clone(),
+                        text,
+                        source_labels: vec![source.label.clone()],
+                        created_at: now()?,
+                    },
+                    actor.clone(),
+                )?;
+            }
+        }
+        let claims = self.repository.list_claims(&run.id)?;
+        run.report = synthesize(&run, &sources, &claims);
+        run.status = ResearchStatus::Completed;
+        run.updated_at = now()?;
+        run.completed_at = Some(run.updated_at.clone());
+        self.repository.update_run(run.clone(), actor.clone())?;
+        self.sessions.append_message(
+            session_id,
+            &run.id,
+            ModelMessage {
+                role: ModelMessageRole::Assistant,
+                content: run.report.clone(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            },
+            Actor {
+                actor_type: ActorType::System,
+                id: "research-synthesizer".into(),
+            },
+        )?;
+        Ok(run)
+    }
+}
+
+fn now() -> Result<String, StoreError> {
+    OffsetDateTime::now_utc().format(&Rfc3339).map_err(adapter)
+}
+
+fn plan_queries(question: &str, depth: ResearchDepth) -> Vec<String> {
+    let count = match depth {
+        ResearchDepth::Quick => 1,
+        ResearchDepth::Standard => 2,
+        ResearchDepth::Deep => 3,
+    };
+    [
+        question.to_owned(),
+        format!("{question} implementation"),
+        format!("{question} tests limitations"),
+    ]
+    .into_iter()
+    .take(count)
+    .collect()
+}
+
+fn lane(
+    query: &str,
+    kind: ResearchSourceKind,
+    status: ResearchLaneStatus,
+    message: &str,
+    source_count: usize,
+) -> Result<ResearchLane, StoreError> {
+    Ok(ResearchLane {
+        id: Uuid::now_v7().to_string(),
+        query: query.into(),
+        kind,
+        status,
+        message: message.into(),
+        source_count,
+        updated_at: now()?,
+    })
+}
+
+fn first_evidence_sentence(content: &str) -> Option<String> {
+    content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(2_000).collect())
+}
+
+fn synthesize(run: &ResearchRun, sources: &[ResearchSource], claims: &[ResearchClaim]) -> String {
+    let mut report = format!("# Research: {}\n\n", run.question);
+    if claims.is_empty() {
+        report.push_str("No source-backed claims were available.\n");
+    } else {
+        report.push_str("## Findings\n\n");
+        for claim in claims {
+            let citations = claim
+                .source_labels
+                .iter()
+                .map(|label| format!("[{label}]"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            report.push_str(&format!("- {} {}\n", claim.text, citations));
+        }
+    }
+    if !run.limitations.is_empty() {
+        report.push_str("\n## Limitations\n\n");
+        for limitation in &run.limitations {
+            report.push_str(&format!("- {limitation}\n"));
+        }
+    }
+    if !sources.is_empty() {
+        report.push_str("\n## Sources\n\n");
+        for source in sources {
+            report.push_str(&format!(
+                "- [{}] {} — {}\n",
+                source.label, source.title, source.uri
+            ));
+        }
+    }
+    report
+}
+
 #[cfg(test)]
 mod tests {
-    use super::EventSourcedResearchRepository;
+    use super::{
+        EventSourcedResearchRepository, ResearchCollection, ResearchCollector, ResearchLimits,
+        ResearchService, ResearchSourceDraft,
+    };
+    use async_trait::async_trait;
     use colossus_contracts::{
         Actor, ActorType, ResearchClaim, ResearchDepth, ResearchLane, ResearchLaneStatus,
         ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus,
     };
-    use colossus_ports::ResearchRepository;
+    use colossus_ports::{ResearchRepository, SessionRepository};
+    use colossus_session::EventSourcedSessionRepository;
     use colossus_testkit::InMemoryEventJournal;
     use std::{collections::BTreeMap, sync::Arc};
+
+    struct OfflineCollector;
+
+    #[async_trait]
+    impl ResearchCollector for OfflineCollector {
+        async fn collect(
+            &self,
+            _run: &ResearchRun,
+            kind: ResearchSourceKind,
+            query: &str,
+            _limit: usize,
+        ) -> ResearchCollection {
+            match kind {
+                ResearchSourceKind::Repo => ResearchCollection {
+                    status: ResearchLaneStatus::Completed,
+                    message: "repository evidence released".into(),
+                    sources: vec![ResearchSourceDraft {
+                        kind,
+                        title: "Architecture".into(),
+                        uri: format!("docs/ARCHITECTURE.md#{query}"),
+                        content: format!("Evidence for {query}"),
+                        metadata: BTreeMap::new(),
+                    }],
+                },
+                _ => ResearchCollection {
+                    status: ResearchLaneStatus::Disabled,
+                    message: "adapter is not configured".into(),
+                    sources: Vec::new(),
+                },
+            }
+        }
+    }
 
     fn actor() -> Actor {
         Actor {
@@ -596,5 +950,46 @@ mod tests {
             .update_run(run.clone(), actor())
             .expect("complete");
         assert!(repository.update_run(run, actor()).is_err());
+    }
+
+    #[tokio::test]
+    async fn offline_orchestration_persists_progress_limit_and_session_report() {
+        let journal = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn ResearchRepository> =
+            Arc::new(EventSourcedResearchRepository::new(journal.clone()));
+        let sessions = Arc::new(EventSourcedSessionRepository::new(journal));
+        sessions
+            .create_session("session-1", Some("Research"), actor())
+            .expect("session");
+        let service = ResearchService::new(
+            repository.clone(),
+            sessions.clone(),
+            Arc::new(OfflineCollector),
+            ResearchLimits {
+                max_sources: 2,
+                max_workers: 3,
+            },
+        )
+        .expect("service");
+        let run = service
+            .run(
+                "session-1",
+                "How does audit work?",
+                ResearchDepth::Standard,
+                vec![ResearchSourceKind::Repo, ResearchSourceKind::Web],
+                actor(),
+            )
+            .await
+            .expect("research");
+        assert_eq!(run.status, ResearchStatus::Completed);
+        assert_eq!(run.queries.len(), 2);
+        assert_eq!(run.lanes.len(), 4);
+        assert!(run.limitations.iter().any(|item| item.contains("Web")));
+        assert!(run.report.contains("[R1]"));
+        assert_eq!(repository.list_sources(&run.id).expect("sources").len(), 2);
+        let messages = sessions.list_messages("session-1").expect("messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].run_id, run.id);
+        assert_eq!(messages[0].message.content, run.report);
     }
 }
