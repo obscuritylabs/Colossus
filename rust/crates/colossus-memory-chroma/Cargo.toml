@@ -1,0 +1,26 @@
+[package]
+name = "colossus-memory-chroma"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+colossus-contracts.workspace = true
+colossus-policy.workspace = true
+colossus-ports.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+colossus-testkit = { path = "../colossus-testkit" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

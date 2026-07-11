@@ -15,6 +15,7 @@ members = [
     "crates/colossus-context",
     "crates/colossus-work",
     "crates/colossus-memory",
+    "crates/colossus-memory-chroma",
     "crates/colossus-research",
     "crates/colossus-telemetry",
     "crates/colossus-skills",
@@ -78,6 +79,7 @@ colossus-work = { path = "crates/colossus-work" }
 colossus-domain = { path = "crates/colossus-domain" }
 colossus-journal-redb = { path = "crates/colossus-journal-redb" }
 colossus-memory = { path = "crates/colossus-memory" }
+colossus-memory-chroma = { path = "crates/colossus-memory-chroma" }
 colossus-research = { path = "crates/colossus-research" }
 colossus-telemetry = { path = "crates/colossus-telemetry" }
 colossus-testkit = { path = "crates/colossus-testkit" }

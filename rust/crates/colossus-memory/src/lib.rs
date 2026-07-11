@@ -894,6 +894,11 @@ impl MemoryService {
                 )
             })
             .collect::<Vec<_>>();
+        // A destructive adapter rebuild may fail after clearing external state. Reset the
+        // replay cursor first so the next sync replays every canonical lifecycle event
+        // instead of leaving a partially rebuilt projection at the old journal position.
+        self.index.set_position(0).await?;
+        self.index_position.store(0, Ordering::Release);
         self.index.rebuild(&values).await?;
         let (head, _) = self.journal.head()?;
         self.index.set_position(head).await?;
@@ -907,9 +912,13 @@ impl MemoryService {
         let (head, _) = self.journal.head()?;
         let position = self.index_position.load(Ordering::Acquire);
         let adapter_status = self.index.status().await?;
+        let adapter_ready = adapter_status
+            .get("ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let error = self.last_index_error.lock().map_err(adapter)?.clone();
         Ok(json!({
-            "ready": error.is_none() && position == head,
+            "ready": adapter_ready && error.is_none() && position == head,
             "position": position,
             "journal_head": head,
             "lag": head.saturating_sub(position),
@@ -1031,7 +1040,10 @@ mod tests {
     use colossus_session::EventSourcedSessionRepository;
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    };
     use tempfile::tempdir;
 
     fn actor() -> Actor {
@@ -1242,6 +1254,10 @@ mod tests {
         let index: Arc<dyn MemoryIndex> =
             Arc::new(UnavailableMemoryIndex::new("index unavailable"));
         let service = MemoryService::new(journal, repository, index, sessions);
+        assert_eq!(
+            service.index_status().await.expect("empty status")["ready"],
+            false
+        );
         let record = service
             .create(
                 MemoryScope::Global,
@@ -1265,5 +1281,106 @@ mod tests {
         assert_eq!(status["ready"], false);
         assert!(status["lag"].as_u64().is_some_and(|lag| lag > 0));
         assert!(status["last_error"].as_str().is_some());
+    }
+
+    struct FailingRebuildIndex {
+        position: AtomicU64,
+        fail_rebuild: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoryIndex for FailingRebuildIndex {
+        fn position(&self) -> Result<u64, colossus_ports::StoreError> {
+            Ok(self.position.load(Ordering::Acquire))
+        }
+
+        async fn set_position(&self, position: u64) -> Result<(), colossus_ports::StoreError> {
+            self.position.store(position, Ordering::Release);
+            Ok(())
+        }
+
+        async fn upsert(
+            &self,
+            _event_id: &str,
+            _memory_id: &str,
+            _text: &str,
+            _metadata: &serde_json::Value,
+            _embedding: Option<&[f32]>,
+        ) -> Result<(), colossus_ports::StoreError> {
+            Ok(())
+        }
+
+        async fn remove(
+            &self,
+            _event_id: &str,
+            _memory_id: &str,
+        ) -> Result<(), colossus_ports::StoreError> {
+            Ok(())
+        }
+
+        async fn search(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Vec<(String, f32)>, colossus_ports::StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn status(&self) -> Result<serde_json::Value, colossus_ports::StoreError> {
+            Ok(json!({"ready": true, "kind": "failing-rebuild-fixture"}))
+        }
+
+        async fn rebuild(
+            &self,
+            _records: &[(String, String, serde_json::Value)],
+        ) -> Result<(), colossus_ports::StoreError> {
+            if self.fail_rebuild.load(Ordering::Acquire) {
+                Err(colossus_ports::StoreError::Adapter(
+                    "fixture rebuild failed after reset".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_destructive_rebuild_resets_cursor_for_complete_journal_replay() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn SessionRepository> =
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+        let repository: Arc<dyn MemoryRepository> =
+            Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
+        let fixture = Arc::new(FailingRebuildIndex {
+            position: AtomicU64::new(0),
+            fail_rebuild: AtomicBool::new(true),
+        });
+        let index: Arc<dyn MemoryIndex> = fixture.clone();
+        let service = MemoryService::new(journal, repository, index, sessions);
+        service
+            .create(
+                MemoryScope::Global,
+                "fact",
+                0.9,
+                "Replay every canonical event",
+                "rebuild recovery test",
+                None,
+                actor(),
+            )
+            .await
+            .expect("create");
+        assert!(fixture.position.load(Ordering::Acquire) > 0);
+        assert!(service.rebuild_index().await.is_err());
+        assert_eq!(fixture.position.load(Ordering::Acquire), 0);
+        assert_eq!(
+            service.index_status().await.expect("lag status")["ready"],
+            false
+        );
+        fixture.fail_rebuild.store(false, Ordering::Release);
+        service.sync_index().await.expect("full replay");
+        assert_eq!(
+            service.index_status().await.expect("ready status")["ready"],
+            true
+        );
     }
 }

@@ -223,8 +223,15 @@ For model, workflow, and subagent callers, repository and session scopes come fr
 runtime context rather than model arguments; targeted operations recheck the canonical
 record after authorization, query results are filtered before applying caller limits,
 and index administration is unavailable. A repository scope is bound to a stable hash
-of the canonical workspace path. Memory injected on a later turn is explicitly labeled
-as background context rather than instructions.
+of the canonical workspace path. Optional Chroma indexing does not weaken this boundary:
+Chroma receives candidate projection data only, and returned ids are reloaded and
+rechecked against canonical journal state before release. Chroma and remote embedding
+requests use separate effect requests, one-use permits, exact-origin obligations,
+bounded request/response bodies, late credential resolution, and quarantine. A denied
+semantic effect cannot open a network connection. Corrupt local replay-position metadata
+degrades the index instead of silently resetting canonical state.
+Memory injected on a later turn is explicitly labeled as background context rather than
+instructions.
 
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
 are validated against the agent allowlist and active tool catalog before provider calls;

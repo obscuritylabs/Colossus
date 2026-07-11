@@ -64,6 +64,41 @@ multiple provider/tool turns, strict schema validation, two bounded malformed-ar
 correction turns, and distinct max-turn exhaustion. Incremental transport streaming
 remains pending.
 
+Tantivy remains the offline memory-index default. To select the disposable Chroma v2
+adapter, add a semantic block while retaining canonical memory in the encrypted journal:
+
+```yaml
+memory:
+  indexEnabled: true
+  indexPath: null
+  retrievalLimit: 6
+  semantic:
+    kind: chroma
+    baseUrl: http://127.0.0.1:8000
+    tenant: default_tenant
+    database: default_database
+    collection: colossus-memory
+    credentialReference: null
+    timeoutMs: 30000
+    positionPath: .colossus/chroma-position.json
+    embedding:
+      kind: local
+      dimensions: 256
+```
+
+Add the Chroma origin to `sandbox.networkDestinations`. Built-in policy must explicitly
+allow the outer `memory.*` operation and the matching
+`memory.index.chroma.upsert|remove|search|status|reset` action. Rebuild reset can instead
+be approval-gated. For a remote embedding profile, replace the nested block with
+`kind: open_ai_compatible`, `profile`, `model`, `baseUrl`, optional
+`credentialReference`, `timeoutMs`, and optional `dimensions`; add its origin and allow
+`embedding.openai.create`. Chroma and embedding requests are separately audited and fail
+closed. `memory index status|sync|rebuild` exposes readiness, journal position, lag, and
+bounded adapter errors; canonical search falls back when the projection is unavailable.
+An unknown Chroma mutation outcome is persisted locally and blocks automatic retries;
+run an operator-authorized `memory index rebuild` to reset and reconstruct the disposable
+projection from canonical journal state.
+
 Fresh config enables only the pure `echo` tool. Configure `agent.maxTurns` in `1..=100`
 and select exact active names with `tools list`. File, process, HTTP, memory, work, and
 subagent tools remain subject to their policy actions and resource obligations.

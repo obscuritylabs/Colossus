@@ -60,7 +60,12 @@ obsolete Go launcher.
   after decisions and before snapshots. Strict model tools derive repository/session
   scope from trusted runtime context, reject cross-scope targets, attribute writes to the
   model actor, and make a memory created on one turn available as non-instructional
-  context on a later turn.
+  context on a later turn. A selectable Chroma v2 projection stores only candidate ids,
+  caller-generated embeddings, bounded text, and bounded metadata. Chroma and
+  OpenAI-compatible embedding HTTP calls each cross the effect gateway; a deterministic
+  local feature-hashing embedding profile remains available offline. Unknown Chroma
+  mutation outcomes are durably marked and block automatic retry until an independently
+  authorized rebuild resets and reconstructs the disposable projection.
 - A composition root and strict YAML config with role-routed echo, OpenAI Responses, and
   OpenAI-compatible provider profiles. Provider generation and model-catalog calls use
   permit-bound adapters, disclose credential references (never values) to policy, resolve
@@ -218,8 +223,11 @@ cutover. The following planned work remains:
 - Extension repositories plus their shared conformance suites. Canonical research runs,
   sources, claims, citations, phase progress, deterministic/model fallbacks, restart
   interruption, repository collection, and configured SearXNG collection are implemented.
-- Chroma semantic candidates and local/OpenAI-compatible embedding providers. Tantivy
-  candidate retrieval, durable replay lag, and canonical re-filtering are implemented.
+- A durable external-work queue that can advance Tantivy and Chroma independently,
+  live Chroma version compatibility, and richer retry/backoff telemetry. Selectable
+  Chroma semantic candidates plus local/OpenAI-compatible embedding profiles are
+  implemented; Tantivy remains the offline default and canonical re-filtering remains
+  mandatory.
 - Podman revalidation of the new proxy-only network path and Windows filesystem/network
   runtime acceptance. Native macOS/Linux isolation, live Docker execution/recovery, OCI
   command and allowlist-proxy hardening, the native allowlist proxy, authenticated

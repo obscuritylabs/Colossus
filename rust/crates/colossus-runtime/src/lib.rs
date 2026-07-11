@@ -35,6 +35,10 @@ use colossus_mcp::{
 use colossus_memory::{
     EventSourcedMemoryRepository, MemoryService, TantivyMemoryIndex, UnavailableMemoryIndex,
 };
+use colossus_memory_chroma::{
+    ChromaExecutor, ChromaMemoryIndex, ChromaProfile, GatewayOpenAiEmbeddingProvider,
+    LocalHashEmbeddingProvider, OpenAiEmbeddingExecutor, OpenAiEmbeddingProfile,
+};
 use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
@@ -42,8 +46,8 @@ use colossus_policy::{
     OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
-    ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EventJournal,
-    ExtensionRepository, KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever,
+    ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EmbeddingProvider,
+    EventJournal, ExtensionRepository, KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever,
     ModelProvider, ModelProviderError, PolicyDecisionPoint, ProjectionStore, ResearchRepository,
     SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
     WorkRepository, WorkflowRepository,
@@ -174,6 +178,9 @@ pub struct MemoryConfig {
     pub index_path: Option<PathBuf>,
     /// Maximum memories composed into one model turn.
     pub retrieval_limit: usize,
+    /// Optional semantic projection. Disabled preserves the offline Tantivy default.
+    #[serde(default)]
+    pub semantic: SemanticMemoryConfig,
 }
 
 impl Default for MemoryConfig {
@@ -182,8 +189,73 @@ impl Default for MemoryConfig {
             index_enabled: true,
             index_path: None,
             retrieval_limit: 6,
+            semantic: SemanticMemoryConfig::default(),
         }
     }
+}
+
+/// Optional semantic memory projection configuration.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum SemanticMemoryConfig {
+    /// Use only the offline Tantivy lexical projection.
+    #[default]
+    Disabled,
+    /// Replace the disposable search projection with Chroma v2.
+    Chroma {
+        /// Chroma server origin. HTTPS is required except for loopback development.
+        base_url: String,
+        /// Existing Chroma tenant identifier.
+        tenant: String,
+        /// Existing Chroma database name.
+        database: String,
+        /// Disposable collection name managed by Colossus.
+        collection: String,
+        /// Optional `env:VARIABLE` token reference.
+        credential_reference: Option<String>,
+        /// Per-operation transport timeout.
+        timeout_ms: u64,
+        /// Optional local file tracking the last applied journal sequence.
+        position_path: Option<PathBuf>,
+        /// Caller-owned embedding profile; Chroma never generates canonical embeddings.
+        embedding: Box<MemoryEmbeddingConfig>,
+    },
+}
+
+/// Embedding provider selected for a Chroma projection.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum MemoryEmbeddingConfig {
+    /// Deterministic offline token and bigram feature hashing.
+    Local {
+        /// Output vector dimensions in 64..=4096.
+        dimensions: usize,
+    },
+    /// OpenAI-compatible `/embeddings` endpoint.
+    OpenAiCompatible {
+        /// Stable profile name used in audit requests.
+        profile: String,
+        /// Embedding model identifier.
+        model: String,
+        /// API base URL, normally ending in `/v1`.
+        base_url: String,
+        /// Optional `env:VARIABLE` credential reference.
+        credential_reference: Option<String>,
+        /// Per-request transport timeout.
+        timeout_ms: u64,
+        /// Optional strict response dimension.
+        dimensions: Option<usize>,
+    },
 }
 
 /// Bounded durable research orchestration configuration.
@@ -651,6 +723,7 @@ impl RuntimeConfig {
                 "memory.retrievalLimit must be in 1..=100".into(),
             ));
         }
+        validate_memory_config(&config.memory, &config.sandbox)?;
         if !(1..=100).contains(&config.research.max_sources)
             || !(1..=16).contains(&config.research.max_workers)
         {
@@ -773,6 +846,73 @@ fn validate_research_search_config(
     Ok(())
 }
 
+fn validate_memory_config(
+    memory: &MemoryConfig,
+    sandbox: &SandboxConfig,
+) -> Result<(), RuntimeError> {
+    let SemanticMemoryConfig::Chroma {
+        base_url,
+        tenant,
+        database,
+        collection,
+        credential_reference,
+        timeout_ms,
+        position_path: _,
+        embedding,
+    } = &memory.semantic
+    else {
+        return Ok(());
+    };
+    if !memory.index_enabled {
+        return Err(RuntimeError::Config(
+            "memory semantic Chroma requires indexEnabled: true".into(),
+        ));
+    }
+    let chroma = ChromaProfile::new(
+        base_url,
+        tenant,
+        database,
+        collection,
+        credential_reference.clone(),
+        *timeout_ms,
+    )?;
+    let chroma_origin = chroma.network_origin()?;
+    if !sandbox.network_destinations.contains(&chroma_origin) {
+        return Err(RuntimeError::Config(format!(
+            "Chroma origin {chroma_origin} is absent from sandbox.networkDestinations"
+        )));
+    }
+    match embedding.as_ref() {
+        MemoryEmbeddingConfig::Local { dimensions } => {
+            let _ = LocalHashEmbeddingProvider::new(*dimensions)?;
+        }
+        MemoryEmbeddingConfig::OpenAiCompatible {
+            profile,
+            model,
+            base_url,
+            credential_reference,
+            timeout_ms,
+            dimensions,
+        } => {
+            let profile = OpenAiEmbeddingProfile::new(
+                profile,
+                model,
+                base_url,
+                credential_reference.clone(),
+                *timeout_ms,
+                *dimensions,
+            )?;
+            let embedding_origin = profile.network_origin()?;
+            if !sandbox.network_destinations.contains(&embedding_origin) {
+                return Err(RuntimeError::Config(format!(
+                    "embedding origin {embedding_origin} is absent from sandbox.networkDestinations"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn valid_oci_image_reference(image: &str) -> bool {
     if let Some(digest) = image.strip_prefix("sha256:") {
         return digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit());
@@ -836,6 +976,90 @@ fn provider_registry(config: &ProvidersConfig) -> Result<ProviderRegistry, Runti
         .map(|(name, profile)| provider_profile(name, profile).map(ProviderExecutor::new))
         .collect::<Result<Vec<_>, _>>()?;
     ProviderRegistry::new(profiles, config.roles.clone()).map_err(Into::into)
+}
+
+fn compose_memory_index(
+    config: &RuntimeConfig,
+    gateway: Arc<EffectGateway>,
+) -> Result<Arc<dyn MemoryIndex>, RuntimeError> {
+    if !config.memory.index_enabled {
+        return Ok(Arc::new(UnavailableMemoryIndex::new(
+            "memory index disabled by configuration",
+        )));
+    }
+    let SemanticMemoryConfig::Chroma {
+        base_url,
+        tenant,
+        database,
+        collection,
+        credential_reference,
+        timeout_ms,
+        position_path,
+        embedding,
+    } = &config.memory.semantic
+    else {
+        let path = config
+            .memory
+            .index_path
+            .clone()
+            .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
+        return Ok(match TantivyMemoryIndex::open(&path) {
+            Ok(index) => Arc::new(index),
+            Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
+                "Tantivy index {} could not open: {error}",
+                path.display()
+            ))),
+        });
+    };
+    let embedding: Arc<dyn EmbeddingProvider> = match embedding.as_ref() {
+        MemoryEmbeddingConfig::Local { dimensions } => {
+            Arc::new(LocalHashEmbeddingProvider::new(*dimensions)?)
+        }
+        MemoryEmbeddingConfig::OpenAiCompatible {
+            profile,
+            model,
+            base_url,
+            credential_reference,
+            timeout_ms,
+            dimensions,
+        } => {
+            let profile = OpenAiEmbeddingProfile::new(
+                profile,
+                model,
+                base_url,
+                credential_reference.clone(),
+                *timeout_ms,
+                *dimensions,
+            )?;
+            let executor = Arc::new(OpenAiEmbeddingExecutor::new(profile.clone()));
+            Arc::new(GatewayOpenAiEmbeddingProvider::new(
+                Arc::clone(&gateway),
+                executor,
+                profile,
+            ))
+        }
+    };
+    let profile = ChromaProfile::new(
+        base_url,
+        tenant,
+        database,
+        collection,
+        credential_reference.clone(),
+        *timeout_ms,
+    )?;
+    let executor = Arc::new(ChromaExecutor::new(profile.clone()));
+    let position_path = position_path
+        .clone()
+        .unwrap_or_else(|| config.storage.path.with_extension("chroma-position.json"));
+    Ok(
+        match ChromaMemoryIndex::open(gateway, executor, embedding, profile, &position_path) {
+            Ok(index) => Arc::new(index),
+            Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
+                "Chroma projection metadata {} could not open: {error}",
+                position_path.display()
+            ))),
+        },
+    )
 }
 
 fn validate_provider_config(config: &RuntimeConfig) -> Result<(), RuntimeError> {
@@ -1704,30 +1928,6 @@ impl Runtime {
         }
         let memory_repository: Arc<dyn MemoryRepository> =
             Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
-        let memory_index: Arc<dyn MemoryIndex> = if config.memory.index_enabled {
-            let path = config
-                .memory
-                .index_path
-                .clone()
-                .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
-            match TantivyMemoryIndex::open(&path) {
-                Ok(index) => Arc::new(index),
-                Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
-                    "Tantivy index {} could not open: {error}",
-                    path.display()
-                ))),
-            }
-        } else {
-            Arc::new(UnavailableMemoryIndex::new(
-                "memory index disabled by configuration",
-            ))
-        };
-        let memory_service = Arc::new(MemoryService::new(
-            Arc::clone(&journal),
-            memory_repository,
-            memory_index,
-            Arc::clone(&sessions),
-        ));
         let research: Arc<dyn ResearchRepository> =
             Arc::new(EventSourcedResearchRepository::new(Arc::clone(&journal)));
         if !journal.is_recovery_mode() {
@@ -1971,6 +2171,12 @@ impl Runtime {
             "memory.index.status".to_owned(),
             "memory.index.sync".to_owned(),
             "memory.index.rebuild".to_owned(),
+            "embedding.openai.create".to_owned(),
+            "memory.index.chroma.upsert".to_owned(),
+            "memory.index.chroma.remove".to_owned(),
+            "memory.index.chroma.search".to_owned(),
+            "memory.index.chroma.status".to_owned(),
+            "memory.index.chroma.reset".to_owned(),
             "research.run".to_owned(),
             "skill.scaffold".to_owned(),
             "skill.inspect".to_owned(),
@@ -2000,6 +2206,13 @@ impl Runtime {
             approvals,
             SafetyKernel::new(known_capabilities),
             permit_key,
+        ));
+        let memory_index = compose_memory_index(config, Arc::clone(&gateway))?;
+        let memory_service = Arc::new(MemoryService::new(
+            Arc::clone(&journal),
+            memory_repository,
+            memory_index,
+            Arc::clone(&sessions),
         ));
         let work_executor = Arc::new(WorkEffectExecutor {
             service: Arc::clone(&work_service),
@@ -7486,11 +7699,11 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 #[cfg(test)]
 mod tests {
     use super::{
-        GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, PackProcessDeclaration,
-        PackProcessExecutor, PackToolEffectInput, ProviderProfileConfig, ResearchSearchConfig,
-        RuntimeConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult,
-        WorkEffectExecutor, goal_objective_from_plan, recover_interrupted_subagents,
-        recover_unknown_effects,
+        GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, MemoryEmbeddingConfig,
+        PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput, ProviderProfileConfig,
+        ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig, SkillEffectExecutor,
+        SkillOperation, SkillScaffoldResult, WorkEffectExecutor, goal_objective_from_plan,
+        recover_interrupted_subagents, recover_unknown_effects,
     };
     use colossus_contracts::{
         Actor, ActorType, CredentialReference, DecisionOutcome, EffectRequest, EventClassification,
@@ -7743,6 +7956,57 @@ surprise: true
         };
         config.sandbox.network_destinations = vec!["http://example.com".into()];
         assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    }
+
+    #[test]
+    fn semantic_memory_requires_enabled_index_secure_origins_and_valid_profiles() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        config.memory.semantic = SemanticMemoryConfig::Chroma {
+            base_url: "http://127.0.0.1:8000".into(),
+            tenant: "default_tenant".into(),
+            database: "default_database".into(),
+            collection: "colossus-memory".into(),
+            credential_reference: None,
+            timeout_ms: 5_000,
+            position_path: None,
+            embedding: Box::new(MemoryEmbeddingConfig::Local { dimensions: 256 }),
+        };
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config
+            .sandbox
+            .network_destinations
+            .push("http://127.0.0.1:8000".into());
+        let yaml = config.to_yaml().expect("YAML");
+        assert!(yaml.contains("baseUrl:"));
+        assert!(yaml.contains("timeoutMs:"));
+        assert!(RuntimeConfig::from_yaml(&yaml).is_ok());
+
+        config.memory.index_enabled = false;
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config.memory.index_enabled = true;
+        config.memory.semantic = SemanticMemoryConfig::Chroma {
+            base_url: "http://127.0.0.1:8000".into(),
+            tenant: "default_tenant".into(),
+            database: "default_database".into(),
+            collection: "colossus-memory".into(),
+            credential_reference: None,
+            timeout_ms: 5_000,
+            position_path: None,
+            embedding: Box::new(MemoryEmbeddingConfig::OpenAiCompatible {
+                profile: "local-embedding".into(),
+                model: "embedding-model".into(),
+                base_url: "http://127.0.0.1:11434/v1".into(),
+                credential_reference: None,
+                timeout_ms: 5_000,
+                dimensions: Some(768),
+            }),
+        };
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config
+            .sandbox
+            .network_destinations
+            .push("http://127.0.0.1:11434".into());
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
     }
 
     #[test]

@@ -110,6 +110,14 @@ workspace path and the session identity from the execution context. Targeted acc
 checked against the canonical record after authorization, and list limits are applied
 after scope filtering.
 
+When configured, `colossus-memory-chroma` replaces only the disposable candidate
+projection. It uses Chroma's v2 collection API with caller-generated embeddings and
+persists its replay position locally. The collection contains memory ids, bounded text,
+bounded metadata, embeddings, and source event ids—not lifecycle authority. Both Chroma
+transport and OpenAI-compatible embedding transport are permit-bound, exact-origin,
+bounded effects. The offline local embedding profile uses deterministic token/bigram
+feature hashing and does not claim model-quality semantic understanding.
+
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
 subprocess specifications are authenticated to a one-shot helper, which clears the
 environment and applies the selected native or OCI isolation profile before spawning.

@@ -804,6 +804,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-memory-chroma"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "colossus-policy",
+ "colossus-ports",
+ "colossus-testkit",
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "colossus-packs"
 version = "0.6.0-alpha.1"
 dependencies = [
@@ -919,6 +938,7 @@ dependencies = [
  "colossus-journal-redb",
  "colossus-mcp",
  "colossus-memory",
+ "colossus-memory-chroma",
  "colossus-packs",
  "colossus-policy",
  "colossus-ports",
