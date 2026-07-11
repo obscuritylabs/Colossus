@@ -142,6 +142,12 @@ obsolete Go launcher.
   same canonical queue.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
+- Configured stdio MCP integration using the official Rust SDK protocol models, exact
+  sandbox executable identities, environment-only credential references, deterministic
+  paginated discovery, strict server/tool allowlists, live JSON Schema validation,
+  approval-obligated invocation, bounded quarantine, post-effect release, echoed-secret
+  redaction, CLI/REPL surfaces, and MCP-backed research collection. Servers remain hidden
+  from the model catalog until configuration is present.
 
 ## Current Command Surface
 
@@ -181,6 +187,9 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- i
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect github --credential-reference env:GITHUB_TOKEN
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect searxng --base-url http://127.0.0.1:8888 --auth-type none
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect opensearch --base-url http://127.0.0.1:9200 --auth-type none
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- mcp servers
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- mcp tools --server local
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask mcp call local search '{"query":"audit"}'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
@@ -225,13 +234,15 @@ cutover. The following planned work remains:
   execution, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
-- Packs, offline bundles, Rust MCP collection, and the rest of P1/P2. Native GitHub,
+- Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,
   permit/approval enforcement, bounded quarantine, and post-effect release are implemented.
   Declarative discovery, deterministic composition, active-scoped resources, optimistic
   authoring, workspace-local validation, and approval-gated skill installation are
-  implemented; skill resources remain non-executable.
+  implemented; skill resources remain non-executable. Configured stdio MCP discovery,
+  invocation, and research collection are implemented through the normal sandbox and
+  gateway boundaries.
 - Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
   runtime matrix, and
   six-target release smoke tests.

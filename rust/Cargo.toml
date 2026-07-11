@@ -19,6 +19,7 @@ members = [
     "crates/colossus-telemetry",
     "crates/colossus-skills",
     "crates/colossus-integrations",
+    "crates/colossus-mcp",
     "crates/colossus-workflow",
     "crates/colossus-runtime",
     "crates/colossus-cli",
@@ -52,6 +53,7 @@ keyring = "4.1.4"
 nono = { version = "=0.67.1", default-features = false }
 redb = "4.1.0"
 regex = "1.13.0"
+rmcp = { version = "=2.2.0", default-features = false }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 reedline = "0.49.0"
 sysinfo = { version = "=0.39.5", default-features = false, features = ["system"] }
@@ -78,6 +80,7 @@ colossus-telemetry = { path = "crates/colossus-telemetry" }
 colossus-testkit = { path = "crates/colossus-testkit" }
 colossus-skills = { path = "crates/colossus-skills" }
 colossus-integrations = { path = "crates/colossus-integrations" }
+colossus-mcp = { path = "crates/colossus-mcp" }
 colossus-policy = { path = "crates/colossus-policy" }
 colossus-provider = { path = "crates/colossus-provider" }
 colossus-tools = { path = "crates/colossus-tools" }

@@ -178,6 +178,8 @@ enum Command {
     Skills(SkillsCommand),
     /// Manage persisted integrations and imported OpenAPI tools.
     Integrations(IntegrationsCommand),
+    /// Discover and invoke explicitly configured MCP servers.
+    Mcp(McpCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -1069,6 +1071,31 @@ struct IntegrationsCommand {
     command: IntegrationsAction,
 }
 
+#[derive(Args)]
+struct McpCommand {
+    #[command(subcommand)]
+    command: McpAction,
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// List configured server names and exact tool allowlists without launching them.
+    Servers,
+    /// Discover live allowlisted tool schemas through the audited sandbox.
+    Tools {
+        /// Restrict discovery to one configured server.
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Discover, validate, and invoke one exact allowlisted tool.
+    Call {
+        server: String,
+        tool: String,
+        /// Inline JSON object or @path to a JSON document.
+        arguments: String,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum IntegrationAuthMode {
     None,
@@ -1385,7 +1412,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /integrations | /integration show|call|disconnect | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1480,6 +1507,30 @@ async fn repl(
                         .ok_or_else(|| cli_error("usage: /integration call TOOL JSON"))?;
                     let arguments: Value = serde_json::from_str(arguments.trim())?;
                     print_json(&runtime.call_integration_tool(tool, arguments).await?)?;
+                } else if line == "/mcp servers" {
+                    print_json(&runtime.mcp_servers())?;
+                } else if line == "/mcp tools" {
+                    print_json(&runtime.mcp_tools(None).await?)?;
+                } else if let Some(server) = line.strip_prefix("/mcp tools ") {
+                    print_json(&runtime.mcp_tools(Some(server.trim())).await?)?;
+                } else if let Some(arguments) = line.strip_prefix("/mcp call ") {
+                    let mut parts = arguments.trim().splitn(3, ' ');
+                    let server = parts
+                        .next()
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+                    let tool = parts
+                        .next()
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+                    let arguments = parts
+                        .next()
+                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+                    print_json(
+                        &runtime
+                            .mcp_call(server, tool, serde_json::from_str(arguments.trim())?)
+                            .await?,
+                    )?;
                 } else if line == "/skills" {
                     let skills = runtime
                         .list_skills()?
@@ -2218,6 +2269,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
             IntegrationsAction::Call { tool, arguments } => {
                 let arguments = parse_json_argument(&runtime, &arguments).await?;
                 print_json(&runtime.call_integration_tool(&tool, arguments).await?)?;
+            }
+        },
+        Command::Mcp(command) => match command.command {
+            McpAction::Servers => print_json(&runtime.mcp_servers())?,
+            McpAction::Tools { server } => {
+                print_json(&runtime.mcp_tools(server.as_deref()).await?)?;
+            }
+            McpAction::Call {
+                server,
+                tool,
+                arguments,
+            } => {
+                let arguments = parse_json_argument(&runtime, &arguments).await?;
+                print_json(&runtime.mcp_call(&server, &tool, arguments).await?)?;
             }
         },
         Command::Run {

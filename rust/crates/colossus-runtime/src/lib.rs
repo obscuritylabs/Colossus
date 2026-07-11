@@ -26,6 +26,11 @@ use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
     RedbWriterLease, platform_secret,
 };
+use colossus_mcp::{
+    MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor, McpOperation,
+    McpServerSummary, McpToolSummary, McpToolsPage, validate_config as validate_mcp_config,
+    validate_tool_arguments,
+};
 use colossus_memory::{
     EventSourcedMemoryRepository, MemoryService, TantivyMemoryIndex, UnavailableMemoryIndex,
 };
@@ -110,6 +115,9 @@ pub struct RuntimeConfig {
     /// Durable research collection and worker bounds.
     #[serde(default)]
     pub research: ResearchConfig,
+    /// Explicit allowlisted stdio Model Context Protocol servers.
+    #[serde(default)]
+    pub mcp: McpConfig,
     /// Declarative skill libraries and precedence policy.
     #[serde(default)]
     pub skills: SkillsConfig,
@@ -630,6 +638,16 @@ impl RuntimeConfig {
             ));
         }
         validate_research_search_config(&config.research.search, &config.sandbox)?;
+        validate_mcp_config(
+            &config.mcp,
+            &fs::canonicalize(std::env::current_dir()?)?,
+            &config.sandbox.executables,
+            &config.sandbox.filesystem,
+            &config.sandbox.environment,
+            config.sandbox.timeout_ms,
+            config.sandbox.max_output_bytes,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
         if config.skills.disabled.iter().any(|name| {
             name.trim().is_empty()
                 || name.len() > 128
@@ -680,6 +698,7 @@ impl RuntimeConfig {
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
             research: ResearchConfig::default(),
+            mcp: McpConfig::default(),
             skills: SkillsConfig::default(),
             sandbox: SandboxConfig::default(),
         }
@@ -858,6 +877,9 @@ pub enum RuntimeError {
     /// Active tool catalog is invalid.
     #[error(transparent)]
     ToolCatalog(#[from] ToolCatalogError),
+    /// Configured MCP adapter or protocol contract failed.
+    #[error(transparent)]
+    Mcp(#[from] McpError),
     /// Workflow validation or execution failed.
     #[error(transparent)]
     Workflow(#[from] WorkflowError),
@@ -1261,6 +1283,7 @@ pub struct Runtime {
     work: Arc<dyn WorkRepository>,
     work_executor: Arc<WorkEffectExecutor>,
     memory_executor: Arc<MemoryEffectExecutor>,
+    mcp_executor: Arc<McpExecutor>,
     research: Arc<dyn ResearchRepository>,
     research_executor: Arc<ResearchEffectExecutor>,
     policy: Arc<dyn PolicyDecisionPoint>,
@@ -1442,6 +1465,10 @@ impl Runtime {
                 for action in ["skill.scaffold", "skill.write", "skill.install"] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
+                if !config.mcp.servers.is_empty() {
+                    policy = policy.with_action("mcp.tools", DecisionOutcome::Allow);
+                    policy = policy.with_action("mcp.call", DecisionOutcome::RequireApproval);
+                }
                 for action in [
                     "integration.openapi.import",
                     "integration.connect",
@@ -1541,6 +1568,12 @@ impl Runtime {
             sandbox_executor_config.clone(),
             sandbox_job_key,
         ));
+        let mcp_executor = Arc::new(McpExecutor::new(
+            &config.mcp,
+            &workspace,
+            &config.sandbox.backend,
+            Arc::clone(&process_executor),
+        )?);
         let http_executor = Arc::new(HttpExecutor::new());
         let gateway = Arc::new(EffectGateway::new(
             Arc::clone(&journal),
@@ -1611,6 +1644,7 @@ impl Runtime {
                 "integration.connect".to_owned(),
                 "integration.disconnect".to_owned(),
                 "integration.invoke".to_owned(),
+                "mcp.invoke".to_owned(),
             ]),
             permit_key,
         ));
@@ -1638,6 +1672,13 @@ impl Runtime {
                 active_tools.push(goal_tool.into());
             }
         }
+        if mcp_executor.is_configured() {
+            for mcp_tool in ["mcp.servers", "mcp.tools", "mcp.call"] {
+                if !active_tools.iter().any(|name| name == mcp_tool) {
+                    active_tools.push(mcp_tool.into());
+                }
+            }
+        }
         let mut tool_specs = StaticToolRegistry::builtins(&active_tools)?.list_specs();
         tool_specs.extend(integration_specs);
         let tool_registry: Arc<dyn ToolRegistry> = Arc::new(StaticToolRegistry::new(tool_specs)?);
@@ -1651,6 +1692,7 @@ impl Runtime {
             http: Arc::clone(&http_executor),
             workspace: workspace.clone(),
             search: config.research.search.clone(),
+            mcp: Arc::clone(&mcp_executor),
         });
         let research_model: Arc<dyn ResearchModel> = Arc::new(GatewayResearchModel {
             provider: Arc::clone(&model_provider),
@@ -1680,6 +1722,7 @@ impl Runtime {
             memory: Some(Arc::clone(&memory_executor)),
             skills: Some(Arc::clone(&skill_executor)),
             integrations: Some(Arc::clone(&integration_executor)),
+            mcp: Some(Arc::clone(&mcp_executor)),
             workspace,
             repository_id,
             executables: config
@@ -1748,6 +1791,7 @@ impl Runtime {
             work,
             work_executor,
             memory_executor,
+            mcp_executor,
             research,
             research_executor,
             policy,
@@ -2894,6 +2938,51 @@ impl Runtime {
         self.tools.list_specs()
     }
 
+    /// List safe metadata for explicitly configured MCP servers.
+    pub fn mcp_servers(&self) -> Vec<McpServerSummary> {
+        self.mcp_executor.servers()
+    }
+
+    /// Discover all allowlisted MCP tools through separately authorized pages.
+    pub async fn mcp_tools(
+        &self,
+        server: Option<&str>,
+    ) -> Result<Vec<McpToolSummary>, RuntimeError> {
+        discover_mcp_tools(
+            self.gateway.as_ref(),
+            self.mcp_executor.as_ref(),
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            ExecutionContext::default(),
+            server,
+        )
+        .await
+    }
+
+    /// Discover, validate, and invoke one allowlisted MCP tool through the gateway.
+    pub async fn mcp_call(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<McpCallOutput, RuntimeError> {
+        invoke_mcp_tool(
+            self.gateway.as_ref(),
+            self.mcp_executor.as_ref(),
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            ExecutionContext::default(),
+            server,
+            tool,
+            arguments,
+        )
+        .await
+    }
+
     /// List models for a profile through the universal effect boundary.
     pub async fn provider_models(
         &self,
@@ -3562,6 +3651,122 @@ fn repository_identity(workspace: &Path) -> String {
     )
 }
 
+async fn discover_mcp_tools(
+    gateway: &EffectGateway,
+    executor: &McpExecutor,
+    actor: Actor,
+    context: ExecutionContext,
+    selected_server: Option<&str>,
+) -> Result<Vec<McpToolSummary>, RuntimeError> {
+    let servers =
+        selected_server.map_or_else(|| executor.server_names(), |server| vec![server.to_owned()]);
+    let mut tools = Vec::new();
+    for server in servers {
+        let mut cursor = None;
+        let mut cursors = BTreeSet::new();
+        let mut server_names = BTreeSet::new();
+        let mut completed = false;
+        for _ in 0..MAX_MCP_PAGES {
+            let request = executor.request(
+                actor.clone(),
+                context.clone(),
+                McpOperation::ListTools {
+                    server: server.clone(),
+                    cursor: cursor.clone(),
+                },
+            )?;
+            let released = gateway.execute(request, executor).await?;
+            let page: McpToolsPage = serde_json::from_slice(&released.bytes).map_err(|error| {
+                RuntimeError::Config(format!("invalid MCP tools page: {error}"))
+            })?;
+            if page.server != server {
+                return Err(RuntimeError::Config(
+                    "released MCP tools page names another server".into(),
+                ));
+            }
+            for tool in page.tools {
+                if !server_names.insert(tool.name.clone()) {
+                    return Err(RuntimeError::Config(format!(
+                        "MCP server {server} returned duplicate tool {} across pages",
+                        tool.name
+                    )));
+                }
+                tools.push(tool);
+                if tools.len() > MAX_MCP_TOOLS.saturating_mul(executor.server_names().len().max(1))
+                {
+                    return Err(RuntimeError::Config(
+                        "MCP discovery exceeded its aggregate tool bound".into(),
+                    ));
+                }
+            }
+            let Some(next) = page.next_cursor else {
+                completed = true;
+                break;
+            };
+            if next.is_empty() || !cursors.insert(next.clone()) {
+                return Err(RuntimeError::Config(format!(
+                    "MCP server {server} returned an empty or cyclic pagination cursor"
+                )));
+            }
+            cursor = Some(next);
+        }
+        if !completed {
+            return Err(RuntimeError::Config(format!(
+                "MCP server {server} exceeded {MAX_MCP_PAGES} discovery pages"
+            )));
+        }
+    }
+    tools.sort_by(|left, right| {
+        left.server
+            .cmp(&right.server)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(tools)
+}
+
+async fn invoke_mcp_tool(
+    gateway: &EffectGateway,
+    executor: &McpExecutor,
+    actor: Actor,
+    context: ExecutionContext,
+    server: &str,
+    tool: &str,
+    arguments: Value,
+) -> Result<McpCallOutput, RuntimeError> {
+    let discovered = discover_mcp_tools(
+        gateway,
+        executor,
+        actor.clone(),
+        context.clone(),
+        Some(server),
+    )
+    .await?;
+    let tool_spec = discovered
+        .iter()
+        .find(|candidate| candidate.name == tool)
+        .ok_or_else(|| McpError::ToolDenied(format!("{server}:{tool}")))?;
+    validate_tool_arguments(tool_spec, &arguments)?;
+    let request = executor.request(
+        actor,
+        context,
+        McpOperation::CallTool {
+            server: server.into(),
+            tool: tool.into(),
+            arguments,
+            input_schema: tool_spec.input_schema.clone(),
+        },
+    )?;
+    let released = gateway.execute(request, executor).await?;
+    let output: McpCallOutput = serde_json::from_slice(&released.bytes)
+        .map_err(|error| RuntimeError::Config(format!("invalid MCP call output: {error}")))?;
+    if output.server != server || output.tool != tool {
+        return Err(RuntimeError::Config(
+            "released MCP result does not match its requested server and tool".into(),
+        ));
+    }
+    Ok(output)
+}
+
 struct GatewayModelProvider {
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
@@ -3644,6 +3849,7 @@ struct GatewayToolExecutor {
     memory: Option<Arc<MemoryEffectExecutor>>,
     skills: Option<Arc<SkillEffectExecutor>>,
     integrations: Option<Arc<IntegrationExecutor>>,
+    mcp: Option<Arc<McpExecutor>>,
     workspace: PathBuf,
     repository_id: String,
     executables: Vec<PathBuf>,
@@ -3803,6 +4009,58 @@ impl GatewayToolExecutor {
         serde_json::from_str::<Value>(&output)
             .map_err(|error| ToolError::Failed(format!("invalid integration result: {error}")))?;
         Ok(Some(bounded_tool_text(&output, 1024 * 1024)))
+    }
+
+    async fn discover_mcp_tool_output(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+        server: Option<&str>,
+    ) -> Result<String, ToolError> {
+        let executor = self
+            .mcp
+            .as_deref()
+            .ok_or_else(|| ToolError::Failed("MCP adapter is unavailable".into()))?;
+        let tools = discover_mcp_tools(
+            self.gateway.as_ref(),
+            executor,
+            model_actor(call, &context),
+            context,
+            server,
+        )
+        .await
+        .map_err(mcp_runtime_tool_error)?;
+        serde_json::to_string(&tools)
+            .map(|output| bounded_tool_text(&output, 1024 * 1024))
+            .map_err(|error| ToolError::Failed(error.to_string()))
+    }
+
+    async fn execute_mcp_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<String, ToolError> {
+        let executor = self
+            .mcp
+            .as_deref()
+            .ok_or_else(|| ToolError::Failed("MCP adapter is unavailable".into()))?;
+        let output = invoke_mcp_tool(
+            self.gateway.as_ref(),
+            executor,
+            model_actor(call, &context),
+            context,
+            server,
+            tool,
+            arguments,
+        )
+        .await
+        .map_err(mcp_runtime_tool_error)?;
+        serde_json::to_string(&output)
+            .map(|output| bounded_tool_text(&output, 1024 * 1024))
+            .map_err(|error| ToolError::Failed(error.to_string()))
     }
 
     async fn execute_filesystem_mutation(
@@ -4705,6 +4963,35 @@ impl ToolExecutor for GatewayToolExecutor {
                 )
                 .await?
             }
+            "mcp.servers" => {
+                let servers = self
+                    .mcp
+                    .as_deref()
+                    .ok_or_else(|| ToolError::Failed("MCP adapter is unavailable".into()))?
+                    .servers();
+                serde_json::to_string(&servers)
+                    .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
+            "mcp.tools" => {
+                self.discover_mcp_tool_output(
+                    &call,
+                    context,
+                    optional_tool_string(&call, "server")?,
+                )
+                .await?
+            }
+            "mcp.call" => {
+                let server = required_tool_string(&call, "server")?.to_owned();
+                let tool = required_tool_string(&call, "tool")?.to_owned();
+                let arguments = call.arguments.get("arguments").cloned().ok_or_else(|| {
+                    ToolError::InvalidArguments {
+                        tool: call.name.clone(),
+                        message: "arguments must be an object".into(),
+                    }
+                })?;
+                self.execute_mcp_tool(&call, context, &server, &tool, arguments)
+                    .await?
+            }
             "network.http" => {
                 let url = required_tool_string(&call, "url")?;
                 let mut request = effect_request(
@@ -5092,6 +5379,20 @@ fn tool_gateway_error(error: GatewayError) -> ToolError {
     }
 }
 
+fn mcp_runtime_tool_error(error: RuntimeError) -> ToolError {
+    match error {
+        RuntimeError::Gateway(error) => tool_gateway_error(error),
+        RuntimeError::Mcp(McpError::UnknownServer(message) | McpError::ToolDenied(message)) => {
+            ToolError::Denied(message)
+        }
+        RuntimeError::Mcp(McpError::InvalidArguments(message)) => ToolError::InvalidArguments {
+            tool: "mcp.call".into(),
+            message,
+        },
+        error => ToolError::Failed(error.to_string()),
+    }
+}
+
 struct MemoryEffectExecutor {
     service: Arc<MemoryService>,
     repository_id: String,
@@ -5339,9 +5640,98 @@ struct GatewayResearchCollector {
     http: Arc<HttpExecutor>,
     workspace: PathBuf,
     search: ResearchSearchConfig,
+    mcp: Arc<McpExecutor>,
 }
 
 impl GatewayResearchCollector {
+    async fn collect_mcp(
+        &self,
+        run: &ResearchRun,
+        query: &str,
+        limit: usize,
+    ) -> ResearchCollection {
+        let calls = self.mcp.research_calls(query);
+        if calls.is_empty() {
+            return ResearchCollection {
+                status: colossus_contracts::ResearchLaneStatus::Disabled,
+                message: "MCP research tools are not configured".into(),
+                sources: Vec::new(),
+            };
+        }
+        let mut sources = Vec::new();
+        let mut denied = 0_usize;
+        let mut failed = 0_usize;
+        for call in calls.into_iter().take(limit.max(1)) {
+            let context = ExecutionContext {
+                correlation_id: format!("research:{}", run.id),
+                session_id: Some(run.session_id.clone()),
+                run_id: Some(run.id.clone()),
+                ..ExecutionContext::default()
+            };
+            match invoke_mcp_tool(
+                self.gateway.as_ref(),
+                self.mcp.as_ref(),
+                Actor {
+                    actor_type: ActorType::System,
+                    id: "research-mcp-collector".into(),
+                },
+                context,
+                &call.server,
+                &call.tool,
+                call.arguments,
+            )
+            .await
+            {
+                Ok(output) if output.result.is_error != Some(true) => {
+                    let content = match serde_json::to_string(&output.result) {
+                        Ok(content) => content.chars().take(256 * 1024).collect(),
+                        Err(_) => {
+                            failed = failed.saturating_add(1);
+                            continue;
+                        }
+                    };
+                    sources.push(ResearchSourceDraft {
+                        kind: ResearchSourceKind::Mcp,
+                        title: call.title.chars().take(8 * 1024).collect(),
+                        uri: format!("mcp://{}/{}", call.server, call.tool),
+                        content,
+                        metadata: BTreeMap::from([
+                            ("collector".into(), "mcp".into()),
+                            ("server".into(), call.server),
+                            ("tool".into(), call.tool),
+                        ]),
+                    });
+                }
+                Ok(_) => failed = failed.saturating_add(1),
+                Err(RuntimeError::Gateway(GatewayError::Denied(_) | GatewayError::Approval(_))) => {
+                    denied = denied.saturating_add(1)
+                }
+                Err(_) => failed = failed.saturating_add(1),
+            }
+        }
+        if !sources.is_empty() {
+            return ResearchCollection {
+                status: colossus_contracts::ResearchLaneStatus::Completed,
+                message: format!(
+                    "released {} MCP source(s); denied={denied}, failed={failed}",
+                    sources.len()
+                ),
+                sources,
+            };
+        }
+        ResearchCollection {
+            status: if denied > 0 && failed == 0 {
+                colossus_contracts::ResearchLaneStatus::Denied
+            } else {
+                colossus_contracts::ResearchLaneStatus::Failed
+            },
+            message: format!(
+                "MCP collection released no sources; denied={denied}, failed={failed}"
+            ),
+            sources,
+        }
+    }
+
     async fn collect_web(
         &self,
         run: &ResearchRun,
@@ -5598,6 +5988,9 @@ impl ResearchCollector for GatewayResearchCollector {
         query: &str,
         limit: usize,
     ) -> ResearchCollection {
+        if kind == ResearchSourceKind::Mcp {
+            return self.collect_mcp(run, query, limit).await;
+        }
         if kind == ResearchSourceKind::Web {
             return self.collect_web(run, query, limit).await;
         }
@@ -6310,10 +6703,11 @@ mod tests {
         recover_interrupted_subagents, recover_unknown_effects,
     };
     use colossus_contracts::{
-        Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, GoalStatus,
-        MemoryScope, MemoryStatus, ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep,
-        ProviderEvent, ProviderRoute, ProviderTurn, SubagentStatus, TaskStatus, ToolCall,
+        Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, FilesystemGrant,
+        GoalStatus, MemoryScope, MemoryStatus, ModelRequest, NewEvent, PlanRecord, PlanStatus,
+        PlanStep, ProviderEvent, ProviderRoute, ProviderTurn, SubagentStatus, TaskStatus, ToolCall,
     };
+    use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
     use colossus_ports::{
         EventJournal, ModelProvider, ModelProviderError, SkillRepository, ToolExecutor,
     };
@@ -6324,7 +6718,7 @@ mod tests {
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
     use std::{
-        collections::VecDeque,
+        collections::{BTreeMap, VecDeque},
         fs,
         sync::{Arc, Mutex},
     };
@@ -6440,6 +6834,66 @@ surprise: true
             user_agent: "colossus-test".into(),
         };
         config.sandbox.network_destinations = vec!["http://example.com".into()];
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    }
+
+    #[test]
+    fn mcp_config_requires_exact_process_identity_refs_and_allowlists() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        let command = std::path::PathBuf::from("/usr/bin/env");
+        config.sandbox.executables.push(command.clone());
+        config.sandbox.filesystem.push(FilesystemGrant {
+            root: std::env::current_dir().expect("cwd").display().to_string(),
+            mode: "read".into(),
+        });
+        config.sandbox.environment.push("CHILD_TOKEN".into());
+        config.mcp.servers.insert(
+            "fixture".into(),
+            McpServerConfig {
+                command,
+                args: Vec::new(),
+                working_directory: None,
+                environment: BTreeMap::from([("CHILD_TOKEN".into(), "env:HOST_TOKEN".into())]),
+                allowed_tools: vec!["search".into()],
+                research_tools: vec![McpResearchToolConfig {
+                    tool: "search".into(),
+                    title: None,
+                    arguments: json!({"query": "{query}"}),
+                }],
+                timeout_ms: Some(5_000),
+                max_output_bytes: Some(64 * 1024),
+            },
+        );
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+
+        config
+            .mcp
+            .servers
+            .get_mut("fixture")
+            .expect("fixture")
+            .environment
+            .insert("CHILD_TOKEN".into(), "raw-secret-is-never-valid".into());
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config
+            .mcp
+            .servers
+            .get_mut("fixture")
+            .expect("fixture")
+            .environment
+            .insert("CHILD_TOKEN".into(), "env:HOST_TOKEN".into());
+        config
+            .mcp
+            .servers
+            .get_mut("fixture")
+            .expect("fixture")
+            .allowed_tools = vec!["search".into(), "search".into()];
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config
+            .mcp
+            .servers
+            .get_mut("fixture")
+            .expect("fixture")
+            .allowed_tools = Vec::new();
         assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
     }
 
@@ -6672,6 +7126,7 @@ surprise: true
             memory: None,
             skills: Some(skill_executor),
             integrations: None,
+            mcp: None,
             workspace: directory.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6909,6 +7364,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: allowed.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6977,6 +7433,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: allowed.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7061,6 +7518,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7105,6 +7563,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7222,6 +7681,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7383,6 +7843,7 @@ surprise: true
             memory: Some(memory),
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7595,6 +8056,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7724,6 +8186,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7858,6 +8321,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7997,6 +8461,7 @@ surprise: true
             memory: Some(Arc::clone(&memory)),
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -8160,6 +8625,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -8326,6 +8792,7 @@ surprise: true
             memory: None,
             skills: None,
             integrations: None,
+            mcp: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: vec![executable],

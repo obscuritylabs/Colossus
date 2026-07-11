@@ -412,6 +412,18 @@ Global HTTP PKI and proxy settings configure transport for Colossus-owned `httpx
 clients only. They do not grant network approval, expand tool schemas, or affect HTTP
 requests made inside external subprocesses or MCP server processes.
 
+Rust MCP servers are exact configured stdio process identities, never arbitrary commands
+selected by a model. Configuration binds command, literal argv, working directory,
+environment credential references, resource limits, and an exact tool allowlist.
+`mcp.tools` still crosses policy, a one-use permit, native/OCI process isolation, and a
+post-effect release decision even though the built-in policy allows discovery without a
+prompt. `mcp.call` requires approval by default. Calls first rediscover the allowlisted
+schema, validate the complete argument object locally, and bind that schema and content
+into the authorized request. Raw environment values are resolved only inside the
+permit-bearing adapter and exact values are removed if an MCP result echoes them. A
+missing or malformed terminal result after a call starts is recorded as
+`outcome_unknown`; it is never silently retried.
+
 ## Integration Credentials
 
 Integration credentials are referenced by local handles such as `env:GITHUB_TOKEN`.

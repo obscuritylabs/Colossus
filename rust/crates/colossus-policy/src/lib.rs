@@ -382,7 +382,13 @@ fn valid_environment_name(name: &str) -> bool {
 fn is_process_action(action: &str) -> bool {
     matches!(
         action,
-        "process.spawn" | "shell.run" | "git.status" | "git.diff" | "git.show"
+        "process.spawn"
+            | "shell.run"
+            | "git.status"
+            | "git.diff"
+            | "git.show"
+            | "mcp.tools"
+            | "mcp.call"
     )
 }
 
@@ -1131,6 +1137,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
                     || request.action.starts_with("github.")
                     || request.action.starts_with("searxng.")
                     || request.action.starts_with("opensearch.")
+                    || request.action == "mcp.call"
                 {
                     DecisionOutcome::RequireApproval
                 } else {
@@ -1158,6 +1165,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("github.")
             || request.action.starts_with("searxng.")
             || request.action.starts_with("opensearch.")
+            || request.action.starts_with("mcp.")
             || request.action == "network.http"
         {
             obligations.require_post_effect = true;

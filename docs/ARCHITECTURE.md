@@ -14,6 +14,7 @@ colossus-cli -> colossus-runtime -> colossus-agent -> colossus-ports
                     +-> colossus-policy -----------------+
                     +-> colossus-workflow ---------------+
                     +-> colossus-provider -> colossus-policy
+                    +-> colossus-mcp -> colossus-sandbox -> colossus-policy
                     +-> colossus-sandbox  -> colossus-policy
 
 redb and future adapters -> colossus-ports -> colossus-contracts -> colossus-domain
@@ -232,6 +233,12 @@ private metasearch, and OpenSearch for document-focused search and writes. OpenA
 imports generate operation tools from JSON OpenAPI documents and execute through the
 brokered HTTP adapter. MCP remains an explicit configured integration protocol; it is
 not exposed as arbitrary model-callable execution unless configured and policy-approved.
+The Rust MCP adapter uses the official `rmcp` protocol models, launches only exact
+configured stdio executables through the authenticated sandbox helper, filters every
+discovery page through an exact tool allowlist, and validates call arguments against a
+freshly discovered schema. Each page and call is a separate normal effect. Environment
+credential references are resolved only after permit issuance, server output is bounded
+and quarantined, and configured MCP calls can also supply the research collector.
 
 Colossus should not depend on ADK in core. Compatibility comes through importers and
 adapters. A future AI proxy should be a separate phase behind the same credential

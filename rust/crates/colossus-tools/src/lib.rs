@@ -690,6 +690,40 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 64 * 1024,
         },
         ToolSpec {
+            name: "mcp.servers".into(),
+            description: "List safe metadata for explicitly configured MCP servers and their exact tool allowlists.".into(),
+            input_schema: object_schema(json!({}), &[]),
+            effect_action: None,
+            capability: None,
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "mcp.tools".into(),
+            description: "Discover allowlisted tools from one configured MCP server, or every configured server.".into(),
+            input_schema: object_schema(
+                json!({"server": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &[],
+            ),
+            effect_action: Some("mcp.tools".into()),
+            capability: Some("mcp.invoke".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "mcp.call".into(),
+            description: "Invoke one exact allowlisted tool on one explicitly configured MCP server after live schema discovery.".into(),
+            input_schema: object_schema(
+                json!({
+                    "server": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "tool": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "arguments": {"type": "object"}
+                }),
+                &["server", "tool", "arguments"],
+            ),
+            effect_action: Some("mcp.call".into()),
+            capability: Some("mcp.invoke".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "network.http".into(),
             description: "Fetch one exact policy-permitted HTTP(S) URL with GET.".into(),
             input_schema: object_schema(

@@ -864,7 +864,13 @@ impl SandboxProcessExecutor {
 fn is_sandbox_process_action(action: &str) -> bool {
     matches!(
         action,
-        "process.spawn" | "shell.run" | "git.status" | "git.diff" | "git.show"
+        "process.spawn"
+            | "shell.run"
+            | "git.status"
+            | "git.diff"
+            | "git.show"
+            | "mcp.tools"
+            | "mcp.call"
     )
 }
 

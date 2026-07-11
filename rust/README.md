@@ -49,6 +49,10 @@ cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
   integrations connect searxng --base-url http://127.0.0.1:8888 --auth-type none
 cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
   integrations connect opensearch --base-url http://127.0.0.1:9200 --auth-type none
+cargo run -p colossus-cli --bin colossus-rs -- mcp servers
+cargo run -p colossus-cli --bin colossus-rs -- mcp tools --server local
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
+  mcp call local search '{"query":"audit"}'
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
@@ -70,7 +74,9 @@ collection is read-only and each search independently crosses the gateway and
 post-effect release check. Configure a SearXNG JSON endpoint with
 `research.search.kind: searxng`, add its exact origin to
 `sandbox.networkDestinations`, and allow `network.http` to enable the web lane.
-Unconfigured web and MCP lanes are retained as explicit limitations.
+Unconfigured web and MCP lanes are retained as explicit limitations. Configured MCP
+research tools use the same allowlist, schema validation, approval, sandbox, quarantine,
+and post-effect release path as terminal and model calls.
 `research_planner`, `research_worker`, and `research_synthesizer` use normal
 gateway-bound provider roles; invalid or unavailable model output produces a durable
 deterministic fallback instead of weakening citation checks. Source labels, claims,
@@ -111,7 +117,33 @@ normalized search and health results. OpenSearch exposes cluster/index discovery
 document search/retrieval, and independently authorized index/update/delete mutations.
 Bearer/API-key secrets and OpenSearch Basic username/password values are resolved only
 after authorization; canonical state and policy inputs retain their `env:` handles.
-Configured MCP remains the next integration slice.
+
+Configured MCP uses exact stdio server executables and the official Rust SDK protocol
+models. Every server declares literal argv, an optional working directory, child
+environment names mapped to `env:HOST_VARIABLE` references, exact allowed tools, and
+optional research call templates. The command must also appear in
+`sandbox.executables`; the working directory needs a filesystem grant; child environment
+names must appear in `sandbox.environment`. Discovery is permit-bound and allowed by the
+built-in policy without a prompt, while invocation requires approval by default. Tools
+remain absent from the model catalog until at least one server is configured.
+
+```yaml
+mcp:
+  servers:
+    local:
+      command: /absolute/path/to/mcp-server
+      args: []
+      workingDirectory: /absolute/path/to/workspace
+      environment:
+        API_TOKEN: env:LOCAL_MCP_TOKEN
+      allowedTools: [search]
+      researchTools:
+        - tool: search
+          title: Local MCP search
+          arguments: {query: "{query}"}
+      timeoutMs: 30000
+      maxOutputBytes: 1048576
+```
 
 Normal runs create a durable session automatically and return its id. Use
 `run --session ID` for an exact session, `run --resume` for the most recently updated
