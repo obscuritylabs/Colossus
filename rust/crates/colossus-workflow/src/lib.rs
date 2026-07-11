@@ -424,6 +424,14 @@ fn step_id(step: &WorkflowStep) -> &str {
     }
 }
 
+fn scoped_execution_id(scope: &str, step_id: &str) -> String {
+    if scope.is_empty() {
+        step_id.into()
+    } else {
+        format!("{scope}/{step_id}")
+    }
+}
+
 fn find_step<'a>(steps: &'a [WorkflowStep], id: &str) -> Option<&'a WorkflowStep> {
     for step in steps {
         if step_id(step) == id {
@@ -895,6 +903,10 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
             .get("parent_step_id")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        parent_execution_id: start
+            .get("parent_execution_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         call_depth: start
             .get("call_depth")
             .and_then(Value::as_u64)
@@ -909,6 +921,7 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
         outputs: None,
         completed_steps: 0,
         waiting_step_id: None,
+        waiting_execution_id: None,
         waiting_reason: None,
         waiting_child_run_id: None,
     };
@@ -919,6 +932,7 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
             "workflow.run.started.v1" => {
                 run.status = WorkflowStatus::Running;
                 run.waiting_step_id = None;
+                run.waiting_execution_id = None;
                 run.waiting_reason = None;
                 run.waiting_child_run_id = None;
             }
@@ -935,6 +949,10 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
                     .get("step_id")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
+                run.waiting_execution_id = payload
+                    .get("execution_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 run.waiting_reason = payload
                     .get("reason")
                     .and_then(Value::as_str)
@@ -947,6 +965,7 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
             "workflow.run.resumed.v1" => {
                 run.status = WorkflowStatus::Running;
                 run.waiting_step_id = None;
+                run.waiting_execution_id = None;
                 run.waiting_reason = None;
                 run.waiting_child_run_id = None;
             }
@@ -954,24 +973,28 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
                 run.status = WorkflowStatus::Completed;
                 run.outputs = payload.get("outputs").cloned();
                 run.waiting_step_id = None;
+                run.waiting_execution_id = None;
                 run.waiting_reason = None;
                 run.waiting_child_run_id = None;
             }
             "workflow.run.failed.v1" => {
                 run.status = WorkflowStatus::Failed;
                 run.waiting_step_id = None;
+                run.waiting_execution_id = None;
                 run.waiting_reason = None;
                 run.waiting_child_run_id = None;
             }
             "workflow.run.cancelled.v1" => {
                 run.status = WorkflowStatus::Cancelled;
                 run.waiting_step_id = None;
+                run.waiting_execution_id = None;
                 run.waiting_reason = None;
                 run.waiting_child_run_id = None;
             }
             "workflow.run.interrupted.v1" => {
                 run.status = WorkflowStatus::Interrupted;
                 run.waiting_step_id = None;
+                run.waiting_execution_id = None;
                 run.waiting_reason = None;
                 run.waiting_child_run_id = None;
             }
@@ -1004,6 +1027,8 @@ pub struct WorkflowEffect {
     pub run_id: String,
     /// Workflow step identifier.
     pub step_id: String,
+    /// Static step identifier from the pinned definition.
+    pub definition_step_id: String,
     /// Pinned definition hash.
     pub workflow_hash: String,
     /// One-based attempt number.
@@ -1069,6 +1094,7 @@ impl WorkflowService {
             inputs,
             None,
             None,
+            None,
             1,
         )
     }
@@ -1082,6 +1108,7 @@ impl WorkflowService {
         inputs: Value,
         parent_run_id: Option<&str>,
         parent_step_id: Option<&str>,
+        parent_execution_id: Option<&str>,
         call_depth: u16,
     ) -> Result<WorkflowRun, WorkflowError> {
         if usize::from(call_depth) > MAX_WORKFLOW_CALL_DEPTH {
@@ -1105,6 +1132,7 @@ impl WorkflowService {
                 "inputs": inputs,
                 "parent_run_id": parent_run_id,
                 "parent_step_id": parent_step_id,
+                "parent_execution_id": parent_execution_id,
                 "call_depth": call_depth,
             }),
         )?;
@@ -1184,25 +1212,13 @@ impl WorkflowService {
         }
         let root_index = usize::try_from(run.completed_steps)
             .map_err(|error| WorkflowError::InvalidTransition(error.to_string()))?;
-        let waiting_step_id = self
-            .journal
-            .read_stream(&format!("workflow-run:{run_id}"))?
-            .iter()
-            .rev()
-            .find(|event| event.event_type == "workflow.run.waiting.v1")
-            .map(|event| self.journal.decrypt_payload(event))
-            .transpose()?
-            .and_then(|payload| {
-                payload
-                    .get("step_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .ok_or_else(|| {
-                WorkflowError::InvalidTransition(
-                    "waiting step id is absent from the journal".into(),
-                )
-            })?;
+        let waiting_step_id = run.waiting_step_id.clone().ok_or_else(|| {
+            WorkflowError::InvalidTransition("waiting step id is absent from the journal".into())
+        })?;
+        let waiting_execution_id = run
+            .waiting_execution_id
+            .clone()
+            .unwrap_or_else(|| waiting_step_id.clone());
         let step = find_step(&definition.steps, &waiting_step_id).ok_or_else(|| {
             WorkflowError::InvalidTransition("waiting step is outside the definition".into())
         })?;
@@ -1228,14 +1244,18 @@ impl WorkflowService {
         self.append_run_event(
             run_id,
             "workflow.input.provided.v1",
-            json!({"step_id": step_id(step), "input": input.clone()}),
+            json!({
+                "step_id": step_id(step),
+                "execution_id": waiting_execution_id,
+                "input": input.clone(),
+            }),
         )?;
-        let is_root = definition
-            .steps
-            .get(root_index)
-            .is_some_and(|root| step_id(root) == step_id(step));
+        let is_root = definition.steps.get(root_index).is_some_and(|root| {
+            step_id(root) == step_id(step) && waiting_execution_id == step_id(step)
+        });
         let mut completion = json!({
             "step_id": step_id(step),
+            "execution_id": waiting_execution_id,
             "output": input,
         });
         if is_root {
@@ -1470,7 +1490,7 @@ impl WorkflowService {
         let events = self
             .journal
             .read_stream(&format!("workflow-run:{run_id}"))?;
-        let mut context = json!({"inputs": inputs, "steps": {}});
+        let mut context = json!({"inputs": inputs, "steps": {}, "executions": {}});
         for event in &events {
             if event.event_type == "workflow.step.completed.v1" {
                 let payload = self.journal.decrypt_payload(event)?;
@@ -1478,7 +1498,14 @@ impl WorkflowService {
                     payload.get("step_id").and_then(Value::as_str),
                     payload.get("output").cloned(),
                 ) {
-                    context["steps"][step_id] = output;
+                    let execution_id = payload
+                        .get("execution_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or(step_id);
+                    context["executions"][execution_id] = output.clone();
+                    if execution_id == step_id {
+                        context["steps"][step_id] = output;
+                    }
                 }
             }
         }
@@ -1508,6 +1535,7 @@ impl WorkflowService {
                     run_id,
                     &workflow_hash,
                     step,
+                    "",
                     &mut context,
                     Arc::clone(&budget),
                     definition.step_budget,
@@ -1523,12 +1551,14 @@ impl WorkflowService {
                         json!({
                             "root_index": index,
                             "step_id": step_id(step),
+                            "execution_id": step_id(step),
                             "output": output,
                         }),
                     )?;
                 }
                 Ok(StepState::Waiting {
                     step_id: waiting_step_id,
+                    execution_id,
                     reason,
                     child_run_id,
                 }) => {
@@ -1537,6 +1567,7 @@ impl WorkflowService {
                         "workflow.run.waiting.v1",
                         json!({
                             "step_id": waiting_step_id,
+                            "execution_id": execution_id,
                             "reason": reason,
                             "child_run_id": child_run_id,
                         }),
@@ -1656,22 +1687,26 @@ impl WorkflowService {
         run_id: &str,
         workflow_hash: &str,
         step: &WorkflowStep,
+        scope: &str,
         context: &mut Value,
         budget: Arc<AtomicU32>,
         step_budget: u32,
         semaphore: Arc<Semaphore>,
     ) -> Result<StepState, WorkflowError> {
+        let execution_id = scoped_execution_id(scope, step_id(step));
         if let Some(output) = context
-            .get("steps")
-            .and_then(|steps| steps.get(step_id(step)))
+            .get("executions")
+            .and_then(|executions| executions.get(&execution_id))
             .cloned()
         {
             return Ok(StepState::Completed(output));
         }
         if let WorkflowStep::Workflow { id, .. } = step
-            && let Some(child) = self.linked_child(run_id, id)?
+            && let Some(child) = self.linked_child(run_id, &execution_id)?
         {
-            return self.observe_child_run(run_id, id, &child).await;
+            return self
+                .observe_child_run(run_id, id, &execution_id, &child)
+                .await;
         }
         let attempt = budget.fetch_add(1, Ordering::AcqRel).saturating_add(1);
         if attempt > step_budget {
@@ -1682,17 +1717,23 @@ impl WorkflowService {
         self.append_run_event(
             run_id,
             "workflow.step.started.v1",
-            json!({"step_id": step_id(step), "attempt": attempt}),
+            json!({
+                "step_id": step_id(step),
+                "execution_id": execution_id,
+                "attempt": attempt,
+            }),
         )?;
         match step {
             WorkflowStep::Emit { value, .. } => Ok(StepState::Completed(value.clone())),
             WorkflowStep::WaitForInput { id, prompt, .. } => Ok(StepState::Waiting {
                 step_id: id.clone(),
+                execution_id: execution_id.clone(),
                 reason: prompt.clone(),
                 child_run_id: None,
             }),
             WorkflowStep::Approval { id, prompt, .. } => Ok(StepState::Waiting {
                 step_id: id.clone(),
+                execution_id: execution_id.clone(),
                 reason: prompt.clone(),
                 child_run_id: None,
             }),
@@ -1710,9 +1751,12 @@ impl WorkflowService {
                         kind: "agent".into(),
                         action: "agent.run".into(),
                         content: json!({"prompt": prompt}),
-                        idempotency: idempotency.clone(),
+                        idempotency: idempotency
+                            .as_ref()
+                            .map(|strategy| format!("{strategy}:{run_id}:{execution_id}")),
                         run_id: run_id.into(),
-                        step_id: id.clone(),
+                        step_id: execution_id.clone(),
+                        definition_step_id: id.clone(),
                         workflow_hash: workflow_hash.into(),
                         attempt,
                         compensation: false,
@@ -1738,9 +1782,12 @@ impl WorkflowService {
                         kind: "tool".into(),
                         action: tool.clone(),
                         content: arguments.clone(),
-                        idempotency: idempotency.clone(),
+                        idempotency: idempotency
+                            .as_ref()
+                            .map(|strategy| format!("{strategy}:{run_id}:{execution_id}")),
                         run_id: run_id.into(),
-                        step_id: id.clone(),
+                        step_id: execution_id.clone(),
+                        definition_step_id: id.clone(),
                         workflow_hash: workflow_hash.into(),
                         attempt,
                         compensation: false,
@@ -1766,9 +1813,10 @@ impl WorkflowService {
                             "version": version,
                             "inputs": inputs,
                         }),
-                        idempotency: Some(format!("subworkflow:{run_id}:{id}")),
+                        idempotency: Some(format!("subworkflow:{run_id}:{execution_id}")),
                         run_id: run_id.into(),
-                        step_id: id.clone(),
+                        step_id: execution_id.clone(),
+                        definition_step_id: id.clone(),
                         workflow_hash: workflow_hash.into(),
                         attempt,
                         compensation: false,
@@ -1785,6 +1833,7 @@ impl WorkflowService {
                     "workflow.subworkflow.linked.v1",
                     json!({
                         "step_id": id,
+                        "execution_id": execution_id,
                         "child_run_id": child_run_id,
                         "workflow_name": workflow,
                         "workflow_version": version,
@@ -1799,7 +1848,8 @@ impl WorkflowService {
                     inputs: inputs.clone(),
                     call_depth,
                 };
-                self.observe_child_run(run_id, id, &child).await
+                self.observe_child_run(run_id, id, &execution_id, &child)
+                    .await
             }
             WorkflowStep::Condition {
                 expression,
@@ -1817,6 +1867,7 @@ impl WorkflowService {
                     run_id,
                     workflow_hash,
                     selected,
+                    scope,
                     context,
                     budget,
                     step_budget,
@@ -1834,6 +1885,7 @@ impl WorkflowService {
                     workflow_hash,
                     branches,
                     *max_concurrency,
+                    &execution_id,
                     context,
                     budget,
                     step_budget,
@@ -1866,6 +1918,7 @@ impl WorkflowService {
                 }
                 let mut outputs = Vec::with_capacity(values.len());
                 for (index, item) in values.into_iter().enumerate() {
+                    let iteration_scope = format!("{execution_id}[{index}]");
                     let mut iteration = context.clone();
                     iteration["item"] = item;
                     iteration["index"] = json!(index);
@@ -1874,6 +1927,7 @@ impl WorkflowService {
                             run_id,
                             workflow_hash,
                             steps,
+                            &iteration_scope,
                             &mut iteration,
                             Arc::clone(&budget),
                             step_budget,
@@ -1882,15 +1936,20 @@ impl WorkflowService {
                         .await?;
                     if let StepState::Waiting {
                         step_id,
+                        execution_id,
                         reason,
                         child_run_id,
                     } = state
                     {
                         return Ok(StepState::Waiting {
                             step_id,
+                            execution_id,
                             reason,
                             child_run_id,
                         });
+                    }
+                    if let Some(object) = iteration.as_object_mut() {
+                        object.remove("executions");
                     }
                     outputs.push(iteration);
                 }
@@ -1902,7 +1961,7 @@ impl WorkflowService {
     fn linked_child(
         &self,
         parent_run_id: &str,
-        step_id: &str,
+        execution_id: &str,
     ) -> Result<Option<LinkedWorkflowCall>, WorkflowError> {
         for event in self
             .journal
@@ -1912,7 +1971,12 @@ impl WorkflowService {
             .filter(|event| event.event_type == "workflow.subworkflow.linked.v1")
         {
             let payload = self.journal.decrypt_payload(event)?;
-            if payload.get("step_id").and_then(Value::as_str) == Some(step_id) {
+            if payload
+                .get("execution_id")
+                .or_else(|| payload.get("step_id"))
+                .and_then(Value::as_str)
+                == Some(execution_id)
+            {
                 return Ok(Some(LinkedWorkflowCall {
                     run_id: string_field(&payload, "child_run_id")?,
                     workflow_name: string_field(&payload, "workflow_name")?,
@@ -1938,6 +2002,7 @@ impl WorkflowService {
         &self,
         parent_run_id: &str,
         parent_step_id: &str,
+        parent_execution_id: &str,
         linked: &LinkedWorkflowCall,
     ) -> Result<StepState, WorkflowError> {
         if self.repository.run(&linked.run_id)?.is_none() {
@@ -1948,6 +2013,7 @@ impl WorkflowService {
                 linked.inputs.clone(),
                 Some(parent_run_id),
                 Some(parent_step_id),
+                Some(parent_execution_id),
                 linked.call_depth,
             )?;
         }
@@ -1967,6 +2033,7 @@ impl WorkflowService {
                     "workflow.subworkflow.completed.v1",
                     json!({
                         "step_id": parent_step_id,
+                        "execution_id": parent_execution_id,
                         "child_run_id": linked.run_id,
                         "output": output,
                     }),
@@ -1976,6 +2043,7 @@ impl WorkflowService {
             WorkflowStatus::Queued | WorkflowStatus::Running | WorkflowStatus::Waiting => {
                 Ok(StepState::Waiting {
                     step_id: parent_step_id.into(),
+                    execution_id: parent_execution_id.into(),
                     reason: format!("waiting for child workflow run {}", linked.run_id),
                     child_run_id: Some(linked.run_id.clone()),
                 })
@@ -2008,7 +2076,8 @@ impl WorkflowService {
                     &effect.run_id,
                     "workflow.step.retrying.v1",
                     json!({
-                        "step_id": effect.step_id,
+                        "step_id": effect.definition_step_id,
+                        "execution_id": effect.step_id,
                         "failed_attempt": effect.attempt,
                         "next_attempt": retry_attempt,
                         "reason": first_error,
@@ -2019,7 +2088,12 @@ impl WorkflowService {
                 self.append_run_event(
                     &effect.run_id,
                     "workflow.step.started.v1",
-                    json!({"step_id": effect.step_id, "attempt": retry_attempt, "retry": true}),
+                    json!({
+                        "step_id": effect.definition_step_id,
+                        "execution_id": effect.step_id,
+                        "attempt": retry_attempt,
+                        "retry": true,
+                    }),
                 )?;
                 self.effects.run(effect).await
             }
@@ -2064,6 +2138,7 @@ impl WorkflowService {
                     idempotency: idempotency.clone(),
                     run_id: run_id.into(),
                     step_id: id.clone(),
+                    definition_step_id: id.clone(),
                     workflow_hash: workflow_hash.into(),
                     attempt,
                     compensation: true,
@@ -2080,6 +2155,7 @@ impl WorkflowService {
                     idempotency: idempotency.clone(),
                     run_id: run_id.into(),
                     step_id: id.clone(),
+                    definition_step_id: id.clone(),
                     workflow_hash: workflow_hash.into(),
                     attempt,
                     compensation: true,
@@ -2119,6 +2195,7 @@ impl WorkflowService {
         workflow_hash: &str,
         branches: &[Vec<WorkflowStep>],
         max_concurrency: u32,
+        scope: &str,
         context: &Value,
         budget: Arc<AtomicU32>,
         step_budget: u32,
@@ -2128,17 +2205,20 @@ impl WorkflowService {
             .map_err(|error| WorkflowError::InvalidDefinition(error.to_string()))?;
         let base_context = context.clone();
         let owned_branches = branches.to_vec();
+        let scope = scope.to_owned();
         let results = stream::iter(owned_branches.into_iter().enumerate())
             .map(|(index, branch)| {
                 let mut branch_context = base_context.clone();
                 let budget = Arc::clone(&budget);
                 let semaphore = Arc::clone(&semaphore);
+                let branch_scope = format!("{scope}.branch[{index}]");
                 async move {
                     let state = self
                         .execute_sequence(
                             run_id,
                             workflow_hash,
                             &branch,
+                            &branch_scope,
                             &mut branch_context,
                             budget,
                             step_budget,
@@ -2153,18 +2233,25 @@ impl WorkflowService {
             .await?;
         let mut ordered = results;
         ordered.sort_by_key(|(index, _, _)| *index);
-        if let Some((step_id, reason, child_run_id)) =
+        if let Some((step_id, execution_id, reason, child_run_id)) =
             ordered.iter().find_map(|(_, state, _)| match state {
                 StepState::Waiting {
                     step_id,
+                    execution_id,
                     reason,
                     child_run_id,
-                } => Some((step_id.clone(), reason.clone(), child_run_id.clone())),
+                } => Some((
+                    step_id.clone(),
+                    execution_id.clone(),
+                    reason.clone(),
+                    child_run_id.clone(),
+                )),
                 StepState::Completed(_) => None,
             })
         {
             return Ok(StepState::Waiting {
                 step_id,
+                execution_id,
                 reason,
                 child_run_id,
             });
@@ -2184,6 +2271,7 @@ impl WorkflowService {
         run_id: &str,
         workflow_hash: &str,
         steps: &[WorkflowStep],
+        scope: &str,
         context: &mut Value,
         budget: Arc<AtomicU32>,
         step_budget: u32,
@@ -2195,6 +2283,7 @@ impl WorkflowService {
                     run_id,
                     workflow_hash,
                     step,
+                    scope,
                     context,
                     Arc::clone(&budget),
                     step_budget,
@@ -2203,11 +2292,17 @@ impl WorkflowService {
                 .await?
             {
                 StepState::Completed(output) => {
+                    let execution_id = scoped_execution_id(scope, step_id(step));
+                    context["executions"][&execution_id] = output.clone();
                     context["steps"][step_id(step)] = output;
                     self.append_run_event(
                         run_id,
                         "workflow.step.completed.v1",
-                        json!({"step_id": step_id(step), "output": context["steps"][step_id(step)]}),
+                        json!({
+                            "step_id": step_id(step),
+                            "execution_id": execution_id,
+                            "output": context["steps"][step_id(step)],
+                        }),
                     )?;
                 }
                 waiting @ StepState::Waiting { .. } => return Ok(waiting),
@@ -2223,6 +2318,7 @@ enum StepState {
     Completed(Value),
     Waiting {
         step_id: String,
+        execution_id: String,
         reason: String,
         child_run_id: Option<String>,
     },
@@ -2548,6 +2644,136 @@ steps:
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn foreach_inputs_resume_with_distinct_iteration_scopes() {
+        const ITERATIVE: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: iterative-input
+  version: 1.0.0
+  description: Iteration scoped input
+inputs:
+  type: object
+  required: [items]
+  properties:
+    items: { type: array, items: { type: string } }
+outputs: { type: object }
+capabilities: []
+maxConcurrency: 1
+stepBudget: 10
+steps:
+  - type: foreach
+    id: each
+    items: /inputs/items
+    max_items: 2
+    steps:
+      - type: wait_for_input
+        id: answer
+        prompt: Answer for this item
+        schema: { type: string }
+      - type: emit
+        id: done
+        value: { ok: true }
+"#;
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let service = WorkflowService::new(journal, repository, Arc::new(DenyWorkflowEffects));
+        service
+            .register_definition(ITERATIVE, "test")
+            .expect("register");
+        let first_wait = service
+            .start_run(
+                "iterative-input",
+                "1.0.0",
+                json!({"items":["left", "right"]}),
+            )
+            .await
+            .expect("start");
+        assert_eq!(
+            first_wait.waiting_execution_id.as_deref(),
+            Some("each[0]/answer")
+        );
+        let second_wait = service
+            .provide_input(&first_wait.run_id, json!("first"))
+            .await
+            .expect("first input");
+        assert_eq!(
+            second_wait.status,
+            colossus_contracts::WorkflowStatus::Waiting
+        );
+        assert_eq!(
+            second_wait.waiting_execution_id.as_deref(),
+            Some("each[1]/answer")
+        );
+        let completed = service
+            .provide_input(&first_wait.run_id, json!("second"))
+            .await
+            .expect("second input");
+        assert_eq!(
+            completed.status,
+            colossus_contracts::WorkflowStatus::Completed
+        );
+        let iterations = completed.outputs.expect("outputs")["each"]
+            .as_array()
+            .expect("iterations")
+            .clone();
+        assert_eq!(iterations[0]["steps"]["answer"], json!("first"));
+        assert_eq!(iterations[1]["steps"]["answer"], json!("second"));
+    }
+
+    #[tokio::test]
+    async fn foreach_effects_receive_distinct_execution_and_idempotency_identity() {
+        const ITERATIVE: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: iterative-effects
+  version: 1.0.0
+  description: Iteration scoped effects
+inputs:
+  type: object
+  required: [items]
+  properties: { items: { type: array } }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - type: foreach
+    id: each
+    items: /inputs/items
+    max_items: 2
+    steps:
+      - type: tool
+        id: call
+        tool: iterative.call
+        arguments: {}
+        idempotency: per-item
+"#;
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(journal, repository, effects.clone());
+        service
+            .register_definition(ITERATIVE, "test")
+            .expect("register");
+        let run = service
+            .start_run("iterative-effects", "1.0.0", json!({"items":[1, 2]}))
+            .await
+            .expect("run");
+        assert_eq!(run.status, colossus_contracts::WorkflowStatus::Completed);
+        let calls = effects.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].definition_step_id, "call");
+        assert_eq!(calls[1].definition_step_id, "call");
+        assert_eq!(calls[0].step_id, "each[0]/call");
+        assert_eq!(calls[1].step_id, "each[1]/call");
+        assert_ne!(calls[0].idempotency, calls[1].idempotency);
     }
 
     #[tokio::test]

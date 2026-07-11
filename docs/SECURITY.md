@@ -130,6 +130,10 @@ built-in policy unless explicitly overridden). Child runs pin their own definiti
 and immutable parent run, parent step, and call depth. A durable parent link is reused on
 resume; its journal-encrypted payload can repair a missing child queue record using the
 original child ID after interruption.
+Static workflow step IDs never serve as the sole identity for repeated execution.
+`foreach` items and parallel branches receive scoped execution IDs that bind permits,
+idempotency values, input completion, retries, and subworkflow links, preventing an
+approval or effect result for one iteration from authorizing or completing another.
 
 The sections below describe the frozen Python 0.5 implementation. They remain relevant
 to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.

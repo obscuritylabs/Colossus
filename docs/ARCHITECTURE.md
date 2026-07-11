@@ -176,6 +176,12 @@ to recreate the same child ID after a crash between link and queue, so recovery 
 duplicates nor orphans the call. The composition root opens fresh YAML config and fresh
 state; it never silently imports the Python SQLite store.
 
+Runtime execution identity is separate from the static YAML step ID. Root steps retain
+their declared ID, while nested repeated work receives bounded paths such as
+`each[1]/approval` and `parallel.branch[0]/tool`. Journal completion, waiting input,
+idempotency, retry, effect context, and child-workflow links use that scoped identity.
+Replay therefore cannot apply one `foreach` item's result or approval to another item.
+
 See [Rust Reconstruction Status](RUST_RECONSTRUCTION.md) for the current implementation
 line and remaining milestones.
 

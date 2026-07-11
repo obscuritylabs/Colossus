@@ -9139,6 +9139,11 @@ mod tests {
                     } else {
                         "launch-child".into()
                     },
+                    definition_step_id: if compensation {
+                        "rollback-child".into()
+                    } else {
+                        "launch-child".into()
+                    },
                     workflow_hash: "parent-hash".into(),
                     attempt: 1,
                     compensation,

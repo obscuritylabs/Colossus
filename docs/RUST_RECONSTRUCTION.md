@@ -65,7 +65,9 @@ obsolete Go launcher.
   and interrupted non-idempotent effects are never retried. Subworkflow steps launch
   separately pinned, policy-authorized child runs with projected lineage, visible waiting
   identity, duplicate-free resume, crash repair, terminal propagation, and cancellation
-  cascade.
+  cascade. Repeated and parallel steps use durable scoped execution identities, so
+  per-item inputs, effects, idempotency keys, retries, and child links reconstruct without
+  cross-iteration reuse.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   a disposable Tantivy lexical index with event-id idempotency, durable replay position,
   retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry

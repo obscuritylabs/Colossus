@@ -2285,6 +2285,8 @@ pub struct WorkflowRun {
     pub parent_run_id: Option<String>,
     /// Parent step that launched this run.
     pub parent_step_id: Option<String>,
+    /// Runtime-scoped parent execution that launched this run.
+    pub parent_execution_id: Option<String>,
     /// One-based workflow call depth.
     pub call_depth: u16,
     /// Durable status.
@@ -2297,6 +2299,8 @@ pub struct WorkflowRun {
     pub completed_steps: u32,
     /// Exact step currently waiting, if any.
     pub waiting_step_id: Option<String>,
+    /// Runtime-scoped execution identity for the waiting step.
+    pub waiting_execution_id: Option<String>,
     /// Bounded waiting reason, if any.
     pub waiting_reason: Option<String>,
     /// Linked child run blocking the waiting step, if any.
