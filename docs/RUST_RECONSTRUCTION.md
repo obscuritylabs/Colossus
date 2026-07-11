@@ -173,6 +173,9 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- t
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- telemetry metrics
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- skills list
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --skill coding 'Implement the scoped change'
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask skills scaffold my-skill 'My data-only skill'
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- skills validate path/to/local-skill --local
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask skills install path/to/local-skill
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
@@ -217,8 +220,10 @@ cutover. The following planned work remains:
   execution, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
-- Skill authoring/install, packs, integrations, offline bundles, Rust MCP collection,
-  and the rest of P1/P2.
+- Packs, integrations, offline bundles, Rust MCP collection, and the rest of P1/P2.
+  Declarative discovery, deterministic composition, active-scoped resources, optimistic
+  authoring, workspace-local validation, and approval-gated skill installation are
+  implemented; skill resources remain non-executable.
 - Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
   runtime matrix, and
   six-target release smoke tests.

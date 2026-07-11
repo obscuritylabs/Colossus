@@ -912,10 +912,12 @@ name = "colossus-skills"
 version = "0.6.0-alpha.1"
 dependencies = [
  "colossus-contracts",
+ "colossus-policy",
  "colossus-ports",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]

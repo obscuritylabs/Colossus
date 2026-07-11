@@ -13,9 +13,10 @@ use colossus_contracts::{
     ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute,
     ProviderTurn, QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun,
     ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
-    SessionSummary, SkillComposition, SkillDuplicate, SkillRecord, SkillResourceEntry,
-    SkillResourceRead, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
-    TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
+    SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection,
+    SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult,
+    SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus,
+    TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -49,7 +50,10 @@ use colossus_sandbox::{
     SandboxProcessExecutor, sandbox_doctor,
 };
 use colossus_session::EventSourcedSessionRepository;
-use colossus_skills::{FilesystemSkillRepository, SkillComposer, SkillResourceService, SkillRoot};
+use colossus_skills::{
+    FilesystemSkillRepository, SkillAuthoringService, SkillComposer, SkillResourceService,
+    SkillRoot,
+};
 use colossus_telemetry::TelemetryService;
 use colossus_tools::{StaticToolRegistry, ToolCatalogError};
 use colossus_work::{EventSourcedWorkRepository, WorkService};
@@ -1161,6 +1165,34 @@ impl ResearchOperation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum SkillOperation {
+    Scaffold {
+        name: String,
+        description: String,
+        instructions: String,
+        resource_dirs: Vec<String>,
+    },
+    Inspect {
+        name: String,
+    },
+    ReadFile {
+        name: String,
+        path: String,
+    },
+    WriteFile {
+        name: String,
+        path: String,
+        content: String,
+        expected_sha256: Option<String>,
+    },
+    ValidateInstalled {
+        name: String,
+    },
+    ValidateLocal {
+        path: String,
+    },
+    InstallLocal {
+        path: String,
+    },
     ListResources {
         skill_name: String,
         active_skills: Vec<String>,
@@ -1175,15 +1207,32 @@ enum SkillOperation {
 impl SkillOperation {
     fn action(&self) -> &'static str {
         match self {
+            Self::Scaffold { .. } => "skill.scaffold",
+            Self::Inspect { .. } => "skill.inspect",
+            Self::ReadFile { .. } => "skill.read",
+            Self::WriteFile { .. } => "skill.write",
+            Self::ValidateInstalled { .. } | Self::ValidateLocal { .. } => "skill.validate",
+            Self::InstallLocal { .. } => "skill.install",
             Self::ListResources { .. } => "skill.resource.list",
             Self::ReadResource { .. } => "skill.resource.read",
         }
     }
 
-    fn skill_name(&self) -> &str {
+    fn resource(&self) -> String {
         match self {
-            Self::ListResources { skill_name, .. } | Self::ReadResource { skill_name, .. } => {
-                skill_name
+            Self::Scaffold { name, .. }
+            | Self::Inspect { name }
+            | Self::ReadFile { name, .. }
+            | Self::WriteFile { name, .. }
+            | Self::ValidateInstalled { name }
+            | Self::ListResources {
+                skill_name: name, ..
+            }
+            | Self::ReadResource {
+                skill_name: name, ..
+            } => format!("skill:{name}"),
+            Self::ValidateLocal { path } | Self::InstallLocal { path } => {
+                format!("workspace-skill:{path}")
             }
         }
     }
@@ -1277,6 +1326,7 @@ impl Runtime {
             default_handlers(),
         )?);
         let telemetry = Arc::new(TelemetryService::new(Arc::clone(&journal)));
+        let user_skill_root = absolute_path(&config.skills.user)?;
         let skills: Arc<dyn SkillRepository> = Arc::new(FilesystemSkillRepository::new(
             vec![
                 SkillRoot {
@@ -1288,7 +1338,7 @@ impl Runtime {
                     label: "repository".into(),
                 },
                 SkillRoot {
-                    path: absolute_path(&config.skills.user)?,
+                    path: user_skill_root.clone(),
                     label: "user".into(),
                 },
             ],
@@ -1297,6 +1347,10 @@ impl Runtime {
         )?);
         let skill_composer = Arc::new(SkillComposer::new(Arc::clone(&skills)));
         let skill_resources = Arc::new(SkillResourceService::new(Arc::clone(&skills)));
+        let skill_authoring = Arc::new(SkillAuthoringService::new(
+            user_skill_root,
+            workspace.clone(),
+        )?);
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
@@ -1364,8 +1418,14 @@ impl Runtime {
                     "filesystem.search",
                     "skill.resource.list",
                     "skill.resource.read",
+                    "skill.inspect",
+                    "skill.read",
+                    "skill.validate",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
+                }
+                for action in ["skill.scaffold", "skill.write", "skill.install"] {
+                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
                 for root in [&config.workflows.repository, &config.workflows.user] {
                     if let Ok(root) = absolute_path(root).and_then(fs::canonicalize) {
@@ -1514,6 +1574,12 @@ impl Runtime {
                 "memory.index.sync".to_owned(),
                 "memory.index.rebuild".to_owned(),
                 "research.run".to_owned(),
+                "skill.scaffold".to_owned(),
+                "skill.inspect".to_owned(),
+                "skill.read".to_owned(),
+                "skill.write".to_owned(),
+                "skill.validate".to_owned(),
+                "skill.install".to_owned(),
                 "skill.resource.list".to_owned(),
                 "skill.resource.read".to_owned(),
             ]),
@@ -1529,6 +1595,7 @@ impl Runtime {
         });
         let skill_executor = Arc::new(SkillEffectExecutor {
             resources: Arc::clone(&skill_resources),
+            authoring: skill_authoring,
         });
         let memory_retriever: Arc<dyn MemoryRetriever> = Arc::new(GatewayMemoryRetriever {
             gateway: Arc::clone(&gateway),
@@ -1747,11 +1814,12 @@ impl Runtime {
         let active_skills = match &operation {
             SkillOperation::ListResources { active_skills, .. }
             | SkillOperation::ReadResource { active_skills, .. } => active_skills.clone(),
+            _ => Vec::new(),
         };
         let mut request = effect_request(
             terminal_actor(),
             operation.action(),
-            format!("skill:{}", operation.skill_name()),
+            operation.resource(),
             serde_json::to_value(&operation)
                 .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
@@ -1763,6 +1831,107 @@ impl Runtime {
             .await?;
         serde_json::from_slice(&released.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Create a new installed data-only skill through approval and a one-use permit.
+    pub async fn scaffold_skill(
+        &self,
+        name: &str,
+        description: &str,
+        instructions: &str,
+        resource_dirs: &[String],
+    ) -> Result<SkillScaffoldResult, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::Scaffold {
+                name: name.into(),
+                description: description.into(),
+                instructions: instructions.into(),
+                resource_dirs: resource_dirs.to_vec(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Inspect metadata and hashes for an installed user skill through policy.
+    pub async fn inspect_skill(&self, name: &str) -> Result<SkillInspection, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::Inspect { name: name.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Read one authorable installed user-skill file through policy.
+    pub async fn read_skill_file(
+        &self,
+        name: &str,
+        path: &str,
+    ) -> Result<SkillFileRead, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::ReadFile {
+                name: name.into(),
+                path: path.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Write one installed user-skill file through approval and optimistic concurrency.
+    pub async fn write_skill_file(
+        &self,
+        name: &str,
+        path: &str,
+        content: &str,
+        expected_sha256: Option<&str>,
+    ) -> Result<SkillWriteResult, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::WriteFile {
+                name: name.into(),
+                path: path.into(),
+                content: content.into(),
+                expected_sha256: expected_sha256.map(Into::into),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Validate an installed user skill through policy.
+    pub async fn validate_installed_skill(
+        &self,
+        name: &str,
+    ) -> Result<SkillValidationResult, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::ValidateInstalled { name: name.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Validate a workspace-local skill directory through policy.
+    pub async fn validate_local_skill(
+        &self,
+        path: &str,
+    ) -> Result<SkillValidationResult, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::ValidateLocal { path: path.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Install a validated workspace-local skill through approval and a one-use permit.
+    pub async fn install_local_skill(
+        &self,
+        path: &str,
+    ) -> Result<SkillInstallResult, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::InstallLocal { path: path.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// List resources for an explicitly active skill through the permission boundary.
@@ -3385,7 +3554,7 @@ impl GatewayToolExecutor {
         let mut request = effect_request(
             model_actor(call, &context),
             &action,
-            format!("skill:{}", operation.skill_name()),
+            operation.resource(),
             serde_json::to_value(operation)
                 .map_err(|error| ToolError::Failed(error.to_string()))?,
         );
@@ -4210,6 +4379,75 @@ impl ToolExecutor for GatewayToolExecutor {
                         rationale: optional_tool_string(&call, "rationale")?
                             .unwrap_or_default()
                             .into(),
+                    },
+                )
+                .await?
+            }
+            "skill.scaffold" => {
+                self.execute_skill_tool(
+                    &call,
+                    context,
+                    SkillOperation::Scaffold {
+                        name: required_tool_string(&call, "name")?.into(),
+                        description: required_tool_string(&call, "description")?.into(),
+                        instructions: required_tool_string(&call, "instructions")?.into(),
+                        resource_dirs: optional_tool_string_array(&call, "resource_dirs")?
+                            .unwrap_or_default(),
+                    },
+                )
+                .await?
+            }
+            "skill.inspect" => {
+                self.execute_skill_tool(
+                    &call,
+                    context,
+                    SkillOperation::Inspect {
+                        name: required_tool_string(&call, "name")?.into(),
+                    },
+                )
+                .await?
+            }
+            "skill.read" => {
+                self.execute_skill_tool(
+                    &call,
+                    context,
+                    SkillOperation::ReadFile {
+                        name: required_tool_string(&call, "name")?.into(),
+                        path: required_tool_string(&call, "path")?.into(),
+                    },
+                )
+                .await?
+            }
+            "skill.write" => {
+                self.execute_skill_tool(
+                    &call,
+                    context,
+                    SkillOperation::WriteFile {
+                        name: required_tool_string(&call, "name")?.into(),
+                        path: required_tool_string(&call, "path")?.into(),
+                        content: required_tool_string(&call, "content")?.into(),
+                        expected_sha256: optional_tool_string(&call, "expected_sha256")?
+                            .map(Into::into),
+                    },
+                )
+                .await?
+            }
+            "skill.validate" => {
+                let operation = if let Some(name) = optional_tool_string(&call, "name")? {
+                    SkillOperation::ValidateInstalled { name: name.into() }
+                } else {
+                    SkillOperation::ValidateLocal {
+                        path: required_tool_string(&call, "path")?.into(),
+                    }
+                };
+                self.execute_skill_tool(&call, context, operation).await?
+            }
+            "skill.install" => {
+                self.execute_skill_tool(
+                    &call,
+                    context,
+                    SkillOperation::InstallLocal {
+                        path: required_tool_string(&call, "path")?.into(),
                     },
                 )
                 .await?
@@ -5261,6 +5499,7 @@ struct ResearchEffectExecutor {
 
 struct SkillEffectExecutor {
     resources: Arc<SkillResourceService>,
+    authoring: Arc<SkillAuthoringService>,
 }
 
 #[async_trait]
@@ -5268,24 +5507,67 @@ impl EffectExecutor for SkillEffectExecutor {
     async fn execute(
         &self,
         request: &EffectRequest,
-        _permit: ExecutionPermit,
+        permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let operation: SkillOperation = serde_json::from_value(request.content.clone())
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
-        if request.action != operation.action()
-            || request.resource != format!("skill:{}", operation.skill_name())
-        {
+        if request.action != operation.action() || request.resource != operation.resource() {
             return Err(ExecutionError::Failed(
-                "skill resource request does not match authorized content".into(),
+                "skill request does not match authorized content".into(),
             ));
         }
         let value = match operation {
+            SkillOperation::Scaffold {
+                name,
+                description,
+                instructions,
+                resource_dirs,
+            } => serde_json::to_value(
+                self.authoring
+                    .scaffold(&permit, &name, &description, &instructions, &resource_dirs)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+            SkillOperation::Inspect { name } => serde_json::to_value(
+                self.authoring
+                    .inspect_installed(&permit, &name)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+            SkillOperation::ReadFile { name, path } => serde_json::to_value(
+                self.authoring
+                    .read_installed(&permit, &name, &path)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+            SkillOperation::WriteFile {
+                name,
+                path,
+                content,
+                expected_sha256,
+            } => serde_json::to_value(
+                self.authoring
+                    .write_installed(&permit, &name, &path, &content, expected_sha256.as_deref())
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+            SkillOperation::ValidateInstalled { name } => serde_json::to_value(
+                self.authoring
+                    .validate_installed(&permit, &name)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+            SkillOperation::ValidateLocal { path } => serde_json::to_value(
+                self.authoring
+                    .validate_local(&permit, Path::new(&path))
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+            SkillOperation::InstallLocal { path } => serde_json::to_value(
+                self.authoring
+                    .install_local(&permit, Path::new(&path))
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
             SkillOperation::ListResources {
                 skill_name,
                 active_skills,
             } => serde_json::to_value(
                 self.resources
-                    .list_resources(&skill_name, &active_skills)
+                    .list_resources(&permit, &skill_name, &active_skills)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?,
             ),
             SkillOperation::ReadResource {
@@ -5294,7 +5576,7 @@ impl EffectExecutor for SkillEffectExecutor {
                 active_skills,
             } => serde_json::to_value(
                 self.resources
-                    .read_resource(&skill_name, &path, &active_skills)
+                    .read_resource(&permit, &skill_name, &path, &active_skills)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?,
             ),
         }
@@ -5792,8 +6074,9 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 mod tests {
     use super::{
         GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, ProviderProfileConfig,
-        ResearchSearchConfig, RuntimeConfig, SkillEffectExecutor, WorkEffectExecutor,
-        goal_objective_from_plan, recover_interrupted_subagents, recover_unknown_effects,
+        ResearchSearchConfig, RuntimeConfig, SkillEffectExecutor, SkillOperation,
+        SkillScaffoldResult, WorkEffectExecutor, goal_objective_from_plan,
+        recover_interrupted_subagents, recover_unknown_effects,
     };
     use colossus_contracts::{
         Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, GoalStatus,
@@ -5804,7 +6087,9 @@ mod tests {
         EventJournal, ModelProvider, ModelProviderError, SkillRepository, ToolExecutor,
     };
     use colossus_provider::ProviderKind;
-    use colossus_skills::{FilesystemSkillRepository, SkillResourceService, SkillRoot};
+    use colossus_skills::{
+        FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
+    };
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
     use std::{
@@ -6128,6 +6413,13 @@ surprise: true
         );
         let skill_executor = Arc::new(SkillEffectExecutor {
             resources: Arc::new(SkillResourceService::new(repository)),
+            authoring: Arc::new(
+                SkillAuthoringService::new(
+                    directory.path().join("user-skills"),
+                    directory.path().canonicalize().expect("workspace"),
+                )
+                .expect("authoring"),
+            ),
         });
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
         let gateway = Arc::new(colossus_policy::EffectGateway::new(
@@ -6188,6 +6480,66 @@ surprise: true
             .map(|event| event.event_type)
             .collect::<Vec<_>>();
         assert!(event_types.contains(&"effect.release_requested.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn skill_authoring_mutation_cannot_execute_without_approval_permit() {
+        let directory = tempdir().expect("tempdir");
+        let workspace = directory.path().canonicalize().expect("workspace");
+        let repository: Arc<dyn SkillRepository> = Arc::new(
+            FilesystemSkillRepository::new(Vec::new(), false, Vec::new()).expect("repository"),
+        );
+        let executor = SkillEffectExecutor {
+            resources: Arc::new(SkillResourceService::new(repository)),
+            authoring: Arc::new(
+                SkillAuthoringService::new(directory.path().join("user"), workspace)
+                    .expect("authoring"),
+            ),
+        };
+        let operation = SkillOperation::Scaffold {
+            name: "permit-demo".into(),
+            description: "Permit-bound skill".into(),
+            instructions: "Data-only instructions.".into(),
+            resource_dirs: Vec::new(),
+        };
+        let request = colossus_policy::effect_request(
+            colossus_policy::system_actor("skill-test"),
+            operation.action(),
+            operation.resource(),
+            serde_json::to_value(&operation).expect("operation"),
+        );
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = Arc::new(
+            colossus_policy::BuiltInPolicy::offline_default()
+                .with_action("skill.scaffold", DecisionOutcome::RequireApproval),
+        );
+        let denied = colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            policy.clone(),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["skill.scaffold".into()]),
+            [26_u8; 32],
+        )
+        .execute(request.clone(), &executor)
+        .await;
+        assert!(denied.is_err());
+        assert!(!directory.path().join("user/permit-demo").exists());
+
+        let released = colossus_policy::EffectGateway::new(
+            journal,
+            policy,
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test-operator".into(),
+            }),
+            colossus_policy::SafetyKernel::new(["skill.scaffold".into()]),
+            [27_u8; 32],
+        )
+        .execute(request, &executor)
+        .await
+        .expect("approved scaffold");
+        let result: SkillScaffoldResult = serde_json::from_slice(&released.bytes).expect("result");
+        assert_eq!(result.name, "permit-demo");
+        assert!(directory.path().join("user/permit-demo/SKILL.md").is_file());
     }
 
     #[test]

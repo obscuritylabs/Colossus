@@ -31,6 +31,13 @@ cargo run -p colossus-cli --bin colossus-rs -- telemetry metrics
 cargo run -p colossus-cli --bin colossus-rs -- skills list
 cargo run -p colossus-cli --bin colossus-rs -- skills show coding
 cargo run -p colossus-cli --bin colossus-rs -- run --skill coding 'Implement the scoped change'
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
+  skills scaffold my-skill 'My data-only skill' --resource-dir references
+cargo run -p colossus-cli --bin colossus-rs -- skills inspect my-skill
+cargo run -p colossus-cli --bin colossus-rs -- skills file-read my-skill SKILL.md
+cargo run -p colossus-cli --bin colossus-rs -- skills validate path/to/local-skill --local
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
+  skills install path/to/local-skill
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
@@ -71,8 +78,11 @@ Later roots cannot override earlier names unless `skills.allowUserOverrides` is 
 required tools must already exist in the configured catalog and activation never grants
 policy permission. `skill.resource.list/read` work only for skills active on the current
 run, cross the effect gateway and post-effect release gate, reject traversal and symlinks,
-and return scripts only as bounded UTF-8 text. Skill authoring/install remains the next
-extension slice; executable activation belongs exclusively to verified packs.
+and return scripts only as bounded UTF-8 text. Authoring mutates only the configured user
+library: scaffold, write, and install require approval by default; existing files require
+the SHA-256 returned by `skills file-read`; candidates are validated before replacement;
+and local install sources must be traversal-free, symlink-free workspace directories.
+Executable activation belongs exclusively to verified packs.
 
 Normal runs create a durable session automatically and return its id. Use
 `run --session ID` for an exact session, `run --resume` for the most recently updated

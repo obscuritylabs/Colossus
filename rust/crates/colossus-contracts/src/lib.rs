@@ -1117,6 +1117,102 @@ pub struct SkillResourceRead {
     pub content: String,
 }
 
+/// Metadata-only inventory entry for one authorable skill file.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillFileEntry {
+    /// POSIX path relative to the skill root.
+    pub path: String,
+    /// Exact file size.
+    pub size: u64,
+    /// SHA-256 of the file bytes.
+    pub sha256: String,
+}
+
+/// Bounded inspection result for one installed or local skill directory.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillInspection {
+    /// Validated manifest.
+    pub manifest: SkillManifest,
+    /// Stable source label without instruction content.
+    pub source: String,
+    /// Deterministic metadata-only file inventory.
+    pub files: Vec<SkillFileEntry>,
+    /// Hash over the validated manifest, instructions, and file inventory.
+    pub content_sha256: String,
+}
+
+/// One bounded UTF-8 authoring read from an installed user skill.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillFileRead {
+    /// Installed skill name.
+    pub name: String,
+    /// POSIX path relative to its root.
+    pub path: String,
+    /// Exact UTF-8 byte length.
+    pub size: u64,
+    /// SHA-256 used for optimistic writes.
+    pub sha256: String,
+    /// Released text content.
+    pub content: String,
+}
+
+/// Result of an atomic optimistic-concurrency authoring write.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillWriteResult {
+    /// Installed skill name.
+    pub name: String,
+    /// POSIX path relative to its root.
+    pub path: String,
+    /// Hash observed before replacement, absent for a new file.
+    pub previous_sha256: Option<String>,
+    /// Hash of the committed content.
+    pub sha256: String,
+    /// Whether the file was newly created.
+    pub created: bool,
+}
+
+/// Result of creating a new installed data-only skill skeleton.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillScaffoldResult {
+    /// Installed skill name.
+    pub name: String,
+    /// Files created relative to the skill root.
+    pub files: Vec<String>,
+    /// Hash of the validated installed skill.
+    pub content_sha256: String,
+}
+
+/// Result of validating an installed or workspace-local skill.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillValidationResult {
+    /// Validated skill name.
+    pub name: String,
+    /// Stable source label.
+    pub source: String,
+    /// Deterministic file count.
+    pub file_count: usize,
+    /// Hash of the validated skill.
+    pub content_sha256: String,
+}
+
+/// Result of installing a validated workspace-local skill.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillInstallResult {
+    /// Installed skill name.
+    pub name: String,
+    /// Source hash copied into the user library.
+    pub content_sha256: String,
+    /// Deterministic number of installed files.
+    pub file_count: usize,
+}
+
 /// Provenance for a durable key decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

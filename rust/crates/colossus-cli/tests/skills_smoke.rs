@@ -25,6 +25,7 @@ fn skill_activation_and_resources_are_durable_policy_bound_and_data_only() {
     let directory = tempdir().expect("directory");
     let workflows = directory.path().join("workflows");
     let skills = directory.path().join("skills");
+    let user_skills = directory.path().join("user-skills");
     let skill = skills.join("demo");
     fs::create_dir_all(skill.join("references")).expect("skill directory");
     fs::create_dir_all(&workflows).expect("workflows");
@@ -67,7 +68,7 @@ skills:
   allowUserOverrides: false
   bundled: {missing}
   repository: {skills}
-  user: {missing}
+  user: {user_skills}
   disabled: []
 agent:
   maxTurns: 4
@@ -94,6 +95,7 @@ sandbox:
             anchor = anchor.display(),
             workflows = workflows.display(),
             skills = skills.display(),
+            user_skills = user_skills.display(),
             missing = directory.path().join("missing").display(),
         ),
     )
@@ -184,4 +186,135 @@ sandbox:
             .expect("detail serialization")
             .contains("Use the demo instructions safely")
     );
+
+    let denied = run(
+        binary,
+        &config,
+        directory.path(),
+        &[
+            "skills",
+            "scaffold",
+            "denied",
+            "Denied scaffold",
+            "--instructions",
+            "Must not be written.",
+        ],
+    );
+    assert!(!denied.status.success());
+    assert!(!user_skills.join("denied").exists());
+
+    let scaffold = run(
+        binary,
+        &config,
+        directory.path(),
+        &[
+            "--approval-mode",
+            "full-access",
+            "skills",
+            "scaffold",
+            "authored",
+            "Authored skill",
+            "--instructions",
+            "Initial authoring instructions.",
+            "--resource-dir",
+            "references",
+        ],
+    );
+    assert!(
+        scaffold.status.success(),
+        "{}",
+        String::from_utf8_lossy(&scaffold.stderr)
+    );
+    let inspected = run(
+        binary,
+        &config,
+        directory.path(),
+        &["skills", "inspect", "authored"],
+    );
+    assert!(inspected.status.success());
+    let inspected: Value = serde_json::from_slice(&inspected.stdout).expect("inspection JSON");
+    assert_eq!(inspected["manifest"]["name"], "authored");
+    assert!(inspected.get("instructions").is_none());
+
+    let file = run(
+        binary,
+        &config,
+        directory.path(),
+        &["skills", "file-read", "authored", "SKILL.md"],
+    );
+    assert!(file.status.success());
+    let file: Value = serde_json::from_slice(&file.stdout).expect("file JSON");
+    let expected = file["sha256"].as_str().expect("hash");
+    let write = run(
+        binary,
+        &config,
+        directory.path(),
+        &[
+            "--approval-mode",
+            "full-access",
+            "skills",
+            "write",
+            "authored",
+            "SKILL.md",
+            "Updated authoring instructions.",
+            "--expected-sha256",
+            expected,
+        ],
+    );
+    assert!(
+        write.status.success(),
+        "{}",
+        String::from_utf8_lossy(&write.stderr)
+    );
+    let stale = run(
+        binary,
+        &config,
+        directory.path(),
+        &[
+            "--approval-mode",
+            "full-access",
+            "skills",
+            "write",
+            "authored",
+            "SKILL.md",
+            "Stale instructions.",
+            "--expected-sha256",
+            expected,
+        ],
+    );
+    assert!(!stale.status.success());
+
+    let local = directory.path().join("local-source/local");
+    fs::create_dir_all(local.join("examples")).expect("local source");
+    fs::write(local.join("SKILL.md"), "Local instructions.\n").expect("local instructions");
+    fs::write(
+        local.join("manifest.json"),
+        r#"{"name":"local","version":"1.0.0","description":"Local install source","triggers":[],"required_tools":[],"permissions":[],"offline_compatible":true}"#,
+    )
+    .expect("local manifest");
+    let validation = run(
+        binary,
+        &config,
+        directory.path(),
+        &["skills", "validate", "local-source/local", "--local"],
+    );
+    assert!(validation.status.success());
+    let install = run(
+        binary,
+        &config,
+        directory.path(),
+        &[
+            "--approval-mode",
+            "full-access",
+            "skills",
+            "install",
+            "local-source/local",
+        ],
+    );
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(user_skills.join("local/SKILL.md").is_file());
 }

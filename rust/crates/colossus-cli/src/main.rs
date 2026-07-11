@@ -1026,6 +1026,35 @@ enum SkillsAction {
         #[arg(long = "skill")]
         skills: Vec<String>,
     },
+    /// Create a new installed user skill (approval required).
+    Scaffold {
+        name: String,
+        description: String,
+        #[arg(long)]
+        instructions: Option<String>,
+        #[arg(long = "resource-dir")]
+        resource_dirs: Vec<String>,
+    },
+    /// Inspect an installed user skill without returning file bodies.
+    Inspect { name: String },
+    /// Read one authorable installed user-skill file.
+    FileRead { name: String, path: String },
+    /// Write one authorable installed user-skill file (approval required).
+    Write {
+        name: String,
+        path: String,
+        content: String,
+        #[arg(long)]
+        expected_sha256: Option<String>,
+    },
+    /// Validate an installed name or a workspace-local directory with --local.
+    Validate {
+        target: String,
+        #[arg(long)]
+        local: bool,
+    },
+    /// Install a validated workspace-local skill (approval required).
+    Install { path: String },
     /// List bounded regular resources for an explicitly active skill.
     Resources { name: String },
     /// Read one bounded UTF-8 resource through the effect gateway.
@@ -1948,6 +1977,48 @@ async fn main() -> Result<(), Box<dyn Error>> {
             SkillsAction::Duplicates => print_json(&runtime.skill_duplicates()?)?,
             SkillsAction::Compose { prompt, skills } => {
                 print_json(&runtime.compose_skills("You are Colossus.", &prompt, &skills, &[])?)?
+            }
+            SkillsAction::Scaffold {
+                name,
+                description,
+                instructions,
+                resource_dirs,
+            } => {
+                let instructions = instructions
+                    .unwrap_or_else(|| format!("# {name}\n\nAdd data-only instructions here.\n"));
+                print_json(
+                    &runtime
+                        .scaffold_skill(&name, &description, &instructions, &resource_dirs)
+                        .await?,
+                )?;
+            }
+            SkillsAction::Inspect { name } => {
+                print_json(&runtime.inspect_skill(&name).await?)?;
+            }
+            SkillsAction::FileRead { name, path } => {
+                print_json(&runtime.read_skill_file(&name, &path).await?)?;
+            }
+            SkillsAction::Write {
+                name,
+                path,
+                content,
+                expected_sha256,
+            } => {
+                print_json(
+                    &runtime
+                        .write_skill_file(&name, &path, &content, expected_sha256.as_deref())
+                        .await?,
+                )?;
+            }
+            SkillsAction::Validate { target, local } => {
+                if local {
+                    print_json(&runtime.validate_local_skill(&target).await?)?;
+                } else {
+                    print_json(&runtime.validate_installed_skill(&target).await?)?;
+                }
+            }
+            SkillsAction::Install { path } => {
+                print_json(&runtime.install_local_skill(&path).await?)?;
             }
             SkillsAction::Resources { name } => {
                 print_json(

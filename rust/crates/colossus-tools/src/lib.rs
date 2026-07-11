@@ -582,6 +582,89 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "skill.scaffold".into(),
+            description: "Create a validated data-only skill skeleton in the configured user library.".into(),
+            input_schema: object_schema(
+                json!({
+                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "description": {"type": "string", "minLength": 1, "maxLength": 8192},
+                    "instructions": {"type": "string", "minLength": 1, "maxLength": 262144},
+                    "resource_dirs": {"type": "array", "maxItems": 5, "uniqueItems": true, "items": {"type": "string", "enum": ["assets", "examples", "references", "scripts", "tests"]}, "default": []}
+                }),
+                &["name", "description", "instructions"],
+            ),
+            effect_action: Some("skill.scaffold".into()),
+            capability: Some("skill.scaffold".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "skill.inspect".into(),
+            description: "Inspect manifests and hashes for one installed user skill without releasing file bodies.".into(),
+            input_schema: object_schema(
+                json!({"name": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["name"],
+            ),
+            effect_action: Some("skill.inspect".into()),
+            capability: Some("skill.inspect".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "skill.read".into(),
+            description: "Read one bounded UTF-8 file from an installed user skill for authoring.".into(),
+            input_schema: object_schema(
+                json!({
+                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096}
+                }),
+                &["name", "path"],
+            ),
+            effect_action: Some("skill.read".into()),
+            capability: Some("skill.read".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "skill.write".into(),
+            description: "Write one validated installed user-skill file; existing files require their current SHA-256.".into(),
+            input_schema: object_schema(
+                json!({
+                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "content": {"type": "string", "maxLength": 262144},
+                    "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }),
+                &["name", "path", "content"],
+            ),
+            effect_action: Some("skill.write".into()),
+            capability: Some("skill.write".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "skill.validate".into(),
+            description: "Validate an installed user skill by name or a workspace-local skill directory by path.".into(),
+            input_schema: object_schema_with(
+                json!({
+                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096}
+                }),
+                &[],
+                json!({"oneOf": [{"required": ["name"]}, {"required": ["path"]}], "maxProperties": 1}),
+            ),
+            effect_action: Some("skill.validate".into()),
+            capability: Some("skill.validate".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "skill.install".into(),
+            description: "Validate and install a workspace-local data-only skill into the configured user library.".into(),
+            input_schema: object_schema(
+                json!({"path": {"type": "string", "minLength": 1, "maxLength": 4096}}),
+                &["path"],
+            ),
+            effect_action: Some("skill.install".into()),
+            capability: Some("skill.install".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
             name: "skill.resource.list".into(),
             description: "List bounded regular resources for a skill active on this turn.".into(),
             input_schema: object_schema(
@@ -816,6 +899,55 @@ mod tests {
                 Err(ToolError::InvalidArguments { .. })
             ));
         }
+    }
+
+    #[test]
+    fn skill_authoring_tools_are_strict_and_keep_distinct_policy_identities() {
+        let registry = StaticToolRegistry::builtins(&[
+            "skill.scaffold".into(),
+            "skill.inspect".into(),
+            "skill.read".into(),
+            "skill.write".into(),
+            "skill.validate".into(),
+            "skill.install".into(),
+        ])
+        .expect("catalog");
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
+            assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+        }
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "validate-name".into(),
+                    name: "skill.validate".into(),
+                    arguments: json!({"name": "demo"}),
+                })
+                .is_ok()
+        );
+        for arguments in [json!({}), json!({"name": "demo", "path": "skills/demo"})] {
+            assert!(matches!(
+                registry.validate(&ToolCall {
+                    call_id: "invalid".into(),
+                    name: "skill.validate".into(),
+                    arguments,
+                }),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "write".into(),
+                name: "skill.write".into(),
+                arguments: json!({
+                    "name": "demo",
+                    "path": "SKILL.md",
+                    "content": "new",
+                    "expected_sha256": "not-a-hash",
+                }),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
     }
 
     #[test]
