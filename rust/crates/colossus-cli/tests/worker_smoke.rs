@@ -88,7 +88,7 @@ storage:
     anchor_path: {anchor}
 policy:
   kind: built_in
-  allow_actions: [filesystem.read, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.update, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
+  allow_actions: [filesystem.read, process.spawn, research.run, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.update, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
   approval_actions: [plan.approve_request]
   require_post_effect: true
 workflows:
@@ -118,7 +118,7 @@ sandbox:
   filesystem:
     - root: {workspace}
       mode: read
-  executables: []
+  executables: [/bin/echo]
   environment: []
   networkDestinations: []
   timeoutMs: 5000
@@ -369,6 +369,69 @@ sandbox:
         &["memories", "supersede", memory_id, "worker IPC replacement"],
     );
     assert!(superseded.status.success());
+
+    let research = run(
+        binary,
+        &config,
+        &[
+            "research",
+            "run",
+            "Summarize worker IPC",
+            "--session",
+            session_id,
+            "--depth",
+            "quick",
+            "--source",
+            "repo",
+        ],
+    );
+    assert!(
+        research.status.success(),
+        "{}",
+        String::from_utf8_lossy(&research.stderr)
+    );
+    let research: Value = serde_json::from_slice(&research.stdout).expect("research JSON");
+    assert_eq!(research["session_id"], session_id);
+
+    let process = run(
+        binary,
+        &config,
+        &[
+            "process",
+            "run",
+            "/bin/echo",
+            "--cwd",
+            directory.path().to_str().expect("workspace path"),
+            "--",
+            "worker-process",
+        ],
+    );
+    assert!(
+        process.status.success(),
+        "{}",
+        String::from_utf8_lossy(&process.stderr)
+    );
+    let process: Value = serde_json::from_slice(&process.stdout).expect("process JSON");
+    assert_eq!(process["exit_code"], 0);
+
+    let mcp = run(binary, &config, &["mcp", "servers"]);
+    assert!(mcp.status.success());
+    let mcp: Value = serde_json::from_slice(&mcp.stdout).expect("MCP JSON");
+    assert_eq!(mcp.as_array().map(Vec::len), Some(0));
+
+    let skills = run(binary, &config, &["skills", "list"]);
+    assert!(skills.status.success());
+    let skills: Value = serde_json::from_slice(&skills.stdout).expect("skills JSON");
+    assert!(skills.is_array());
+    let packs = run(binary, &config, &["packs", "list"]);
+    assert!(packs.status.success());
+    let packs: Value = serde_json::from_slice(&packs.stdout).expect("packs JSON");
+    assert_eq!(packs.as_array().map(Vec::len), Some(0));
+    let integrations = run(binary, &config, &["integrations", "list"]);
+    assert!(integrations.status.success());
+    let integrations: Value =
+        serde_json::from_slice(&integrations.stdout).expect("integrations JSON");
+    assert_eq!(integrations.as_array().map(Vec::len), Some(0));
 
     let workflow = directory.path().join("smoke.yaml");
     fs::write(

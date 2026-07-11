@@ -1947,6 +1947,35 @@ async fn dispatch_to_worker_if_active(
             }
             Ok(true)
         }
+        Command::Process(command) => {
+            let operation = match &command.command {
+                ProcessAction::Run {
+                    executable,
+                    cwd,
+                    environment,
+                    args,
+                } => WorkerOperation::ProcessRun {
+                    executable: executable.to_string_lossy().into_owned(),
+                    cwd: cwd.to_string_lossy().into_owned(),
+                    args: args.clone(),
+                    environment: parse_environment(environment.clone())?,
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::Network(command) => {
+            let operation = match &command.command {
+                NetworkAction::Get { url } => WorkerOperation::NetworkGet { url: url.clone() },
+            };
+            let result = client.call(operation).await?;
+            let encoded = result
+                .get("bytes_base64")
+                .and_then(Value::as_str)
+                .ok_or_else(|| cli_error("worker network response has no bytes_base64"))?;
+            println!("{}", String::from_utf8_lossy(&BASE64.decode(encoded)?));
+            Ok(true)
+        }
         Command::Run {
             prompt,
             role,
@@ -2100,6 +2129,231 @@ async fn dispatch_to_worker_if_active(
                 },
             };
             print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::Research(command) => {
+            let operation = match &command.command {
+                ResearchAction::Run {
+                    question,
+                    session,
+                    depth,
+                    sources,
+                } => WorkerOperation::ResearchRun {
+                    question: question.clone(),
+                    session_id: session.clone(),
+                    depth: (*depth).into(),
+                    source_kinds: sources.iter().copied().map(Into::into).collect(),
+                },
+                ResearchAction::List { session, limit } => WorkerOperation::ResearchList {
+                    session_id: session.clone(),
+                    limit: *limit,
+                },
+                ResearchAction::Show { run_id } => WorkerOperation::ResearchGet {
+                    run_id: run_id.clone(),
+                },
+                ResearchAction::Sources { run_id } => WorkerOperation::ResearchSources {
+                    run_id: run_id.clone(),
+                },
+                ResearchAction::Claims { run_id } => WorkerOperation::ResearchClaims {
+                    run_id: run_id.clone(),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, ResearchAction::Show { .. }) && result.is_null() {
+                return Err("research run not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Skills(command) => {
+            let operation = match &command.command {
+                SkillsAction::List => WorkerOperation::SkillList,
+                SkillsAction::Show { name } => WorkerOperation::SkillGet { name: name.clone() },
+                SkillsAction::Duplicates => WorkerOperation::SkillDuplicates,
+                SkillsAction::Compose { prompt, skills } => WorkerOperation::SkillCompose {
+                    prompt: prompt.clone(),
+                    skills: skills.clone(),
+                },
+                SkillsAction::Scaffold {
+                    name,
+                    description,
+                    instructions,
+                    resource_dirs,
+                } => WorkerOperation::SkillScaffold {
+                    name: name.clone(),
+                    description: description.clone(),
+                    instructions: instructions.clone().unwrap_or_else(|| {
+                        format!("# {name}\n\nAdd data-only instructions here.\n")
+                    }),
+                    resource_dirs: resource_dirs.clone(),
+                },
+                SkillsAction::Inspect { name } => {
+                    WorkerOperation::SkillInspect { name: name.clone() }
+                }
+                SkillsAction::FileRead { name, path } => WorkerOperation::SkillFileRead {
+                    name: name.clone(),
+                    path: path.clone(),
+                },
+                SkillsAction::Write {
+                    name,
+                    path,
+                    content,
+                    expected_sha256,
+                } => WorkerOperation::SkillWrite {
+                    name: name.clone(),
+                    path: path.clone(),
+                    content: content.clone(),
+                    expected_sha256: expected_sha256.clone(),
+                },
+                SkillsAction::Validate { target, local } => WorkerOperation::SkillValidate {
+                    target: target.clone(),
+                    local: *local,
+                },
+                SkillsAction::Install { path } => {
+                    WorkerOperation::SkillInstall { path: path.clone() }
+                }
+                SkillsAction::Resources { name } => {
+                    WorkerOperation::SkillResources { name: name.clone() }
+                }
+                SkillsAction::Read { name, path } => WorkerOperation::SkillResourceRead {
+                    name: name.clone(),
+                    path: path.clone(),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, SkillsAction::Show { .. }) && result.is_null() {
+                return Err("skill not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Packs(command) => {
+            let operation = match &command.command {
+                PacksAction::List { limit } => WorkerOperation::PackList { limit: *limit },
+                PacksAction::Show { name } => WorkerOperation::PackGet { name: name.clone() },
+                PacksAction::Verify { path } | PacksAction::Validate { path } => {
+                    WorkerOperation::PackVerify {
+                        path: path.to_string_lossy().into_owned(),
+                    }
+                }
+                PacksAction::Install {
+                    path,
+                    allow_untrusted,
+                } => WorkerOperation::PackInstall {
+                    path: path.to_string_lossy().into_owned(),
+                    allow_untrusted: *allow_untrusted,
+                },
+                PacksAction::Enable { name } => WorkerOperation::PackEnable { name: name.clone() },
+                PacksAction::Disable { name } => {
+                    WorkerOperation::PackDisable { name: name.clone() }
+                }
+                PacksAction::Uninstall { name } => {
+                    WorkerOperation::PackUninstall { name: name.clone() }
+                }
+                PacksAction::Call { tool } => WorkerOperation::PackCall { tool: tool.clone() },
+                PacksAction::Trust(command) => match &command.command {
+                    PackTrustAction::List { limit } => {
+                        WorkerOperation::PackTrustList { limit: *limit }
+                    }
+                    PackTrustAction::Add {
+                        publisher,
+                        public_key,
+                    } => WorkerOperation::PackTrustAdd {
+                        publisher: publisher.clone(),
+                        public_key: public_key.clone(),
+                    },
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, PacksAction::Show { .. }) && result.is_null() {
+                return Err("pack not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Bundle(command) => {
+            let operation = match &command.command {
+                BundleAction::Verify { path } => WorkerOperation::BundleVerify {
+                    path: path.to_string_lossy().into_owned(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::Integrations(command) => {
+            let operation = match &command.command {
+                IntegrationsAction::List { limit } => {
+                    WorkerOperation::IntegrationList { limit: *limit }
+                }
+                IntegrationsAction::Show { name } => {
+                    WorkerOperation::IntegrationGet { name: name.clone() }
+                }
+                IntegrationsAction::Connect {
+                    name,
+                    base_url,
+                    auth_type,
+                    credential_reference,
+                    username_reference,
+                    password_reference,
+                    auth_header,
+                    auth_scheme,
+                    scopes,
+                } => {
+                    let mode = auth_type.unwrap_or(match name.as_str() {
+                        "github" => IntegrationAuthMode::Bearer,
+                        "searxng" if credential_reference.is_some() => IntegrationAuthMode::ApiKey,
+                        _ => IntegrationAuthMode::None,
+                    });
+                    let mut credential_references = BTreeMap::new();
+                    if let Some(reference) = username_reference {
+                        credential_references.insert("username".into(), reference.clone());
+                    }
+                    if let Some(reference) = password_reference {
+                        credential_references.insert("password".into(), reference.clone());
+                    }
+                    WorkerOperation::IntegrationConnect {
+                        name: name.clone(),
+                        base_url: base_url.clone(),
+                        auth: integration_auth(mode, auth_header.clone(), auth_scheme.clone()),
+                        credential_reference: credential_reference.clone(),
+                        credential_references,
+                        scopes: scopes.clone(),
+                    }
+                }
+                IntegrationsAction::ImportOpenapi {
+                    name,
+                    spec,
+                    base_url,
+                    auth_type,
+                    credential_reference,
+                    auth_header,
+                    auth_scheme,
+                    scopes,
+                } => WorkerOperation::IntegrationImportOpenApi {
+                    name: name.clone(),
+                    document_source: if spec.starts_with('@') {
+                        spec.clone()
+                    } else {
+                        format!("@{spec}")
+                    },
+                    base_url: base_url.clone(),
+                    auth: integration_auth(*auth_type, auth_header.clone(), auth_scheme.clone()),
+                    credential_reference: credential_reference.clone(),
+                    scopes: scopes.clone(),
+                },
+                IntegrationsAction::Disconnect { name } => {
+                    WorkerOperation::IntegrationDisconnect { name: name.clone() }
+                }
+                IntegrationsAction::Call { tool, arguments } => WorkerOperation::IntegrationCall {
+                    tool: tool.clone(),
+                    arguments_source: arguments.clone(),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, IntegrationsAction::Show { .. }) && result.is_null() {
+                return Err("integration not found".into());
+            }
+            print_json(&result)?;
             Ok(true)
         }
         Command::Tasks(command) => {
@@ -2410,16 +2664,30 @@ async fn dispatch_to_worker_if_active(
             print_json(&result)?;
             Ok(true)
         }
+        Command::Mcp(command) => {
+            let operation = match &command.command {
+                McpAction::Servers => WorkerOperation::McpServers,
+                McpAction::Tools { server } => WorkerOperation::McpTools {
+                    server: server.clone(),
+                },
+                McpAction::Call {
+                    server,
+                    tool,
+                    arguments,
+                } => WorkerOperation::McpCall {
+                    server: server.clone(),
+                    tool: tool.clone(),
+                    arguments_source: arguments.clone(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
         Command::Repl { session, resume } => {
             worker_repl(&client, session.clone(), *resume).await?;
             Ok(true)
         }
         Command::Worker { .. } | Command::Config(_) | Command::SandboxHelper => Ok(false),
-        _ => Err(format!(
-            "authenticated worker is active at {}; this command is not routed over IPC yet",
-            client.endpoint()
-        )
-        .into()),
     }
 }
 

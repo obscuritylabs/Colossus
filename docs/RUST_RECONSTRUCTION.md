@@ -28,7 +28,8 @@ obsolete Go launcher.
   named-pipe framing, a pre-disclosure server handshake, connection-bound replay
   protection, streamed model events, session/workflow application operations, periodic
   safe draining, durable task/decision/plan/goal/subagent/memory operations, readiness,
-  clean shutdown, and automatic embedded fallback.
+  research/skill/pack/integration/MCP/process/network routing, clean shutdown, and
+  automatic embedded fallback.
 - Restartable projection workers with optimistic per-projection positions, atomic redb
   record/position commits, deterministic rebuilds, lag/readiness diagnostics, and
   default session, work, memory, and workflow reducers. Session and work repository
@@ -247,8 +248,7 @@ cutover. The following planned work remains:
   strict catalog validation, pure echo,
   permit-bound file list/read/search/write/replace, Git inspection, structured shell
   execution, and permit-bound HTTP GET are implemented.
-- Remaining worker IPC routing for research, skills/packs/integrations/MCP, and direct
-  process/network terminal operations, plus live Windows named-pipe acceptance.
+- Full worker-backed REPL slash-command parity and live Windows named-pipe acceptance.
 - Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,

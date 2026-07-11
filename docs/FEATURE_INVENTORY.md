@@ -584,6 +584,9 @@ Worker routing covers model runs, core REPL turns, sessions, workflows, audit an
 diagnostics, context and telemetry, plus canonical tasks, decisions, plans, goals,
 subagents, memories, and memory-index maintenance. Approval mode belongs to the worker
 process; a client-side approval override MUST fail rather than silently change authority.
+Research, skills, packs, bundles, integrations, MCP, process, and network commands use
+typed operations too; `@path` JSON and other file-backed inputs are read by the worker
+through the normal filesystem permission boundary rather than by the client.
 
 ## 13. Goal Mode
 

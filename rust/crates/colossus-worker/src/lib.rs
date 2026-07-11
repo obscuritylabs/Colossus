@@ -5,8 +5,9 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
-    AgentRunResult, DecisionPriority, DecisionStatus, GoalStatus, MemoryScope, MemoryStatus,
-    PlanStatus, PlanStep, ProviderEvent, SubagentStatus, TaskStatus,
+    AgentRunResult, DecisionPriority, DecisionStatus, GoalStatus, IntegrationAuth, MemoryScope,
+    MemoryStatus, PlanStatus, PlanStep, ProviderEvent, ResearchDepth, ResearchSourceKind,
+    SubagentStatus, TaskStatus,
 };
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeError};
 use hmac::{Hmac, Mac as _};
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -489,6 +490,256 @@ pub enum WorkerOperation {
     MemoryIndexSync,
     /// Rebuild the disposable memory index.
     MemoryIndexRebuild,
+    /// Run bounded durable research.
+    ResearchRun {
+        /// Research question.
+        question: String,
+        /// Existing session or none to create one.
+        session_id: Option<String>,
+        /// Research depth.
+        depth: ResearchDepth,
+        /// Enabled source lanes.
+        source_kinds: Vec<ResearchSourceKind>,
+    },
+    /// List canonical research runs.
+    ResearchList {
+        /// Optional session filter.
+        session_id: Option<String>,
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Reconstruct one research run.
+    ResearchGet {
+        /// Exact run identifier.
+        run_id: String,
+    },
+    /// List research evidence sources.
+    ResearchSources {
+        /// Exact run identifier.
+        run_id: String,
+    },
+    /// List source-backed research claims.
+    ResearchClaims {
+        /// Exact run identifier.
+        run_id: String,
+    },
+    /// Execute one exact process through the sandbox boundary.
+    ProcessRun {
+        /// Exact executable path.
+        executable: String,
+        /// Exact working directory.
+        cwd: String,
+        /// Literal argument vector.
+        args: Vec<String>,
+        /// Explicit environment values.
+        environment: BTreeMap<String, String>,
+    },
+    /// Fetch one exact URL through policy and quarantine.
+    NetworkGet {
+        /// Exact URL.
+        url: String,
+    },
+    /// List configured MCP servers without launching them.
+    McpServers,
+    /// Discover allowlisted MCP tools.
+    McpTools {
+        /// Optional exact server filter.
+        server: Option<String>,
+    },
+    /// Invoke one allowlisted MCP tool.
+    McpCall {
+        /// Exact server name.
+        server: String,
+        /// Exact tool name.
+        tool: String,
+        /// Inline JSON or a server-local `@path` reference.
+        arguments_source: String,
+    },
+    /// List selected declarative skill summaries.
+    SkillList,
+    /// Read one selected declarative skill.
+    SkillGet {
+        /// Exact skill name.
+        name: String,
+    },
+    /// Report duplicate skill names and winners.
+    SkillDuplicates,
+    /// Preview deterministic skill composition.
+    SkillCompose {
+        /// User prompt.
+        prompt: String,
+        /// Explicit skill names.
+        skills: Vec<String>,
+    },
+    /// Scaffold one installed user skill.
+    SkillScaffold {
+        /// Skill name.
+        name: String,
+        /// Skill description.
+        description: String,
+        /// Data-only instructions.
+        instructions: String,
+        /// Declared resource directories.
+        resource_dirs: Vec<String>,
+    },
+    /// Inspect installed skill metadata and hashes.
+    SkillInspect {
+        /// Exact skill name.
+        name: String,
+    },
+    /// Read one authorable skill file.
+    SkillFileRead {
+        /// Exact skill name.
+        name: String,
+        /// Relative authorable path.
+        path: String,
+    },
+    /// Write one authorable skill file.
+    SkillWrite {
+        /// Exact skill name.
+        name: String,
+        /// Relative authorable path.
+        path: String,
+        /// Replacement content.
+        content: String,
+        /// Optional optimistic content hash.
+        expected_sha256: Option<String>,
+    },
+    /// Validate an installed or workspace-local skill.
+    SkillValidate {
+        /// Installed name or local path.
+        target: String,
+        /// Whether target is a local path.
+        local: bool,
+    },
+    /// Install one validated workspace-local skill.
+    SkillInstall {
+        /// Server-local skill directory.
+        path: String,
+    },
+    /// List bounded resources for one explicitly active skill.
+    SkillResources {
+        /// Exact skill name.
+        name: String,
+    },
+    /// Read one bounded skill resource.
+    SkillResourceRead {
+        /// Exact skill name.
+        name: String,
+        /// Relative resource path.
+        path: String,
+    },
+    /// List canonical pack lifecycles.
+    PackList {
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Reconstruct one pack lifecycle.
+    PackGet {
+        /// Exact pack name.
+        name: String,
+    },
+    /// Verify one server-local pack.
+    PackVerify {
+        /// Server-local pack path.
+        path: String,
+    },
+    /// Install one verified pack.
+    PackInstall {
+        /// Server-local pack path.
+        path: String,
+        /// Explicit development override.
+        allow_untrusted: bool,
+    },
+    /// Enable one installed pack.
+    PackEnable {
+        /// Exact pack name.
+        name: String,
+    },
+    /// Disable one installed pack.
+    PackDisable {
+        /// Exact pack name.
+        name: String,
+    },
+    /// Uninstall one installed pack.
+    PackUninstall {
+        /// Exact pack name.
+        name: String,
+    },
+    /// Invoke one active fixed-argument pack tool.
+    PackCall {
+        /// Exact generated tool name.
+        tool: String,
+    },
+    /// List pack publisher trust bindings.
+    PackTrustList {
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Add a pack publisher trust binding.
+    PackTrustAdd {
+        /// Publisher identifier.
+        publisher: String,
+        /// Base64 Ed25519 public key.
+        public_key: String,
+    },
+    /// Verify a signed offline release bundle.
+    BundleVerify {
+        /// Server-local bundle path.
+        path: String,
+    },
+    /// List safe integration summaries.
+    IntegrationList {
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Reconstruct one integration without credentials.
+    IntegrationGet {
+        /// Exact integration name.
+        name: String,
+    },
+    /// Connect one first-party integration.
+    IntegrationConnect {
+        /// Exact integration name.
+        name: String,
+        /// Optional base URL.
+        base_url: Option<String>,
+        /// Authentication shape with no values.
+        auth: IntegrationAuth,
+        /// Optional primary credential reference.
+        credential_reference: Option<String>,
+        /// Named credential references.
+        credential_references: BTreeMap<String, String>,
+        /// Declared scopes.
+        scopes: Vec<String>,
+    },
+    /// Import one OpenAPI document.
+    IntegrationImportOpenApi {
+        /// Exact integration name.
+        name: String,
+        /// Inline JSON or a server-local `@path` reference.
+        document_source: String,
+        /// Optional base URL override.
+        base_url: Option<String>,
+        /// Authentication shape with no values.
+        auth: IntegrationAuth,
+        /// Optional credential reference.
+        credential_reference: Option<String>,
+        /// Declared scopes.
+        scopes: Vec<String>,
+    },
+    /// Disconnect one integration.
+    IntegrationDisconnect {
+        /// Exact integration name.
+        name: String,
+    },
+    /// Invoke one connected integration tool.
+    IntegrationCall {
+        /// Exact dynamic tool name.
+        tool: String,
+        /// Inline JSON or a server-local `@path` reference.
+        arguments_source: String,
+    },
     /// Validate a workflow file through the normal filesystem policy boundary.
     WorkflowValidate {
         /// Server-local workflow path.
@@ -1003,6 +1254,45 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::MemoryIndexStatus => "memory_index_status",
         WorkerOperation::MemoryIndexSync => "memory_index_sync",
         WorkerOperation::MemoryIndexRebuild => "memory_index_rebuild",
+        WorkerOperation::ResearchRun { .. } => "research_run",
+        WorkerOperation::ResearchList { .. } => "research_list",
+        WorkerOperation::ResearchGet { .. } => "research_get",
+        WorkerOperation::ResearchSources { .. } => "research_sources",
+        WorkerOperation::ResearchClaims { .. } => "research_claims",
+        WorkerOperation::ProcessRun { .. } => "process_run",
+        WorkerOperation::NetworkGet { .. } => "network_get",
+        WorkerOperation::McpServers => "mcp_servers",
+        WorkerOperation::McpTools { .. } => "mcp_tools",
+        WorkerOperation::McpCall { .. } => "mcp_call",
+        WorkerOperation::SkillList => "skill_list",
+        WorkerOperation::SkillGet { .. } => "skill_get",
+        WorkerOperation::SkillDuplicates => "skill_duplicates",
+        WorkerOperation::SkillCompose { .. } => "skill_compose",
+        WorkerOperation::SkillScaffold { .. } => "skill_scaffold",
+        WorkerOperation::SkillInspect { .. } => "skill_inspect",
+        WorkerOperation::SkillFileRead { .. } => "skill_file_read",
+        WorkerOperation::SkillWrite { .. } => "skill_write",
+        WorkerOperation::SkillValidate { .. } => "skill_validate",
+        WorkerOperation::SkillInstall { .. } => "skill_install",
+        WorkerOperation::SkillResources { .. } => "skill_resources",
+        WorkerOperation::SkillResourceRead { .. } => "skill_resource_read",
+        WorkerOperation::PackList { .. } => "pack_list",
+        WorkerOperation::PackGet { .. } => "pack_get",
+        WorkerOperation::PackVerify { .. } => "pack_verify",
+        WorkerOperation::PackInstall { .. } => "pack_install",
+        WorkerOperation::PackEnable { .. } => "pack_enable",
+        WorkerOperation::PackDisable { .. } => "pack_disable",
+        WorkerOperation::PackUninstall { .. } => "pack_uninstall",
+        WorkerOperation::PackCall { .. } => "pack_call",
+        WorkerOperation::PackTrustList { .. } => "pack_trust_list",
+        WorkerOperation::PackTrustAdd { .. } => "pack_trust_add",
+        WorkerOperation::BundleVerify { .. } => "bundle_verify",
+        WorkerOperation::IntegrationList { .. } => "integration_list",
+        WorkerOperation::IntegrationGet { .. } => "integration_get",
+        WorkerOperation::IntegrationConnect { .. } => "integration_connect",
+        WorkerOperation::IntegrationImportOpenApi { .. } => "integration_import_open_api",
+        WorkerOperation::IntegrationDisconnect { .. } => "integration_disconnect",
+        WorkerOperation::IntegrationCall { .. } => "integration_call",
         WorkerOperation::WorkflowValidate { .. } => "workflow_validate",
         WorkerOperation::WorkflowRegister { .. } => "workflow_register",
         WorkerOperation::WorkflowList => "workflow_list",
@@ -1449,6 +1739,233 @@ async fn dispatch(
         WorkerOperation::MemoryIndexRebuild => {
             let _guard = maintenance.lock().await;
             Ok(runtime.rebuild_memory_index().await?)
+        }
+        WorkerOperation::ResearchRun {
+            question,
+            session_id,
+            depth,
+            source_kinds,
+        } => {
+            let session_id = match session_id {
+                Some(session_id) => {
+                    runtime
+                        .get_session(&session_id)?
+                        .ok_or_else(|| {
+                            WorkerError::Remote(format!("session {session_id} not found"))
+                        })?
+                        .id
+                }
+                None => runtime.create_session(Some("Research"))?.id,
+            };
+            Ok(serde_json::to_value(
+                runtime
+                    .run_research(&session_id, &question, depth, source_kinds)
+                    .await?,
+            )?)
+        }
+        WorkerOperation::ResearchList { session_id, limit } => Ok(serde_json::to_value(
+            runtime.list_research_runs(session_id.as_deref(), limit.clamp(1, 1_000))?,
+        )?),
+        WorkerOperation::ResearchGet { run_id } => {
+            Ok(serde_json::to_value(runtime.get_research_run(&run_id)?)?)
+        }
+        WorkerOperation::ResearchSources { run_id } => {
+            Ok(serde_json::to_value(runtime.research_sources(&run_id)?)?)
+        }
+        WorkerOperation::ResearchClaims { run_id } => {
+            Ok(serde_json::to_value(runtime.research_claims(&run_id)?)?)
+        }
+        WorkerOperation::ProcessRun {
+            executable,
+            cwd,
+            args,
+            environment,
+        } => Ok(runtime
+            .run_process(executable, cwd, args, environment)
+            .await?),
+        WorkerOperation::NetworkGet { url } => {
+            let released = runtime.http_get(&url).await?;
+            Ok(json!({
+                "media_type": released.media_type,
+                "bytes_base64": BASE64.encode(released.bytes),
+            }))
+        }
+        WorkerOperation::McpServers => Ok(serde_json::to_value(runtime.mcp_servers())?),
+        WorkerOperation::McpTools { server } => Ok(serde_json::to_value(
+            runtime.mcp_tools(server.as_deref()).await?,
+        )?),
+        WorkerOperation::McpCall {
+            server,
+            tool,
+            arguments_source,
+        } => {
+            let arguments = parse_json_source(runtime, &arguments_source).await?;
+            Ok(serde_json::to_value(
+                runtime.mcp_call(&server, &tool, arguments).await?,
+            )?)
+        }
+        WorkerOperation::SkillList => {
+            let skills = runtime
+                .list_skills()?
+                .into_iter()
+                .map(|skill| {
+                    json!({
+                        "name": skill.manifest.name,
+                        "version": skill.manifest.version,
+                        "description": skill.manifest.description,
+                        "offline_compatible": skill.manifest.offline_compatible,
+                        "source": skill.source,
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(serde_json::to_value(skills)?)
+        }
+        WorkerOperation::SkillGet { name } => Ok(serde_json::to_value(runtime.get_skill(&name)?)?),
+        WorkerOperation::SkillDuplicates => Ok(serde_json::to_value(runtime.skill_duplicates()?)?),
+        WorkerOperation::SkillCompose { prompt, skills } => Ok(serde_json::to_value(
+            runtime.compose_skills("You are Colossus.", &prompt, &skills, &[])?,
+        )?),
+        WorkerOperation::SkillScaffold {
+            name,
+            description,
+            instructions,
+            resource_dirs,
+        } => Ok(serde_json::to_value(
+            runtime
+                .scaffold_skill(&name, &description, &instructions, &resource_dirs)
+                .await?,
+        )?),
+        WorkerOperation::SkillInspect { name } => {
+            Ok(serde_json::to_value(runtime.inspect_skill(&name).await?)?)
+        }
+        WorkerOperation::SkillFileRead { name, path } => Ok(serde_json::to_value(
+            runtime.read_skill_file(&name, &path).await?,
+        )?),
+        WorkerOperation::SkillWrite {
+            name,
+            path,
+            content,
+            expected_sha256,
+        } => Ok(serde_json::to_value(
+            runtime
+                .write_skill_file(&name, &path, &content, expected_sha256.as_deref())
+                .await?,
+        )?),
+        WorkerOperation::SkillValidate { target, local } => {
+            if local {
+                Ok(serde_json::to_value(
+                    runtime.validate_local_skill(&target).await?,
+                )?)
+            } else {
+                Ok(serde_json::to_value(
+                    runtime.validate_installed_skill(&target).await?,
+                )?)
+            }
+        }
+        WorkerOperation::SkillInstall { path } => Ok(serde_json::to_value(
+            runtime.install_local_skill(&path).await?,
+        )?),
+        WorkerOperation::SkillResources { name } => Ok(serde_json::to_value(
+            runtime
+                .skill_resources(&name, std::slice::from_ref(&name))
+                .await?,
+        )?),
+        WorkerOperation::SkillResourceRead { name, path } => Ok(serde_json::to_value(
+            runtime
+                .read_skill_resource(&name, &path, std::slice::from_ref(&name))
+                .await?,
+        )?),
+        WorkerOperation::PackList { limit } => Ok(serde_json::to_value(
+            runtime.list_packs(limit.clamp(1, 1_000))?,
+        )?),
+        WorkerOperation::PackGet { name } => Ok(serde_json::to_value(runtime.get_pack(&name)?)?),
+        WorkerOperation::PackVerify { path } => {
+            Ok(serde_json::to_value(runtime.verify_pack(path).await?)?)
+        }
+        WorkerOperation::PackInstall {
+            path,
+            allow_untrusted,
+        } => Ok(serde_json::to_value(
+            runtime.install_pack(path, allow_untrusted).await?,
+        )?),
+        WorkerOperation::PackEnable { name } => {
+            Ok(serde_json::to_value(runtime.enable_pack(&name).await?)?)
+        }
+        WorkerOperation::PackDisable { name } => {
+            Ok(serde_json::to_value(runtime.disable_pack(&name).await?)?)
+        }
+        WorkerOperation::PackUninstall { name } => {
+            Ok(serde_json::to_value(runtime.uninstall_pack(&name).await?)?)
+        }
+        WorkerOperation::PackCall { tool } => Ok(runtime.call_pack_tool(&tool).await?),
+        WorkerOperation::PackTrustList { limit } => Ok(serde_json::to_value(
+            runtime.list_pack_trust(limit.clamp(1, 1_000))?,
+        )?),
+        WorkerOperation::PackTrustAdd {
+            publisher,
+            public_key,
+        } => Ok(serde_json::to_value(
+            runtime.add_pack_trust(&publisher, &public_key).await?,
+        )?),
+        WorkerOperation::BundleVerify { path } => {
+            Ok(serde_json::to_value(runtime.verify_bundle(path).await?)?)
+        }
+        WorkerOperation::IntegrationList { limit } => Ok(serde_json::to_value(
+            runtime.list_integrations(limit.clamp(1, 1_000))?,
+        )?),
+        WorkerOperation::IntegrationGet { name } => {
+            Ok(serde_json::to_value(runtime.get_integration(&name)?)?)
+        }
+        WorkerOperation::IntegrationConnect {
+            name,
+            base_url,
+            auth,
+            credential_reference,
+            credential_references,
+            scopes,
+        } => Ok(serde_json::to_value(
+            runtime
+                .connect_native_integration(
+                    &name,
+                    base_url.as_deref(),
+                    auth,
+                    credential_reference.as_deref(),
+                    &credential_references,
+                    &scopes,
+                )
+                .await?,
+        )?),
+        WorkerOperation::IntegrationImportOpenApi {
+            name,
+            document_source,
+            base_url,
+            auth,
+            credential_reference,
+            scopes,
+        } => {
+            let document = parse_json_source(runtime, &document_source).await?;
+            Ok(serde_json::to_value(
+                runtime
+                    .import_openapi_integration(
+                        &name,
+                        document,
+                        base_url.as_deref(),
+                        auth,
+                        credential_reference.as_deref(),
+                        &scopes,
+                    )
+                    .await?,
+            )?)
+        }
+        WorkerOperation::IntegrationDisconnect { name } => Ok(serde_json::to_value(
+            runtime.disconnect_integration(&name).await?,
+        )?),
+        WorkerOperation::IntegrationCall {
+            tool,
+            arguments_source,
+        } => {
+            let arguments = parse_json_source(runtime, &arguments_source).await?;
+            Ok(runtime.call_integration_tool(&tool, arguments).await?)
         }
         WorkerOperation::WorkflowValidate { path } => {
             let validated = runtime.validate_workflow_path(path).await?;

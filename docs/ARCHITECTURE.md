@@ -143,10 +143,12 @@ application protocol over a mode-0600 Unix socket or a Windows named pipe. CLI o
 runs, the worker-aware REPL, session operations, and workflow lifecycle operations
 auto-discover the worker and otherwise use the same runtime in-process. Durable task,
 decision, plan, goal, child-agent, and memory lifecycle commands use that application
-protocol as well. The transport does not contain provider, policy, workflow, or
-repository logic. Independent clients run concurrently, while projection rebuild/drain,
-memory-index maintenance, and queued child work share one worker coordination lock so
-optimistic positions cannot race.
+protocol as well. Research, declarative skill, signed pack/bundle, integration, MCP,
+process, and network terminal operations are also dispatched to the worker when active.
+The transport does not contain provider, policy, workflow, or repository logic.
+Independent clients run concurrently, while projection rebuild/drain, memory-index
+maintenance, and queued child work share one worker coordination lock so optimistic
+positions cannot race.
 Workflow definitions are exact-content hash pinned and workflow runs are normal journal
 streams. The composition root opens fresh YAML config and fresh state; it never silently
 imports the Python SQLite store.
