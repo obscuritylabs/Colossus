@@ -1123,11 +1123,10 @@ impl PolicyDecisionPoint for BuiltInPolicy {
         let mut obligations = self.obligations.clone();
         if request.action.starts_with("filesystem.")
             || is_process_action(&request.action)
+            || request.action.starts_with("task.")
+            || request.action.starts_with("decision.")
+            || request.action.starts_with("memory.")
             || request.action == "network.http"
-            || matches!(
-                request.action.as_str(),
-                "memory.read" | "memory.list" | "memory.search"
-            )
         {
             obligations.require_post_effect = true;
         }

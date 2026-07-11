@@ -53,11 +53,14 @@ obsolete Go launcher.
   typed step schemas; bounded step and concurrency budgets; direct-cycle rejection;
   durable run reconstruction; wait/input, resume, cancellation, interruption, `foreach`,
   and bounded parallel execution. Interrupted non-idempotent effects are not retried.
-- Policy-bound canonical memory create/archive/supersede/read/list/search operations;
+- Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   a disposable Tantivy lexical index with event-id idempotency, durable replay position,
   retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry
   re-filtering; degraded index fallback; and post-effect-authorized context injection
-  after decisions and before snapshots.
+  after decisions and before snapshots. Strict model tools derive repository/session
+  scope from trusted runtime context, reject cross-scope targets, attribute writes to the
+  model actor, and make a memory created on one turn available as non-instructional
+  context on a later turn.
 - A composition root and strict YAML config with role-routed echo, OpenAI Responses, and
   OpenAI-compatible provider profiles. Provider generation and model-catalog calls use
   permit-bound adapters, disclose credential references (never values) to policy, resolve
@@ -79,6 +82,13 @@ obsolete Go launcher.
   only after post-effect policy authorization. Text create/overwrite/append/replace is
   atomic, approval-obligated by configuration, and returns a bounded diff plus changed
   line range after a separate release decision.
+- Strict model-visible `task.create/update/list`, `decision.create/update/list/archive/
+  supersede`, and `memory.create/update/list/search/archive/supersede` tools. Task and
+  decision sessions are implicit, memory repository/session identities are runtime
+  derived, every result is post-effect gated, and canonical target checks prevent model,
+  workflow, or subagent callers from crossing their current scope. Agent-authored key
+  decisions bind the next model turn; relevant memories are injected separately as
+  explicitly non-instructional background.
 - Git inspection and structured command execution share the authenticated sandbox helper
   but retain distinct action/capability identities. Git pathspec traversal, revision
   option injection, external diff/text-conversion helpers, and generic shell wrappers are

@@ -696,7 +696,7 @@ fn read_optional(path: Option<&PathBuf>) -> Result<Option<Vec<u8>>, RuntimeError
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-enum WorkMutation {
+enum WorkOperation {
     TaskCreate {
         session_id: String,
         title: String,
@@ -708,6 +708,11 @@ enum WorkMutation {
         title: Option<String>,
         description: Option<String>,
         status: Option<TaskStatus>,
+    },
+    TaskList {
+        session_id: String,
+        status: Option<TaskStatus>,
+        limit: usize,
     },
     DecisionCreate {
         session_id: String,
@@ -744,25 +749,33 @@ enum WorkMutation {
         rationale: String,
         source_excerpt: String,
     },
+    DecisionList {
+        session_id: String,
+        status: Option<DecisionStatus>,
+        limit: usize,
+    },
 }
 
-impl WorkMutation {
+impl WorkOperation {
     fn action(&self) -> &'static str {
         match self {
             Self::TaskCreate { .. } => "task.create",
             Self::TaskUpdate { .. } => "task.update",
+            Self::TaskList { .. } => "task.list",
             Self::DecisionCreate { .. } => "decision.create",
             Self::DecisionUpdate { .. } => "decision.update",
             Self::DecisionArchive { .. } => "decision.archive",
             Self::DecisionSupersede { .. } => "decision.supersede",
+            Self::DecisionList { .. } => "decision.list",
         }
     }
 
     fn resource(&self) -> &str {
         match self {
-            Self::TaskCreate { session_id, .. } | Self::DecisionCreate { session_id, .. } => {
-                session_id
-            }
+            Self::TaskCreate { session_id, .. }
+            | Self::TaskList { session_id, .. }
+            | Self::DecisionCreate { session_id, .. }
+            | Self::DecisionList { session_id, .. } => session_id,
             Self::TaskUpdate { id, .. }
             | Self::DecisionUpdate { id, .. }
             | Self::DecisionArchive { id }
@@ -782,6 +795,12 @@ enum MemoryOperation {
         rationale: String,
         expires_at: Option<String>,
     },
+    Update {
+        id: String,
+        text: Option<String>,
+        rationale: Option<String>,
+        confidence: Option<f32>,
+    },
     Archive {
         id: String,
     },
@@ -796,6 +815,8 @@ enum MemoryOperation {
     List {
         status: Option<MemoryStatus>,
         limit: usize,
+        session_id: Option<String>,
+        repository_id: Option<String>,
     },
     Search {
         query: String,
@@ -812,6 +833,7 @@ impl MemoryOperation {
     fn action(&self) -> &'static str {
         match self {
             Self::Create { .. } => "memory.create",
+            Self::Update { .. } => "memory.update",
             Self::Archive { .. } => "memory.archive",
             Self::Supersede { .. } => "memory.supersede",
             Self::Read { .. } => "memory.read",
@@ -826,7 +848,10 @@ impl MemoryOperation {
     fn resource(&self) -> String {
         match self {
             Self::Create { scope, .. } => format!("memory-scope:{scope:?}"),
-            Self::Archive { id } | Self::Supersede { id, .. } | Self::Read { id } => id.clone(),
+            Self::Update { id, .. }
+            | Self::Archive { id }
+            | Self::Supersede { id, .. }
+            | Self::Read { id } => id.clone(),
             Self::List { .. } => "memory:*".into(),
             Self::Search { session_id, .. } => session_id
                 .as_ref()
@@ -845,7 +870,7 @@ pub struct Runtime {
     sessions: Arc<dyn SessionRepository>,
     context: Arc<ContextService>,
     work: Arc<dyn WorkRepository>,
-    work_executor: Arc<WorkMutationExecutor>,
+    work_executor: Arc<WorkEffectExecutor>,
     memory_executor: Arc<MemoryEffectExecutor>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
@@ -873,6 +898,8 @@ impl Runtime {
         config: &RuntimeConfig,
         approvals: Arc<dyn ApprovalProvider>,
     ) -> Result<Self, RuntimeError> {
+        let workspace = fs::canonicalize(std::env::current_dir()?)?;
+        let repository_id = repository_identity(&workspace);
         if let Some(parent) = config.storage.path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -1090,11 +1117,14 @@ impl Runtime {
                 "network.http".to_owned(),
                 "task.create".to_owned(),
                 "task.update".to_owned(),
+                "task.list".to_owned(),
                 "decision.create".to_owned(),
                 "decision.update".to_owned(),
                 "decision.archive".to_owned(),
                 "decision.supersede".to_owned(),
+                "decision.list".to_owned(),
                 "memory.create".to_owned(),
+                "memory.update".to_owned(),
                 "memory.archive".to_owned(),
                 "memory.supersede".to_owned(),
                 "memory.read".to_owned(),
@@ -1106,16 +1136,19 @@ impl Runtime {
             ]),
             permit_key,
         ));
-        let work_executor = Arc::new(WorkMutationExecutor {
+        let work_executor = Arc::new(WorkEffectExecutor {
             service: Arc::clone(&work_service),
+            repository: Arc::clone(&work),
         });
         let memory_executor = Arc::new(MemoryEffectExecutor {
             service: Arc::clone(&memory_service),
+            repository_id: repository_id.clone(),
         });
         let memory_retriever: Arc<dyn MemoryRetriever> = Arc::new(GatewayMemoryRetriever {
             gateway: Arc::clone(&gateway),
             executor: Arc::clone(&memory_executor),
             limit: config.memory.retrieval_limit,
+            repository_id: repository_id.clone(),
         });
         let tool_registry: Arc<dyn ToolRegistry> =
             Arc::new(StaticToolRegistry::builtins(&config.agent.tools)?);
@@ -1128,7 +1161,10 @@ impl Runtime {
             filesystem: Arc::clone(&filesystem_executor),
             process: Some(Arc::clone(&process_executor) as Arc<dyn EffectExecutor>),
             http: Arc::clone(&http_executor),
-            workspace: fs::canonicalize(std::env::current_dir()?)?,
+            work: Some(Arc::clone(&work_executor)),
+            memory: Some(Arc::clone(&memory_executor)),
+            workspace,
+            repository_id,
             executables: config
                 .sandbox
                 .executables
@@ -1301,21 +1337,23 @@ impl Runtime {
         Arc::clone(&self.work)
     }
 
-    async fn execute_work_mutation(&self, mutation: WorkMutation) -> Result<Value, RuntimeError> {
+    async fn execute_work_operation(&self, mutation: WorkOperation) -> Result<Value, RuntimeError> {
         let action = mutation.action();
         let resource = mutation.resource().to_owned();
         let session_id = match &mutation {
-            WorkMutation::TaskCreate { session_id, .. }
-            | WorkMutation::DecisionCreate { session_id, .. } => session_id.clone(),
-            WorkMutation::TaskUpdate { id, .. } => {
+            WorkOperation::TaskCreate { session_id, .. }
+            | WorkOperation::TaskList { session_id, .. }
+            | WorkOperation::DecisionCreate { session_id, .. }
+            | WorkOperation::DecisionList { session_id, .. } => session_id.clone(),
+            WorkOperation::TaskUpdate { id, .. } => {
                 self.work
                     .get_task(id)?
                     .ok_or_else(|| StoreError::NotFound(format!("task {id}")))?
                     .session_id
             }
-            WorkMutation::DecisionUpdate { id, .. }
-            | WorkMutation::DecisionArchive { id }
-            | WorkMutation::DecisionSupersede { id, .. } => {
+            WorkOperation::DecisionUpdate { id, .. }
+            | WorkOperation::DecisionArchive { id }
+            | WorkOperation::DecisionSupersede { id, .. } => {
                 self.work
                     .get_decision(id)?
                     .ok_or_else(|| StoreError::NotFound(format!("decision {id}")))?
@@ -1348,7 +1386,7 @@ impl Runtime {
         status: TaskStatus,
     ) -> Result<TaskRecord, RuntimeError> {
         serde_json::from_value(
-            self.execute_work_mutation(WorkMutation::TaskCreate {
+            self.execute_work_operation(WorkOperation::TaskCreate {
                 session_id: session_id.into(),
                 title: title.into(),
                 description: description.into(),
@@ -1368,7 +1406,7 @@ impl Runtime {
         status: Option<TaskStatus>,
     ) -> Result<TaskRecord, RuntimeError> {
         serde_json::from_value(
-            self.execute_work_mutation(WorkMutation::TaskUpdate {
+            self.execute_work_operation(WorkOperation::TaskUpdate {
                 id: id.into(),
                 title: title.map(str::to_owned),
                 description: description.map(str::to_owned),
@@ -1410,7 +1448,7 @@ impl Runtime {
         source_excerpt: &str,
     ) -> Result<KeyDecision, RuntimeError> {
         serde_json::from_value(
-            self.execute_work_mutation(WorkMutation::DecisionCreate {
+            self.execute_work_operation(WorkOperation::DecisionCreate {
                 session_id: session_id.into(),
                 title: title.into(),
                 decision: decision.into(),
@@ -1440,7 +1478,7 @@ impl Runtime {
         source_excerpt: Option<&str>,
     ) -> Result<KeyDecision, RuntimeError> {
         serde_json::from_value(
-            self.execute_work_mutation(WorkMutation::DecisionUpdate {
+            self.execute_work_operation(WorkOperation::DecisionUpdate {
                 id: id.into(),
                 title: title.map(str::to_owned),
                 decision: decision.map(str::to_owned),
@@ -1475,7 +1513,7 @@ impl Runtime {
     /// Archive one active decision while retaining its complete history.
     pub async fn archive_decision(&self, id: &str) -> Result<KeyDecision, RuntimeError> {
         serde_json::from_value(
-            self.execute_work_mutation(WorkMutation::DecisionArchive { id: id.into() })
+            self.execute_work_operation(WorkOperation::DecisionArchive { id: id.into() })
                 .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))
@@ -1495,7 +1533,7 @@ impl Runtime {
         source_excerpt: &str,
     ) -> Result<(KeyDecision, KeyDecision), RuntimeError> {
         serde_json::from_value(
-            self.execute_work_mutation(WorkMutation::DecisionSupersede {
+            self.execute_work_operation(WorkOperation::DecisionSupersede {
                 id: id.into(),
                 title: title.into(),
                 decision: decision.into(),
@@ -1523,6 +1561,7 @@ impl Runtime {
                 ..
             } => Some(id.clone()),
             MemoryOperation::Archive { id }
+            | MemoryOperation::Update { id, .. }
             | MemoryOperation::Supersede { id, .. }
             | MemoryOperation::Read { id } => {
                 self.memory_executor
@@ -1578,6 +1617,26 @@ impl Runtime {
         .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
+    /// Update mutable fields on one active canonical memory.
+    pub async fn update_memory(
+        &self,
+        id: &str,
+        text: Option<&str>,
+        rationale: Option<&str>,
+        confidence: Option<f32>,
+    ) -> Result<MemoryRecord, RuntimeError> {
+        serde_json::from_value(
+            self.execute_memory_operation(MemoryOperation::Update {
+                id: id.into(),
+                text: text.map(str::to_owned),
+                rationale: rationale.map(str::to_owned),
+                confidence,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
     /// Archive one canonical memory through the permission boundary.
     pub async fn archive_memory(&self, id: &str) -> Result<MemoryRecord, RuntimeError> {
         serde_json::from_value(
@@ -1621,8 +1680,13 @@ impl Runtime {
         limit: usize,
     ) -> Result<Vec<MemoryRecord>, RuntimeError> {
         serde_json::from_value(
-            self.execute_memory_operation(MemoryOperation::List { status, limit })
-                .await?,
+            self.execute_memory_operation(MemoryOperation::List {
+                status,
+                limit,
+                session_id: None,
+                repository_id: None,
+            })
+            .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))
     }
@@ -2078,6 +2142,14 @@ fn sha2_compat(secret: &[u8; 32], label: &[u8]) -> [u8; 32] {
         .into()
 }
 
+fn repository_identity(workspace: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "repo-{}",
+        hex::encode(Sha256::digest(workspace.to_string_lossy().as_bytes()))
+    )
+}
+
 struct GatewayModelProvider {
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
@@ -2156,7 +2228,10 @@ struct GatewayToolExecutor {
     filesystem: Arc<FilesystemExecutor>,
     process: Option<Arc<dyn EffectExecutor>>,
     http: Arc<HttpExecutor>,
+    work: Option<Arc<WorkEffectExecutor>>,
+    memory: Option<Arc<MemoryEffectExecutor>>,
     workspace: PathBuf,
+    repository_id: String,
     executables: Vec<PathBuf>,
 }
 
@@ -2171,6 +2246,81 @@ struct ProcessToolOutput {
 }
 
 impl GatewayToolExecutor {
+    fn current_session(context: &ExecutionContext) -> Result<String, ToolError> {
+        context
+            .session_id
+            .clone()
+            .ok_or_else(|| ToolError::Denied("durable state tools require a session".into()))
+    }
+
+    async fn execute_work_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+        operation: WorkOperation,
+    ) -> Result<String, ToolError> {
+        let action = operation.action().to_owned();
+        let resource = operation.resource().to_owned();
+        let mut request = effect_request(
+            model_actor(call),
+            &action,
+            resource,
+            serde_json::to_value(operation)
+                .map_err(|error| ToolError::Failed(error.to_string()))?,
+        );
+        request.capabilities = vec![action];
+        request.context = context;
+        let result = self
+            .gateway
+            .execute(
+                request,
+                self.work
+                    .as_deref()
+                    .ok_or_else(|| ToolError::Failed("work adapter is unavailable".into()))?,
+            )
+            .await
+            .map_err(tool_gateway_error)?;
+        let output = String::from_utf8(result.bytes)
+            .map_err(|_| ToolError::Failed("work result returned non-UTF-8".into()))?;
+        serde_json::from_str::<Value>(&output)
+            .map_err(|error| ToolError::Failed(format!("invalid work result: {error}")))?;
+        Ok(bounded_tool_text(&output, 1024 * 1024))
+    }
+
+    async fn execute_memory_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+        operation: MemoryOperation,
+    ) -> Result<String, ToolError> {
+        let action = operation.action().to_owned();
+        let resource = operation.resource();
+        let mut request = effect_request(
+            model_actor(call),
+            &action,
+            resource,
+            serde_json::to_value(operation)
+                .map_err(|error| ToolError::Failed(error.to_string()))?,
+        );
+        request.capabilities = vec![action];
+        request.context = context;
+        let result = self
+            .gateway
+            .execute(
+                request,
+                self.memory
+                    .as_deref()
+                    .ok_or_else(|| ToolError::Failed("memory adapter is unavailable".into()))?,
+            )
+            .await
+            .map_err(tool_gateway_error)?;
+        let output = String::from_utf8(result.bytes)
+            .map_err(|_| ToolError::Failed("memory result returned non-UTF-8".into()))?;
+        serde_json::from_str::<Value>(&output)
+            .map_err(|error| ToolError::Failed(format!("invalid memory result: {error}")))?;
+        Ok(bounded_tool_text(&output, 1024 * 1024))
+    }
+
     async fn execute_filesystem_mutation(
         &self,
         call: &ToolCall,
@@ -2625,6 +2775,240 @@ impl ToolExecutor for GatewayToolExecutor {
                 }))
                 .map_err(|error| ToolError::Failed(error.to_string()))?
             }
+            "task.create" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::TaskCreate {
+                        session_id,
+                        title: required_tool_string(&call, "title")?.into(),
+                        description: optional_tool_string(&call, "description")?
+                            .unwrap_or_default()
+                            .into(),
+                        status: optional_tool_value(&call, "status")?
+                            .unwrap_or(TaskStatus::Pending),
+                    },
+                )
+                .await?
+            }
+            "task.update" => {
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::TaskUpdate {
+                        id: required_tool_string(&call, "id")?.into(),
+                        title: optional_tool_string(&call, "title")?.map(str::to_owned),
+                        description: optional_tool_string(&call, "description")?.map(str::to_owned),
+                        status: optional_tool_value(&call, "status")?,
+                    },
+                )
+                .await?
+            }
+            "task.list" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::TaskList {
+                        session_id,
+                        status: optional_tool_value(&call, "status")?,
+                        limit: tool_limit(&call, 100)?,
+                    },
+                )
+                .await?
+            }
+            "decision.create" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::DecisionCreate {
+                        session_id,
+                        title: required_tool_string(&call, "title")?.into(),
+                        decision: required_tool_string(&call, "decision")?.into(),
+                        source: DecisionSource::Agent,
+                        priority: optional_tool_value(&call, "priority")?
+                            .unwrap_or(DecisionPriority::Normal),
+                        intent: optional_tool_string(&call, "intent")?
+                            .unwrap_or_default()
+                            .into(),
+                        applies_when: optional_tool_string(&call, "applies_when")?
+                            .unwrap_or_default()
+                            .into(),
+                        rationale: optional_tool_string(&call, "rationale")?
+                            .unwrap_or_default()
+                            .into(),
+                        source_excerpt: optional_tool_string(&call, "source_excerpt")?
+                            .unwrap_or_default()
+                            .into(),
+                    },
+                )
+                .await?
+            }
+            "decision.update" => {
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::DecisionUpdate {
+                        id: required_tool_string(&call, "id")?.into(),
+                        title: optional_tool_string(&call, "title")?.map(str::to_owned),
+                        decision: optional_tool_string(&call, "decision")?.map(str::to_owned),
+                        priority: optional_tool_value(&call, "priority")?,
+                        intent: optional_tool_string(&call, "intent")?.map(str::to_owned),
+                        applies_when: optional_tool_string(&call, "applies_when")?
+                            .map(str::to_owned),
+                        rationale: optional_tool_string(&call, "rationale")?.map(str::to_owned),
+                        source_excerpt: optional_tool_string(&call, "source_excerpt")?
+                            .map(str::to_owned),
+                    },
+                )
+                .await?
+            }
+            "decision.list" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::DecisionList {
+                        session_id,
+                        status: optional_tool_value(&call, "status")?,
+                        limit: tool_limit(&call, 100)?,
+                    },
+                )
+                .await?
+            }
+            "decision.archive" => {
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::DecisionArchive {
+                        id: required_tool_string(&call, "id")?.into(),
+                    },
+                )
+                .await?
+            }
+            "decision.supersede" => {
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::DecisionSupersede {
+                        id: required_tool_string(&call, "id")?.into(),
+                        title: required_tool_string(&call, "title")?.into(),
+                        decision: required_tool_string(&call, "decision")?.into(),
+                        source: DecisionSource::Agent,
+                        priority: optional_tool_value(&call, "priority")?
+                            .unwrap_or(DecisionPriority::Normal),
+                        intent: optional_tool_string(&call, "intent")?
+                            .unwrap_or_default()
+                            .into(),
+                        applies_when: optional_tool_string(&call, "applies_when")?
+                            .unwrap_or_default()
+                            .into(),
+                        rationale: optional_tool_string(&call, "rationale")?
+                            .unwrap_or_default()
+                            .into(),
+                        source_excerpt: optional_tool_string(&call, "source_excerpt")?
+                            .unwrap_or_default()
+                            .into(),
+                    },
+                )
+                .await?
+            }
+            "memory.create" => {
+                let session_id = Self::current_session(&context)?;
+                let scope = match optional_tool_string(&call, "scope")?.unwrap_or("session") {
+                    "global" => MemoryScope::Global,
+                    "repository" => MemoryScope::Repository(self.repository_id.clone()),
+                    "session" => MemoryScope::Session(session_id),
+                    value => {
+                        return Err(ToolError::InvalidArguments {
+                            tool: call.name.clone(),
+                            message: format!("unknown memory scope {value}"),
+                        });
+                    }
+                };
+                self.execute_memory_tool(
+                    &call,
+                    context,
+                    MemoryOperation::Create {
+                        scope,
+                        kind: required_tool_string(&call, "kind")?.into(),
+                        confidence: optional_tool_value(&call, "confidence")?.unwrap_or(1.0),
+                        text: required_tool_string(&call, "text")?.into(),
+                        rationale: optional_tool_string(&call, "rationale")?
+                            .unwrap_or_default()
+                            .into(),
+                        expires_at: optional_tool_string(&call, "expires_at")?.map(str::to_owned),
+                    },
+                )
+                .await?
+            }
+            "memory.update" => {
+                self.execute_memory_tool(
+                    &call,
+                    context,
+                    MemoryOperation::Update {
+                        id: required_tool_string(&call, "id")?.into(),
+                        text: optional_tool_string(&call, "text")?.map(str::to_owned),
+                        rationale: optional_tool_string(&call, "rationale")?.map(str::to_owned),
+                        confidence: optional_tool_value(&call, "confidence")?,
+                    },
+                )
+                .await?
+            }
+            "memory.list" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_memory_tool(
+                    &call,
+                    context,
+                    MemoryOperation::List {
+                        status: optional_tool_value(&call, "status")?,
+                        limit: tool_limit(&call, 100)?,
+                        session_id: Some(session_id),
+                        repository_id: Some(self.repository_id.clone()),
+                    },
+                )
+                .await?
+            }
+            "memory.search" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_memory_tool(
+                    &call,
+                    context,
+                    MemoryOperation::Search {
+                        query: required_tool_string(&call, "query")?.into(),
+                        session_id: Some(session_id),
+                        repository_id: Some(self.repository_id.clone()),
+                        limit: tool_limit(&call, 20)?,
+                    },
+                )
+                .await?
+            }
+            "memory.archive" => {
+                self.execute_memory_tool(
+                    &call,
+                    context,
+                    MemoryOperation::Archive {
+                        id: required_tool_string(&call, "id")?.into(),
+                    },
+                )
+                .await?
+            }
+            "memory.supersede" => {
+                self.execute_memory_tool(
+                    &call,
+                    context,
+                    MemoryOperation::Supersede {
+                        id: required_tool_string(&call, "id")?.into(),
+                        text: required_tool_string(&call, "text")?.into(),
+                        rationale: optional_tool_string(&call, "rationale")?
+                            .unwrap_or_default()
+                            .into(),
+                    },
+                )
+                .await?
+            }
             "network.http" => {
                 let url = required_tool_string(&call, "url")?;
                 let mut request = effect_request(
@@ -2706,6 +3090,31 @@ fn optional_tool_u64(call: &ToolCall, field: &str) -> Result<Option<u64>, ToolEr
             message: format!("{field} must be an integer"),
         }),
     }
+}
+
+fn optional_tool_value<T: serde::de::DeserializeOwned>(
+    call: &ToolCall,
+    field: &str,
+) -> Result<Option<T>, ToolError> {
+    call.arguments
+        .get(field)
+        .cloned()
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| ToolError::InvalidArguments {
+                tool: call.name.clone(),
+                message: format!("{field} is invalid: {error}"),
+            })
+        })
+        .transpose()
+}
+
+fn tool_limit(call: &ToolCall, default: usize) -> Result<usize, ToolError> {
+    optional_tool_u64(call, "limit")?.map_or(Ok(default), |value| {
+        usize::try_from(value).map_err(|error| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("limit is invalid: {error}"),
+        })
+    })
 }
 
 fn required_tool_string_array(call: &ToolCall, field: &str) -> Result<Vec<String>, ToolError> {
@@ -2904,6 +3313,84 @@ fn tool_gateway_error(error: GatewayError) -> ToolError {
 
 struct MemoryEffectExecutor {
     service: Arc<MemoryService>,
+    repository_id: String,
+}
+
+impl MemoryEffectExecutor {
+    fn model_controlled(request: &EffectRequest) -> bool {
+        matches!(
+            request.actor.actor_type,
+            ActorType::Model | ActorType::Workflow | ActorType::Subagent
+        )
+    }
+
+    fn scope_allowed(&self, scope: &MemoryScope, request: &EffectRequest) -> bool {
+        match scope {
+            MemoryScope::Global => true,
+            MemoryScope::Repository(id) => id == &self.repository_id,
+            MemoryScope::Session(id) => request.context.session_id.as_ref() == Some(id),
+        }
+    }
+
+    fn validate_access(
+        &self,
+        request: &EffectRequest,
+        operation: &MemoryOperation,
+    ) -> Result<(), ExecutionError> {
+        if !Self::model_controlled(request) {
+            return Ok(());
+        }
+        match operation {
+            MemoryOperation::Create { scope, .. } => {
+                if !self.scope_allowed(scope, request) {
+                    return Err(ExecutionError::Failed(
+                        "memory tool cannot create outside its current scope".into(),
+                    ));
+                }
+            }
+            MemoryOperation::Update { id, .. }
+            | MemoryOperation::Archive { id }
+            | MemoryOperation::Supersede { id, .. }
+            | MemoryOperation::Read { id } => {
+                let record = self
+                    .service
+                    .get(id)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?
+                    .ok_or_else(|| ExecutionError::Failed(format!("memory {id} was not found")))?;
+                if !self.scope_allowed(&record.scope, request) {
+                    return Err(ExecutionError::Failed(
+                        "memory tool cannot access another scope".into(),
+                    ));
+                }
+            }
+            MemoryOperation::List {
+                session_id,
+                repository_id,
+                ..
+            }
+            | MemoryOperation::Search {
+                session_id,
+                repository_id,
+                ..
+            } => {
+                if session_id.as_ref() != request.context.session_id.as_ref()
+                    || repository_id.as_deref() != Some(self.repository_id.as_str())
+                {
+                    return Err(ExecutionError::Failed(
+                        "memory query scope does not match the current context".into(),
+                    ));
+                }
+            }
+            MemoryOperation::IndexStatus
+            | MemoryOperation::IndexSync
+            | MemoryOperation::IndexRebuild => {
+                return Err(ExecutionError::Failed(
+                    "model-controlled actors cannot administer the memory index".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -2920,6 +3407,7 @@ impl EffectExecutor for MemoryEffectExecutor {
                 "memory operation action does not match its validated content".into(),
             ));
         }
+        self.validate_access(request, &operation)?;
         let actor = request.actor.clone();
         let value = match operation {
             MemoryOperation::Create {
@@ -2936,6 +3424,22 @@ impl EffectExecutor for MemoryEffectExecutor {
                     )
                     .await,
             ),
+            MemoryOperation::Update {
+                id,
+                text,
+                rationale,
+                confidence,
+            } => work_result(
+                self.service
+                    .update(
+                        &id,
+                        text.as_deref(),
+                        rationale.as_deref(),
+                        confidence,
+                        actor,
+                    )
+                    .await,
+            ),
             MemoryOperation::Archive { id } => work_result(self.service.archive(&id, actor).await),
             MemoryOperation::Supersede {
                 id,
@@ -2943,8 +3447,26 @@ impl EffectExecutor for MemoryEffectExecutor {
                 rationale,
             } => work_result(self.service.supersede(&id, &text, &rationale, actor).await),
             MemoryOperation::Read { id } => work_result(self.service.get(&id)),
-            MemoryOperation::List { status, limit } => {
-                work_result(self.service.list(status, limit))
+            MemoryOperation::List {
+                status,
+                limit,
+                session_id: _,
+                repository_id: _,
+            } => {
+                let fetch_limit = if Self::model_controlled(request) {
+                    1_000
+                } else {
+                    limit
+                };
+                let mut records = self
+                    .service
+                    .list(status, fetch_limit)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+                if Self::model_controlled(request) {
+                    records.retain(|record| self.scope_allowed(&record.scope, request));
+                    records.truncate(limit);
+                }
+                work_result(Ok::<_, StoreError>(records))
             }
             MemoryOperation::Search {
                 query,
@@ -2987,6 +3509,7 @@ struct GatewayMemoryRetriever {
     gateway: Arc<EffectGateway>,
     executor: Arc<MemoryEffectExecutor>,
     limit: usize,
+    repository_id: String,
 }
 
 #[async_trait]
@@ -3001,7 +3524,7 @@ impl MemoryRetriever for GatewayMemoryRetriever {
         let operation = MemoryOperation::Search {
             query: query.into(),
             session_id: Some(session_id.into()),
-            repository_id: None,
+            repository_id: Some(self.repository_id.clone()),
             limit: limit.min(self.limit),
         };
         let mut request = effect_request(
@@ -3029,27 +3552,76 @@ impl MemoryRetriever for GatewayMemoryRetriever {
     }
 }
 
-struct WorkMutationExecutor {
+struct WorkEffectExecutor {
     service: Arc<WorkService>,
+    repository: Arc<dyn WorkRepository>,
+}
+
+impl WorkEffectExecutor {
+    fn validate_scope(
+        &self,
+        request: &EffectRequest,
+        operation: &WorkOperation,
+    ) -> Result<(), ExecutionError> {
+        if !matches!(
+            request.actor.actor_type,
+            ActorType::Model | ActorType::Workflow | ActorType::Subagent
+        ) {
+            return Ok(());
+        }
+        let requested_session =
+            request.context.session_id.as_deref().ok_or_else(|| {
+                ExecutionError::Failed("work tool session context is absent".into())
+            })?;
+        let operation_session = match operation {
+            WorkOperation::TaskCreate { session_id, .. }
+            | WorkOperation::TaskList { session_id, .. }
+            | WorkOperation::DecisionCreate { session_id, .. }
+            | WorkOperation::DecisionList { session_id, .. } => session_id.clone(),
+            WorkOperation::TaskUpdate { id, .. } => {
+                self.repository
+                    .get_task(id)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?
+                    .ok_or_else(|| ExecutionError::Failed(format!("task {id} was not found")))?
+                    .session_id
+            }
+            WorkOperation::DecisionUpdate { id, .. }
+            | WorkOperation::DecisionArchive { id }
+            | WorkOperation::DecisionSupersede { id, .. } => {
+                self.repository
+                    .get_decision(id)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?
+                    .ok_or_else(|| ExecutionError::Failed(format!("decision {id} was not found")))?
+                    .session_id
+            }
+        };
+        if operation_session != requested_session {
+            return Err(ExecutionError::Failed(
+                "work tool cannot access another session".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
-impl EffectExecutor for WorkMutationExecutor {
+impl EffectExecutor for WorkEffectExecutor {
     async fn execute(
         &self,
         request: &EffectRequest,
         _permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        let mutation: WorkMutation = serde_json::from_value(request.content.clone())
+        let mutation: WorkOperation = serde_json::from_value(request.content.clone())
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         if request.action != mutation.action() {
             return Err(ExecutionError::Failed(
                 "work mutation action does not match its validated content".into(),
             ));
         }
+        self.validate_scope(request, &mutation)?;
         let actor = request.actor.clone();
         let value = match mutation {
-            WorkMutation::TaskCreate {
+            WorkOperation::TaskCreate {
                 session_id,
                 title,
                 description,
@@ -3061,7 +3633,7 @@ impl EffectExecutor for WorkMutationExecutor {
                 status,
                 actor,
             )),
-            WorkMutation::TaskUpdate {
+            WorkOperation::TaskUpdate {
                 id,
                 title,
                 description,
@@ -3073,7 +3645,12 @@ impl EffectExecutor for WorkMutationExecutor {
                 status,
                 actor,
             )),
-            WorkMutation::DecisionCreate {
+            WorkOperation::TaskList {
+                session_id,
+                status,
+                limit,
+            } => work_result(self.repository.list_tasks(Some(&session_id), status, limit)),
+            WorkOperation::DecisionCreate {
                 session_id,
                 title,
                 decision,
@@ -3101,7 +3678,7 @@ impl EffectExecutor for WorkMutationExecutor {
                     actor,
                 ))
             }
-            WorkMutation::DecisionUpdate {
+            WorkOperation::DecisionUpdate {
                 id,
                 title,
                 decision,
@@ -3121,10 +3698,10 @@ impl EffectExecutor for WorkMutationExecutor {
                 source_excerpt.as_deref(),
                 actor,
             )),
-            WorkMutation::DecisionArchive { id } => {
+            WorkOperation::DecisionArchive { id } => {
                 work_result(self.service.archive_decision(&id, actor))
             }
-            WorkMutation::DecisionSupersede {
+            WorkOperation::DecisionSupersede {
                 id,
                 title,
                 decision,
@@ -3149,6 +3726,14 @@ impl EffectExecutor for WorkMutationExecutor {
                     actor,
                 ))
             }
+            WorkOperation::DecisionList {
+                session_id,
+                status,
+                limit,
+            } => work_result(
+                self.repository
+                    .list_decisions(Some(&session_id), status, limit),
+            ),
         }?;
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
@@ -3269,17 +3854,20 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 #[cfg(test)]
 mod tests {
     use super::{
-        GatewayToolExecutor, ProviderProfileConfig, RuntimeConfig, recover_unknown_effects,
+        GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, ProviderProfileConfig,
+        RuntimeConfig, WorkEffectExecutor, recover_unknown_effects,
     };
     use colossus_contracts::{
-        Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, NewEvent,
-        ToolCall,
+        Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, MemoryScope,
+        MemoryStatus, ModelRequest, NewEvent, ProviderEvent, ProviderRoute, ProviderTurn,
+        TaskStatus, ToolCall,
     };
-    use colossus_ports::{EventJournal, ToolExecutor};
+    use colossus_ports::{EventJournal, ModelProvider, ModelProviderError, ToolExecutor};
     use colossus_provider::ProviderKind;
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
     use std::{
+        collections::VecDeque,
         fs,
         sync::{Arc, Mutex},
     };
@@ -3600,7 +4188,10 @@ surprise: true
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
             process: None,
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
             workspace: allowed.path().to_path_buf(),
+            repository_id: "repo-test".into(),
             executables: Vec::new(),
         };
         let result = executor
@@ -3663,7 +4254,10 @@ surprise: true
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
             process: None,
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
             workspace: allowed.path().to_path_buf(),
+            repository_id: "repo-test".into(),
             executables: Vec::new(),
         };
         let context = ExecutionContext {
@@ -3742,7 +4336,10 @@ surprise: true
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
             process: None,
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
             workspace: workspace.path().to_path_buf(),
+            repository_id: "repo-test".into(),
             executables: Vec::new(),
         };
         let denied = denied_executor
@@ -3781,7 +4378,10 @@ surprise: true
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
             process: None,
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
             workspace: workspace.path().to_path_buf(),
+            repository_id: "repo-test".into(),
             executables: Vec::new(),
         };
         let written = allowed_executor
@@ -3836,6 +4436,686 @@ surprise: true
         assert!(names.contains(&"approval.denied.v1".into()));
         assert!(names.contains(&"approval.granted.v1".into()));
         assert!(names.contains(&"effect.release_requested.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn model_work_tools_are_durable_attributed_and_session_confined() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        for id in ["session-a", "session-b"] {
+            sessions
+                .create_session(
+                    id,
+                    Some(id),
+                    Actor {
+                        actor_type: ActorType::User,
+                        id: "test-user".into(),
+                    },
+                )
+                .expect("session");
+        }
+        let repository: Arc<dyn colossus_ports::WorkRepository> = Arc::new(
+            colossus_work::EventSourcedWorkRepository::new(Arc::clone(&journal)),
+        );
+        let service = Arc::new(colossus_work::WorkService::new(
+            Arc::clone(&repository),
+            sessions,
+        ));
+        let work = Arc::new(WorkEffectExecutor {
+            service,
+            repository: Arc::clone(&repository),
+        });
+        let actions = [
+            "task.create",
+            "task.update",
+            "task.list",
+            "decision.create",
+            "decision.update",
+            "decision.list",
+            "decision.archive",
+            "decision.supersede",
+        ];
+        let mut policy = colossus_policy::BuiltInPolicy::offline_default();
+        for action in actions {
+            policy = policy.with_action(action, DecisionOutcome::Allow);
+        }
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(actions.map(str::to_owned)),
+            [10_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: Some(work),
+            memory: None,
+            workspace: std::env::current_dir().expect("cwd"),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        };
+        let context = |session: &str| ExecutionContext {
+            correlation_id: format!("run-{session}"),
+            session_id: Some(session.into()),
+            run_id: Some(format!("run-{session}")),
+            ..ExecutionContext::default()
+        };
+
+        let created = executor
+            .execute(
+                ToolCall {
+                    call_id: "task-create".into(),
+                    name: "task.create".into(),
+                    arguments: json!({
+                        "title": "Finish Rust transition",
+                        "description": "Port durable model tools",
+                    }),
+                },
+                context("session-a"),
+            )
+            .await
+            .expect("task create");
+        let task: serde_json::Value = serde_json::from_str(&created.output).expect("task JSON");
+        let task_id = task["id"].as_str().expect("task id").to_owned();
+        assert_eq!(task["session_id"], "session-a");
+        assert_eq!(task["status"], "pending");
+
+        let denied = executor
+            .execute(
+                ToolCall {
+                    call_id: "task-cross-session".into(),
+                    name: "task.update".into(),
+                    arguments: json!({"id": task_id, "status": "completed"}),
+                },
+                context("session-b"),
+            )
+            .await
+            .expect_err("cross-session task update denied");
+        assert!(matches!(denied, colossus_ports::ToolError::Failed(_)));
+        assert_eq!(
+            repository
+                .get_task(&task_id)
+                .expect("task")
+                .expect("record")
+                .status,
+            TaskStatus::Pending
+        );
+
+        let decision = executor
+            .execute(
+                ToolCall {
+                    call_id: "decision-create".into(),
+                    name: "decision.create".into(),
+                    arguments: json!({
+                        "title": "Rust implementation",
+                        "decision": "All new implementation work is Rust.",
+                        "priority": "critical",
+                        "rationale": "Complete the cutover",
+                    }),
+                },
+                context("session-a"),
+            )
+            .await
+            .expect("decision create");
+        let decision: serde_json::Value =
+            serde_json::from_str(&decision.output).expect("decision JSON");
+        assert_eq!(decision["source"], "agent");
+        assert_eq!(decision["session_id"], "session-a");
+
+        let listed = executor
+            .execute(
+                ToolCall {
+                    call_id: "decision-list".into(),
+                    name: "decision.list".into(),
+                    arguments: json!({"status": "active"}),
+                },
+                context("session-a"),
+            )
+            .await
+            .expect("decision list");
+        let listed: serde_json::Value = serde_json::from_str(&listed.output).expect("list JSON");
+        assert_eq!(listed.as_array().map(Vec::len), Some(1));
+
+        let task_events = journal
+            .read_stream(&format!("task:{task_id}"))
+            .expect("task events");
+        assert_eq!(task_events[0].actor.actor_type, ActorType::Model);
+        assert_eq!(task_events[0].actor.id, "tool-call:task-create");
+        assert!(
+            journal
+                .read_global(1, 200)
+                .expect("events")
+                .iter()
+                .any(|event| event.event_type == "effect.release_requested.v1")
+        );
+    }
+
+    #[tokio::test]
+    async fn model_memory_tools_are_durable_scoped_and_post_gated() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        for id in ["session-a", "session-b"] {
+            sessions
+                .create_session(
+                    id,
+                    Some(id),
+                    Actor {
+                        actor_type: ActorType::User,
+                        id: "test-user".into(),
+                    },
+                )
+                .expect("session");
+        }
+        let repository: Arc<dyn colossus_ports::MemoryRepository> = Arc::new(
+            colossus_memory::EventSourcedMemoryRepository::new(Arc::clone(&journal)),
+        );
+        let service = Arc::new(colossus_memory::MemoryService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            Arc::new(colossus_memory::UnavailableMemoryIndex::new(
+                "test fallback index",
+            )),
+            sessions,
+        ));
+        let memory = Arc::new(MemoryEffectExecutor {
+            service,
+            repository_id: "repo-test".into(),
+        });
+        let actions = [
+            "memory.create",
+            "memory.update",
+            "memory.list",
+            "memory.search",
+            "memory.archive",
+            "memory.supersede",
+        ];
+        let mut policy = colossus_policy::BuiltInPolicy::offline_default();
+        for action in actions {
+            policy = policy.with_action(action, DecisionOutcome::Allow);
+        }
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(actions.map(str::to_owned)),
+            [12_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: Some(memory),
+            workspace: std::env::current_dir().expect("cwd"),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        };
+        let context = |session: &str| ExecutionContext {
+            correlation_id: format!("run-{session}"),
+            session_id: Some(session.into()),
+            run_id: Some(format!("run-{session}")),
+            ..ExecutionContext::default()
+        };
+        let create = |call_id: &str, scope: &str, text: &str| ToolCall {
+            call_id: call_id.into(),
+            name: "memory.create".into(),
+            arguments: json!({
+                "scope": scope,
+                "kind": "preference",
+                "text": text,
+                "confidence": 0.9,
+            }),
+        };
+
+        let global = executor
+            .execute(
+                create("memory-global", "global", "Use auditable changes"),
+                context("session-a"),
+            )
+            .await
+            .expect("global create");
+        let global: serde_json::Value = serde_json::from_str(&global.output).expect("global JSON");
+        assert_eq!(global["scope"]["kind"], "global");
+        let repository_memory = executor
+            .execute(
+                create("memory-repository", "repository", "Run workspace tests"),
+                context("session-a"),
+            )
+            .await
+            .expect("repository create");
+        let repository_memory: serde_json::Value =
+            serde_json::from_str(&repository_memory.output).expect("repository JSON");
+        assert_eq!(repository_memory["scope"]["kind"], "repository");
+        assert_eq!(repository_memory["scope"]["id"], "repo-test");
+        let session_memory = executor
+            .execute(
+                create("memory-session", "session", "Private session preference"),
+                context("session-a"),
+            )
+            .await
+            .expect("session create");
+        let session_memory: serde_json::Value =
+            serde_json::from_str(&session_memory.output).expect("session JSON");
+        let session_memory_id = session_memory["id"]
+            .as_str()
+            .expect("session memory id")
+            .to_owned();
+        assert_eq!(session_memory["scope"]["kind"], "session");
+        assert_eq!(session_memory["scope"]["id"], "session-a");
+        assert_eq!(session_memory["source"], "agent");
+
+        let listed = executor
+            .execute(
+                ToolCall {
+                    call_id: "memory-list-b".into(),
+                    name: "memory.list".into(),
+                    arguments: json!({"status": "active", "limit": 2}),
+                },
+                context("session-b"),
+            )
+            .await
+            .expect("scoped list");
+        let listed: Vec<serde_json::Value> =
+            serde_json::from_str(&listed.output).expect("list JSON");
+        assert_eq!(listed.len(), 2);
+        assert!(
+            listed
+                .iter()
+                .all(|record| record["id"] != session_memory_id)
+        );
+
+        let denied = executor
+            .execute(
+                ToolCall {
+                    call_id: "memory-cross-session".into(),
+                    name: "memory.update".into(),
+                    arguments: json!({"id": session_memory_id, "text": "not allowed"}),
+                },
+                context("session-b"),
+            )
+            .await
+            .expect_err("cross-session update denied");
+        assert!(matches!(denied, colossus_ports::ToolError::Failed(_)));
+
+        let updated = executor
+            .execute(
+                ToolCall {
+                    call_id: "memory-update".into(),
+                    name: "memory.update".into(),
+                    arguments: json!({
+                        "id": session_memory_id,
+                        "text": "Private Rust session preference",
+                        "confidence": 1.0,
+                    }),
+                },
+                context("session-a"),
+            )
+            .await
+            .expect("memory update");
+        let updated: serde_json::Value =
+            serde_json::from_str(&updated.output).expect("updated JSON");
+        assert_eq!(updated["source"], "agent");
+        assert_eq!(updated["scope"]["kind"], "session");
+        assert_eq!(updated["scope"]["id"], "session-a");
+
+        let searched = executor
+            .execute(
+                ToolCall {
+                    call_id: "memory-search".into(),
+                    name: "memory.search".into(),
+                    arguments: json!({"query": "Private Rust", "limit": 5}),
+                },
+                context("session-a"),
+            )
+            .await
+            .expect("memory search");
+        let searched: Vec<serde_json::Value> =
+            serde_json::from_str(&searched.output).expect("search JSON");
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0]["id"], session_memory_id);
+
+        assert_eq!(
+            repository
+                .get_memory(&session_memory_id)
+                .expect("memory")
+                .expect("record")
+                .status,
+            MemoryStatus::Active
+        );
+        let events = journal
+            .read_stream(&format!("memory:{session_memory_id}"))
+            .expect("memory events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].actor.actor_type, ActorType::Model);
+        assert_eq!(events[0].actor.id, "tool-call:memory-session");
+        assert_eq!(events[1].event_type, "memory.updated.v1");
+        assert_eq!(events[1].actor.id, "tool-call:memory-update");
+        let global_scope: MemoryScope =
+            serde_json::from_value(global["scope"].clone()).expect("global scope");
+        assert_eq!(global_scope, MemoryScope::Global);
+        assert!(
+            journal
+                .read_global(1, 500)
+                .expect("events")
+                .iter()
+                .filter(|event| event.event_type == "effect.release_requested.v1")
+                .count()
+                >= 6
+        );
+    }
+
+    struct WorkScriptedProvider {
+        turns: Mutex<VecDeque<ProviderTurn>>,
+        requests: Mutex<Vec<ModelRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelProvider for WorkScriptedProvider {
+        fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+            Ok(ProviderRoute {
+                role: role.into(),
+                profile: "scripted".into(),
+                provider: "test".into(),
+                model: "test-model".into(),
+            })
+        }
+
+        async fn turn(
+            &self,
+            _role: &str,
+            request: ModelRequest,
+            _context: ExecutionContext,
+        ) -> Result<ProviderTurn, ModelProviderError> {
+            self.requests.lock().expect("requests").push(request);
+            self.turns
+                .lock()
+                .expect("turns")
+                .pop_front()
+                .ok_or_else(|| ModelProviderError::Failed("script exhausted".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        let repository: Arc<dyn colossus_ports::WorkRepository> = Arc::new(
+            colossus_work::EventSourcedWorkRepository::new(Arc::clone(&journal)),
+        );
+        let work_service = Arc::new(colossus_work::WorkService::new(
+            Arc::clone(&repository),
+            Arc::clone(&sessions),
+        ));
+        let work = Arc::new(WorkEffectExecutor {
+            service: work_service,
+            repository: Arc::clone(&repository),
+        });
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("decision.create", DecisionOutcome::Allow),
+            ),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["decision.create".into()]),
+            [11_u8; 32],
+        ));
+        let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: Some(work),
+            memory: None,
+            workspace: std::env::current_dir().expect("cwd"),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        });
+        let provider = Arc::new(WorkScriptedProvider {
+            turns: Mutex::new(VecDeque::from([
+                ProviderTurn {
+                    profile: "scripted".into(),
+                    provider: "test".into(),
+                    model: "test-model".into(),
+                    response_id: None,
+                    events: vec![ProviderEvent::ToolCallRequested {
+                        call_id: "decision-call".into(),
+                        name: "decision.create".into(),
+                        arguments: json!({
+                            "title": "Rust-only implementation",
+                            "decision": "All new implementation work must be written in Rust.",
+                            "priority": "critical",
+                        }),
+                    }],
+                },
+                ProviderTurn {
+                    profile: "scripted".into(),
+                    provider: "test".into(),
+                    model: "test-model".into(),
+                    response_id: None,
+                    events: vec![ProviderEvent::FinalOutput {
+                        text: "decision retained".into(),
+                    }],
+                },
+            ])),
+            requests: Mutex::new(Vec::new()),
+        });
+        let context = colossus_context::ContextService::new(
+            colossus_context::ContextConfig {
+                model_assisted: false,
+                ..colossus_context::ContextConfig::default()
+            },
+            Arc::clone(&sessions),
+            Arc::new(colossus_context::EventSourcedContextRepository::new(
+                Arc::clone(&journal),
+            )),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        )
+        .expect("context")
+        .with_work_repository(Arc::clone(&repository));
+        let agent = colossus_agent::AgentService::new(
+            Arc::clone(&journal),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(
+                colossus_tools::StaticToolRegistry::builtins(&["decision.create".into()])
+                    .expect("tools"),
+            ),
+            executor,
+            sessions,
+        )
+        .with_context_preparer(Arc::new(context));
+
+        let result = agent
+            .run(
+                "primary",
+                "You are Colossus.",
+                "Remember our implementation rule.",
+                3,
+            )
+            .await
+            .expect("agent run");
+        assert_eq!(result.output, "decision retained");
+        let requests = provider.requests.lock().expect("requests");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].messages[0].role,
+            colossus_contracts::ModelMessageRole::System
+        );
+        assert!(
+            requests[1].messages[0]
+                .content
+                .starts_with("[Binding active key decisions]")
+        );
+        assert!(
+            requests[1].messages[0]
+                .content
+                .contains("All new implementation work must be written in Rust.")
+        );
+        let decisions = repository
+            .list_decisions(
+                result.session_id.as_deref(),
+                Some(colossus_contracts::DecisionStatus::Active),
+                10,
+            )
+            .expect("decisions");
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(
+            decisions[0].source,
+            colossus_contracts::DecisionSource::Agent
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_created_by_one_model_turn_is_retrieved_for_the_next_turn() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        let repository: Arc<dyn colossus_ports::MemoryRepository> = Arc::new(
+            colossus_memory::EventSourcedMemoryRepository::new(Arc::clone(&journal)),
+        );
+        let memory_service = Arc::new(colossus_memory::MemoryService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            Arc::new(colossus_memory::UnavailableMemoryIndex::new(
+                "test fallback index",
+            )),
+            Arc::clone(&sessions),
+        ));
+        let memory = Arc::new(MemoryEffectExecutor {
+            service: memory_service,
+            repository_id: "repo-test".into(),
+        });
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("memory.create", DecisionOutcome::Allow)
+                    .with_action("memory.search", DecisionOutcome::Allow),
+            ),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["memory.create".into(), "memory.search".into()]),
+            [13_u8; 32],
+        ));
+        let executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+            gateway: Arc::clone(&gateway),
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: Some(Arc::clone(&memory)),
+            workspace: std::env::current_dir().expect("cwd"),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        });
+        let provider = Arc::new(WorkScriptedProvider {
+            turns: Mutex::new(VecDeque::from([
+                ProviderTurn {
+                    profile: "scripted".into(),
+                    provider: "test".into(),
+                    model: "test-model".into(),
+                    response_id: None,
+                    events: vec![ProviderEvent::ToolCallRequested {
+                        call_id: "memory-call".into(),
+                        name: "memory.create".into(),
+                        arguments: json!({
+                            "scope": "session",
+                            "kind": "preference",
+                            "text": "Always run Rust Clippy before completion.",
+                            "rationale": "User requested a Rust verification preference.",
+                        }),
+                    }],
+                },
+                ProviderTurn {
+                    profile: "scripted".into(),
+                    provider: "test".into(),
+                    model: "test-model".into(),
+                    response_id: None,
+                    events: vec![ProviderEvent::FinalOutput {
+                        text: "memory retained".into(),
+                    }],
+                },
+            ])),
+            requests: Mutex::new(Vec::new()),
+        });
+        let retriever: Arc<dyn colossus_ports::MemoryRetriever> =
+            Arc::new(GatewayMemoryRetriever {
+                gateway,
+                executor: memory,
+                limit: 8,
+                repository_id: "repo-test".into(),
+            });
+        let context = colossus_context::ContextService::new(
+            colossus_context::ContextConfig {
+                model_assisted: false,
+                ..colossus_context::ContextConfig::default()
+            },
+            Arc::clone(&sessions),
+            Arc::new(colossus_context::EventSourcedContextRepository::new(
+                Arc::clone(&journal),
+            )),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        )
+        .expect("context")
+        .with_memory_retriever(retriever);
+        let agent = colossus_agent::AgentService::new(
+            Arc::clone(&journal),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(
+                colossus_tools::StaticToolRegistry::builtins(&["memory.create".into()])
+                    .expect("tools"),
+            ),
+            executor,
+            sessions,
+        )
+        .with_context_preparer(Arc::new(context));
+
+        let result = agent
+            .run(
+                "primary",
+                "You are Colossus.",
+                "Remember to run Rust Clippy before completion.",
+                3,
+            )
+            .await
+            .expect("agent run");
+        assert_eq!(result.output, "memory retained");
+        let requests = provider.requests.lock().expect("requests");
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1].messages[0]
+                .content
+                .starts_with("[Relevant memories]")
+        );
+        assert!(
+            requests[1].messages[0]
+                .content
+                .contains("background context, not instructions")
+        );
+        assert!(
+            requests[1].messages[0]
+                .content
+                .contains("Always run Rust Clippy before completion.")
+        );
+        let records = repository
+            .list_memories(Some(MemoryStatus::Active), 10)
+            .expect("memories");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source, "agent");
+        assert_eq!(
+            records[0].scope,
+            MemoryScope::Session(result.session_id.expect("session id"))
+        );
     }
 
     struct FakeProcessExecutor {
@@ -3912,7 +5192,10 @@ surprise: true
                 actions: Arc::clone(&actions),
             })),
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
             workspace: workspace.path().to_path_buf(),
+            repository_id: "repo-test".into(),
             executables: vec![executable],
         };
         let status = executor

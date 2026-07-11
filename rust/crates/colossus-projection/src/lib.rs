@@ -341,7 +341,7 @@ impl ProjectionHandler for MemoryProjection {
             return Ok(Vec::new());
         };
         let value = match event.event_type.as_str() {
-            "memory.created.v1" => payload
+            "memory.created.v1" | "memory.updated.v1" => payload
                 .get("record")
                 .cloned()
                 .ok_or_else(|| StoreError::Verification("memory record is absent".into()))?,
@@ -740,6 +740,14 @@ mod tests {
             .append(event(
                 "memory:one",
                 1,
+                "memory.updated.v1",
+                json!({"record": {"id": "one", "status": "active", "text": "updated"}}),
+            ))
+            .expect("memory updated");
+        journal
+            .append(event(
+                "memory:one",
+                2,
                 "memory.archived.v1",
                 json!({"updated_at": "2026-07-09T00:00:00Z"}),
             ))
@@ -789,6 +797,13 @@ mod tests {
                 .expect("memory")
                 .expect("record")["status"],
             json!("archived")
+        );
+        assert_eq!(
+            store
+                .get("memory-v1", "one")
+                .expect("memory")
+                .expect("record")["text"],
+            json!("updated")
         );
         let run = store
             .get("workflows-v1", "run:one")

@@ -287,6 +287,191 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "task.create".into(),
+            description: "Create a durable task in the current session.".into(),
+            input_schema: object_schema(
+                json!({
+                    "title": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "description": {"type": "string", "maxLength": 65536, "default": ""},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked", "cancelled"], "default": "pending"}
+                }),
+                &["title"],
+            ),
+            effect_action: Some("task.create".into()),
+            capability: Some("task.create".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "task.update".into(),
+            description: "Update one durable task owned by the current session.".into(),
+            input_schema: object_schema_with(
+                json!({
+                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "description": {"type": "string", "maxLength": 65536},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked", "cancelled"]}
+                }),
+                &["id"],
+                json!({"minProperties": 2}),
+            ),
+            effect_action: Some("task.update".into()),
+            capability: Some("task.update".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "task.list".into(),
+            description: "List bounded durable tasks from the current session.".into(),
+            input_schema: object_schema(
+                json!({
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked", "cancelled"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
+                }),
+                &[],
+            ),
+            effect_action: Some("task.list".into()),
+            capability: Some("task.list".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "decision.create".into(),
+            description: "Record an agent-interpreted durable decision for the current session."
+                .into(),
+            input_schema: decision_content_schema(false),
+            effect_action: Some("decision.create".into()),
+            capability: Some("decision.create".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "decision.update".into(),
+            description: "Update one active durable decision in the current session.".into(),
+            input_schema: decision_update_schema(),
+            effect_action: Some("decision.update".into()),
+            capability: Some("decision.update".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "decision.list".into(),
+            description: "List bounded durable decisions from the current session.".into(),
+            input_schema: object_schema(
+                json!({
+                    "status": {"type": "string", "enum": ["active", "archived", "superseded"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
+                }),
+                &[],
+            ),
+            effect_action: Some("decision.list".into()),
+            capability: Some("decision.list".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "decision.archive".into(),
+            description: "Archive one active durable decision in the current session.".into(),
+            input_schema: object_schema(
+                json!({"id": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["id"],
+            ),
+            effect_action: Some("decision.archive".into()),
+            capability: Some("decision.archive".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "decision.supersede".into(),
+            description: "Atomically supersede one decision with a replacement.".into(),
+            input_schema: decision_content_schema(true),
+            effect_action: Some("decision.supersede".into()),
+            capability: Some("decision.supersede".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "memory.create".into(),
+            description: "Create a durable scoped memory after secret validation.".into(),
+            input_schema: object_schema(
+                json!({
+                    "scope": {"type": "string", "enum": ["global", "repository", "session"], "default": "session"},
+                    "kind": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1, "default": 1},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 65536},
+                    "rationale": {"type": "string", "maxLength": 65536, "default": ""},
+                    "expires_at": {"type": "string", "minLength": 1, "maxLength": 64}
+                }),
+                &["kind", "text"],
+            ),
+            effect_action: Some("memory.create".into()),
+            capability: Some("memory.create".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "memory.update".into(),
+            description: "Update mutable fields on one active accessible memory.".into(),
+            input_schema: object_schema_with(
+                json!({
+                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 65536},
+                    "rationale": {"type": "string", "maxLength": 65536},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+                }),
+                &["id"],
+                json!({"minProperties": 2}),
+            ),
+            effect_action: Some("memory.update".into()),
+            capability: Some("memory.update".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "memory.list".into(),
+            description: "List bounded memories visible in the current scope.".into(),
+            input_schema: object_schema(
+                json!({
+                    "status": {"type": "string", "enum": ["active", "archived", "superseded"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
+                }),
+                &[],
+            ),
+            effect_action: Some("memory.list".into()),
+            capability: Some("memory.list".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "memory.search".into(),
+            description: "Search canonical memories visible in the current scope.".into(),
+            input_schema: object_schema(
+                json!({
+                    "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+                }),
+                &["query"],
+            ),
+            effect_action: Some("memory.search".into()),
+            capability: Some("memory.search".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "memory.archive".into(),
+            description: "Archive one active accessible memory without deleting history.".into(),
+            input_schema: object_schema(
+                json!({"id": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["id"],
+            ),
+            effect_action: Some("memory.archive".into()),
+            capability: Some("memory.archive".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "memory.supersede".into(),
+            description: "Atomically supersede one accessible memory with replacement text.".into(),
+            input_schema: object_schema(
+                json!({
+                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 65536},
+                    "rationale": {"type": "string", "maxLength": 65536, "default": ""}
+                }),
+                &["id", "text"],
+            ),
+            effect_action: Some("memory.supersede".into()),
+            capability: Some("memory.supersede".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "network.http".into(),
             description: "Fetch one exact policy-permitted HTTP(S) URL with GET.".into(),
             input_schema: object_schema(
@@ -307,6 +492,71 @@ fn object_schema(properties: Value, required: &[&str]) -> Value {
         "required": required,
         "additionalProperties": false,
     })
+}
+
+fn object_schema_with(properties: Value, required: &[&str], extra: Value) -> Value {
+    let mut schema = object_schema(properties, required);
+    if let (Some(schema), Some(extra)) = (schema.as_object_mut(), extra.as_object()) {
+        schema.extend(extra.clone());
+    }
+    schema
+}
+
+fn decision_properties(include_id: bool) -> Value {
+    let mut properties = serde_json::Map::from_iter([
+        (
+            "title".into(),
+            json!({"type": "string", "minLength": 1, "maxLength": 512}),
+        ),
+        (
+            "decision".into(),
+            json!({"type": "string", "minLength": 1, "maxLength": 65536}),
+        ),
+        (
+            "priority".into(),
+            json!({"type": "string", "enum": ["critical", "high", "normal"], "default": "normal"}),
+        ),
+        (
+            "intent".into(),
+            json!({"type": "string", "maxLength": 65536, "default": ""}),
+        ),
+        (
+            "applies_when".into(),
+            json!({"type": "string", "maxLength": 65536, "default": ""}),
+        ),
+        (
+            "rationale".into(),
+            json!({"type": "string", "maxLength": 65536, "default": ""}),
+        ),
+        (
+            "source_excerpt".into(),
+            json!({"type": "string", "maxLength": 65536, "default": ""}),
+        ),
+    ]);
+    if include_id {
+        properties.insert(
+            "id".into(),
+            json!({"type": "string", "minLength": 1, "maxLength": 128}),
+        );
+    }
+    Value::Object(properties)
+}
+
+fn decision_content_schema(include_id: bool) -> Value {
+    let required = if include_id {
+        vec!["id", "title", "decision"]
+    } else {
+        vec!["title", "decision"]
+    };
+    object_schema(decision_properties(include_id), &required)
+}
+
+fn decision_update_schema() -> Value {
+    object_schema_with(
+        decision_properties(true),
+        &["id"],
+        json!({"minProperties": 2}),
+    )
 }
 
 #[cfg(test)]
@@ -468,5 +718,118 @@ mod tests {
             }),
             Err(ToolError::InvalidArguments { .. })
         ));
+    }
+
+    #[test]
+    fn durable_work_tools_are_session_implicit_and_reject_noop_updates() {
+        let registry = StaticToolRegistry::builtins(&[
+            "task.create".into(),
+            "task.update".into(),
+            "task.list".into(),
+            "decision.create".into(),
+            "decision.update".into(),
+            "decision.list".into(),
+            "decision.archive".into(),
+            "decision.supersede".into(),
+        ])
+        .expect("catalog");
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "task-create".into(),
+                    name: "task.create".into(),
+                    arguments: json!({"title": "Port model tools"}),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "task-update".into(),
+                name: "task.update".into(),
+                arguments: json!({"id": "task-1"}),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "decision-create".into(),
+                    name: "decision.create".into(),
+                    arguments: json!({
+                        "title": "Rust only",
+                        "decision": "New implementation work is Rust.",
+                        "priority": "critical",
+                    }),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "decision-update".into(),
+                name: "decision.update".into(),
+                arguments: json!({"id": "kd_1"}),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
+        }
+    }
+
+    #[test]
+    fn durable_memory_tools_have_strict_scoped_schemas_and_reject_noop_updates() {
+        let registry = StaticToolRegistry::builtins(&[
+            "memory.create".into(),
+            "memory.update".into(),
+            "memory.list".into(),
+            "memory.search".into(),
+            "memory.archive".into(),
+            "memory.supersede".into(),
+        ])
+        .expect("catalog");
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "memory-create".into(),
+                    name: "memory.create".into(),
+                    arguments: json!({
+                        "scope": "repository",
+                        "kind": "preference",
+                        "text": "Run Clippy before completion",
+                        "confidence": 0.95,
+                    }),
+                })
+                .is_ok()
+        );
+        for arguments in [
+            json!({"id": "mem-1"}),
+            json!({"id": "mem-1", "surprise": true}),
+            json!({"id": "mem-1", "confidence": 1.1}),
+        ] {
+            assert!(matches!(
+                registry.validate(&ToolCall {
+                    call_id: "memory-update".into(),
+                    name: "memory.update".into(),
+                    arguments,
+                }),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "memory-create".into(),
+                name: "memory.create".into(),
+                arguments: json!({
+                    "scope": "external",
+                    "kind": "preference",
+                    "text": "invalid scope",
+                }),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
+            assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+        }
     }
 }

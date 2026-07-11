@@ -178,7 +178,10 @@ adapter requires a matching one-use permit; policy denial leaves canonical strea
 unchanged. Decision source is derived from immutable actor provenance rather than a
 caller-selectable label. Only active same-session decisions enter model context; their
 binding block is bounded, token-accounted, and placed ahead of summaries so compaction
-cannot silently erase durable commitments.
+cannot silently erase durable commitments. Model-visible schemas never accept a session
+identifier. The runtime derives it from the authenticated execution context and the
+permit-bound executor checks canonical target ownership, so guessed task or decision ids
+cannot cross session boundaries.
 
 Rust memory lifecycle events are encrypted canonical state. Memory operations and index
 administration require one-use permits; reads, lists, and searches always require a
@@ -187,7 +190,14 @@ are treated only as candidate ids. Colossus reloads canonical records and reappl
 status, expiry, and scope before release. Index failure leaves journal-backed memory
 usable through bounded canonical fallback, exposes lag/error status, and never causes a
 plaintext downgrade or silent loss. Memory source is derived from actor provenance, and
-hard validation rejects common credential/private-key forms before persistence.
+hard validation rejects common credential/private-key forms before persistence. Updates
+are immutable journal events and cannot change identity, scope, source, or creation time.
+For model, workflow, and subagent callers, repository and session scopes come from the
+runtime context rather than model arguments; targeted operations recheck the canonical
+record after authorization, query results are filtered before applying caller limits,
+and index administration is unavailable. A repository scope is bound to a stable hash
+of the canonical workspace path. Memory injected on a later turn is explicitly labeled
+as background context rather than instructions.
 
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
 are validated against the agent allowlist and active tool catalog before provider calls;

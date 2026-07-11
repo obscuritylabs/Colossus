@@ -385,6 +385,9 @@ pub trait MemoryRepository: Send + Sync {
     /// Load one reconstructed canonical record.
     fn get_memory(&self, id: &str) -> Result<Option<MemoryRecord>, StoreError>;
 
+    /// Append a new active state for one existing record without changing identity or scope.
+    fn update(&self, record: MemoryRecord, actor: Actor) -> Result<MemoryRecord, StoreError>;
+
     /// List bounded active canonical records before policy filtering.
     fn list_active(&self, limit: usize) -> Result<Vec<MemoryRecord>, StoreError>;
 

@@ -157,6 +157,28 @@ impl MemoryRepository for EventSourcedMemoryRepository {
         for event in events.iter().skip(1) {
             let payload = self.journal.decrypt_payload(event)?;
             match event.event_type.as_str() {
+                "memory.updated.v1" => {
+                    let updated: MemoryRecord =
+                        serde_json::from_value(payload.get("record").cloned().ok_or_else(
+                            || StoreError::Verification("updated memory record is absent".into()),
+                        )?)
+                        .map_err(adapter)?;
+                    validate_record(&updated).map_err(|error| {
+                        StoreError::Verification(format!(
+                            "invalid canonical memory update event: {error}"
+                        ))
+                    })?;
+                    if updated.id != record.id
+                        || updated.scope != record.scope
+                        || updated.source != record.source
+                        || updated.created_at != record.created_at
+                    {
+                        return Err(StoreError::Verification(
+                            "memory update changed immutable identity or provenance".into(),
+                        ));
+                    }
+                    record = updated;
+                }
                 "memory.archived.v1" => {
                     record.status = MemoryStatus::Archived;
                     record.updated_at = string(&payload, "updated_at")?;
@@ -170,6 +192,33 @@ impl MemoryRepository for EventSourcedMemoryRepository {
             }
         }
         Ok(Some(record))
+    }
+
+    fn update(&self, record: MemoryRecord, actor: Actor) -> Result<MemoryRecord, StoreError> {
+        validate_record(&record)?;
+        let current = self
+            .get_memory(&record.id)?
+            .ok_or_else(|| StoreError::NotFound(format!("memory {}", record.id)))?;
+        if current.status != MemoryStatus::Active
+            || record.scope != current.scope
+            || record.source != current.source
+            || record.created_at != current.created_at
+        {
+            return Err(StoreError::Adapter(
+                "memory update requires an active record and immutable identity, scope, source, and creation time"
+                    .into(),
+            ));
+        }
+        let stream = Self::stream(&record.id);
+        let expected = u64::try_from(self.journal.read_stream(&stream)?.len()).map_err(adapter)?;
+        self.journal.append(Self::event(
+            &record.id,
+            expected,
+            "memory.updated.v1",
+            actor,
+            json!({"record": &record}),
+        ))?;
+        Ok(record)
     }
 
     fn list_active(&self, limit: usize) -> Result<Vec<MemoryRecord>, StoreError> {
@@ -640,6 +689,44 @@ impl MemoryService {
         Ok(record)
     }
 
+    /// Append an updated active memory state while preserving identity and scope.
+    pub async fn update(
+        &self,
+        id: &str,
+        text: Option<&str>,
+        rationale: Option<&str>,
+        confidence: Option<f32>,
+        actor: Actor,
+    ) -> Result<MemoryRecord, StoreError> {
+        let mut record = self
+            .repository
+            .get_memory(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("memory {id}")))?;
+        if record.status != MemoryStatus::Active {
+            return Err(StoreError::Adapter(
+                "only an active memory can be updated".into(),
+            ));
+        }
+        if text.is_none() && rationale.is_none() && confidence.is_none() {
+            return Err(StoreError::Adapter(
+                "memory update requires text, rationale, or confidence".into(),
+            ));
+        }
+        if let Some(text) = text {
+            record.text = text.trim().into();
+        }
+        if let Some(rationale) = rationale {
+            record.rationale = rationale.into();
+        }
+        if let Some(confidence) = confidence {
+            record.confidence = confidence;
+        }
+        record.updated_at = now()?;
+        let record = self.repository.update(record, actor)?;
+        self.sync_best_effort().await;
+        Ok(record)
+    }
+
     /// Archive one active canonical memory without deleting history.
     pub async fn archive(&self, id: &str, actor: Actor) -> Result<MemoryRecord, StoreError> {
         let record = self.repository.archive(id, actor)?;
@@ -756,7 +843,7 @@ impl MemoryService {
             for event in &events {
                 if let Some(id) = event.stream_id.strip_prefix("memory:") {
                     match event.event_type.as_str() {
-                        "memory.created.v1" => {
+                        "memory.created.v1" | "memory.updated.v1" => {
                             let payload = self.journal.decrypt_payload(event)?;
                             let record: MemoryRecord = serde_json::from_value(
                                 payload.get("record").cloned().ok_or_else(|| {
@@ -978,6 +1065,20 @@ mod tests {
         repository
             .create(memory("old", "Use Rust"), actor())
             .expect("create");
+        let mut updated = repository.get_memory("old").expect("get").expect("memory");
+        updated.text = "Use auditable Rust".into();
+        updated.rationale = "updated test".into();
+        updated.confidence = 0.95;
+        updated.updated_at = "2026-07-10T00:00:00Z".into();
+        let updated = repository.update(updated, actor()).expect("update");
+        let reopened = EventSourcedMemoryRepository::new(Arc::clone(&journal));
+        assert_eq!(
+            reopened.get_memory("old").expect("reconstruct"),
+            Some(updated.clone())
+        );
+        assert_eq!(updated.scope, MemoryScope::Global);
+        assert_eq!(updated.source, "user");
+        assert_eq!(updated.created_at, "2026-07-09T00:00:00Z");
         let (old, replacement) = repository
             .supersede("old", memory("new", "Use Rust 1.96"), actor())
             .expect("supersede");
@@ -1068,6 +1169,32 @@ mod tests {
                 .expect("search"),
             vec![created.clone()]
         );
+        let updated = service
+            .update(
+                &created.id,
+                Some("Run Rust Clippy before completion"),
+                Some("updated preference"),
+                Some(0.95),
+                actor(),
+            )
+            .await
+            .expect("update");
+        assert_eq!(updated.scope, created.scope);
+        assert_eq!(updated.source, created.source);
+        assert!(
+            service
+                .search("tests", Some("session-1"), None, 8)
+                .await
+                .expect("old text removed")
+                .is_empty()
+        );
+        assert_eq!(
+            service
+                .search("Clippy", Some("session-1"), None, 8)
+                .await
+                .expect("updated text indexed"),
+            vec![updated.clone()]
+        );
         assert!(
             service
                 .search("Rust tests", Some("other-session"), None, 8)
@@ -1087,7 +1214,7 @@ mod tests {
         reopened.sync_index().await.expect("replay");
         assert!(
             reopened
-                .search("Rust tests", Some("session-1"), None, 8)
+                .search("Clippy", Some("session-1"), None, 8)
                 .await
                 .expect("search after restart")
                 .is_empty()

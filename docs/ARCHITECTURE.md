@@ -59,17 +59,27 @@ permits only after `task.*` or `decision.*` authorization. The `work-v1` project
 disposable discovery state, not the write model. Active decisions are loaded from the
 canonical repository and injected as
 bounded binding system context before snapshots on every provider turn; archived and
-superseded decisions remain auditable but are not injected.
+superseded decisions remain auditable but are not injected. Strict model-visible task
+and decision tools derive the session from the execution context rather than accepting
+one from model arguments. The permit-bound executor rechecks that same session against
+canonical target records, derives decision source from the model actor, and rejects
+cross-session access before repository mutation or release.
 
 `colossus-memory` separates canonical lifecycle state from disposable retrieval. Memory
-create/archive/supersede events remain authoritative in the encrypted journal. Tantivy
+create/update/archive/supersede events remain authoritative in the encrypted journal.
+Updates append a complete validated next-state record while preserving identity, scope,
+source, and creation time. Tantivy
 stores candidate ids, bounded searchable text, metadata, event-id markers, and a durable
 global replay position; failed index work remains in the journal and is retried without
 blocking canonical reads. Search always reloads candidate ids from the repository and
 reapplies active status, expiry, and global/repository/session scope. Every lifecycle,
 read, search, and index operation crosses the gateway. Context composition receives only
 post-effect-authorized canonical records and places them after decisions and before
-snapshots as non-instructional background.
+snapshots as non-instructional background. Model tools name only `global`, `repository`,
+or `session`; the runtime derives the stable repository identity from the canonical
+workspace path and the session identity from the execution context. Targeted access is
+checked against the canonical record after authorization, and list limits are applied
+after scope filtering.
 
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
 subprocess specifications are authenticated to a one-shot helper, which clears the
@@ -140,6 +150,12 @@ the application `ToolRegistry` and `ToolExecutor` ports. The orchestrator valida
 arguments before policy and approval handling, then records policy and completion audit
 events. CLI and REPL code may list or render tools, but must not implement model, tool,
 policy, or state behavior.
+
+Durable `task.*`, `decision.*`, and `memory.*` model tools use the same composition.
+Their public schemas omit session and repository identifiers, the runtime constructs
+typed operations with trusted context, and private work/memory executors perform a final
+canonical scope check while consuming the permit. Their JSON results remain quarantined
+until the configured post-effect decision allows disclosure.
 
 The Rust workspace tools preserve this split: `colossus-tools` owns strict model-visible
 schemas, `colossus-runtime` resolves workspace-relative resources and constructs typed
