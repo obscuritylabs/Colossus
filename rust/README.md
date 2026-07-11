@@ -327,3 +327,21 @@ cargo fuzz run workflow_condition
 CI pins its nightly toolchain, executes 5,000 inputs per target, and uploads any crash
 artifacts. Add minimized reproductions to the matching `fuzz/corpus/` directory before
 fixing a discovered defect.
+
+Supply-chain CI pins `cargo-deny` 0.20.2 and `cargo-audit` 0.22.2. It checks the
+production and independent fuzz lockfiles separately; duplicate transitive versions are
+reported, while unapproved licenses, wildcard requirements, unknown sources, banned
+crates, yanked or unmaintained dependencies, and RustSec advisories fail the build.
+
+```sh
+cargo install cargo-deny --version 0.20.2 --locked
+cargo install cargo-audit --version 0.22.2 --locked
+
+cargo deny --locked check -A license-not-encountered licenses sources bans
+cargo deny --locked check -D warnings advisories
+cargo audit -D warnings --file Cargo.lock
+
+cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
+cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
+cargo audit -D warnings --file fuzz/Cargo.lock
+```

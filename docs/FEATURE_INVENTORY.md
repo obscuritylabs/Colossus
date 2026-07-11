@@ -1005,6 +1005,8 @@ A reconstruction is complete only when all applicable checks pass:
   pass durable acceptance tests.
 - [ ] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
   network escapes on each supported platform.
+- [x] Production and independent fuzz dependency graphs enforce locked registry sources,
+  explicit licenses and versions, banned crates, and warnings-denied RustSec audits.
 - [ ] Formatting, warnings-denied lint, workspace tests, fuzzing, dependency/license and
   vulnerability policy, and macOS/Linux/Windows arm64/x64 release smoke tests pass.
 - [ ] Strict configuration rejects unknown fields and safely redacts displayed secrets.

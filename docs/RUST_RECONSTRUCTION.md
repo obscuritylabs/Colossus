@@ -210,7 +210,8 @@ obsolete Go launcher.
   requeue`, REPL `/agents`, one-shot parent-run draining, and worker draining share the
   same canonical queue.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
-  denied, and workspace tests while the frozen Python job remains green.
+  denied, workspace tests, and pinned `cargo-deny`/`cargo-audit` policy for both the
+  production and independent fuzz lockfiles while the frozen Python job remains green.
 - Configured stdio MCP integration using the official Rust SDK protocol models, exact
   sandbox executable identities, environment-only credential references, deterministic
   paginated discovery, strict server/tool allowlists, live JSON Schema validation,
@@ -314,8 +315,6 @@ cutover. The following planned work remains:
   implemented; skill resources remain non-executable. Configured stdio MCP discovery,
   invocation, and research collection are implemented through the normal sandbox and
   gateway boundaries.
-- Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
-  runtime matrix, and
-  six-target release smoke tests.
+- The full Windows/Linux sandbox runtime matrix and six-target release smoke tests.
 
 Rust is promoted to the repository root only after those P0+P1 acceptance checks pass.

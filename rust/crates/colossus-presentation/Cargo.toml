@@ -12,7 +12,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-colossus-testkit = { path = "../colossus-testkit" }
+colossus-testkit.workspace = true
 
 [lints]
 workspace = true

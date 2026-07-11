@@ -21,8 +21,7 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-colossus-testkit = { path = "../colossus-testkit" }
+colossus-testkit.workspace = true
 
 [lints]
 workspace = true
-

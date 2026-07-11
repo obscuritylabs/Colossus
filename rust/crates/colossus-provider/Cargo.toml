@@ -19,7 +19,7 @@ url.workspace = true
 
 [dev-dependencies]
 colossus-ports.workspace = true
-colossus-testkit = { path = "../colossus-testkit" }
+colossus-testkit.workspace = true
 
 [lints]
 workspace = true

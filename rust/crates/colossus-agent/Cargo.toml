@@ -15,7 +15,7 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-colossus-testkit = { path = "../colossus-testkit" }
+colossus-testkit.workspace = true
 colossus-session.workspace = true
 tokio.workspace = true
 

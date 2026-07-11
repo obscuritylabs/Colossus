@@ -15,7 +15,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 colossus-session.workspace = true
-colossus-testkit = { path = "../colossus-testkit" }
+colossus-testkit.workspace = true
 
 [lints]
 workspace = true

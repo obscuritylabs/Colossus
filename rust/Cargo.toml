@@ -79,34 +79,34 @@ tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process",
 uuid = { version = "1.23.4", features = ["serde", "v7"] }
 url = "2.5.8"
 
-colossus-contracts = { path = "crates/colossus-contracts" }
-colossus-audit = { path = "crates/colossus-audit" }
-colossus-context = { path = "crates/colossus-context" }
-colossus-work = { path = "crates/colossus-work" }
-colossus-domain = { path = "crates/colossus-domain" }
-colossus-journal-redb = { path = "crates/colossus-journal-redb" }
-colossus-memory = { path = "crates/colossus-memory" }
-colossus-memory-chroma = { path = "crates/colossus-memory-chroma" }
-colossus-research = { path = "crates/colossus-research" }
-colossus-telemetry = { path = "crates/colossus-telemetry" }
-colossus-testkit = { path = "crates/colossus-testkit" }
-colossus-fuzzing = { path = "crates/colossus-fuzzing" }
-colossus-skills = { path = "crates/colossus-skills" }
-colossus-integrations = { path = "crates/colossus-integrations" }
-colossus-mcp = { path = "crates/colossus-mcp" }
-colossus-packs = { path = "crates/colossus-packs" }
-colossus-policy = { path = "crates/colossus-policy" }
-colossus-provider = { path = "crates/colossus-provider" }
-colossus-tools = { path = "crates/colossus-tools" }
-colossus-agent = { path = "crates/colossus-agent" }
-colossus-session = { path = "crates/colossus-session" }
-colossus-ports = { path = "crates/colossus-ports" }
-colossus-projection = { path = "crates/colossus-projection" }
-colossus-sandbox = { path = "crates/colossus-sandbox" }
-colossus-runtime = { path = "crates/colossus-runtime" }
-colossus-worker = { path = "crates/colossus-worker" }
-colossus-workflow = { path = "crates/colossus-workflow" }
-colossus-presentation = { path = "crates/colossus-presentation" }
+colossus-contracts = { version = "=0.6.0-alpha.1", path = "crates/colossus-contracts" }
+colossus-audit = { version = "=0.6.0-alpha.1", path = "crates/colossus-audit" }
+colossus-context = { version = "=0.6.0-alpha.1", path = "crates/colossus-context" }
+colossus-work = { version = "=0.6.0-alpha.1", path = "crates/colossus-work" }
+colossus-domain = { version = "=0.6.0-alpha.1", path = "crates/colossus-domain" }
+colossus-journal-redb = { version = "=0.6.0-alpha.1", path = "crates/colossus-journal-redb" }
+colossus-memory = { version = "=0.6.0-alpha.1", path = "crates/colossus-memory" }
+colossus-memory-chroma = { version = "=0.6.0-alpha.1", path = "crates/colossus-memory-chroma" }
+colossus-research = { version = "=0.6.0-alpha.1", path = "crates/colossus-research" }
+colossus-telemetry = { version = "=0.6.0-alpha.1", path = "crates/colossus-telemetry" }
+colossus-testkit = { version = "=0.6.0-alpha.1", path = "crates/colossus-testkit" }
+colossus-fuzzing = { version = "=0.6.0-alpha.1", path = "crates/colossus-fuzzing" }
+colossus-skills = { version = "=0.6.0-alpha.1", path = "crates/colossus-skills" }
+colossus-integrations = { version = "=0.6.0-alpha.1", path = "crates/colossus-integrations" }
+colossus-mcp = { version = "=0.6.0-alpha.1", path = "crates/colossus-mcp" }
+colossus-packs = { version = "=0.6.0-alpha.1", path = "crates/colossus-packs" }
+colossus-policy = { version = "=0.6.0-alpha.1", path = "crates/colossus-policy" }
+colossus-provider = { version = "=0.6.0-alpha.1", path = "crates/colossus-provider" }
+colossus-tools = { version = "=0.6.0-alpha.1", path = "crates/colossus-tools" }
+colossus-agent = { version = "=0.6.0-alpha.1", path = "crates/colossus-agent" }
+colossus-session = { version = "=0.6.0-alpha.1", path = "crates/colossus-session" }
+colossus-ports = { version = "=0.6.0-alpha.1", path = "crates/colossus-ports" }
+colossus-projection = { version = "=0.6.0-alpha.1", path = "crates/colossus-projection" }
+colossus-sandbox = { version = "=0.6.0-alpha.1", path = "crates/colossus-sandbox" }
+colossus-runtime = { version = "=0.6.0-alpha.1", path = "crates/colossus-runtime" }
+colossus-worker = { version = "=0.6.0-alpha.1", path = "crates/colossus-worker" }
+colossus-workflow = { version = "=0.6.0-alpha.1", path = "crates/colossus-workflow" }
+colossus-presentation = { version = "=0.6.0-alpha.1", path = "crates/colossus-presentation" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

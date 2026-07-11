@@ -38,6 +38,16 @@ tokens, 128 recursive levels, or 128 boolean-composition nodes. Committed corpor
 normal workspace tests; pinned nightly CI performs bounded mutation runs and retains crash
 artifacts.
 
+Rust dependency policy is locked and fail-closed for both the production and independent
+fuzz workspaces. `cargo-deny` evaluates the complete six-release-target graph, permits only
+the licenses listed in `rust/deny.toml`, rejects wildcard version requirements, rejects
+unknown registries and Git sources, and bans dependencies that would bypass the rustls or
+license boundary. Internal path dependencies include the exact current prerelease version.
+Duplicate transitive versions remain visible warnings so they can be reduced without
+blocking an otherwise safe graph. `cargo-deny` advisory checks and an independent
+`cargo-audit` scan both deny RustSec warnings for `Cargo.lock` and `fuzz/Cargo.lock`; there
+are no advisory exceptions or silent vulnerability downgrades.
+
 Configured external audit export is itself an effect; it never receives a trusted-service
 bypass. The exporter discloses only ciphertext-free `AuditEvidence` envelope metadata and
 hashes. Every directory write requires `audit.export.write`, a matching sandbox write

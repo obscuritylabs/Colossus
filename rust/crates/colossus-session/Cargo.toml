@@ -11,7 +11,7 @@ colossus-ports.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-colossus-testkit = { path = "../colossus-testkit" }
+colossus-testkit.workspace = true
 
 [lints]
 workspace = true
