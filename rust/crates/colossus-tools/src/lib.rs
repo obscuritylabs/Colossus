@@ -420,6 +420,42 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 512 * 1024,
         },
         ToolSpec {
+            name: "agent.delegate".into(),
+            description: "Queue a durable bounded child-agent job in the current session.".into(),
+            input_schema: object_schema(
+                json!({"task": {"type": "string", "minLength": 1, "maxLength": 65536}}),
+                &["task"],
+            ),
+            effect_action: Some("subagent.create".into()),
+            capability: Some("subagent.create".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "agent.result".into(),
+            description: "Return one current-session durable child-agent job and result.".into(),
+            input_schema: object_schema(
+                json!({"id": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["id"],
+            ),
+            effect_action: Some("subagent.read".into()),
+            capability: Some("subagent.read".into()),
+            max_output_bytes: 512 * 1024,
+        },
+        ToolSpec {
+            name: "agent.list".into(),
+            description: "List bounded durable child-agent jobs in the current session.".into(),
+            input_schema: object_schema(
+                json!({
+                    "status": {"type": "string", "enum": ["queued", "running", "completed", "failed", "cancelled", "interrupted"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
+                }),
+                &[],
+            ),
+            effect_action: Some("subagent.list".into()),
+            capability: Some("subagent.list".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "goal.update".into(),
             description: "Mark the active goal complete or blocked with concise evidence.".into(),
             input_schema: object_schema(
@@ -992,5 +1028,47 @@ mod tests {
                 Err(ToolError::InvalidArguments { .. })
             ));
         }
+    }
+
+    #[test]
+    fn subagent_tools_inject_lineage_and_keep_strict_bounded_arguments() {
+        let registry = StaticToolRegistry::builtins(&[
+            "agent.delegate".into(),
+            "agent.result".into(),
+            "agent.list".into(),
+        ])
+        .expect("catalog");
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "delegate".into(),
+                    name: "agent.delegate".into(),
+                    arguments: json!({"task": "Review the tests"}),
+                })
+                .is_ok()
+        );
+        for arguments in [
+            json!({"task": ""}),
+            json!({"task": "review", "role": "forged"}),
+            json!({"task": "review", "session_id": "forged"}),
+        ] {
+            assert!(matches!(
+                registry.validate(&ToolCall {
+                    call_id: "delegate".into(),
+                    name: "agent.delegate".into(),
+                    arguments,
+                }),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "list".into(),
+                    name: "agent.list".into(),
+                    arguments: json!({"status": "interrupted", "limit": 1000}),
+                })
+                .is_ok()
+        );
     }
 }

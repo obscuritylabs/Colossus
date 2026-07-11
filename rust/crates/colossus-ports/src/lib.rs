@@ -8,8 +8,8 @@ use colossus_contracts::{
     ExecutionContext, GoalRecord, GoalStatus, KeyDecision, MemoryRecord, ModelMessage,
     ModelRequest, ModelToolDefinition, NewEvent, PlanRecord, PlanStatus, PolicyDecision,
     PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute, ProviderTurn,
-    SessionMessage, SessionSummary, SignedCheckpoint, TaskRecord, TaskStatus, ToolCall, ToolResult,
-    ToolSpec, WorkflowDefinition, WorkflowRun,
+    SessionMessage, SessionSummary, SignedCheckpoint, SubagentJob, SubagentStatus, TaskRecord,
+    TaskStatus, ToolCall, ToolResult, ToolSpec, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -419,6 +419,23 @@ pub trait WorkRepository: Send + Sync {
         status: Option<GoalStatus>,
         limit: usize,
     ) -> Result<Vec<GoalRecord>, StoreError>;
+
+    /// Create one queued durable child-agent job.
+    fn create_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError>;
+
+    /// Append one validated child-agent lifecycle transition.
+    fn update_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError>;
+
+    /// Reconstruct one child-agent job.
+    fn get_subagent(&self, id: &str) -> Result<Option<SubagentJob>, StoreError>;
+
+    /// List bounded child-agent jobs.
+    fn list_subagents(
+        &self,
+        session_id: Option<&str>,
+        status: Option<SubagentStatus>,
+        limit: usize,
+    ) -> Result<Vec<SubagentJob>, StoreError>;
 }
 /// Canonical event-sourced memory lifecycle repository.
 pub trait MemoryRepository: Send + Sync {

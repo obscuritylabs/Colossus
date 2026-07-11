@@ -41,7 +41,7 @@ storage:
     anchor_path: {anchor}
 policy:
   kind: built_in
-  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, goal.create, goal.show, goal.update, goal.iteration.record, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
+  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
   approval_actions: []
   require_post_effect: true
 workflows:
@@ -60,6 +60,8 @@ providers:
 agent:
   maxTurns: 4
   tools: [echo, filesystem.list, filesystem.read, filesystem.search]
+subagents:
+  maxConcurrent: 2
 sandbox:
   backend: native
   profile: agent-test-v1
@@ -247,7 +249,7 @@ sandbox:
         fs::read_to_string(&config)
             .expect("read config")
             .replace(
-                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, goal.create, goal.show, goal.update, goal.iteration.record, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]",
+                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]",
                 "allow_actions: []",
             ),
     )
@@ -453,6 +455,36 @@ sandbox:
     let shown_goal: Value = serde_json::from_slice(&shown_goal.stdout).expect("shown goal JSON");
     assert_eq!(shown_goal["id"], goal_id);
 
+    let mut agent_ids = Vec::new();
+    for index in 0..4 {
+        let task = format!("child complete {index}");
+        let queued_agent = run(binary, &config, &["agents", "queue", &session_id, &task]);
+        assert!(queued_agent.status.success());
+        let queued_agent: Value =
+            serde_json::from_slice(&queued_agent.stdout).expect("queued agent JSON");
+        agent_ids.push(queued_agent["id"].as_str().expect("agent id").to_owned());
+        assert_eq!(queued_agent["status"], "queued");
+    }
+    let queued_status = run(binary, &config, &["agents", "status"]);
+    let queued_status: Value =
+        serde_json::from_slice(&queued_status.stdout).expect("queue status JSON");
+    assert_eq!(queued_status["queued"], 4);
+    assert_eq!(queued_status["max_concurrent"], 2);
+    let drained_agents = run(binary, &config, &["agents", "drain"]);
+    assert!(
+        drained_agents.status.success(),
+        "{}",
+        String::from_utf8_lossy(&drained_agents.stderr)
+    );
+    let drained_agents: Value =
+        serde_json::from_slice(&drained_agents.stdout).expect("drained agents JSON");
+    assert_eq!(drained_agents["completed"], 4);
+    let child = run(binary, &config, &["agents", "show", &agent_ids[0]]);
+    let child: Value = serde_json::from_slice(&child.stdout).expect("child JSON");
+    assert_eq!(child["status"], "completed");
+    assert_eq!(child["final_output"], "child complete 0");
+    assert!(child["child_run_id"].as_str().is_some());
+
     let audit = run(binary, &config, &["audit", "show", "--limit", "1000"]);
     assert!(audit.status.success());
     let events: Vec<Value> = serde_json::from_slice(&audit.stdout).expect("audit JSON");
@@ -472,4 +504,6 @@ sandbox:
     assert!(event_types.contains(&"memory.superseded.v1"));
     assert!(event_types.contains(&"goal.created.v1"));
     assert!(event_types.contains(&"goal.updated.v1"));
+    assert!(event_types.contains(&"subagent.queued.v1"));
+    assert!(event_types.contains(&"subagent.status_changed.v1"));
 }

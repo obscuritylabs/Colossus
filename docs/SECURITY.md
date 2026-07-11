@@ -200,6 +200,16 @@ runtime appends one iteration record after each returned run. The 50-iteration h
 persisted per-goal budget prevent unbounded continuation. Approved-plan consumption and
 linked goal creation are one optimistic journal batch.
 
+Rust subagents do not create a new authority domain. Job creation, reads, lifecycle
+transitions, and result release cross the effect gateway, and model-visible schemas omit
+session, parent-run, parent-call, child-session, and role identities. The runtime derives
+those values from the parent tool context. Each child receives a distinct durable
+session and `ActorType::Subagent` provenance for its tool effects. Nested delegation is
+removed from provider definitions and independently denied by the executor. Results are
+bounded and post-effect authorized before canonical completion. Cross-session job ids
+are rejected after permit minting. Cancellation becomes canonical immediately and late
+child output is not committed; process-loss recovery records running jobs interrupted.
+
 Rust memory lifecycle events are encrypted canonical state. Memory operations and index
 administration require one-use permits; reads, lists, and searches always require a
 post-effect content decision before records can reach a model or user. Tantivy results

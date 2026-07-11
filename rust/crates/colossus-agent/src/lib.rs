@@ -122,6 +122,7 @@ impl AgentService {
             requested_session_id,
             None,
             None,
+            None,
         )
         .await
     }
@@ -146,6 +147,31 @@ impl AgentService {
             Some(session_id),
             Some(goal_id),
             plan_id,
+            None,
+        )
+        .await
+    }
+
+    /// Execute one durable child-agent job without exposing nested delegation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_subagent(
+        &self,
+        role: &str,
+        instructions: &str,
+        task: &str,
+        max_turns: u16,
+        child_session_id: &str,
+        subagent_id: &str,
+    ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            task,
+            max_turns,
+            Some(child_session_id),
+            None,
+            None,
+            Some(subagent_id),
         )
         .await
     }
@@ -160,6 +186,7 @@ impl AgentService {
         requested_session_id: Option<&str>,
         goal_id: Option<&str>,
         plan_id: Option<&str>,
+        subagent_id: Option<&str>,
     ) -> Result<AgentRunResult, AgentError> {
         if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
@@ -196,6 +223,7 @@ impl AgentService {
             run_id: Some(run_id.clone()),
             goal_id: goal_id.map(str::to_owned),
             plan_id: plan_id.map(str::to_owned),
+            subagent_id: subagent_id.map(str::to_owned),
             ..ExecutionContext::default()
         };
         let mut messages = self
@@ -222,7 +250,8 @@ impl AgentService {
         messages.push(user_message);
         let mut definitions = model_definitions(self.tools.as_ref());
         definitions.retain(|definition| {
-            goal_id.is_some() || !matches!(definition.name.as_str(), "goal.show" | "goal.update")
+            (goal_id.is_some() || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
+                && (subagent_id.is_none() || definition.name != "agent.delegate")
         });
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
@@ -771,6 +800,9 @@ mod tests {
             turn(vec![ProviderEvent::FinalOutput {
                 text: "goal".into(),
             }]),
+            turn(vec![ProviderEvent::FinalOutput {
+                text: "child".into(),
+            }]),
         ]));
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
         let service = AgentService::new(
@@ -779,6 +811,7 @@ mod tests {
             Arc::new(
                 StaticToolRegistry::builtins(&[
                     "echo".into(),
+                    "agent.delegate".into(),
                     "goal.show".into(),
                     "goal.update".into(),
                 ])
@@ -803,6 +836,17 @@ mod tests {
             )
             .await
             .expect("goal");
+        service
+            .run_subagent(
+                "primary",
+                "child instructions",
+                "child task",
+                1,
+                plain.session_id.as_deref().expect("session"),
+                "agent-1",
+            )
+            .await
+            .expect("subagent");
         let requests = provider.requests.lock().expect("requests");
         assert_eq!(
             requests[0]
@@ -810,7 +854,7 @@ mod tests {
                 .iter()
                 .map(|tool| tool.name.as_str())
                 .collect::<Vec<_>>(),
-            ["echo"]
+            ["agent.delegate", "echo"]
         );
         assert_eq!(
             requests[1]
@@ -818,7 +862,15 @@ mod tests {
                 .iter()
                 .map(|tool| tool.name.as_str())
                 .collect::<Vec<_>>(),
-            ["echo", "goal.show", "goal.update"]
+            ["agent.delegate", "echo", "goal.show", "goal.update"]
+        );
+        assert_eq!(
+            requests[2]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["echo"]
         );
     }
 

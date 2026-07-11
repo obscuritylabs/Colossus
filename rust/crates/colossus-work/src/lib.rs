@@ -4,8 +4,8 @@
 
 use colossus_contracts::{
     Actor, DecisionPriority, DecisionSource, DecisionStatus, EventClassification, ExecutionContext,
-    GoalRecord, GoalStatus, KeyDecision, NewEvent, PlanRecord, PlanStatus, PlanStep, TaskRecord,
-    TaskStatus,
+    GoalRecord, GoalStatus, KeyDecision, NewEvent, PlanRecord, PlanStatus, PlanStep, SubagentJob,
+    SubagentStatus, TaskRecord, TaskStatus,
 };
 use colossus_ports::{EventJournal, SessionRepository, StoreError, WorkRepository};
 use serde_json::{Value, json};
@@ -26,6 +26,8 @@ const PLAN_EXECUTED: &str = "plan.executed.v1";
 const PLAN_DISCARDED: &str = "plan.discarded.v1";
 const GOAL_CREATED: &str = "goal.created.v1";
 const GOAL_UPDATED: &str = "goal.updated.v1";
+const SUBAGENT_CREATED: &str = "subagent.queued.v1";
+const SUBAGENT_UPDATED: &str = "subagent.status_changed.v1";
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const MAX_PLAN_BYTES: usize = 256 * 1024;
@@ -153,6 +155,48 @@ fn validate_goal(goal: &GoalRecord) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn validate_subagent(job: &SubagentJob) -> Result<(), StoreError> {
+    let lifecycle_valid = match job.status {
+        SubagentStatus::Queued => {
+            job.child_run_id.is_none()
+                && job.started_at.is_none()
+                && job.completed_at.is_none()
+                && job.final_output.is_empty()
+                && job.error.is_empty()
+        }
+        SubagentStatus::Running => job.started_at.is_some() && job.completed_at.is_none(),
+        SubagentStatus::Completed => {
+            job.started_at.is_some()
+                && job.completed_at.is_some()
+                && job.child_run_id.is_some()
+                && job.error.is_empty()
+        }
+        SubagentStatus::Failed | SubagentStatus::Cancelled | SubagentStatus::Interrupted => {
+            job.completed_at.is_some() && !job.error.trim().is_empty()
+        }
+    };
+    if !valid_id(&job.id)
+        || !valid_id(&job.session_id)
+        || !valid_id(&job.parent_run_id)
+        || !valid_id(&job.parent_call_id)
+        || !valid_id(&job.child_session_id)
+        || job.task.trim().is_empty()
+        || job.task.len() > MAX_TEXT_BYTES
+        || job.role.trim().is_empty()
+        || job.role.len() > 128
+        || job.final_output.len() > MAX_TEXT_BYTES
+        || job.error.len() > MAX_TEXT_BYTES
+        || job.created_at.is_empty()
+        || job.updated_at.is_empty()
+        || !lifecycle_valid
+    {
+        return Err(StoreError::Adapter(
+            "invalid subagent identity, task, result, lifecycle, or timestamp".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Immutable-journal implementation of the work lifecycle port.
 pub struct EventSourcedWorkRepository {
     journal: Arc<dyn EventJournal>,
@@ -178,6 +222,10 @@ impl EventSourcedWorkRepository {
 
     fn goal_stream(id: &str) -> String {
         format!("goal:{id}")
+    }
+
+    fn subagent_stream(id: &str) -> String {
+        format!("subagent:{id}")
     }
 
     fn event(
@@ -731,6 +779,98 @@ impl WorkRepository for EventSourcedWorkRepository {
         records.truncate(limit.clamp(1, MAX_LIST));
         Ok(records)
     }
+
+    fn create_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError> {
+        validate_subagent(&job)?;
+        if job.status != SubagentStatus::Queued {
+            return Err(StoreError::Adapter("new subagents must be queued".into()));
+        }
+        self.journal.append(Self::event(
+            Self::subagent_stream(&job.id),
+            0,
+            SUBAGENT_CREATED,
+            actor,
+            &job.session_id,
+            json!({"record": &job}),
+        ))?;
+        Ok(job)
+    }
+
+    fn update_subagent(&self, job: SubagentJob, actor: Actor) -> Result<SubagentJob, StoreError> {
+        validate_subagent(&job)?;
+        let current = self
+            .get_subagent(&job.id)?
+            .ok_or_else(|| StoreError::NotFound(format!("subagent {}", job.id)))?;
+        let transition_valid = matches!(
+            (current.status, job.status),
+            (
+                SubagentStatus::Queued,
+                SubagentStatus::Running | SubagentStatus::Cancelled
+            ) | (
+                SubagentStatus::Running,
+                SubagentStatus::Completed
+                    | SubagentStatus::Failed
+                    | SubagentStatus::Cancelled
+                    | SubagentStatus::Interrupted
+            ) | (
+                SubagentStatus::Failed | SubagentStatus::Cancelled | SubagentStatus::Interrupted,
+                SubagentStatus::Queued
+            )
+        );
+        if !transition_valid
+            || current.session_id != job.session_id
+            || current.parent_run_id != job.parent_run_id
+            || current.parent_call_id != job.parent_call_id
+            || current.task != job.task
+            || current.role != job.role
+            || current.child_session_id != job.child_session_id
+            || current.created_at != job.created_at
+        {
+            return Err(StoreError::Adapter(
+                "invalid subagent transition or changed immutable provenance".into(),
+            ));
+        }
+        let stream = Self::subagent_stream(&job.id);
+        let expected = u64::try_from(self.journal.read_stream(&stream)?.len()).map_err(adapter)?;
+        self.journal.append(Self::event(
+            stream,
+            expected,
+            SUBAGENT_UPDATED,
+            actor,
+            &job.session_id,
+            json!({"record": &job}),
+        ))?;
+        Ok(job)
+    }
+
+    fn get_subagent(&self, id: &str) -> Result<Option<SubagentJob>, StoreError> {
+        self.record(&Self::subagent_stream(id), SUBAGENT_CREATED)
+    }
+
+    fn list_subagents(
+        &self,
+        session_id: Option<&str>,
+        status: Option<SubagentStatus>,
+        limit: usize,
+    ) -> Result<Vec<SubagentJob>, StoreError> {
+        let mut records = self
+            .ids("subagent:", SUBAGENT_CREATED)?
+            .into_iter()
+            .filter_map(|id| self.get_subagent(&id).transpose())
+            .collect::<Result<Vec<_>, _>>()?;
+        records.retain(|record| {
+            session_id.is_none_or(|id| record.session_id == id)
+                && status.is_none_or(|status| record.status == status)
+        });
+        records.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        records.truncate(limit.clamp(1, MAX_LIST));
+        Ok(records)
+    }
 }
 
 /// Validated application service shared by CLI, REPL, tools, and embedded callers.
@@ -1140,6 +1280,144 @@ impl WorkService {
         self.repository.update_goal(goal, actor)
     }
 
+    /// Queue a durable child-agent job and create its isolated child session.
+    pub fn create_subagent(
+        &self,
+        session_id: &str,
+        parent_run_id: &str,
+        parent_call_id: &str,
+        task: &str,
+        role: &str,
+        actor: Actor,
+    ) -> Result<SubagentJob, StoreError> {
+        self.require_session(session_id)?;
+        let id = format!("agent-{}", Uuid::now_v7());
+        let child_session_id = Uuid::now_v7().to_string();
+        self.sessions.create_session(
+            &child_session_id,
+            Some(&format!("subagent {id}")),
+            actor.clone(),
+        )?;
+        let timestamp = now()?;
+        self.repository.create_subagent(
+            SubagentJob {
+                id,
+                session_id: session_id.into(),
+                parent_run_id: parent_run_id.into(),
+                parent_call_id: parent_call_id.into(),
+                task: task.trim().into(),
+                role: role.into(),
+                status: SubagentStatus::Queued,
+                child_session_id,
+                child_run_id: None,
+                final_output: String::new(),
+                error: String::new(),
+                created_at: timestamp.clone(),
+                updated_at: timestamp,
+                started_at: None,
+                completed_at: None,
+            },
+            actor,
+        )
+    }
+
+    /// Move a queued job to running.
+    pub fn start_subagent(&self, id: &str, actor: Actor) -> Result<SubagentJob, StoreError> {
+        let mut job = self.require_subagent(id)?;
+        if job.status != SubagentStatus::Queued {
+            return Err(StoreError::Adapter(
+                "only queued subagents can start".into(),
+            ));
+        }
+        let timestamp = now()?;
+        job.status = SubagentStatus::Running;
+        job.started_at = Some(timestamp.clone());
+        job.updated_at = timestamp;
+        self.repository.update_subagent(job, actor)
+    }
+
+    /// Store one released child result.
+    pub fn complete_subagent(
+        &self,
+        id: &str,
+        child_run_id: &str,
+        output: &str,
+        actor: Actor,
+    ) -> Result<SubagentJob, StoreError> {
+        let mut job = self.require_subagent(id)?;
+        if job.status != SubagentStatus::Running {
+            return Err(StoreError::Adapter(
+                "only running subagents can complete".into(),
+            ));
+        }
+        let timestamp = now()?;
+        job.status = SubagentStatus::Completed;
+        job.child_run_id = Some(child_run_id.into());
+        job.final_output = output.into();
+        job.error.clear();
+        job.completed_at = Some(timestamp.clone());
+        job.updated_at = timestamp;
+        self.repository.update_subagent(job, actor)
+    }
+
+    /// Store a bounded failed, cancelled, or interrupted terminal outcome.
+    pub fn stop_subagent(
+        &self,
+        id: &str,
+        status: SubagentStatus,
+        error: &str,
+        actor: Actor,
+    ) -> Result<SubagentJob, StoreError> {
+        let mut job = self.require_subagent(id)?;
+        let allowed = match status {
+            SubagentStatus::Cancelled => {
+                matches!(job.status, SubagentStatus::Queued | SubagentStatus::Running)
+            }
+            SubagentStatus::Failed | SubagentStatus::Interrupted => {
+                job.status == SubagentStatus::Running
+            }
+            _ => false,
+        };
+        if !allowed {
+            return Err(StoreError::Adapter(
+                "invalid subagent terminal transition".into(),
+            ));
+        }
+        let timestamp = now()?;
+        job.status = status;
+        job.error = error.into();
+        job.completed_at = Some(timestamp.clone());
+        job.updated_at = timestamp;
+        self.repository.update_subagent(job, actor)
+    }
+
+    /// Requeue a failed, cancelled, or interrupted job without losing lineage.
+    pub fn requeue_subagent(&self, id: &str, actor: Actor) -> Result<SubagentJob, StoreError> {
+        let mut job = self.require_subagent(id)?;
+        if !matches!(
+            job.status,
+            SubagentStatus::Failed | SubagentStatus::Cancelled | SubagentStatus::Interrupted
+        ) {
+            return Err(StoreError::Adapter(
+                "only failed, cancelled, or interrupted subagents can be requeued".into(),
+            ));
+        }
+        job.status = SubagentStatus::Queued;
+        job.child_run_id = None;
+        job.final_output.clear();
+        job.error.clear();
+        job.started_at = None;
+        job.completed_at = None;
+        job.updated_at = now()?;
+        self.repository.update_subagent(job, actor)
+    }
+
+    fn require_subagent(&self, id: &str) -> Result<SubagentJob, StoreError> {
+        self.repository
+            .get_subagent(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))
+    }
+
     /// Canonical repository for bounded query surfaces.
     pub fn repository(&self) -> Arc<dyn WorkRepository> {
         Arc::clone(&self.repository)
@@ -1487,5 +1765,84 @@ mod tests {
             .read_stream(&format!("plan:{}", plan.id))
             .expect("plan events");
         assert_eq!(plan_events.last().expect("event").event_type, PLAN_EXECUTED);
+    }
+
+    #[test]
+    fn subagents_reconstruct_and_enforce_terminal_requeue_transitions() {
+        let (journal, repository, service) = fixture();
+        let queued = service
+            .create_subagent(
+                "session-1",
+                "run-1",
+                "call-1",
+                "Review the tests",
+                "subagent_default",
+                user_actor(),
+            )
+            .expect("queue");
+        let running = service
+            .start_subagent(&queued.id, user_actor())
+            .expect("start");
+        assert_eq!(running.status, SubagentStatus::Running);
+        let failed = service
+            .stop_subagent(
+                &queued.id,
+                SubagentStatus::Failed,
+                "provider failed",
+                user_actor(),
+            )
+            .expect("fail");
+        assert_eq!(failed.status, SubagentStatus::Failed);
+        let requeued = service
+            .requeue_subagent(&queued.id, user_actor())
+            .expect("requeue");
+        assert_eq!(requeued.status, SubagentStatus::Queued);
+        assert!(requeued.error.is_empty());
+        service
+            .start_subagent(&queued.id, user_actor())
+            .expect("restart");
+        let completed = service
+            .complete_subagent(&queued.id, "child-run", "done", user_actor())
+            .expect("complete");
+        assert_eq!(completed.status, SubagentStatus::Completed);
+        assert!(service.requeue_subagent(&queued.id, user_actor()).is_err());
+        assert_eq!(
+            repository
+                .list_subagents(Some("session-1"), Some(SubagentStatus::Completed), 10)
+                .expect("list"),
+            vec![completed.clone()]
+        );
+        let reopened = EventSourcedWorkRepository::new(journal);
+        assert_eq!(
+            reopened.get_subagent(&queued.id).expect("get"),
+            Some(completed)
+        );
+        let cancellable = service
+            .create_subagent(
+                "session-1",
+                "run-2",
+                "call-2",
+                "Long child task",
+                "subagent_default",
+                user_actor(),
+            )
+            .expect("queue cancellable");
+        service
+            .start_subagent(&cancellable.id, user_actor())
+            .expect("start cancellable");
+        let cancelled = service
+            .stop_subagent(
+                &cancellable.id,
+                SubagentStatus::Cancelled,
+                "operator cancelled",
+                user_actor(),
+            )
+            .expect("cancel");
+        assert_eq!(cancelled.status, SubagentStatus::Cancelled);
+        assert!(
+            service
+                .complete_subagent(&cancellable.id, "late-run", "late output", user_actor())
+                .is_err()
+        );
     }
 }

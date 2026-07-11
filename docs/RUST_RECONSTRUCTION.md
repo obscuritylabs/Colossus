@@ -132,6 +132,14 @@ obsolete Go launcher.
   stop on terminal state or errors; and report budget exhaustion without claiming
   completion. Approved plan consumption and linked goal creation are atomic and
   single-use. CLI `goals run/list/show` and REPL `/goal`/`/goals` use the same service.
+- Durable queued subagents with parent run/call lineage, isolated child sessions,
+  configurable positive concurrency (10 by default), normal policy/provider/tool/context
+  execution, post-gated bounded results, cross-session confinement, explicit
+  queued/running/completed/failed/cancelled/interrupted transitions, startup interruption
+  recovery, and requeue restrictions. Child catalogs remove nested delegation and the
+  executor independently denies it. CLI `agents queue/list/show/status/drain/cancel/
+  requeue`, REPL `/agents`, one-shot parent-run draining, and worker draining share the
+  same canonical queue.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
 
@@ -156,6 +164,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- t
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- decisions list --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- plans list --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- goals run 'Finish the scoped task' --session SESSION_ID --max-iterations 5
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- agents status
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories search 'query' --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories index status
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
@@ -200,7 +209,7 @@ cutover. The following planned work remains:
   execution, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
-- Durable subagents, research/citations, skills/resources, telemetry, packs,
+- Research/citations, skills/resources, telemetry, packs,
   integrations, offline bundles, and the rest of P1/P2.
 - Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
   runtime matrix, and

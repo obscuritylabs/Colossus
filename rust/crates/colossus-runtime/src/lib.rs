@@ -11,7 +11,8 @@ use colossus_contracts::{
     KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, NewEvent, PlanRecord, PlanStatus,
     PlanStep, PreparedContext, ProjectionStatus, ProviderModelInfo, ProviderReadiness,
     ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, SessionMessage,
-    SessionSummary, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
+    SessionSummary, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
+    ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -57,6 +58,7 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 /// Strict fresh Rust runtime configuration.
@@ -77,6 +79,9 @@ pub struct RuntimeConfig {
     /// Agent model-turn and active-tool limits.
     #[serde(default)]
     pub agent: AgentConfig,
+    /// Durable child-agent scheduler limits.
+    #[serde(default)]
+    pub subagents: SubagentConfig,
     /// Long-session budgeting and immutable snapshot settings.
     #[serde(default)]
     pub context: ContextConfig,
@@ -104,6 +109,20 @@ impl Default for AgentConfig {
             max_turns: DEFAULT_MAX_TURNS,
             tools: vec!["echo".into()],
         }
+    }
+}
+
+/// Bounded durable child-agent scheduler configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubagentConfig {
+    /// Maximum child runs executing concurrently in one runtime.
+    pub max_concurrent: usize,
+}
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self { max_concurrent: 10 }
     }
 }
 
@@ -465,6 +484,11 @@ impl RuntimeConfig {
                 "agent.maxTurns must be in 1..={MAX_TURNS}"
             )));
         }
+        if config.subagents.max_concurrent == 0 {
+            return Err(RuntimeError::Config(
+                "subagents.maxConcurrent must be at least 1".into(),
+            ));
+        }
         StaticToolRegistry::builtins(&config.agent.tools)?;
         let git_tools_active = config
             .agent
@@ -531,6 +555,7 @@ impl RuntimeConfig {
             },
             providers: ProvidersConfig::default(),
             agent: AgentConfig::default(),
+            subagents: SubagentConfig::default(),
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
             sandbox: SandboxConfig::default(),
@@ -785,6 +810,37 @@ enum WorkOperation {
     GoalIteration {
         id: String,
     },
+    SubagentCreate {
+        session_id: String,
+        parent_run_id: String,
+        parent_call_id: String,
+        task: String,
+        role: String,
+    },
+    SubagentRead {
+        id: String,
+    },
+    SubagentList {
+        session_id: String,
+        status: Option<SubagentStatus>,
+        limit: usize,
+    },
+    SubagentStart {
+        id: String,
+    },
+    SubagentComplete {
+        id: String,
+        child_run_id: String,
+        output: String,
+    },
+    SubagentStop {
+        id: String,
+        status: SubagentStatus,
+        error: String,
+    },
+    SubagentRequeue {
+        id: String,
+    },
 }
 
 impl WorkOperation {
@@ -805,6 +861,17 @@ impl WorkOperation {
             Self::GoalShow { .. } => "goal.show",
             Self::GoalUpdate { .. } => "goal.update",
             Self::GoalIteration { .. } => "goal.iteration.record",
+            Self::SubagentCreate { .. } => "subagent.create",
+            Self::SubagentRead { .. } => "subagent.read",
+            Self::SubagentList { .. } => "subagent.list",
+            Self::SubagentStart { .. } => "subagent.start",
+            Self::SubagentComplete { .. } => "subagent.complete",
+            Self::SubagentStop { status, .. } => match status {
+                SubagentStatus::Cancelled => "subagent.cancel",
+                SubagentStatus::Interrupted => "subagent.interrupt",
+                _ => "subagent.fail",
+            },
+            Self::SubagentRequeue { .. } => "subagent.requeue",
         }
     }
 
@@ -815,7 +882,9 @@ impl WorkOperation {
             | Self::DecisionCreate { session_id, .. }
             | Self::DecisionList { session_id, .. }
             | Self::PlanCreate { session_id, .. }
-            | Self::GoalCreate { session_id, .. } => session_id,
+            | Self::GoalCreate { session_id, .. }
+            | Self::SubagentCreate { session_id, .. }
+            | Self::SubagentList { session_id, .. } => session_id,
             Self::TaskUpdate { id, .. }
             | Self::DecisionUpdate { id, .. }
             | Self::DecisionArchive { id }
@@ -824,7 +893,12 @@ impl WorkOperation {
             | Self::PlanApprove { id }
             | Self::GoalShow { id }
             | Self::GoalUpdate { id, .. }
-            | Self::GoalIteration { id } => id,
+            | Self::GoalIteration { id }
+            | Self::SubagentRead { id }
+            | Self::SubagentStart { id }
+            | Self::SubagentComplete { id, .. }
+            | Self::SubagentStop { id, .. }
+            | Self::SubagentRequeue { id } => id,
         }
     }
 }
@@ -922,6 +996,7 @@ pub struct Runtime {
     providers: Arc<ProviderRegistry>,
     agent: Arc<AgentService>,
     agent_max_turns: u16,
+    subagent_max_concurrent: usize,
     tools: Arc<dyn ToolRegistry>,
     filesystem_executor: Arc<FilesystemExecutor>,
     process_executor: Arc<SandboxProcessExecutor>,
@@ -990,6 +1065,9 @@ impl Runtime {
         let work: Arc<dyn WorkRepository> =
             Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
         let work_service = Arc::new(WorkService::new(Arc::clone(&work), Arc::clone(&sessions)));
+        if !journal.is_recovery_mode() {
+            recover_interrupted_subagents(work.as_ref(), work_service.as_ref())?;
+        }
         let memory_repository: Arc<dyn MemoryRepository> =
             Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
         let memory_index: Arc<dyn MemoryIndex> = if config.memory.index_enabled {
@@ -1175,6 +1253,15 @@ impl Runtime {
                 "goal.show".to_owned(),
                 "goal.update".to_owned(),
                 "goal.iteration.record".to_owned(),
+                "subagent.create".to_owned(),
+                "subagent.read".to_owned(),
+                "subagent.list".to_owned(),
+                "subagent.start".to_owned(),
+                "subagent.complete".to_owned(),
+                "subagent.fail".to_owned(),
+                "subagent.cancel".to_owned(),
+                "subagent.interrupt".to_owned(),
+                "subagent.requeue".to_owned(),
                 "memory.create".to_owned(),
                 "memory.update".to_owned(),
                 "memory.archive".to_owned(),
@@ -1287,6 +1374,7 @@ impl Runtime {
             providers,
             agent,
             agent_max_turns: config.agent.max_turns,
+            subagent_max_concurrent: config.subagents.max_concurrent,
             tools: tool_registry,
             filesystem_executor,
             process_executor,
@@ -1404,7 +1492,9 @@ impl Runtime {
             | WorkOperation::DecisionCreate { session_id, .. }
             | WorkOperation::DecisionList { session_id, .. }
             | WorkOperation::PlanCreate { session_id, .. }
-            | WorkOperation::GoalCreate { session_id, .. } => session_id.clone(),
+            | WorkOperation::GoalCreate { session_id, .. }
+            | WorkOperation::SubagentCreate { session_id, .. }
+            | WorkOperation::SubagentList { session_id, .. } => session_id.clone(),
             WorkOperation::TaskUpdate { id, .. } => {
                 self.work
                     .get_task(id)?
@@ -1433,6 +1523,16 @@ impl Runtime {
                     .ok_or_else(|| StoreError::NotFound(format!("goal {id}")))?
                     .session_id
             }
+            WorkOperation::SubagentRead { id }
+            | WorkOperation::SubagentStart { id }
+            | WorkOperation::SubagentComplete { id, .. }
+            | WorkOperation::SubagentStop { id, .. }
+            | WorkOperation::SubagentRequeue { id } => {
+                self.work
+                    .get_subagent(id)?
+                    .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))?
+                    .session_id
+            }
         };
         let mut request = effect_request(
             terminal_actor(),
@@ -1451,6 +1551,13 @@ impl Runtime {
             | WorkOperation::GoalUpdate { id, .. }
             | WorkOperation::GoalIteration { id } => {
                 request.context.goal_id = Some(id.clone());
+            }
+            WorkOperation::SubagentRead { id }
+            | WorkOperation::SubagentStart { id }
+            | WorkOperation::SubagentComplete { id, .. }
+            | WorkOperation::SubagentStop { id, .. }
+            | WorkOperation::SubagentRequeue { id } => {
+                request.context.subagent_id = Some(id.clone());
             }
             _ => {}
         }
@@ -2175,6 +2282,185 @@ impl Runtime {
         })
     }
 
+    /// Load one canonical durable child-agent job.
+    pub fn get_subagent(&self, id: &str) -> Result<Option<SubagentJob>, RuntimeError> {
+        self.work.get_subagent(id).map_err(Into::into)
+    }
+
+    /// List bounded durable child-agent jobs.
+    pub fn list_subagents(
+        &self,
+        session_id: Option<&str>,
+        status: Option<SubagentStatus>,
+        limit: usize,
+    ) -> Result<Vec<SubagentJob>, RuntimeError> {
+        self.work
+            .list_subagents(session_id, status, limit)
+            .map_err(Into::into)
+    }
+
+    /// Queue a durable child-agent job from an embedded or terminal caller.
+    pub async fn queue_subagent(
+        &self,
+        session_id: &str,
+        task: &str,
+        role: &str,
+    ) -> Result<SubagentJob, RuntimeError> {
+        let lineage = format!("manual-{}", Uuid::now_v7());
+        serde_json::from_value(
+            self.execute_work_operation(WorkOperation::SubagentCreate {
+                session_id: session_id.into(),
+                parent_run_id: lineage.clone(),
+                parent_call_id: lineage,
+                task: task.into(),
+                role: role.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Return scheduler counts without changing queued state.
+    pub fn subagent_queue_status(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<SubagentQueueStatus, RuntimeError> {
+        let jobs = self.work.list_subagents(session_id, None, 1_000)?;
+        let count = |status| jobs.iter().filter(|job| job.status == status).count();
+        let running = count(SubagentStatus::Running);
+        Ok(SubagentQueueStatus {
+            total: jobs.len(),
+            queued: count(SubagentStatus::Queued),
+            running,
+            completed: count(SubagentStatus::Completed),
+            failed: count(SubagentStatus::Failed),
+            cancelled: count(SubagentStatus::Cancelled),
+            interrupted: count(SubagentStatus::Interrupted),
+            max_concurrent: self.subagent_max_concurrent,
+            available_slots: self.subagent_max_concurrent.saturating_sub(running),
+        })
+    }
+
+    /// Cancel one queued or running child job. Late child output is never committed.
+    pub async fn cancel_subagent(&self, id: &str) -> Result<SubagentJob, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_operation(WorkOperation::SubagentStop {
+                id: id.into(),
+                status: SubagentStatus::Cancelled,
+                error: "Subagent job was cancelled.".into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Requeue one failed, cancelled, or interrupted child job.
+    pub async fn requeue_subagent(&self, id: &str) -> Result<SubagentJob, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_operation(WorkOperation::SubagentRequeue { id: id.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Drain queued jobs with bounded local concurrency using normal child agent runs.
+    pub async fn drain_subagents(&self) -> Result<SubagentQueueStatus, RuntimeError> {
+        loop {
+            let queued = self
+                .work
+                .list_subagents(None, Some(SubagentStatus::Queued), 1_000)?;
+            if queued.is_empty() {
+                break;
+            }
+            let batch = queued
+                .into_iter()
+                .take(self.subagent_max_concurrent)
+                .collect::<Vec<_>>();
+            let mut running = Vec::with_capacity(batch.len());
+            for job in batch {
+                let started: SubagentJob = serde_json::from_value(
+                    self.execute_work_operation(WorkOperation::SubagentStart { id: job.id })
+                        .await?,
+                )
+                .map_err(|error| RuntimeError::Config(error.to_string()))?;
+                running.push(started);
+            }
+            let mut set = JoinSet::new();
+            for job in running {
+                let agent = Arc::clone(&self.agent);
+                let max_turns = self.agent_max_turns;
+                set.spawn(async move {
+                    let instructions = format!(
+                        "You are a durable Colossus child agent for job {}. Complete only the assigned task. Nested delegation is disabled. Return a concise result for the parent.",
+                        job.id
+                    );
+                    let result = agent
+                        .run_subagent(
+                            &job.role,
+                            &instructions,
+                            &job.task,
+                            max_turns,
+                            &job.child_session_id,
+                            &job.id,
+                        )
+                        .await;
+                    (job.id, result)
+                });
+            }
+            while let Some(joined) = set.join_next().await {
+                let (id, result) = joined.map_err(|error| {
+                    RuntimeError::Config(format!("subagent scheduler join failed: {error}"))
+                })?;
+                let current = self
+                    .work
+                    .get_subagent(&id)?
+                    .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))?;
+                if current.status == SubagentStatus::Cancelled {
+                    continue;
+                }
+                match result {
+                    Ok(result) => {
+                        let completion = self
+                            .execute_work_operation(WorkOperation::SubagentComplete {
+                                id: id.clone(),
+                                child_run_id: result.run_id,
+                                output: bounded_tool_text(&result.output, 64 * 1024),
+                            })
+                            .await;
+                        if let Err(error) = completion {
+                            let cancelled = self
+                                .work
+                                .get_subagent(&id)?
+                                .is_some_and(|job| job.status == SubagentStatus::Cancelled);
+                            if !cancelled {
+                                return Err(error);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let failure = self
+                            .execute_work_operation(WorkOperation::SubagentStop {
+                                id: id.clone(),
+                                status: SubagentStatus::Failed,
+                                error: bounded_tool_text(&error.to_string(), 64 * 1024),
+                            })
+                            .await;
+                        if let Err(error) = failure {
+                            let cancelled = self
+                                .work
+                                .get_subagent(&id)?
+                                .is_some_and(|job| job.status == SubagentStatus::Cancelled);
+                            if !cancelled {
+                                return Err(error);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.subagent_queue_status(None)
+    }
+
     /// Credential-free, network-free smoke provider routed through policy and journal.
     pub async fn echo(&self, message: &str) -> Result<ReleasedEffectResult, RuntimeError> {
         let request = effect_request(
@@ -2376,6 +2662,22 @@ fn recover_unknown_effects(journal: &dyn EventJournal) -> Result<u64, StoreError
     Ok(recovered)
 }
 
+fn recover_interrupted_subagents(
+    repository: &dyn WorkRepository,
+    service: &WorkService,
+) -> Result<u64, StoreError> {
+    let running = repository.list_subagents(None, Some(SubagentStatus::Running), 1_000)?;
+    for job in &running {
+        service.stop_subagent(
+            &job.id,
+            SubagentStatus::Interrupted,
+            "Subagent process exited before the job completed.",
+            system_actor("subagent-recovery"),
+        )?;
+    }
+    u64::try_from(running.len()).map_err(|error| StoreError::Adapter(error.to_string()))
+}
+
 fn sha2_compat(secret: &[u8; 32], label: &[u8]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     // The journal signing secret is already random. This local KDF only domain-separates
@@ -2507,7 +2809,7 @@ impl GatewayToolExecutor {
         let action = operation.action().to_owned();
         let resource = operation.resource().to_owned();
         let mut request = effect_request(
-            model_actor(call),
+            model_actor(call, &context),
             &action,
             resource,
             serde_json::to_value(operation)
@@ -2541,7 +2843,7 @@ impl GatewayToolExecutor {
         let action = operation.action().to_owned();
         let resource = operation.resource();
         let mut request = effect_request(
-            model_actor(call),
+            model_actor(call, &context),
             &action,
             resource,
             serde_json::to_value(operation)
@@ -2574,7 +2876,7 @@ impl GatewayToolExecutor {
         content: Value,
     ) -> Result<String, ToolError> {
         let mut request = effect_request(
-            model_actor(call),
+            model_actor(call, &context),
             "filesystem.write",
             path.display().to_string(),
             content,
@@ -2654,7 +2956,7 @@ impl GatewayToolExecutor {
         let cwd = spec.cwd.clone();
         let args = spec.args.clone();
         let mut request = effect_request(
-            model_actor(call),
+            model_actor(call, &context),
             action,
             executable.display().to_string(),
             serde_json::to_value(spec).map_err(|error| ToolError::Failed(error.to_string()))?,
@@ -2716,7 +3018,7 @@ impl ToolExecutor for GatewayToolExecutor {
                 let input = optional_tool_string(&call, "path")?.unwrap_or(".");
                 let path = model_workspace_path(&self.workspace, input)?;
                 let mut request = effect_request(
-                    model_actor(&call),
+                    model_actor(&call, &context),
                     "filesystem.list",
                     path.display().to_string(),
                     json!({}),
@@ -2764,7 +3066,7 @@ impl ToolExecutor for GatewayToolExecutor {
                 let path =
                     model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
                 let mut request = effect_request(
-                    model_actor(&call),
+                    model_actor(&call, &context),
                     "filesystem.read",
                     path.display().to_string(),
                     json!({"path": path}),
@@ -2794,7 +3096,7 @@ impl ToolExecutor for GatewayToolExecutor {
                     "max_matches": optional_tool_u64(&call, "max_matches")?.unwrap_or(100),
                 });
                 let mut request = effect_request(
-                    model_actor(&call),
+                    model_actor(&call, &context),
                     "filesystem.search",
                     path.display().to_string(),
                     content,
@@ -3160,6 +3462,52 @@ impl ToolExecutor for GatewayToolExecutor {
                 )
                 .await?
             }
+            "agent.delegate" => {
+                if context.subagent_id.is_some() {
+                    return Err(ToolError::Denied(
+                        "subagents cannot delegate recursively".into(),
+                    ));
+                }
+                let session_id = Self::current_session(&context)?;
+                let parent_run_id = context.run_id.clone().ok_or_else(|| {
+                    ToolError::Denied("agent.delegate requires a parent run".into())
+                })?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::SubagentCreate {
+                        session_id,
+                        parent_run_id,
+                        parent_call_id: call.call_id.clone(),
+                        task: required_tool_string(&call, "task")?.into(),
+                        role: "subagent_default".into(),
+                    },
+                )
+                .await?
+            }
+            "agent.result" => {
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::SubagentRead {
+                        id: required_tool_string(&call, "id")?.into(),
+                    },
+                )
+                .await?
+            }
+            "agent.list" => {
+                let session_id = Self::current_session(&context)?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::SubagentList {
+                        session_id,
+                        status: optional_tool_value(&call, "status")?,
+                        limit: tool_limit(&call, 100)?,
+                    },
+                )
+                .await?
+            }
             "goal.show" => {
                 let id = context.goal_id.clone().ok_or_else(|| {
                     ToolError::Denied(
@@ -3329,7 +3677,7 @@ impl ToolExecutor for GatewayToolExecutor {
             "network.http" => {
                 let url = required_tool_string(&call, "url")?;
                 let mut request = effect_request(
-                    model_actor(&call),
+                    model_actor(&call, &context),
                     "network.http",
                     url,
                     json!({"method": "GET", "headers": {"accept": "*/*"}}),
@@ -3679,10 +4027,17 @@ fn goal_objective_from_plan(plan: &PlanRecord) -> String {
     bounded_tool_text(&objective, 64 * 1024)
 }
 
-fn model_actor(call: &ToolCall) -> Actor {
+fn model_actor(call: &ToolCall, context: &ExecutionContext) -> Actor {
     Actor {
-        actor_type: ActorType::Model,
-        id: format!("tool-call:{}", call.call_id),
+        actor_type: if context.subagent_id.is_some() {
+            ActorType::Subagent
+        } else {
+            ActorType::Model
+        },
+        id: context.subagent_id.as_ref().map_or_else(
+            || format!("tool-call:{}", call.call_id),
+            |id| format!("subagent:{id}:tool-call:{}", call.call_id),
+        ),
     }
 }
 
@@ -3971,7 +4326,9 @@ impl WorkEffectExecutor {
             | WorkOperation::DecisionCreate { session_id, .. }
             | WorkOperation::DecisionList { session_id, .. }
             | WorkOperation::PlanCreate { session_id, .. }
-            | WorkOperation::GoalCreate { session_id, .. } => session_id.clone(),
+            | WorkOperation::GoalCreate { session_id, .. }
+            | WorkOperation::SubagentCreate { session_id, .. }
+            | WorkOperation::SubagentList { session_id, .. } => session_id.clone(),
             WorkOperation::TaskUpdate { id, .. } => {
                 self.repository
                     .get_task(id)
@@ -4012,7 +4369,25 @@ impl WorkEffectExecutor {
                     .ok_or_else(|| ExecutionError::Failed(format!("decision {id} was not found")))?
                     .session_id
             }
+            WorkOperation::SubagentRead { id }
+            | WorkOperation::SubagentStart { id }
+            | WorkOperation::SubagentComplete { id, .. }
+            | WorkOperation::SubagentStop { id, .. }
+            | WorkOperation::SubagentRequeue { id } => {
+                self.repository
+                    .get_subagent(id)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?
+                    .ok_or_else(|| ExecutionError::Failed(format!("subagent {id} was not found")))?
+                    .session_id
+            }
         };
+        if request.context.subagent_id.is_some()
+            && matches!(operation, WorkOperation::SubagentCreate { .. })
+        {
+            return Err(ExecutionError::Failed(
+                "subagents cannot delegate recursively".into(),
+            ));
+        }
         if operation_session != requested_session {
             return Err(ExecutionError::Failed(
                 "work tool cannot access another session".into(),
@@ -4201,6 +4576,50 @@ impl EffectExecutor for WorkEffectExecutor {
             WorkOperation::GoalIteration { id } => {
                 work_result(self.service.record_goal_iteration(&id, actor))
             }
+            WorkOperation::SubagentCreate {
+                session_id,
+                parent_run_id,
+                parent_call_id,
+                task,
+                role,
+            } => work_result(self.service.create_subagent(
+                &session_id,
+                &parent_run_id,
+                &parent_call_id,
+                &task,
+                &role,
+                actor,
+            )),
+            WorkOperation::SubagentRead { id } => {
+                work_result(self.repository.get_subagent(&id).and_then(|job| {
+                    job.ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))
+                }))
+            }
+            WorkOperation::SubagentList {
+                session_id,
+                status,
+                limit,
+            } => work_result(
+                self.repository
+                    .list_subagents(Some(&session_id), status, limit),
+            ),
+            WorkOperation::SubagentStart { id } => {
+                work_result(self.service.start_subagent(&id, actor))
+            }
+            WorkOperation::SubagentComplete {
+                id,
+                child_run_id,
+                output,
+            } => work_result(
+                self.service
+                    .complete_subagent(&id, &child_run_id, &output, actor),
+            ),
+            WorkOperation::SubagentStop { id, status, error } => {
+                work_result(self.service.stop_subagent(&id, status, &error, actor))
+            }
+            WorkOperation::SubagentRequeue { id } => {
+                work_result(self.service.requeue_subagent(&id, actor))
+            }
         }?;
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
@@ -4322,12 +4741,13 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 mod tests {
     use super::{
         GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, ProviderProfileConfig,
-        RuntimeConfig, WorkEffectExecutor, goal_objective_from_plan, recover_unknown_effects,
+        RuntimeConfig, WorkEffectExecutor, goal_objective_from_plan, recover_interrupted_subagents,
+        recover_unknown_effects,
     };
     use colossus_contracts::{
         Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, GoalStatus,
         MemoryScope, MemoryStatus, ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep,
-        ProviderEvent, ProviderRoute, ProviderTurn, TaskStatus, ToolCall,
+        ProviderEvent, ProviderRoute, ProviderTurn, SubagentStatus, TaskStatus, ToolCall,
     };
     use colossus_ports::{EventJournal, ModelProvider, ModelProviderError, ToolExecutor};
     use colossus_provider::ProviderKind;
@@ -4423,6 +4843,12 @@ surprise: true
         assert!(
             RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
             "zero memory retrieval limit was accepted"
+        );
+        config.memory.retrieval_limit = 6;
+        config.subagents.max_concurrent = 0;
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "zero subagent concurrency was accepted"
         );
     }
 
@@ -4599,6 +5025,59 @@ surprise: true
         assert_eq!(
             events.last().expect("terminal event").event_type,
             "effect.outcome_unknown.v1"
+        );
+    }
+
+    #[test]
+    fn startup_marks_running_subagents_interrupted_without_retrying() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        sessions
+            .create_session(
+                "session-1",
+                Some("parent"),
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "test".into(),
+                },
+            )
+            .expect("session");
+        let repository: Arc<dyn colossus_ports::WorkRepository> = Arc::new(
+            colossus_work::EventSourcedWorkRepository::new(Arc::clone(&journal)),
+        );
+        let service = colossus_work::WorkService::new(Arc::clone(&repository), sessions);
+        let actor = Actor {
+            actor_type: ActorType::User,
+            id: "test".into(),
+        };
+        let job = service
+            .create_subagent(
+                "session-1",
+                "run-1",
+                "call-1",
+                "unfinished",
+                "subagent_default",
+                actor.clone(),
+            )
+            .expect("queue");
+        service.start_subagent(&job.id, actor).expect("start");
+        assert_eq!(
+            recover_interrupted_subagents(repository.as_ref(), &service).expect("recover"),
+            1
+        );
+        assert_eq!(
+            repository
+                .get_subagent(&job.id)
+                .expect("job")
+                .expect("record")
+                .status,
+            SubagentStatus::Interrupted
+        );
+        assert_eq!(
+            recover_interrupted_subagents(repository.as_ref(), &service).expect("idempotent"),
+            0
         );
     }
 
@@ -5435,6 +5914,119 @@ surprise: true
         assert!(event_types.contains(&"approval.granted.v1".into()));
         assert!(event_types.contains(&"plan.approved.v1".into()));
         assert!(event_types.contains(&"effect.release_requested.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        for id in ["session-a", "session-b"] {
+            sessions
+                .create_session(
+                    id,
+                    Some(id),
+                    Actor {
+                        actor_type: ActorType::User,
+                        id: "test-user".into(),
+                    },
+                )
+                .expect("session");
+        }
+        let repository: Arc<dyn colossus_ports::WorkRepository> = Arc::new(
+            colossus_work::EventSourcedWorkRepository::new(Arc::clone(&journal)),
+        );
+        let work = Arc::new(WorkEffectExecutor {
+            service: Arc::new(colossus_work::WorkService::new(
+                Arc::clone(&repository),
+                Arc::clone(&sessions),
+            )),
+            repository: Arc::clone(&repository),
+        });
+        let actions = ["subagent.create", "subagent.read", "subagent.list"];
+        let mut policy = colossus_policy::BuiltInPolicy::offline_default();
+        for action in actions {
+            policy = policy.with_action(action, DecisionOutcome::Allow);
+        }
+        let executor = GatewayToolExecutor {
+            gateway: Arc::new(colossus_policy::EffectGateway::new(
+                Arc::clone(&journal),
+                Arc::new(policy),
+                Arc::new(colossus_policy::DenyApproval),
+                colossus_policy::SafetyKernel::new(actions.map(str::to_owned)),
+                [16_u8; 32],
+            )),
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: Some(work),
+            memory: None,
+            workspace: std::env::current_dir().expect("cwd"),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        };
+        let context = |session: &str| ExecutionContext {
+            correlation_id: "run-parent".into(),
+            session_id: Some(session.into()),
+            run_id: Some("run-parent".into()),
+            ..ExecutionContext::default()
+        };
+        let created = executor
+            .execute(
+                ToolCall {
+                    call_id: "delegate-1".into(),
+                    name: "agent.delegate".into(),
+                    arguments: json!({"task": "Review the Rust tests"}),
+                },
+                context("session-a"),
+            )
+            .await
+            .expect("delegate");
+        let created: serde_json::Value = serde_json::from_str(&created.output).expect("job JSON");
+        let id = created["id"].as_str().expect("id").to_owned();
+        assert_eq!(created["parent_run_id"], "run-parent");
+        assert_eq!(created["parent_call_id"], "delegate-1");
+        assert_eq!(created["status"], "queued");
+        assert!(
+            sessions
+                .get_session(created["child_session_id"].as_str().expect("child"))
+                .expect("child session")
+                .is_some()
+        );
+
+        let denied = executor
+            .execute(
+                ToolCall {
+                    call_id: "result-cross".into(),
+                    name: "agent.result".into(),
+                    arguments: json!({"id": id}),
+                },
+                context("session-b"),
+            )
+            .await
+            .expect_err("cross-session result denied");
+        assert!(matches!(denied, colossus_ports::ToolError::Failed(_)));
+
+        let mut child_context = context("session-a");
+        child_context.subagent_id = Some(id.clone());
+        let nested = executor
+            .execute(
+                ToolCall {
+                    call_id: "nested".into(),
+                    name: "agent.delegate".into(),
+                    arguments: json!({"task": "Delegate again"}),
+                },
+                child_context,
+            )
+            .await
+            .expect_err("nested delegation denied");
+        assert!(matches!(nested, colossus_ports::ToolError::Denied(_)));
+        let events = journal
+            .read_stream(&format!("subagent:{id}"))
+            .expect("events");
+        assert_eq!(events[0].actor.actor_type, ActorType::Model);
+        assert_eq!(events[0].actor.id, "tool-call:delegate-1");
     }
 
     struct WorkScriptedProvider {

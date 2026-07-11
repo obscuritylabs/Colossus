@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, MemoryScope,
-    MemoryStatus, PlanStatus, PlanStep, PolicyDecision, TaskStatus,
+    MemoryStatus, PlanStatus, PlanStep, PolicyDecision, SubagentStatus, TaskStatus,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{ApprovalProvider, PolicyError};
@@ -165,6 +165,8 @@ enum Command {
     Plans(PlansCommand),
     /// Run and inspect bounded durable goals.
     Goals(GoalsCommand),
+    /// Inspect and control durable child-agent jobs.
+    Agents(AgentsCommand),
     /// Create, search, archive, and supersede durable memories.
     Memories(MemoriesCommand),
     /// Execute one audited model turn through the configured role.
@@ -731,6 +733,68 @@ enum GoalsAction {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum SubagentStatusArg {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Interrupted,
+}
+
+impl From<SubagentStatusArg> for SubagentStatus {
+    fn from(value: SubagentStatusArg) -> Self {
+        match value {
+            SubagentStatusArg::Queued => Self::Queued,
+            SubagentStatusArg::Running => Self::Running,
+            SubagentStatusArg::Completed => Self::Completed,
+            SubagentStatusArg::Failed => Self::Failed,
+            SubagentStatusArg::Cancelled => Self::Cancelled,
+            SubagentStatusArg::Interrupted => Self::Interrupted,
+        }
+    }
+}
+
+#[derive(Args)]
+struct AgentsCommand {
+    #[command(subcommand)]
+    command: AgentsAction,
+}
+
+#[derive(Subcommand)]
+enum AgentsAction {
+    /// Queue one durable child-agent job from the terminal.
+    Queue {
+        session_id: String,
+        task: String,
+        #[arg(long, default_value = "subagent_default")]
+        role: String,
+    },
+    /// List bounded durable child-agent jobs.
+    List {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum)]
+        status: Option<SubagentStatusArg>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one exact child-agent job and bounded result.
+    Show { job_id: String },
+    /// Show queue counts and available scheduler slots.
+    Status {
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Execute queued jobs up to configured concurrency until empty.
+    Drain,
+    /// Cancel one queued or running job.
+    Cancel { job_id: String },
+    /// Requeue one failed, cancelled, or interrupted job.
+    Requeue { job_id: String },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum MemoryScopeArg {
     Global,
     Repository,
@@ -1066,7 +1130,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /memories | /memory search QUERY | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1105,6 +1169,10 @@ async fn repl(
                             .run_goal("primary", objective.trim(), &active_session_id, 5, None)
                             .await?,
                     )?;
+                } else if line == "/agents" {
+                    print_json(&runtime.list_subagents(Some(&active_session_id), None, 100)?)?;
+                } else if line == "/agents drain" {
+                    print_json(&runtime.drain_subagents().await?)?;
                 } else if line == "/memories" {
                     print_json(
                         &runtime
@@ -1497,6 +1565,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .await?,
             )?,
         },
+        Command::Agents(command) => match command.command {
+            AgentsAction::Queue {
+                session_id,
+                task,
+                role,
+            } => print_json(&runtime.queue_subagent(&session_id, &task, &role).await?)?,
+            AgentsAction::List {
+                session,
+                status,
+                limit,
+            } => print_json(&runtime.list_subagents(
+                session.as_deref(),
+                status.map(Into::into),
+                limit,
+            )?)?,
+            AgentsAction::Show { job_id } => print_json(
+                &runtime
+                    .get_subagent(&job_id)?
+                    .ok_or_else(|| cli_error(format!("subagent not found: {job_id}")))?,
+            )?,
+            AgentsAction::Status { session } => {
+                print_json(&runtime.subagent_queue_status(session.as_deref())?)?;
+            }
+            AgentsAction::Drain => print_json(&runtime.drain_subagents().await?)?,
+            AgentsAction::Cancel { job_id } => {
+                print_json(&runtime.cancel_subagent(&job_id).await?)?;
+            }
+            AgentsAction::Requeue { job_id } => {
+                print_json(&runtime.requeue_subagent(&job_id).await?)?;
+            }
+        },
         Command::Memories(command) => match command.command {
             MemoriesAction::List { status, limit } => {
                 print_json(&runtime.list_memories(status.status(), limit).await?)?;
@@ -1589,6 +1688,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     None => runtime.run_model(&role, &instructions, &prompt).await?,
                 },
             };
+            runtime.drain_subagents().await?;
             print_json(&result)?;
         }
         Command::Echo { message } => {
@@ -1600,11 +1700,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let recovered = runtime.workflows().recover_interrupted()?;
             let drained = runtime.workflows().drain().await?;
             let projections = runtime.drain_projections()?;
+            let subagents = runtime.drain_subagents().await?;
             print_json(&json!({
                 "once": once,
                 "recovered": recovered,
                 "projections": projections,
                 "drained": drained,
+                "subagents": subagents,
             }))?;
         }
         Command::SandboxHelper => unreachable!("handled before runtime construction"),

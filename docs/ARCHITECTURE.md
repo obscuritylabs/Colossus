@@ -83,6 +83,16 @@ so one plan cannot race into multiple autonomous loops.
 The goal objective is rendered from the canonical approved prompt, Markdown, ordered
 steps, and mutation labels rather than accepting a different model-authored handoff.
 
+Subagents are canonical queued work records owned by the same work repository. A job
+pins parent session/run/call lineage, an isolated child session, model role, bounded task,
+lifecycle timestamps, and bounded released output or redacted error. The runtime drains
+queued jobs in batches no larger than `subagents.maxConcurrent` and each child invokes
+the normal `colossus-agent` service with the same provider router, policy gateway,
+approval provider, tool executor, context preparation, and journal. Child request
+definitions remove `agent.delegate`; the executor also rejects delegation whenever
+`ExecutionContext.subagent_id` is present. Running jobs found at startup become
+`interrupted` and are never silently retried.
+
 `colossus-memory` separates canonical lifecycle state from disposable retrieval. Memory
 create/update/archive/supersede events remain authoritative in the encrypted journal.
 Updates append a complete validated next-state record while preserving identity, scope,

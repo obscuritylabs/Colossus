@@ -28,12 +28,12 @@ serde_json.workspace = true
 serde-saphyr.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 colossus-testkit = { path = "../colossus-testkit" }
 tempfile.workspace = true
-tokio.workspace = true
 
 [lints]
 workspace = true

@@ -116,6 +116,8 @@ pub struct ExecutionContext {
     pub goal_id: Option<String>,
     /// Approved plan lineage for this run.
     pub plan_id: Option<String>,
+    /// Durable child-agent job lineage for this run.
+    pub subagent_id: Option<String>,
     /// Pinned workflow identifier.
     pub workflow_id: Option<String>,
     /// Pinned workflow content hash.
@@ -599,6 +601,84 @@ pub struct GoalRunResult {
     pub iteration_budget_exhausted: bool,
     /// Total loop wall time.
     pub elapsed_seconds: f64,
+}
+
+/// Durable subagent job status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentStatus {
+    /// Waiting for scheduler capacity.
+    Queued,
+    /// Child agent run is in progress.
+    Running,
+    /// Child run returned a released final result.
+    Completed,
+    /// Child run failed with a bounded redacted error.
+    Failed,
+    /// Operator cancelled the job.
+    Cancelled,
+    /// Process loss left a previously running job unfinished.
+    Interrupted,
+}
+
+/// Canonical durable child-agent job.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentJob {
+    /// Stable job identifier.
+    pub id: String,
+    /// Parent session identifier.
+    pub session_id: String,
+    /// Run that requested delegation.
+    pub parent_run_id: String,
+    /// Tool call that requested delegation.
+    pub parent_call_id: String,
+    /// Bounded child objective.
+    pub task: String,
+    /// Configured model role.
+    pub role: String,
+    /// Current lifecycle state.
+    pub status: SubagentStatus,
+    /// Isolated durable child session.
+    pub child_session_id: String,
+    /// Completed child run identifier.
+    pub child_run_id: Option<String>,
+    /// Bounded released child output.
+    pub final_output: String,
+    /// Bounded redacted terminal error.
+    pub error: String,
+    /// UTC creation timestamp.
+    pub created_at: String,
+    /// UTC last-update timestamp.
+    pub updated_at: String,
+    /// UTC start timestamp.
+    pub started_at: Option<String>,
+    /// UTC terminal timestamp.
+    pub completed_at: Option<String>,
+}
+
+/// Bounded scheduler status snapshot.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentQueueStatus {
+    /// Total matching jobs.
+    pub total: usize,
+    /// Jobs awaiting capacity.
+    pub queued: usize,
+    /// Jobs currently executing.
+    pub running: usize,
+    /// Successfully completed jobs.
+    pub completed: usize,
+    /// Failed jobs.
+    pub failed: usize,
+    /// Cancelled jobs.
+    pub cancelled: usize,
+    /// Recovery-interrupted jobs.
+    pub interrupted: usize,
+    /// Configured scheduler ceiling.
+    pub max_concurrent: usize,
+    /// Currently available local slots.
+    pub available_slots: usize,
 }
 
 /// Provenance for a durable key decision.

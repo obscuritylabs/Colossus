@@ -29,7 +29,7 @@ tools, see [Integrations](INTEGRATIONS.md).
 | Plan state | `plan.create`, `plan.show`, `plan.approve_request` | Approval request only | Yes | Plans are durable session state; approval is policy-gated; approved plans are atomically consumed once when handed to bounded Goal Mode. |
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Apply/reverse only | Yes | Exact text patch preview and mutation. |
 | Repo context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | No | Yes | Local file map, symbol extraction, references, and summaries. |
-| Subagents | `agent.delegate`, `agent.result`, `agent.list` | No by default | Yes | Durable queued child-agent jobs with bounded local concurrency. |
+| Subagents | `agent.delegate`, `agent.result`, `agent.list` | No by default | Yes | Durable session-confined child jobs with bounded local concurrency, isolated child sessions, post-gated results, and no recursive delegation. |
 | Web/docs | `web.fetch`, `docs.fetch` | Yes | Yes | Approval-gated HTTP(S) fetches. `web.search` is exposed only when a search adapter such as SearXNG is configured. |
 | MCP/discovery | `mcp.servers`, `mcp.tools`, `tool.search` | No | Yes | MCP listing returns unconfigured state; `tool.search` searches the local catalog. `mcp.call` is not exposed unless an MCP adapter is installed. |
 | Integrations | `github.*`, `searxng.*`, `opensearch.*`, `openapi.NAME.*` | Yes | Partial | Hidden until connected. Calls inject auth through credential refs, then pass policy, approval, audit, and HTTP settings. |
