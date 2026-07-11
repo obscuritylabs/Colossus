@@ -341,12 +341,18 @@ configured separately.
 
 ## Event Rendering
 
-Terminal activity rendering consumes typed run events. The CLI uses `interfaces.trace`
-for `--stream`, `--events compact|verbose|off`, and legacy `--trace` behavior. The REPL
-uses `interfaces.transcript` to render a readable interactive transcript with user,
-assistant, reasoning-summary, tool, approval, risk, and error blocks. Renderers may show
-provider-supplied reasoning summaries, but they must not display raw hidden
-chain-of-thought fields.
+Terminal activity rendering consumes strict `RunEventEnvelope` values through the
+`RunEventObserver` port. Provider events remain a separate normalized contract; the agent
+wraps them with correlated run/session identity and adds durable run phase, tool-start,
+tool-completion, recoverability, and elapsed-time events. Provider and tool content is
+observed only after its corresponding authoritative journal event is durable and any
+post-effect release policy has allowed it. Authenticated worker protocol v2 transports
+the same envelopes used by embedded callers.
+
+`colossus-presentation` renders compact, verbose, or off activity modes and semantic
+file, shell, Git, work, context, repository, skill, web, MCP, trace, integration, pack,
+and generic tool families. Renderers may show provider-supplied safe reasoning summaries,
+but they never receive raw provider frames or hidden chain-of-thought fields.
 
 The REPL composer state and built-in themes also live in the interface layer. They may
 render cached model, approval, session, prompt, and context status, but they must
@@ -359,8 +365,8 @@ owning those behaviors.
 timestamped persisted run events. It reports run duration, event counts, tool
 calls/failures, approvals, risk assessments, research/subagent activity, compactions, and
 error totals without exposing raw prompts, hidden reasoning, or raw tool outputs by
-default. CLI and future TUI surfaces should call the service for run lists, timelines,
-and aggregate metrics rather than querying SQLite or parsing transcript text directly.
+default. CLI and future TUI surfaces call the service for run lists, timelines, and
+aggregate metrics rather than querying redb or parsing transcript text directly.
 
 Saved REPL preferences are typed contracts exposed through `PresentationRepository`.
 The Rust runtime uses an encrypted event-sourced adapter and sends every preference

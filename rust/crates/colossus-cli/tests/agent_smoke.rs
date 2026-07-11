@@ -111,7 +111,12 @@ sandbox:
         &config,
         &["run", "offline agent", "--max-turns", "4", "--stream"],
     );
-    assert_eq!(String::from_utf8_lossy(&output.stderr), "offline agent\n");
+    let streamed = String::from_utf8_lossy(&output.stderr);
+    assert!(streamed.contains("[activity] preparing"));
+    assert!(streamed.contains("[activity] waiting_for_model echo"));
+    assert!(streamed.contains("[activity] responding"));
+    assert!(streamed.contains("offline agent"));
+    assert!(streamed.contains("[activity] completed"));
     assert!(
         output.status.success(),
         "{}",
@@ -120,7 +125,7 @@ sandbox:
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "offline agent");
     assert_eq!(result["profile"], "echo");
-    assert_eq!(result["event_count"], 4);
+    assert_eq!(result["event_count"], 6);
     let first_run_id = result["run_id"].as_str().expect("run id").to_owned();
     let session_id = result["session_id"]
         .as_str()

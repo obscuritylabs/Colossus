@@ -6,11 +6,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
     MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
-    ResearchSourceKind, SubagentStatus, TaskStatus, UserPromptRequest, UserPromptResponse,
+    ResearchSourceKind, RunEvent, RunEventEnvelope, SubagentStatus, TaskStatus, UserPromptRequest,
+    UserPromptResponse,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{
-    ApprovalProvider, ModelProviderError, PolicyError, ProviderEventObserver, ToolError,
+    ApprovalProvider, ModelProviderError, PolicyError, RunEventObserver, ToolError,
     UserPromptProvider,
 };
 use colossus_presentation::{
@@ -232,9 +233,12 @@ impl TerminalStreamObserver {
 }
 
 #[async_trait]
-impl ProviderEventObserver for TerminalStreamObserver {
-    async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError> {
-        if let ProviderEvent::ModelDelta { text } = &event {
+impl RunEventObserver for TerminalStreamObserver {
+    async fn observe(&mut self, envelope: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        if let RunEvent::Provider {
+            event: ProviderEvent::ModelDelta { text },
+        } = &envelope.event
+        {
             if self.preferences.stream_mode == StreamDisplayMode::Off {
                 return Ok(());
             }
@@ -253,7 +257,7 @@ impl ProviderEventObserver for TerminalStreamObserver {
             return Ok(());
         }
         if let Some(line) = SemanticRenderer::new(self.preferences.clone())
-            .provider_event(&event)
+            .run_event_envelope(&envelope)
             .map_err(|error| ModelProviderError::Failed(error.to_string()))?
         {
             self.write_line(&line)
@@ -266,8 +270,8 @@ impl ProviderEventObserver for TerminalStreamObserver {
 struct SilentStreamObserver;
 
 #[async_trait]
-impl ProviderEventObserver for SilentStreamObserver {
-    async fn observe(&mut self, _event: ProviderEvent) -> Result<(), ModelProviderError> {
+impl RunEventObserver for SilentStreamObserver {
+    async fn observe(&mut self, _event: RunEventEnvelope) -> Result<(), ModelProviderError> {
         Ok(())
     }
 }

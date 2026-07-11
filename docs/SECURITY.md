@@ -492,13 +492,16 @@ they do not turn auth fields into model arguments.
 ## Reasoning Visibility
 
 Colossus may render provider-supplied reasoning summaries when an endpoint exposes a
-safe summary field. It does not render raw hidden reasoning text in the default CLI or
-REPL paths. Stream chunks are normalized into typed events; raw provider chunks are not
-persisted unless a future explicit debug mode adds that capability.
+safe summary field. It does not render raw hidden reasoning text in CLI or REPL paths.
+Stream chunks are normalized and individually post-authorized before becoming typed
+provider events; raw provider chunks are neither persisted nor placed in run-event
+envelopes.
 
 The REPL transcript labels these safe summaries as `thinking` only when they arrive as
-typed `ReasoningSummaryEvent` values. Local activity such as tool calls, approvals, and
-risk assessments is rendered as harness activity, not as hidden model reasoning.
+typed `ProviderEvent::ReasoningSummary` values. Tool results become `RunEvent::ToolCompleted`
+only after the released result and canonical completion event exist. Semantic rendering
+caps previews and identifies recoverable errors without reclassifying local harness
+activity as model reasoning.
 
 ## REPL Themes And Preferences
 

@@ -75,8 +75,11 @@ obsolete Go launcher.
   encrypted event-sourced adapter for theme, multiline composition, streaming, event
   detail, reasoning-summary visibility, and transcript density. Mutations cross the
   effect gateway and authenticated worker IPC; embedded and worker REPLs share the same
-  commands and semantic work/context/provider-event renderer. Raw provider frames and
-  hidden reasoning never enter this presentation path.
+  commands and semantic work/context/provider-event renderer. Correlated `RunEventEnvelope`
+  streaming adds durable run start/completion, tool start/result, recoverability, phase,
+  and elapsed-time events. Semantic renderers distinguish file, shell, Git, work,
+  context, repository, skill, web, MCP, trace, integration, pack, and generic result
+  families. Raw provider frames and hidden reasoning never enter this presentation path.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   a disposable Tantivy lexical index with event-id idempotency, durable replay position,
   retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry
@@ -272,9 +275,9 @@ cutover. The following planned work remains:
   strict catalog validation, and the complete P0 offline/network tool surface are
   implemented through the normal permission, quarantine, and audit boundaries.
 - Live Windows named-pipe acceptance.
-- Remaining semantic renderers for every tool-result family, richer recoverability
-  labels, and elapsed phase/activity presentation. Persistent preferences and semantic
-  work/context/provider-event rendering are implemented.
+- Prompt-safe in-place activity refresh, full theme palettes/status bar, and broader live
+  provider/tool-use terminal acceptance. Durable correlated run envelopes, semantic
+  tool-family results, recoverability labels, and phase/action elapsed lines are implemented.
 - Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,

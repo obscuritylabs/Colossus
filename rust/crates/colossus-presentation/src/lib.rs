@@ -1,8 +1,8 @@
 //! Event-sourced presentation preferences and pure semantic terminal rendering.
 
 use colossus_contracts::{
-    Actor, ContextStatus, EventClassification, ExecutionContext, NewEvent, ProviderEvent,
-    WorkStateSnapshot,
+    Actor, ContextStatus, EventClassification, ExecutionContext, NewEvent, ProviderEvent, RunEvent,
+    RunEventEnvelope, RunPhase, ToolCall, ToolResult, WorkStateSnapshot,
 };
 pub use colossus_contracts::{
     EventDisplayMode, ReplPreferences, StreamDisplayMode, ThemeName, TranscriptDensity,
@@ -14,6 +14,8 @@ use thiserror::Error;
 
 const PREFERENCES_STREAM: &str = "presentation:repl";
 const PREFERENCES_UPDATED: &str = "presentation.preferences.updated.v1";
+const COMPACT_PREVIEW_CHARS: usize = 240;
+const VERBOSE_PREVIEW_CHARS: usize = 8 * 1024;
 
 /// Presentation rendering failure.
 #[derive(Debug, Error)]
@@ -180,20 +182,7 @@ impl SemanticRenderer {
                 Some(format!("{} {summary}", self.label("thinking")))
             }
             ProviderEvent::ReasoningSummary { .. } => None,
-            ProviderEvent::ToolCallRequested {
-                call_id,
-                name,
-                arguments,
-            } => match self.preferences.events_mode {
-                EventDisplayMode::Off => None,
-                EventDisplayMode::Compact => Some(format!("{} {name}", self.label("tool"))),
-                EventDisplayMode::Verbose => Some(format!(
-                    "{} call_id={call_id} name={name} arguments={}",
-                    self.label("tool"),
-                    serde_json::to_string(arguments)
-                        .map_err(|error| PresentationError::Invalid(error.to_string()))?
-                )),
-            },
+            ProviderEvent::ToolCallRequested { .. } => None,
             ProviderEvent::Usage { usage } => match self.preferences.events_mode {
                 EventDisplayMode::Verbose => Some(format!(
                     "{} input={} output={} total={} cached={} reasoning={}",
@@ -214,6 +203,206 @@ impl SemanticRenderer {
         Ok(rendered)
     }
 
+    /// Render one ordered application-level run event.
+    pub fn run_event(&self, event: &RunEvent) -> Result<Option<String>, PresentationError> {
+        if self.preferences.stream_mode == StreamDisplayMode::Raw {
+            return Ok(None);
+        }
+        match event {
+            RunEvent::Provider { event } => self.provider_event(event),
+            RunEvent::Phase {
+                phase,
+                turn,
+                action,
+                elapsed_seconds,
+            } => Ok(self.render_phase(*phase, *turn, action.as_deref(), *elapsed_seconds)),
+            RunEvent::ToolStarted {
+                turn,
+                call,
+                elapsed_seconds,
+            } => self.render_tool_started(*turn, call, *elapsed_seconds),
+            RunEvent::ToolCompleted {
+                turn,
+                result,
+                duration_seconds,
+                elapsed_seconds,
+            } => self.render_tool_completed(*turn, result, *duration_seconds, *elapsed_seconds),
+            RunEvent::Error {
+                code,
+                message,
+                recoverable,
+                turn,
+                elapsed_seconds,
+            } => Ok(Some(self.with_detail(
+                format!(
+                    "{} code={} recoverable={} turn={} elapsed={:.2}s",
+                    self.label("error"),
+                    code,
+                    if *recoverable { "yes" } else { "no" },
+                    turn.map_or_else(|| "none".into(), |value| value.to_string()),
+                    elapsed_seconds,
+                ),
+                Some(bounded_text(message, COMPACT_PREVIEW_CHARS)),
+            ))),
+        }
+    }
+
+    /// Render a correlated run event, including bounded provenance in verbose mode.
+    pub fn run_event_envelope(
+        &self,
+        envelope: &RunEventEnvelope,
+    ) -> Result<Option<String>, PresentationError> {
+        let Some(rendered) = self.run_event(&envelope.event)? else {
+            return Ok(None);
+        };
+        if self.preferences.events_mode == EventDisplayMode::Verbose {
+            Ok(Some(format!(
+                "run={} session={} {rendered}",
+                envelope.run_id, envelope.session_id
+            )))
+        } else {
+            Ok(Some(rendered))
+        }
+    }
+
+    fn render_phase(
+        &self,
+        phase: RunPhase,
+        turn: Option<u16>,
+        action: Option<&str>,
+        elapsed_seconds: f64,
+    ) -> Option<String> {
+        if phase == RunPhase::Completed && self.preferences.events_mode == EventDisplayMode::Off {
+            return None;
+        }
+        let phase_name = match phase {
+            RunPhase::Preparing => "preparing",
+            RunPhase::WaitingForModel => "waiting_for_model",
+            RunPhase::Responding => "responding",
+            RunPhase::Completed => "completed",
+        };
+        match self.preferences.events_mode {
+            EventDisplayMode::Verbose => Some(format!(
+                "{} phase={phase_name} turn={} action={} elapsed={elapsed_seconds:.2}s",
+                self.label("activity"),
+                turn.map_or_else(|| "none".into(), |value| value.to_string()),
+                action.unwrap_or("none")
+            )),
+            EventDisplayMode::Compact | EventDisplayMode::Off => Some(format!(
+                "{} {phase_name}{} elapsed={elapsed_seconds:.2}s",
+                self.label("activity"),
+                action.map_or_else(String::new, |value| format!(" {value}"))
+            )),
+        }
+    }
+
+    fn render_tool_started(
+        &self,
+        turn: u16,
+        call: &ToolCall,
+        elapsed_seconds: f64,
+    ) -> Result<Option<String>, PresentationError> {
+        if self.preferences.events_mode == EventDisplayMode::Off {
+            return Ok(Some(format!(
+                "{} using {} elapsed={elapsed_seconds:.2}s",
+                self.label("activity"),
+                call.name
+            )));
+        }
+        let family = ToolFamily::from_name(&call.name);
+        let detail = summarize_value(&call.arguments, family.keys());
+        let rendered = match self.preferences.events_mode {
+            EventDisplayMode::Compact => self.with_detail(
+                format!(
+                    "{} start {} elapsed={elapsed_seconds:.2}s",
+                    self.label(family.label()),
+                    call.name,
+                ),
+                detail,
+            ),
+            EventDisplayMode::Verbose => format!(
+                "{} start name={} call_id={} turn={} elapsed={elapsed_seconds:.2}s arguments={}",
+                self.label(family.label()),
+                call.name,
+                call.call_id,
+                turn,
+                bounded_json(&call.arguments, VERBOSE_PREVIEW_CHARS)?
+            ),
+            EventDisplayMode::Off => unreachable!("handled above"),
+        };
+        Ok(Some(rendered))
+    }
+
+    fn render_tool_completed(
+        &self,
+        turn: u16,
+        result: &ToolResult,
+        duration_seconds: f64,
+        elapsed_seconds: f64,
+    ) -> Result<Option<String>, PresentationError> {
+        let parsed = serde_json::from_str::<Value>(&result.output)
+            .unwrap_or_else(|_| Value::String(result.output.clone()));
+        let family = ToolFamily::from_name(&result.name);
+        let recoverable = parsed
+            .pointer("/error/recoverable")
+            .and_then(Value::as_bool);
+        let failed = result.exit_code != 0 || parsed.get("error").is_some();
+        if self.preferences.events_mode == EventDisplayMode::Off && !failed {
+            return Ok(None);
+        }
+        let status = if failed {
+            if recoverable == Some(true) {
+                "recoverable_error"
+            } else {
+                "failed"
+            }
+        } else {
+            "ok"
+        };
+        let detail = if failed {
+            parsed
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .map(|message| bounded_text(message, COMPACT_PREVIEW_CHARS))
+        } else {
+            summarize_value(&parsed, family.keys())
+        };
+        let rendered = match self.preferences.events_mode {
+            EventDisplayMode::Verbose => format!(
+                "{} complete name={} call_id={} turn={} status={} exit={} duration={duration_seconds:.2}s elapsed={elapsed_seconds:.2}s output={}",
+                self.label(family.label()),
+                result.name,
+                result.call_id,
+                turn,
+                status,
+                result.exit_code,
+                bounded_json(&parsed, VERBOSE_PREVIEW_CHARS)?
+            ),
+            EventDisplayMode::Compact | EventDisplayMode::Off => self.with_detail(
+                format!(
+                    "{} complete {} status={} exit={} duration={duration_seconds:.2}s",
+                    self.label(family.label()),
+                    result.name,
+                    status,
+                    result.exit_code,
+                ),
+                detail,
+            ),
+        };
+        Ok(Some(rendered))
+    }
+
+    fn with_detail(&self, summary: String, detail: Option<String>) -> String {
+        let Some(detail) = detail else {
+            return summary;
+        };
+        if self.preferences.transcript_density == TranscriptDensity::Compact {
+            format!("{summary} {detail}")
+        } else {
+            format!("{summary}\n  {detail}")
+        }
+    }
+
     /// Render generic released structured output according to transcript density.
     pub fn structured(&self, value: &Value) -> Result<String, PresentationError> {
         if self.preferences.transcript_density == TranscriptDensity::Compact {
@@ -225,13 +414,157 @@ impl SemanticRenderer {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ToolFamily {
+    Files,
+    Shell,
+    Git,
+    Work,
+    Context,
+    Repository,
+    Skills,
+    Web,
+    Mcp,
+    Trace,
+    Integrations,
+    Packs,
+    Generic,
+}
+
+impl ToolFamily {
+    fn from_name(name: &str) -> Self {
+        let prefix = name.split('.').next().unwrap_or(name);
+        match prefix {
+            "filesystem" | "patch" => Self::Files,
+            "shell" | "process" => Self::Shell,
+            "git" => Self::Git,
+            "task" | "decision" | "plan" | "goal" | "agent" | "memory" => Self::Work,
+            "context" => Self::Context,
+            "repo" => Self::Repository,
+            "skill" => Self::Skills,
+            "web" | "docs" | "network" => Self::Web,
+            "mcp" => Self::Mcp,
+            "trace" | "telemetry" | "audit" => Self::Trace,
+            "integration" => Self::Integrations,
+            "pack" | "bundle" => Self::Packs,
+            _ => Self::Generic,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Files => "file",
+            Self::Shell => "shell",
+            Self::Git => "git",
+            Self::Work => "work",
+            Self::Context => "context",
+            Self::Repository => "repo",
+            Self::Skills => "skill",
+            Self::Web => "web",
+            Self::Mcp => "mcp",
+            Self::Trace => "trace",
+            Self::Integrations => "integration",
+            Self::Packs => "pack",
+            Self::Generic => "tool",
+        }
+    }
+
+    const fn keys(self) -> &'static [&'static str] {
+        match self {
+            Self::Files => &[
+                "path",
+                "bytes",
+                "matches",
+                "changed",
+                "line_start",
+                "line_end",
+            ],
+            Self::Shell => &["executable", "exit_code", "stdout", "stderr", "truncated"],
+            Self::Git => &["branch", "commit", "path", "status", "summary", "stdout"],
+            Self::Work => &["id", "status", "title", "objective", "open_task_count"],
+            Self::Context => &[
+                "session_id",
+                "message_count",
+                "token_estimate",
+                "snapshot_id",
+                "compacted",
+            ],
+            Self::Repository => &["path", "symbol", "matches", "files", "summary"],
+            Self::Skills => &["name", "path", "status", "sha256"],
+            Self::Web => &["url", "status", "title", "media_type", "bytes"],
+            Self::Mcp => &["server", "tool", "status", "content"],
+            Self::Trace => &["run_id", "event_count", "path", "status"],
+            Self::Integrations => &["name", "tool", "status", "connected"],
+            Self::Packs => &["name", "version", "trusted", "status", "publisher"],
+            Self::Generic => &["id", "name", "status", "message"],
+        }
+    }
+}
+
+fn bounded_text(value: &str, max_chars: usize) -> String {
+    let mut rendered = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        rendered.push('…');
+    }
+    rendered.replace(['\n', '\r'], " ")
+}
+
+fn bounded_json(value: &Value, max_chars: usize) -> Result<String, PresentationError> {
+    serde_json::to_string(value)
+        .map(|encoded| bounded_text(&encoded, max_chars))
+        .map_err(|error| PresentationError::Invalid(error.to_string()))
+}
+
+fn summarize_value(value: &Value, keys: &[&str]) -> Option<String> {
+    let parts = keys
+        .iter()
+        .filter_map(|key| {
+            find_key(value, key, 0).map(|value| {
+                format!(
+                    "{key}={}",
+                    bounded_text(&scalar_summary(value), COMPACT_PREVIEW_CHARS / 2)
+                )
+            })
+        })
+        .take(4)
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+fn find_key<'a>(value: &'a Value, key: &str, depth: usize) -> Option<&'a Value> {
+    if depth > 2 {
+        return None;
+    }
+    let object = value.as_object()?;
+    if let Some(value) = object.get(key) {
+        return Some(value);
+    }
+    object
+        .values()
+        .find_map(|value| find_key(value, key, depth.saturating_add(1)))
+}
+
+fn scalar_summary(value: &Value) -> String {
+    match value {
+        Value::Null => "null".into(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(values) => format!("{} items", values.len()),
+        Value::Object(values) => format!("{} fields", values.len()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         EventDisplayMode, EventSourcedPresentationRepository, ReplPreferences, SemanticRenderer,
         StreamDisplayMode, ThemeName, TranscriptDensity,
     };
-    use colossus_contracts::{Actor, ActorType, ProviderEvent, ProviderUsage, WorkStateSnapshot};
+    use colossus_contracts::{
+        Actor, ActorType, ProviderEvent, ProviderUsage, RunEvent, RunEventEnvelope, RunPhase,
+        ToolCall, ToolResult, WorkStateSnapshot,
+    };
     use colossus_ports::{EventJournal, PresentationRepository};
     use colossus_testkit::{InMemoryEventJournal, assert_presentation_repository_conformance};
     use std::sync::Arc;
@@ -363,5 +696,120 @@ mod tests {
                 .expect("usage"),
             Some("usage: input=4 output=2 total=6 cached=1 reasoning=unknown".into())
         );
+        let correlated = verbose
+            .run_event_envelope(&RunEventEnvelope {
+                schema_version: 1,
+                run_id: "run-1".into(),
+                session_id: "session-1".into(),
+                event: RunEvent::Phase {
+                    phase: RunPhase::Preparing,
+                    turn: Some(1),
+                    action: None,
+                    elapsed_seconds: 0.1,
+                },
+            })
+            .expect("correlated")
+            .expect("visible");
+        assert!(correlated.starts_with("run=run-1 session=session-1"));
+    }
+
+    #[test]
+    fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
+        let renderer = SemanticRenderer::new(ReplPreferences::default());
+        for (name, label) in [
+            ("filesystem.read", "[file]"),
+            ("shell.run", "[shell]"),
+            ("git.status", "[git]"),
+            ("task.list", "[work]"),
+            ("context.show", "[context]"),
+            ("repo.map", "[repo]"),
+            ("skill.read", "[skill]"),
+            ("web.fetch", "[web]"),
+            ("mcp.call", "[mcp]"),
+            ("trace.export", "[trace]"),
+            ("integration.invoke", "[integration]"),
+            ("pack.verify", "[pack]"),
+            ("echo", "[tool]"),
+        ] {
+            let rendered = renderer
+                .run_event(&RunEvent::ToolStarted {
+                    turn: 1,
+                    call: ToolCall {
+                        call_id: format!("call-{name}"),
+                        name: name.into(),
+                        arguments: serde_json::json!({"path": "README.md", "name": "demo"}),
+                    },
+                    elapsed_seconds: 0.25,
+                })
+                .expect("render")
+                .expect("visible");
+            assert!(rendered.starts_with(label), "{name}: {rendered}");
+        }
+
+        let completed = renderer
+            .run_event(&RunEvent::ToolCompleted {
+                turn: 1,
+                result: ToolResult {
+                    call_id: "call-file".into(),
+                    name: "filesystem.read".into(),
+                    output: serde_json::json!({"path": "README.md", "bytes": 42}).to_string(),
+                    exit_code: 0,
+                },
+                duration_seconds: 1.25,
+                elapsed_seconds: 2.0,
+            })
+            .expect("render")
+            .expect("visible");
+        assert!(completed.contains("duration=1.25s"));
+        assert!(completed.contains("path=README.md"));
+
+        let quiet = SemanticRenderer::new(ReplPreferences {
+            events_mode: EventDisplayMode::Off,
+            ..ReplPreferences::default()
+        });
+        assert!(
+            quiet
+                .run_event(&RunEvent::ToolCompleted {
+                    turn: 1,
+                    result: ToolResult {
+                        call_id: "call-ok".into(),
+                        name: "echo".into(),
+                        output: "ok".into(),
+                        exit_code: 0,
+                    },
+                    duration_seconds: 0.1,
+                    elapsed_seconds: 0.2,
+                })
+                .expect("quiet")
+                .is_none()
+        );
+        let recoverable = quiet
+            .run_event(&RunEvent::ToolCompleted {
+                turn: 1,
+                result: ToolResult {
+                    call_id: "call-error".into(),
+                    name: "filesystem.read".into(),
+                    output: serde_json::json!({
+                        "error": {"message": "missing", "recoverable": true}
+                    })
+                    .to_string(),
+                    exit_code: 1,
+                },
+                duration_seconds: 0.1,
+                elapsed_seconds: 0.2,
+            })
+            .expect("error")
+            .expect("visible error");
+        assert!(recoverable.contains("status=recoverable_error"));
+        let phase = quiet
+            .run_event(&RunEvent::Phase {
+                phase: RunPhase::WaitingForModel,
+                turn: Some(2),
+                action: Some("model-x".into()),
+                elapsed_seconds: 3.5,
+            })
+            .expect("phase")
+            .expect("activity remains visible");
+        assert!(phase.contains("waiting_for_model model-x elapsed=3.50s"));
     }
 }

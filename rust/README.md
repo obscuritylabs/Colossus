@@ -214,6 +214,14 @@ status use semantic summaries, safe provider reasoning summaries remain independ
 toggleable, and `raw` means normalized visible text without semantic event blocks—not
 unredacted provider frames or hidden reasoning.
 
+Streamed runs use correlated `RunEventEnvelope` values in both embedded mode and
+authenticated worker protocol v2. Run start/completion and tool start/completion are
+durable before display. Compact rendering uses distinct file, shell, Git, work, context,
+repository, skill, web, MCP, trace, integration, pack, and generic summaries; verbose
+mode adds bounded arguments/results and run metadata. Terminal errors always state
+whether recovery continues, and activity lines include the current phase/action and
+elapsed time.
+
 Inspect sandbox readiness or run an explicitly configured exact executable:
 
 ```sh

@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     AgentRunResult, DecisionPriority, DecisionStatus, GoalStatus, IntegrationAuth, MemoryScope,
-    MemoryStatus, PlanStatus, PlanStep, ProviderEvent, ReplPreferences, ResearchDepth,
-    ResearchSourceKind, SubagentStatus, TaskStatus,
+    MemoryStatus, PlanStatus, PlanStep, ReplPreferences, ResearchDepth, ResearchSourceKind,
+    RunEventEnvelope, SubagentStatus, TaskStatus,
 };
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeError};
 use hmac::{Hmac, Mac as _};
@@ -27,7 +27,7 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u16 = 1;
+const PROTOCOL_VERSION: u16 = 2;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -835,7 +835,7 @@ struct WorkerRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WorkerFrameContent {
-    Event { event: ProviderEvent },
+    Event { event: RunEventEnvelope },
     Complete { result: Value },
     Error { message: String },
 }
@@ -945,18 +945,18 @@ impl WorkerClient {
         )?;
         match frame.content {
             WorkerFrameContent::Event { .. } => Err(WorkerError::Protocol(
-                "non-streaming call received a provider event".into(),
+                "non-streaming call received a run event".into(),
             )),
             WorkerFrameContent::Complete { result } => Ok(result),
             WorkerFrameContent::Error { message } => Err(WorkerError::Remote(message)),
         }
     }
 
-    /// Execute one model run while forwarding authenticated released provider events.
+    /// Execute one model run while forwarding authenticated released run events.
     pub async fn run_model(
         &self,
         operation: WorkerOperation,
-        observer: &mut dyn colossus_ports::ProviderEventObserver,
+        observer: &mut dyn colossus_ports::RunEventObserver,
     ) -> Result<AgentRunResult, WorkerError> {
         if !matches!(operation, WorkerOperation::RunModel { .. }) {
             return Err(WorkerError::Protocol(
@@ -1165,7 +1165,7 @@ where
             explicit_skills,
             sticky_skills,
         } => {
-            let mut observer = IpcProviderObserver {
+            let mut observer = IpcRunObserver {
                 stream,
                 key,
                 request_id: &request_id,
@@ -2108,14 +2108,14 @@ async fn parse_json_source(runtime: &Runtime, source: &str) -> Result<Value, Wor
         .map_err(|error| WorkerError::Protocol(format!("invalid JSON input: {error}")))
 }
 
-struct IpcProviderObserver<'a, S> {
+struct IpcRunObserver<'a, S> {
     stream: &'a mut S,
     key: &'a [u8; 32],
     request_id: &'a str,
     sequence: u64,
 }
 
-impl<S> IpcProviderObserver<'_, S>
+impl<S> IpcRunObserver<'_, S>
 where
     S: AsyncWrite + Unpin + Send,
 {
@@ -2144,13 +2144,13 @@ where
 }
 
 #[async_trait]
-impl<S> colossus_ports::ProviderEventObserver for IpcProviderObserver<'_, S>
+impl<S> colossus_ports::RunEventObserver for IpcRunObserver<'_, S>
 where
     S: AsyncWrite + Unpin + Send,
 {
     async fn observe(
         &mut self,
-        event: ProviderEvent,
+        event: RunEventEnvelope,
     ) -> Result<(), colossus_ports::ModelProviderError> {
         self.send(WorkerFrameContent::Event { event })
             .await

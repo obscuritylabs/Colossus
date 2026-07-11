@@ -51,9 +51,9 @@ use colossus_ports::{
     ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EmbeddingProvider,
     EventJournal, ExtensionRepository, KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever,
     ModelProvider, ModelProviderError, PolicyDecisionPoint, PresentationRepository,
-    ProjectionStore, ProviderEventObserver, ResearchRepository, SessionRepository, SkillRepository,
-    StoreError, ToolError, ToolExecutor, ToolRegistry, UserPromptProvider, WorkRepository,
-    WorkflowRepository,
+    ProjectionStore, ProviderEventObserver, ResearchRepository, RunEventObserver,
+    SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
+    UserPromptProvider, WorkRepository, WorkflowRepository,
 };
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
@@ -4154,7 +4154,7 @@ impl Runtime {
         session_id: Option<&str>,
         explicit_skills: &[String],
         sticky_skills: &[String],
-        observer: &mut dyn ProviderEventObserver,
+        observer: &mut dyn RunEventObserver,
     ) -> Result<AgentRunResult, RuntimeError> {
         let composition = self.skill_composer.compose(
             instructions,

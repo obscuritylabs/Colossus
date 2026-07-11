@@ -433,15 +433,15 @@ Runtime controls:
 - `/help`
 - `/trace` toggles compact events on and off for compatibility.
 
-Compact events keep the REPL transcript chat-friendly: assistant text, safe reasoning
-summaries, tool calls, approval prompts, risk assessments, and collapsed tool result
-previews remain visible, while local submit metrics and the final `done` marker are
-hidden. `/events off` hides those event blocks but keeps a single-line activity spinner
-visible while the run is active, such as `Thinking...`, `Using filesystem.read...`, or
-`Reviewing risk for shell.run...`. Use `/events verbose` when debugging run metadata
-such as prompt size, session/context counters, the composed model request, completion
-markers, and larger tool details. Use `/transcript compact` for a tighter terminal
-stream, or `/transcript comfortable` for the default Pi-like spacing.
+Compact events keep the Rust REPL transcript chat-friendly: assistant text, safe
+reasoning summaries, phase/action timing, semantic tool starts/results, and explicit
+recoverability remain visible. `/events off` hides successful result blocks but retains
+bounded activity lines and all errors. `/events verbose` adds correlated run/session
+identity, turns, call ids, bounded arguments, and larger released result previews.
+`/transcript compact` minimizes detail spacing; `comfortable` retains readable semantic
+blocks. A prompt-safe in-place spinner/status bar remains cutover UX work; the current
+Rust alpha emits stable lines so redirected and authenticated-worker output is not
+corrupted.
 
 ## Agent telemetry
 

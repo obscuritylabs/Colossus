@@ -5,11 +5,13 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, AgentRunResult, EventClassification, ExecutionContext, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, ProviderEvent, ToolCall, ToolResult,
+    ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, ProviderEvent, RunEvent,
+    RunEventEnvelope, RunPhase, ToolCall, ToolResult,
 };
 use colossus_ports::{
     ContextError, ContextPreparer, EventJournal, ModelProvider, ModelProviderError,
-    ProviderEventObserver, SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
+    ProviderEventObserver, RunEventObserver, SessionRepository, StoreError, ToolError,
+    ToolExecutor, ToolRegistry,
 };
 use colossus_tools::model_definitions;
 use serde_json::{Value, json};
@@ -156,7 +158,7 @@ impl AgentService {
         .await
     }
 
-    /// Execute a skilled run and forward only policy-released provider events.
+    /// Execute a skilled run and forward ordered policy-released run events.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_in_session_with_skills_stream(
         &self,
@@ -166,7 +168,7 @@ impl AgentService {
         max_turns: u16,
         requested_session_id: Option<&str>,
         active_skills: &[String],
-        observer: &mut dyn ProviderEventObserver,
+        observer: &mut dyn RunEventObserver,
     ) -> Result<AgentRunResult, AgentError> {
         self.run_with_lineage(
             role,
@@ -248,7 +250,7 @@ impl AgentService {
         plan_id: Option<&str>,
         subagent_id: Option<&str>,
         active_skills: &[String],
-        mut released_observer: Option<&mut dyn ProviderEventObserver>,
+        mut released_observer: Option<&mut dyn RunEventObserver>,
     ) -> Result<AgentRunResult, AgentError> {
         if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
@@ -318,8 +320,49 @@ impl AgentService {
         });
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
+        self.append(
+            &stream_id,
+            &mut stream_version,
+            "run.started.v1",
+            system_actor(),
+            &context,
+            json!({
+                "role": role,
+                "profile": route.profile,
+                "provider": route.provider,
+                "model": route.model,
+                "max_turns": max_turns,
+                "active_skills": active_skills,
+            }),
+        )?;
+        emit_run_event(
+            &mut released_observer,
+            &run_id,
+            &session_id,
+            RunEvent::Phase {
+                phase: RunPhase::Preparing,
+                turn: Some(1),
+                action: None,
+                elapsed_seconds: started.elapsed().as_secs_f64(),
+            },
+        )
+        .await?;
 
         for turn in 1..=max_turns {
+            if turn > 1 {
+                emit_run_event(
+                    &mut released_observer,
+                    &run_id,
+                    &session_id,
+                    RunEvent::Phase {
+                        phase: RunPhase::Preparing,
+                        turn: Some(turn),
+                        action: None,
+                        elapsed_seconds: started.elapsed().as_secs_f64(),
+                    },
+                )
+                .await?;
+            }
             let prepared = if let Some(preparer) = &self.context_preparer {
                 let prepared = preparer
                     .prepare(
@@ -382,10 +425,22 @@ impl AgentService {
                     "active_skills": active_skills,
                 }),
             )?;
+            emit_run_event(
+                &mut released_observer,
+                &run_id,
+                &session_id,
+                RunEvent::Phase {
+                    phase: RunPhase::WaitingForModel,
+                    turn: Some(turn),
+                    action: Some(route.model.clone()),
+                    elapsed_seconds: started.elapsed().as_secs_f64(),
+                },
+            )
+            .await?;
             let provider_result = {
                 let downstream = released_observer
                     .as_mut()
-                    .map(|observer| &mut **observer as &mut dyn ProviderEventObserver);
+                    .map(|observer| &mut **observer as &mut dyn RunEventObserver);
                 let mut observer = RunProviderObserver {
                     journal: self.journal.as_ref(),
                     stream_id: &stream_id,
@@ -393,6 +448,9 @@ impl AgentService {
                     actor_id: &route.profile,
                     context: &context,
                     downstream,
+                    started: &started,
+                    turn,
+                    responding_emitted: false,
                 };
                 self.provider
                     .turn_stream(role, request, context.clone(), &mut observer)
@@ -420,6 +478,19 @@ impl AgentService {
                             "max_attempts": TOOL_ARGUMENT_RECOVERY_LIMIT,
                         }),
                     )?;
+                    emit_run_event(
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        RunEvent::Error {
+                            code: code.clone(),
+                            message: message.clone(),
+                            recoverable: can_retry,
+                            turn: Some(turn),
+                            elapsed_seconds: started.elapsed().as_secs_f64(),
+                        },
+                    )
+                    .await?;
                     if !can_retry {
                         return Err(AgentError::ToolArgumentRecoveryExhausted {
                             attempts: recovery_attempts,
@@ -434,14 +505,28 @@ impl AgentService {
                     continue;
                 }
                 Err(error) => {
+                    let message = error.to_string();
                     self.append(
                         &stream_id,
                         &mut stream_version,
                         "error.v1",
                         system_actor(),
                         &context,
-                        json!({"message": error.to_string(), "recoverable": false}),
+                        json!({"message": &message, "recoverable": false}),
                     )?;
+                    emit_run_event(
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        RunEvent::Error {
+                            code: provider_error_code(&error).into(),
+                            message,
+                            recoverable: false,
+                            turn: Some(turn),
+                            elapsed_seconds: started.elapsed().as_secs_f64(),
+                        },
+                    )
+                    .await?;
                     return Err(error.into());
                 }
             };
@@ -483,6 +568,31 @@ impl AgentService {
                             id: route.profile.clone(),
                         },
                     )?;
+                    let elapsed_seconds = started.elapsed().as_secs_f64();
+                    self.append(
+                        &stream_id,
+                        &mut stream_version,
+                        "run.completed.v1",
+                        system_actor(),
+                        &context,
+                        json!({
+                            "turn": turn,
+                            "elapsed_seconds": elapsed_seconds,
+                            "output_bytes": output.len(),
+                        }),
+                    )?;
+                    emit_run_event(
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        RunEvent::Phase {
+                            phase: RunPhase::Completed,
+                            turn: Some(turn),
+                            action: None,
+                            elapsed_seconds,
+                        },
+                    )
+                    .await?;
                     return Ok(AgentRunResult {
                         run_id,
                         session_id: Some(session_id),
@@ -491,7 +601,7 @@ impl AgentService {
                         model: route.model,
                         output,
                         event_count: stream_version,
-                        elapsed_seconds: started.elapsed().as_secs_f64(),
+                        elapsed_seconds,
                     });
                 }
                 self.append(
@@ -502,6 +612,20 @@ impl AgentService {
                     &context,
                     json!({"message": "provider returned no visible output or tool calls", "recoverable": false}),
                 )?;
+                emit_run_event(
+                    &mut released_observer,
+                    &run_id,
+                    &session_id,
+                    RunEvent::Error {
+                        code: "provider.empty_turn".into(),
+                        message: "provider returned no visible assistant output or tool calls"
+                            .into(),
+                        recoverable: false,
+                        turn: Some(turn),
+                        elapsed_seconds: started.elapsed().as_secs_f64(),
+                    },
+                )
+                .await?;
                 return Err(AgentError::EmptyTurn);
             }
 
@@ -529,7 +653,39 @@ impl AgentService {
             )?;
             messages.push(assistant_message);
             for call in calls {
-                let result = match self.tools.validate(&call) {
+                let tool_started = Instant::now();
+                let validation = self.tools.validate(&call);
+                if validation.is_ok() {
+                    self.append(
+                        &stream_id,
+                        &mut stream_version,
+                        "tool.call.started.v1",
+                        system_actor(),
+                        &context,
+                        json!({
+                            "turn": turn,
+                            "call_id": call.call_id,
+                            "name": call.name,
+                            "argument_fields": call
+                                .arguments
+                                .as_object()
+                                .map(|arguments| arguments.keys().cloned().collect::<Vec<_>>())
+                                .unwrap_or_default(),
+                        }),
+                    )?;
+                    emit_run_event(
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        RunEvent::ToolStarted {
+                            turn,
+                            call: call.clone(),
+                            elapsed_seconds: started.elapsed().as_secs_f64(),
+                        },
+                    )
+                    .await?;
+                }
+                let result = match validation {
                     Ok(_) => match self.executor.execute(call.clone(), context.clone()).await {
                         Ok(result) => result,
                         Err(ToolError::Unknown(_) | ToolError::InvalidArguments { .. }) => {
@@ -539,14 +695,28 @@ impl AgentService {
                             tool_error_result(&call, "execution_error", &message)
                         }
                         Err(error @ (ToolError::Denied(_) | ToolError::OutcomeUnknown(_))) => {
+                            let message = error.to_string();
                             self.append(
                                 &stream_id,
                                 &mut stream_version,
                                 "error.v1",
                                 system_actor(),
                                 &context,
-                                json!({"message": error.to_string(), "recoverable": false}),
+                                json!({"message": &message, "recoverable": false}),
                             )?;
+                            emit_run_event(
+                                &mut released_observer,
+                                &run_id,
+                                &session_id,
+                                RunEvent::Error {
+                                    code: tool_error_code(&error).into(),
+                                    message,
+                                    recoverable: false,
+                                    turn: Some(turn),
+                                    elapsed_seconds: started.elapsed().as_secs_f64(),
+                                },
+                            )
+                            .await?;
                             return Err(error.into());
                         }
                     },
@@ -571,6 +741,18 @@ impl AgentService {
                         "exit_code": result.exit_code,
                     }),
                 )?;
+                emit_run_event(
+                    &mut released_observer,
+                    &run_id,
+                    &session_id,
+                    RunEvent::ToolCompleted {
+                        turn,
+                        result: result.clone(),
+                        duration_seconds: tool_started.elapsed().as_secs_f64(),
+                        elapsed_seconds: started.elapsed().as_secs_f64(),
+                    },
+                )
+                .await?;
                 let tool_message = ModelMessage {
                     role: ModelMessageRole::Tool,
                     content: result.output,
@@ -596,6 +778,19 @@ impl AgentService {
             &context,
             json!({"max_turns": max_turns, "event_count": event_count}),
         )?;
+        emit_run_event(
+            &mut released_observer,
+            &run_id,
+            &session_id,
+            RunEvent::Error {
+                code: "agent.max_turns".into(),
+                message: format!("model turn limit exhausted after {max_turns} turns"),
+                recoverable: false,
+                turn: Some(max_turns),
+                elapsed_seconds: started.elapsed().as_secs_f64(),
+            },
+        )
+        .await?;
         Err(AgentError::MaxTurns { max_turns })
     }
 
@@ -623,13 +818,35 @@ impl AgentService {
     }
 }
 
+async fn emit_run_event(
+    observer: &mut Option<&mut dyn RunEventObserver>,
+    run_id: &str,
+    session_id: &str,
+    event: RunEvent,
+) -> Result<(), AgentError> {
+    if let Some(observer) = observer.as_deref_mut() {
+        observer
+            .observe(RunEventEnvelope {
+                schema_version: 1,
+                run_id: run_id.into(),
+                session_id: session_id.into(),
+                event,
+            })
+            .await?;
+    }
+    Ok(())
+}
+
 struct RunProviderObserver<'local, 'downstream> {
     journal: &'local dyn EventJournal,
     stream_id: &'local str,
     stream_version: &'local mut u64,
     actor_id: &'local str,
     context: &'local ExecutionContext,
-    downstream: Option<&'downstream mut dyn ProviderEventObserver>,
+    downstream: Option<&'downstream mut dyn RunEventObserver>,
+    started: &'local Instant,
+    turn: u16,
+    responding_emitted: bool,
 }
 
 #[async_trait]
@@ -657,10 +874,52 @@ impl ProviderEventObserver for RunProviderObserver<'_, '_> {
             })?;
         *self.stream_version = self.stream_version.saturating_add(1);
         if let Some(observer) = self.downstream.as_deref_mut() {
-            observer.observe(event).await?;
+            if !self.responding_emitted
+                && matches!(
+                    &event,
+                    ProviderEvent::ModelDelta { .. }
+                        | ProviderEvent::ReasoningSummary { .. }
+                        | ProviderEvent::FinalOutput { .. }
+                )
+            {
+                observer
+                    .observe(run_event_from_context(
+                        self.context,
+                        RunEvent::Phase {
+                            phase: RunPhase::Responding,
+                            turn: Some(self.turn),
+                            action: None,
+                            elapsed_seconds: self.started.elapsed().as_secs_f64(),
+                        },
+                    )?)
+                    .await?;
+                self.responding_emitted = true;
+            }
+            observer
+                .observe(run_event_from_context(
+                    self.context,
+                    RunEvent::Provider { event },
+                )?)
+                .await?;
         }
         Ok(())
     }
+}
+
+fn run_event_from_context(
+    context: &ExecutionContext,
+    event: RunEvent,
+) -> Result<RunEventEnvelope, ModelProviderError> {
+    Ok(RunEventEnvelope {
+        schema_version: 1,
+        run_id: context.run_id.clone().ok_or_else(|| {
+            ModelProviderError::Failed("run observer context lacks run_id".into())
+        })?,
+        session_id: context.session_id.clone().ok_or_else(|| {
+            ModelProviderError::Failed("run observer context lacks session_id".into())
+        })?,
+        event,
+    })
 }
 
 fn recovery_prompt(attempt: u8, definitions: &[colossus_contracts::ModelToolDefinition]) -> String {
@@ -672,6 +931,25 @@ fn recovery_prompt(attempt: u8, definitions: &[colossus_contracts::ModelToolDefi
     format!(
         "The previous assistant response contained invalid tool-call arguments. No tool was executed. Recovery attempt {attempt}/{TOOL_ARGUMENT_RECOVERY_LIMIT}. Retry with one JSON object matching a listed tool schema. Available tools: {names}."
     )
+}
+
+fn provider_error_code(error: &ModelProviderError) -> &'static str {
+    match error {
+        ModelProviderError::Configuration(_) => "provider.configuration",
+        ModelProviderError::Recoverable { .. } => "provider.recoverable",
+        ModelProviderError::Failed(_) => "provider.failed",
+        ModelProviderError::OutcomeUnknown(_) => "provider.outcome_unknown",
+    }
+}
+
+fn tool_error_code(error: &ToolError) -> &'static str {
+    match error {
+        ToolError::Unknown(_) => "tool.unknown",
+        ToolError::InvalidArguments { .. } => "tool.invalid_arguments",
+        ToolError::Denied(_) => "tool.denied",
+        ToolError::Failed(_) => "tool.failed",
+        ToolError::OutcomeUnknown(_) => "tool.outcome_unknown",
+    }
 }
 
 fn session_title(prompt: &str) -> String {
@@ -761,6 +1039,19 @@ mod tests {
     struct ScriptedProvider {
         turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
         requests: Mutex<Vec<ModelRequest>>,
+    }
+
+    #[derive(Default)]
+    struct RecordingRunObserver {
+        events: Vec<RunEventEnvelope>,
+    }
+
+    #[async_trait]
+    impl RunEventObserver for RecordingRunObserver {
+        async fn observe(&mut self, event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+            self.events.push(event);
+            Ok(())
+        }
     }
 
     impl ScriptedProvider {
@@ -1061,8 +1352,17 @@ mod tests {
             Arc::new(EchoTools),
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
         );
+        let mut observer = RecordingRunObserver::default();
         let result = service
-            .run("primary", "test", "use echo", 4)
+            .run_in_session_with_skills_stream(
+                "primary",
+                "test",
+                "use echo",
+                4,
+                None,
+                &[],
+                &mut observer,
+            )
             .await
             .expect("agent run");
         assert_eq!(result.output, "done");
@@ -1074,6 +1374,40 @@ mod tests {
             Some("call-1")
         );
         assert_eq!(requests[1].messages[2].content, "tool output");
+        assert!(observer.events.iter().all(|event| {
+            event.schema_version == 1
+                && event.run_id == result.run_id
+                && Some(event.session_id.as_str()) == result.session_id.as_deref()
+        }));
+        assert!(matches!(
+            observer.events.first().map(|event| &event.event),
+            Some(RunEvent::Phase {
+                phase: RunPhase::Preparing,
+                turn: Some(1),
+                ..
+            })
+        ));
+        let started_index = observer
+            .events
+            .iter()
+            .position(
+                |event| matches!(&event.event, RunEvent::ToolStarted { call, .. } if call.name == "echo"),
+            )
+            .expect("tool started event");
+        let completed_index = observer
+            .events
+            .iter()
+            .position(|event| matches!(&event.event, RunEvent::ToolCompleted { result, .. } if result.output == "tool output"))
+            .expect("tool completed event");
+        assert!(started_index < completed_index);
+        assert!(matches!(
+            observer.events.last().map(|event| &event.event),
+            Some(RunEvent::Phase {
+                phase: RunPhase::Completed,
+                turn: Some(2),
+                ..
+            })
+        ));
         let events = journal
             .read_stream(&format!("run:{}", result.run_id))
             .expect("run events");
@@ -1081,6 +1415,19 @@ mod tests {
             events
                 .iter()
                 .any(|event| event.event_type == "tool.call.completed.v1")
+        );
+        assert_eq!(
+            events.first().map(|event| event.event_type.as_str()),
+            Some("run.started.v1")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "tool.call.started.v1")
+        );
+        assert_eq!(
+            events.last().map(|event| event.event_type.as_str()),
+            Some("run.completed.v1")
         );
     }
 
@@ -1107,11 +1454,35 @@ mod tests {
             Arc::new(EchoTools),
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
         );
+        let mut observer = RecordingRunObserver::default();
         let result = service
-            .run("primary", "test", "recover", 4)
+            .run_in_session_with_skills_stream(
+                "primary",
+                "test",
+                "recover",
+                4,
+                None,
+                &[],
+                &mut observer,
+            )
             .await
             .expect("recovered run");
         assert_eq!(result.output, "recovered");
+        let recoverable_errors = observer
+            .events
+            .iter()
+            .filter(|envelope| {
+                matches!(
+                    &envelope.event,
+                    RunEvent::Error {
+                        code,
+                        recoverable: true,
+                        ..
+                    } if code == INVALID_TOOL_ARGUMENTS_CODE
+                )
+            })
+            .count();
+        assert_eq!(recoverable_errors, 2);
         let events = journal
             .read_stream(&format!("run:{}", result.run_id))
             .expect("run events");

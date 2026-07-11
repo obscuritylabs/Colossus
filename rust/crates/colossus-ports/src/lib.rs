@@ -9,9 +9,10 @@ use colossus_contracts::{
     ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PackInstallation, PackStatus,
     PlanRecord, PlanStatus, PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem,
     ProviderEvent, ProviderRoute, ProviderTurn, PublisherTrust, ReplPreferences, ResearchClaim,
-    ResearchRun, ResearchSource, SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate,
-    SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult,
-    ToolSpec, UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun,
+    ResearchRun, ResearchSource, RunEventEnvelope, SessionMessage, SessionSummary,
+    SignedCheckpoint, SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord,
+    TaskStatus, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
+    WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -199,6 +200,13 @@ pub trait ModelProvider: Send + Sync {
 pub trait ProviderEventObserver: Send {
     /// Persist or render one safe ordered event.
     async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError>;
+}
+
+/// Application observer for ordered policy-released provider and harness activity.
+#[async_trait]
+pub trait RunEventObserver: Send {
+    /// Render or transport one safe event after its authoritative event is durable.
+    async fn observe(&mut self, event: RunEventEnvelope) -> Result<(), ModelProviderError>;
 }
 
 /// Active model-visible tool catalog with strict schema validation.

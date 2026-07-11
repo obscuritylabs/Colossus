@@ -1906,6 +1906,89 @@ pub struct ToolResult {
     pub exit_code: i32,
 }
 
+/// Stable phase of one application-level agent run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunPhase {
+    /// Preparing durable context and the next model request.
+    Preparing,
+    /// Waiting for a policy-authorized provider turn.
+    WaitingForModel,
+    /// Releasing visible assistant output.
+    Responding,
+    /// The run reached a durable successful terminal state.
+    Completed,
+}
+
+/// Safe ordered event released by the application-level agent runtime.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RunEvent {
+    /// One normalized provider event released through post-effect policy.
+    Provider {
+        /// Safe provider event; never a raw provider frame.
+        event: ProviderEvent,
+    },
+    /// Durable run phase orientation.
+    Phase {
+        /// Current run phase.
+        phase: RunPhase,
+        /// One-based model turn when applicable.
+        turn: Option<u16>,
+        /// Optional safe current action.
+        action: Option<String>,
+        /// Wall time since the run began.
+        elapsed_seconds: f64,
+    },
+    /// Validated tool call immediately before execution.
+    ToolStarted {
+        /// One-based model turn.
+        turn: u16,
+        /// Strict released tool call.
+        call: ToolCall,
+        /// Wall time since the run began.
+        elapsed_seconds: f64,
+    },
+    /// Policy-released tool result after durable completion recording.
+    ToolCompleted {
+        /// One-based model turn.
+        turn: u16,
+        /// Bounded result suitable for provider continuation.
+        result: ToolResult,
+        /// Wall time spent executing this tool call.
+        duration_seconds: f64,
+        /// Wall time since the run began.
+        elapsed_seconds: f64,
+    },
+    /// Durable recoverable or terminal run error.
+    Error {
+        /// Stable error category.
+        code: String,
+        /// Bounded user-safe message.
+        message: String,
+        /// Whether the runtime will continue automatically.
+        recoverable: bool,
+        /// One-based model turn when applicable.
+        turn: Option<u16>,
+        /// Wall time since the run began.
+        elapsed_seconds: f64,
+    },
+}
+
+/// Correlated application-level run event delivered to embedded and worker clients.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunEventEnvelope {
+    /// Envelope schema version.
+    pub schema_version: u16,
+    /// Stable UUIDv7 run identifier.
+    pub run_id: String,
+    /// Durable session containing the run.
+    pub session_id: String,
+    /// Ordered safe event.
+    pub event: RunEvent,
+}
+
 /// Bounded model-authored question presented only by an interactive interface.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2456,7 +2539,7 @@ pub struct WorkflowRun {
 
 #[cfg(test)]
 mod tests {
-    use super::PolicyDecision;
+    use super::{PolicyDecision, RunEvent};
 
     #[test]
     fn policy_decision_rejects_unknown_fields() {
@@ -2471,5 +2554,14 @@ mod tests {
             "surprise":true
         }"#;
         assert!(serde_json::from_str::<PolicyDecision>(document).is_err());
+    }
+
+    #[test]
+    fn run_event_rejects_unknown_fields() {
+        let document = r#"{
+            "type":"phase","phase":"preparing","turn":1,"action":null,
+            "elapsed_seconds":0.1,"surprise":true
+        }"#;
+        assert!(serde_json::from_str::<RunEvent>(document).is_err());
     }
 }

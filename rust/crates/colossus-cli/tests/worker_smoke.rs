@@ -174,7 +174,7 @@ sandbox:
     assert!(status.status.success());
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 1);
+    assert_eq!(status["protocol_version"], 2);
 
     thread::scope(|scope| {
         let config = &config;
@@ -202,7 +202,12 @@ sandbox:
         "{}",
         String::from_utf8_lossy(&streamed.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&streamed.stderr), "worker-stream\n");
+    let worker_stream = String::from_utf8_lossy(&streamed.stderr);
+    assert!(worker_stream.contains("[activity] preparing"));
+    assert!(worker_stream.contains("[activity] waiting_for_model echo"));
+    assert!(worker_stream.contains("[activity] responding"));
+    assert!(worker_stream.contains("worker-stream"));
+    assert!(worker_stream.contains("[activity] completed"));
     let result: Value = serde_json::from_slice(&streamed.stdout).expect("run JSON");
     assert_eq!(result["output"], "worker-stream");
     assert_eq!(result["profile"], "echo");
