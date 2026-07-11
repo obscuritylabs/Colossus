@@ -1,80 +1,92 @@
 # Release Process
 
-This process keeps Colossus releases reproducible, documented, and suitable for offline
-review.
+Rust alpha versions use `0.6.0-alpha.N`; P0+P1 cutover is `0.6.0`. Release only from a
+clean tree after the feature inventory and acceptance matrix accurately describe any
+remaining gap.
 
-## Release readiness
+## Readiness
 
-Before tagging a release:
-
-1. Confirm the working tree contains only intentional changes.
-2. Update `CHANGELOG.md` with user-facing changes, security notes, and migration steps.
-3. Update the version in `pyproject.toml`.
-4. Review `README.md`, `docs/`, `SECURITY.md`, and bundle format notes for accuracy.
-5. Confirm `docs/TOOLS.md`, built-in `ToolSpec` schemas, bundled skill `required_tools`,
-   and tool tests describe the same catalog.
-6. Run the verification commands:
+1. Update the workspace version, `CHANGELOG.md`, user docs, security notes, and migration
+   guidance together.
+2. Confirm `Cargo.lock` and `fuzz/Cargo.lock` contain only reviewed dependency changes.
+3. Run the authoritative gates from `rust/`:
 
 ```bash
-uv run pytest
-uv run ruff check .
-uv run mypy src/colossus
-uv run python -m build
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
+cargo deny --locked check -A license-not-encountered licenses sources bans
+cargo deny --locked check -D warnings advisories
+cargo audit -D warnings --file Cargo.lock
 ```
 
-## Artifact review
+Apply the equivalent deny/audit checks to `fuzz/Cargo.toml` and `fuzz/Cargo.lock`.
+Pinned nightly CI runs bounded libFuzzer mutation targets in addition to committed corpus
+tests.
 
-Inspect the generated artifacts:
+## Native Artifacts
+
+The `rust-release-smoke` matrix builds six targets:
+
+- macOS arm64 and x64;
+- static Linux musl arm64 and x64;
+- Windows arm64 and x64.
+
+Each native job:
+
+1. builds with `--locked --release`;
+2. executes version, strict config, credential-free echo, and encrypted audit checks;
+3. verifies static linkage for Linux;
+4. packages `colossus`/`colossus.exe`, the platform installer, license, and Rust README;
+5. writes a SHA-256 sidecar;
+6. extracts the completed archive into a clean directory;
+7. installs into a clean prefix and repeats version/echo/audit using only the installed
+   executable;
+8. uploads that target independently.
+
+Do not infer six-target readiness from a host-only build. Every matrix job must be green.
+
+## Security And Live Matrices
+
+Release evidence also includes:
+
+- native Seatbelt/Landlock escape acceptance on macOS/Linux arm64/x64;
+- Windows named-pipe authentication and fail-closed sandbox acceptance;
+- Docker and Podman OCI isolation/cleanup tests with preloaded digest-pinned images;
+- OPA decision, outage, readiness, disclosure, masking, and mTLS tests;
+- current/previous pinned Chroma v2 lifecycle tests;
+- production and fuzz dependency/license/advisory policy.
+
+Opt-in external tests are not replaced by a skipped local test. Preserve their CI links
+with the release record.
+
+## Offline And Signed Distribution
+
+Checksums detect corruption but do not authenticate a publisher. A trusted offline
+release includes a signed bundle manifest, immutable hashes, SBOM, publisher key
+identity, native archive, and any reviewed workflows, skills, packs, OPA bundles, local
+model assets, or MCP servers.
+
+Verify without network:
 
 ```bash
-python -m tarfile -l dist/colossus-*.tar.gz
-python -m zipfile -l dist/colossus-*-py3-none-any.whl
+colossus --config .colossus/config.yaml bundle verify ./bundle
 ```
 
-Confirm that the source distribution includes:
+Retain bundle verification, installed-binary smoke, audit verification, secure-anchor
+status, and artifact hashes as release evidence.
 
-- `src/`
-- `tests/`
-- `docs/`
-- `README.md`
-- `LICENSE`
-- `CHANGELOG.md`
-- `SECURITY.md`
-- `AGENTS.md`
-- `pyproject.toml`
+## Tag And Publish
 
-## Offline bundle preparation
-
-For airgapped releases, prepare a bundle directory with:
-
-- Built Colossus wheel and source distribution.
-- Dependency wheelhouse for the target platform.
-- `uv.lock`.
-- SBOM and signature material.
-- Reviewed skills and manifests.
-- Bundle `manifest.json` with SHA-256 checksums.
-
-Verify it before distribution:
+After all required CI and acceptance evidence is green:
 
 ```bash
-uv run colossus bundle verify ./bundle
+git tag -a v0.6.0-alpha.N -m "Colossus v0.6.0-alpha.N"
+git push origin v0.6.0-alpha.N
 ```
 
-## Tagging
+Attach all six archives, sidecars, SBOM/signature material, changelog excerpt, and known
+limitations. Confirm installation on a clean matching host before announcing the release.
 
-Use an annotated tag after CI passes:
-
-```bash
-git tag -a v0.1.0 -m "Colossus v0.1.0"
-git push origin v0.1.0
-```
-
-Attach release artifacts, checksums, SBOM, signatures, and the relevant changelog
-section to the release record.
-
-## Post-release
-
-- Confirm package metadata renders correctly.
-- Confirm release artifacts can be installed in a clean Python 3.12 environment.
-- Confirm offline bundle verification succeeds from the published artifacts.
-- Open follow-up issues for any deferred hardening or documentation gaps.
+The frozen Python tag/branch is not rebuilt or republished as part of the Rust release.

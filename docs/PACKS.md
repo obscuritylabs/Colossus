@@ -23,12 +23,9 @@ integrations. External packs install into the Colossus data directory.
 ## Commands
 
 ```bash
-cargo run --offline -q --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- \
-  packs verify ./pack
-cargo run --offline -q --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- \
-  --approval-mode ask packs install ./pack
-cargo run --offline -q --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- \
-  packs list
+colossus --config .colossus/config.yaml packs verify ./pack
+colossus --config .colossus/config.yaml --approval-mode ask packs install ./pack
+colossus --config .colossus/config.yaml packs list
 ```
 
 The Rust CLI provides

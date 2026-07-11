@@ -1,690 +1,370 @@
 # Configuration
 
-Colossus loads `config.json` from the platform user config directory. If the file does
-not exist, Colossus uses the built-in defaults.
-
-For task-oriented setup, start with [Getting Started](GETTING_STARTED.md). For daily
-command usage, see the [User Guide](USER_GUIDE.md).
-
-Create a default config:
+The Rust runtime reads one strict YAML file selected by global `--config` (default
+`.colossus/config.yaml`). Unknown fields, invalid enum values, unsafe paths, incomplete
+provider profiles, and inconsistent sandbox grants fail before runtime construction.
 
 ```bash
-uv run colossus config init
+colossus --config .colossus/config.yaml config init
+colossus --config .colossus/config.yaml config show
 ```
 
-Show the resolved config:
+`config init` refuses to overwrite. Use source control or an explicit backup before
+replacing configuration; there is intentionally no force flag.
+
+## Minimal Offline Configuration
+
+The generated file uses platform-managed keys. A headless equivalent can use explicit
+environment references:
+
+<!-- rust-config-example:start -->
+```yaml
+schemaVersion: 1
+storage:
+  path: .colossus/state.redb
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_JOURNAL_KEY
+    journal_key_id: journal-production-v1
+    signing_variable: COLOSSUS_SIGNING_KEY
+    anchor_path: .colossus/secure-anchor.json
+policy:
+  kind: built_in
+  allow_actions: []
+  approval_actions: []
+  require_post_effect: false
+workflows:
+  repository: .colossus/workflows
+  user: workflows
+providers:
+  profiles:
+    echo:
+      kind: echo
+      model: echo
+      baseUrl: null
+      credentialReference: null
+      timeoutMs: 120000
+  roles:
+    primary: echo
+agent:
+  maxTurns: 24
+  tools: [echo]
+subagents:
+  maxConcurrent: 10
+sandbox:
+  backend: native
+  profile: offline-default
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem: []
+  executables: []
+  environment: []
+  networkDestinations: []
+  timeoutMs: 30000
+  maxOutputBytes: 1048576
+  maxProcesses: 16
+  maxMemoryBytes: 268435456
+  maxConcurrency: 1
+```
+<!-- rust-config-example:end -->
+
+Journal and signing variables must contain separately managed 32-byte key material. Do
+not put key values in YAML. Platform mode instead uses `kind: platform` with `service`,
+`journal_key_id`, and `signing_key_id`; Keychain, DPAPI, or Secret Service stores the
+material and secure anchor.
+
+## Provider Profiles And Roles
+
+Supported kinds are `echo`, `open_ai_responses`, and `open_ai_compatible`. Network
+providers need a version base URL, an exact origin grant, and an explicit policy action.
+Credential values are resolved only after a permit; configuration contains only
+`env:VARIABLE` references.
+
+OpenRouter-compatible example:
+
+```yaml
+providers:
+  profiles:
+    openrouter:
+      kind: open_ai_compatible
+      model: openrouter/free
+      baseUrl: https://openrouter.ai/api/v1
+      credentialReference: env:OPENROUTER_API_KEY
+      timeoutMs: 120000
+  roles:
+    primary: openrouter
+    context_summarizer: openrouter
+    subagent_default: openrouter
+    research_planner: openrouter
+    research_worker: openrouter
+    research_synthesizer: openrouter
+policy:
+  kind: built_in
+  allow_actions:
+    - provider.openai.chat
+    - provider.models
+  approval_actions: []
+  require_post_effect: true
+sandbox:
+  networkDestinations:
+    - https://openrouter.ai
+```
+
+The `sandbox` fragment supplements the other required sandbox fields; do not replace the
+whole section with that fragment. For OpenAI Responses use `open_ai_responses`,
+`https://api.openai.com/v1`, `env:OPENAI_API_KEY`, and policy action
+`provider.openai.responses`.
+
+Role resolution is visible without secrets:
 
 ```bash
-uv run colossus config show
+colossus --config .colossus/config.yaml provider profiles
+colossus --config .colossus/config.yaml models routes
+colossus --config .colossus/config.yaml models route primary
+colossus --config .colossus/config.yaml provider doctor openrouter
+colossus --config .colossus/config.yaml provider models openrouter
 ```
 
-Overwrite an existing generated config:
+Specialized roles fall back to `primary` when not mapped. A provider origin must match
+`networkDestinations` exactly by scheme, host, and effective port; URL paths belong only
+in `baseUrl`.
+
+## Policy
+
+Built-in policy is deny by default:
+
+```yaml
+policy:
+  kind: built_in
+  allow_actions:
+    - filesystem.read
+    - provider.openai.chat
+  approval_actions:
+    - filesystem.write
+    - shell.run
+  require_post_effect: true
+```
+
+Approval actions are not grants: an action also needs the matching resource obligation
+from `sandbox`. `--approval-mode ask`, `risk-auto`, or `full-access` can satisfy an
+approval obligation but cannot add roots, executables, destinations, or actions.
+
+OPA configuration uses strict disclosure and TLS fields:
+
+```yaml
+policy:
+  kind: opa
+  base_url: https://opa.internal.example
+  decision_path: /v1/data/colossus/effect
+  ca_pem_path: /etc/colossus/opa-ca.pem
+  identity_pem_path: /etc/colossus/opa-client.pem
+  full_content_disclosure_acknowledged: true
+  decision_log_masking_verified: true
+  timeout_ms: 5000
+```
+
+Remote OPA requires HTTPS, pinned trust, mTLS, a fixed decision path, disclosure
+acknowledgement, and verified decision-log masking. Diagnose it with:
 
 ```bash
-uv run colossus config init --force
+colossus --config .colossus/config.yaml policy doctor
 ```
 
-## Config schema
+## Sandbox And Capabilities
 
-The current config is strict: unknown fields are rejected.
+Filesystem roots and executables must be absolute. Network entries are canonical origins,
+not wildcard URLs.
 
-```json
-{
-  "provider": {
-    "kind": "echo",
-    "model": "default",
-    "base_url": null,
-    "api_key_env": null,
-    "ca_bundle": null,
-    "model_context_windows": {}
-  },
-  "models": {
-    "profiles": {},
-    "roles": {}
-  },
-  "context": {
-    "auto_compaction": true,
-    "default_context_window_tokens": 32768,
-    "compact_at_percent": 0.7,
-    "target_percent": 0.45,
-    "recent_tail_messages": 8,
-    "model_assisted": true,
-    "max_request_bytes": null,
-    "tool_schema_budget_percent": 0.02
-  },
-  "agent": {
-    "max_turns": 24
-  },
-  "subagents": {
-    "max_concurrent": 10
-  },
-  "memory": {
-    "index": {
-      "kind": "sqlite_fts"
-    }
-  },
-  "http": {
-    "ca_bundle": null,
-    "client_cert": null,
-    "client_key": null,
-    "client_key_password_env": null,
-    "proxy_url": null,
-    "proxy_url_env": null,
-    "trust_env": true
-  },
-  "research": {
-    "default_depth": "standard",
-    "max_sources": 20,
-    "max_workers": 4,
-    "sources": ["repo", "web", "mcp"],
-    "search": {
-      "kind": "disabled",
-      "endpoint": "https://duckduckgo.com/html/",
-      "api_key_env": null,
-      "auth_header": "Authorization",
-      "auth_scheme": "bearer",
-      "user_agent": "colossus-agent/0.1"
-    },
-    "mcp": {
-      "servers": {}
-    }
-  },
-  "allow_user_skill_overrides": false
-}
+```yaml
+sandbox:
+  backend: native
+  profile: repository-development
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem:
+    - root: /absolute/path/to/repository
+      mode: write
+  executables:
+    - /usr/bin/git
+  environment:
+    - CI
+  networkDestinations:
+    - https://api.openai.com
+  timeoutMs: 120000
+  maxOutputBytes: 1048576
+  maxProcesses: 16
+  maxMemoryBytes: 268435456
+  maxConcurrency: 1
 ```
 
-## Providers
+Backends are `native`, `oci`, reserved fail-closed `windows_job`, and explicitly
+downgraded `broker`. Broker mode requires `allowBrokerFallback: true`. OCI images must
+be preloaded immutable `@sha256:` references and use an exact Docker or Podman executable.
+Run `sandbox doctor` before enabling process effects.
 
-`provider.kind` supports these values:
+## Agent Tools
 
-- `echo`: deterministic local provider. No credentials or network are required.
-- `openai_responses`: OpenAI Responses API provider. Requires an API key.
-- `local_openai_chat`: OpenAI-compatible local chat completions endpoint.
+`agent.tools` is the exact model-visible built-in catalog. Unknown names fail startup.
+The default is only `echo`; add capabilities deliberately and pair effectful tools with
+policy and sandbox grants.
 
-Provider command-line aliases use hyphenated names:
+```yaml
+agent:
+  maxTurns: 24
+  tools:
+    - echo
+    - filesystem.list
+    - filesystem.read
+    - filesystem.search
+    - git.status
+    - git.diff
+    - repo.map
+    - tool.search
+```
+
+Git tools require exactly one configured executable whose filename is `git` (or
+`git.exe`). `shell.run` requires at least one exact executable. Inspect the resolved
+model schemas with `colossus --config .colossus/config.yaml tools list`.
+
+## Context, Memory, And Research
+
+Omitted sections receive strict defaults:
+
+```yaml
+context:
+  autoCompaction: true
+  contextWindowTokens: 32768
+  compactAtPercent: 70
+  targetPercent: 45
+  preserveRecentMessages: 8
+  modelAssisted: true
+memory:
+  indexEnabled: true
+  indexPath: null
+  retrievalLimit: 6
+  semantic:
+    kind: disabled
+research:
+  maxSources: 20
+  maxWorkers: 4
+  search:
+    kind: disabled
+```
+
+Tantivy is the disposable offline lexical index. Chroma is optional and never canonical:
+
+```yaml
+memory:
+  indexEnabled: true
+  indexPath: .colossus/memory-index
+  retrievalLimit: 8
+  semantic:
+    kind: chroma
+    baseUrl: https://chroma.internal.example
+    tenant: default_tenant
+    database: default_database
+    collection: colossus_memories
+    credentialReference: env:CHROMA_TOKEN
+    timeoutMs: 30000
+    positionPath: .colossus/chroma-position.json
+    embedding:
+      kind: local
+      dimensions: 384
+```
+
+Chroma and remote embedding origins also need exact network and policy grants. Canonical
+records remain available when an index is unavailable; use `memories index status|sync|rebuild`.
+
+SearXNG research uses an exact `/search` endpoint and `network.http` authorization:
+
+```yaml
+research:
+  maxSources: 20
+  maxWorkers: 4
+  search:
+    kind: searxng
+    endpoint: https://search.internal.example/search
+    userAgent: colossus-rust/0.6
+```
+
+## Workflows, Skills, Packs, And MCP
+
+```yaml
+workflows:
+  repository: .colossus/workflows
+  user: workflows
+skills:
+  enabled: true
+  allowUserOverrides: false
+  bundled: rust/bundled-skills
+  repository: .colossus/skills
+  user: skills
+  disabled: []
+packs:
+  installRoot: .colossus/packs
+mcp:
+  servers: {}
+```
+
+Configured MCP servers are stdio-only, exact-executable, exact-tool allowlists:
+
+```yaml
+mcp:
+  servers:
+    local-docs:
+      command: /absolute/path/to/mcp-server
+      args: [--stdio]
+      workingDirectory: /absolute/path/to/repository
+      environment:
+        API_TOKEN: env:MCP_API_TOKEN
+      allowedTools: [search_docs]
+      researchTools:
+        - tool: search_docs
+          title: Internal documentation
+          arguments:
+            query: "{query}"
+      timeoutMs: 30000
+      maxOutputBytes: 1048576
+```
+
+The command, working directory, environment names, and tool must also fit sandbox and
+policy obligations. MCP output is quarantined and hard-secret redacted before release.
+
+## Audit Export
+
+Canonical evidence remains in redb by default. An existing directory can receive
+ciphertext-free evidence through the gateway:
+
+```yaml
+audit:
+  exporter:
+    kind: directory
+    path: /absolute/path/to/audit-evidence
+```
+
+Grant `audit.export.write`, approval if required, and a matching filesystem write root.
+Use `audit exporter-status`, `audit exporter-drain`, and operator-authorized
+`audit exporter-reset` for durable queue management.
+
+## Workspace And Path Resolution
+
+The process working directory is the workspace identity. Start Colossus from the target
+repository and pass an absolute config path when config lives elsewhere. Relative paths
+in YAML resolve from the process environment as documented by each adapter; security
+roots and executable identities must be absolute. Changing directories never widens
+policy.
+
+After every edit, run:
 
 ```bash
-uv run colossus --provider echo run "hello"
-uv run colossus --provider openai-responses --model gpt-4.1-mini run "hello"
-uv run colossus --provider local-openai-chat --base-url http://localhost:8000/v1 run "hello"
+colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml state doctor
+colossus --config .colossus/config.yaml policy doctor
+colossus --config .colossus/config.yaml sandbox doctor
 ```
-
-## Model roles
-
-Use `models.profiles` and `models.roles` when different jobs should use different
-models. If this block is empty, Colossus maps the legacy `provider` config to `primary`
-and reuses it for `risk_evaluator`, `context_summarizer`, `subagent_default`,
-`research_planner`, `research_worker`, and `research_synthesizer`.
-
-```json
-{
-  "models": {
-    "profiles": {
-      "main": {
-        "provider": "local_openai_chat",
-        "model": "coding-model",
-        "base_url": "http://localhost:12434/v1",
-        "api_key_env": null,
-        "ca_bundle": null,
-        "context_window_tokens": 65536
-      },
-      "risk": {
-        "provider": "local_openai_chat",
-        "model": "risk-model",
-        "base_url": "http://localhost:12434/v1"
-      }
-    },
-    "roles": {
-      "primary": "main",
-      "risk_evaluator": "risk",
-      "context_summarizer": "main",
-      "subagent_default": "main",
-      "research_planner": "main",
-      "research_worker": "main",
-      "research_synthesizer": "main"
-    }
-  }
-}
-```
-
-Inspect resolved roles:
-
-```bash
-uv run colossus models list
-uv run colossus models doctor --role risk_evaluator
-uv run colossus run --model-role risk_evaluator "hello"
-```
-
-Global provider/model/base-url/API-key/CA CLI overrides apply to the `primary` role for
-that invocation.
-
-## Agent Runtime
-
-`agent.max_turns` controls the maximum number of model/tool turns in a normal agent run.
-The default is `24`. It can be overridden for a one-shot run with `--max-turns`, for a
-REPL session with `repl --max-turns`, or inside the REPL with `/agent max-turns N`.
-
-## Workspace Selection
-
-Colossus uses the current directory as the workspace root by default. Workspace-bound
-tools, shell commands, repo-scoped memories, repository research, context composition,
-and subagents stay relative to that root.
-
-Use `--workspace` or `-C` to choose a different root for one-shot runs, research, tool
-inspection, or the REPL:
-
-```bash
-uv run colossus run --workspace ../my-project "Inspect this repository"
-uv run colossus research --workspace ../my-project "Summarize local evidence" --source repo
-uv run colossus repl --workspace ../my-project
-```
-
-Inside the REPL, `/workspace` shows the current root and `/workspace PATH` switches the
-active workspace for later tool calls, context checks, memories, and research runs.
-Relative REPL workspace paths are resolved from the current workspace root.
-
-## Integrations
-
-Integrations are persisted local connection records, not config-file secrets. The first
-credential adapter resolves refs of the form `env:VARIABLE_NAME`; Colossus stores the ref
-and injects the secret only inside the tool handler.
-
-For the integration user guide, see [Integrations](INTEGRATIONS.md).
-
-```bash
-export GITHUB_TOKEN=...
-uv run colossus integrations list
-uv run colossus integrations show github
-uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
-uv run colossus tools list
-uv run colossus integrations disconnect github
-```
-
-Inside the REPL, use `/integrations list`, `/integrations show github`, and
-`/integrations connect github --credential-ref env:GITHUB_TOKEN`. A successful connect
-refreshes the live tool catalog.
-
-Imported OpenAPI tools use the same brokered runtime:
-
-```bash
-export DEMO_API_TOKEN=...
-uv run colossus integrations import-openapi demo ./openapi.json \
-  --base-url https://api.example.test \
-  --credential-ref env:DEMO_API_TOKEN \
-  --auth-type bearer
-```
-
-Supported v1 auth labels are `none`, `api-key`, `bearer`,
-`oauth2-authorization-code`, and `service-account`. The current local broker resolves
-environment refs only; future keychain or encrypted-store adapters should keep the same
-credential-ref contract.
-
-OpenSearch is configured through the integration connection record rather than config
-files. Use cluster permissions and least-privilege credentials for index access:
-
-```bash
-docker compose -f docker-compose.opensearch.yml up -d
-uv run colossus integrations connect opensearch \
-  --base-url http://localhost:9200 \
-  --auth-type none
-
-export OPENSEARCH_TOKEN=...
-uv run colossus integrations connect opensearch \
-  --base-url https://search.example.test \
-  --auth-type bearer \
-  --credential-ref env:OPENSEARCH_TOKEN
-
-export OPENSEARCH_USER=...
-export OPENSEARCH_PASSWORD=...
-uv run colossus integrations connect opensearch \
-  --base-url https://search.example.test \
-  --auth-type basic \
-  --username-ref env:OPENSEARCH_USER \
-  --password-ref env:OPENSEARCH_PASSWORD
-```
-
-For Amazon OpenSearch Service, put SigV4 signing in a proxy for v1 and connect Colossus
-to that proxy with one of the supported auth modes.
-
-The local compose file disables the OpenSearch security plugin and binds to localhost
-only. Use it for development and opt-in live integration testing, not production.
-
-## Deep Research
-
-Deep Research Mode is available with:
-
-```bash
-uv run colossus research "question"
-uv run colossus research "question" --source repo --depth quick
-```
-
-The default source preference is `repo`, `web`, and `mcp`, but web search and MCP
-collection only run when configured and approved. With default config, research degrades
-to local repository evidence and records unavailable source lanes as warnings.
-When attached to a session, research uses bounded prior session context and appends the
-completed cited report back to that session for later chat turns.
-
-Enable DuckDuckGo-backed web search:
-
-```json
-{
-  "research": {
-    "search": {
-      "kind": "duckduckgo"
-    }
-  }
-}
-```
-
-Enable self-hosted SearXNG-backed web search. The SearXNG instance must have `json`
-enabled under `search.formats`; public instances often disable JSON output or rate-limit
-automation.
-
-Start the local development instance:
-
-```bash
-docker compose -f docker-compose.searxng.yml up -d
-curl 'http://localhost:8888/search?q=colossus&format=json'
-```
-
-```json
-{
-  "research": {
-    "search": {
-      "kind": "searxng",
-      "endpoint": "http://localhost:8888/search"
-    }
-  }
-}
-```
-
-For a protected SearXNG instance, keep the secret in the environment and reference only
-the variable name from config:
-
-```json
-{
-  "research": {
-    "search": {
-      "kind": "searxng",
-      "endpoint": "https://search.example.test",
-      "api_key_env": "SEARXNG_API_KEY",
-      "auth_header": "Authorization",
-      "auth_scheme": "bearer"
-    }
-  }
-}
-```
-
-For model-callable SearXNG tools, connect the native integration instead of editing the
-research search config:
-
-```bash
-uv run colossus integrations connect searxng --base-url http://localhost:8888
-uv run colossus tools list
-```
-
-The integration stores endpoint config and optional credential refs in local connection
-state. It does not place raw SearXNG keys in tool schemas or model requests.
-
-Configure MCP research tools with explicit stdio server commands and allowlisted tools.
-The gateway uses the official MCP Python SDK when installed:
-
-```json
-{
-  "research": {
-    "mcp": {
-      "servers": {
-        "docs": {
-          "command": "mcp-docs-server",
-          "args": [],
-          "allowed_tools": ["search_docs"],
-          "research_tools": [
-            {
-              "tool": "search_docs",
-              "arguments": {"query": "{query}"},
-              "title": "Docs search"
-            }
-          ]
-        }
-      }
-    }
-  }
-}
-```
-
-## Subagents
-
-`subagents.max_concurrent` controls how many queued child-agent jobs may run at the same
-time in a Colossus process. The default is `10`. Subagents use the `subagent_default`
-model role unless a delegated job names another role.
-
-Inspect durable jobs with:
-
-```bash
-uv run colossus agents list
-uv run colossus agents status
-uv run colossus agents show agent-123
-uv run colossus agents drain --timeout 10
-uv run colossus agents cancel agent-123
-uv run colossus agents resume agent-123
-```
-
-## Run and REPL display
-
-One-shot runs show compact activity events by default. Add `--stream` to print assistant
-text as model deltas arrive, and use `--events` to choose how much event detail to show:
-
-```bash
-uv run colossus run --stream --events compact "hello"
-uv run colossus run --events verbose "Use filesystem.read on pyproject.toml."
-uv run colossus run --events off "hello"
-```
-
-`--trace` remains a compatibility alias for compact event output. Provider-supplied
-reasoning summaries are shown by default; use `--no-reasoning` to hide them.
-
-The REPL starts with streaming, compact events, comfortable transcript blocks, prompt
-history, a styled prompt band, and a dense status bar enabled. The prompt band highlights
-the `colossus` title, mode badge, active model, and caret so the input location is
-visually distinct from the transcript. The transcript renders user prompts, assistant
-text, safe reasoning summaries, tool calls/results, approvals, risks, and errors with
-theme-aware spacing and colors. The status bar shows composer mode, active model
-role/model, theme, approval mode, stream/events/reasoning settings, session id, cursor
-position, draft chars/lines, cached context budget, message count, latest snapshot, and
-the current `tasks=open/total` summary for the session, and last run status.
-
-The prompt bottom bar is owned by the active input composer, so it naturally disappears
-after submit. While a run is active, Colossus keeps compact orientation data visible in a
-bounded transient activity indicator using the theme-specific spinner and current phase,
-such as `Thinking...`, `Using filesystem.read...`, or `Responding...`.
-
-Composer behavior:
-
-- Single-line mode is the default; `Enter` submits.
-- Multiline mode makes `Enter` insert a newline and `Esc+Enter` submit.
-- The frozen Python REPL stores prompt history in `repl_history.txt`. The Rust REPL does
-  not reuse that plaintext file; it stores submitted entries as encrypted canonical
-  events in the fresh Rust journal and hydrates only the newest 1,000 into Reedline.
-
-Runtime controls:
-
-- `/stream on|raw|off`
-- `/events compact|verbose|off`
-- `/reasoning on|off`
-- `/workspace [PATH]`
-- `/resume [LIMIT]`
-- `/sessions [LIMIT]`
-- `/session show [ID]`
-- `/session resume <id>`, `/session latest`, or `/session new`
-- `/tasks [open|all|STATUS]`
-- `/research [on|off|show|sources|QUESTION]`
-- `/decisions [all|STATUS]`
-- `/decision <text>` or `/decision archive <id>` or `/decision supersede <id> <text>`
-- `/memories [all|STATUS]`
-- `/memory <text>` or `/memory search <query>` or `/memory archive <id>` or `/memory supersede <id> <text>`
-- `/transcript comfortable|compact`
-- `/multiline on|off|toggle`
-- `/theme [NAME]`
-- `/theme preview [NAME]`
-- `/theme save [NAME]`
-- `/theme reset`
-- `/repl prefs`
-- `/repl save`
-- `/repl reset`
-- `/status`
-- `/help`
-- `/trace` toggles compact events on and off for compatibility.
-
-Compact events keep the Rust REPL transcript chat-friendly: assistant text, safe
-reasoning summaries, phase/action timing, semantic tool starts/results, and explicit
-recoverability remain visible. `/events off` hides successful result blocks but retains
-bounded activity lines and all errors. `/events verbose` adds correlated run/session
-identity, turns, call ids, bounded arguments, and larger released result previews.
-`/transcript compact` minimizes detail spacing; `comfortable` retains readable semantic
-blocks. On an interactive terminal, the Rust alpha refreshes active phase/tool elapsed
-time in place and clears that transient line before model text or a terminal event. It
-continues to emit stable, escape-free lines when output is redirected. Embedded and
-authenticated-worker REPL prompts share a cached status line with the active session,
-resolved primary model/profile, context and message budget, open/total work, approval
-mode, display preferences, and last run status. Reedline history is hydrated from the
-newest 1,000 encrypted journal entries and persists through the authenticated worker or
-embedded runtime. The same prompt shows 1-based cursor line/column plus Unicode-aware
-draft character and line counts. Reedline's repaint highlighter updates those metrics
-locally before prompt rendering, without repository calls, audit writes, or exposing
-draft text. Rust ships typed `default`, `mono`, `high_contrast`, `carrot`, and
-`hacker` palettes for Reedline prompts, assistant text, semantic labels, and activity
-frames; `plain` remains a migration alias for `mono`. Colors and animated frames are
-terminal-only, so redirected output stays ANSI-free. Rust loads bounded, data-only JSON
-and TOML themes from the repository/config-adjacent `themes/` directory and the platform
-`colossus/themes/` directory. `/theme preview NAME` does not mutate preferences;
-`/theme NAME` and `/theme save NAME` persist an immutable resolved palette plus its
-SHA-256 source hash. Later file changes therefore cannot silently alter the active,
-audited appearance. Versioned files use `schemaVersion: 1`, a simple unique `name`, an
-optional built-in `base`, prompt colors in `#RRGGBB`, semantic style overrides, and one
-of the bounded spinner names. The legacy Python data-only theme schema is also mapped
-strictly during cutover. Unknown keys, invalid colors, duplicate/built-in names,
-oversized files, symlinked files/directories, or more than 64 custom themes fail closed.
-Loopback-live acceptance exercises streamed tool-call continuation for both Responses and
-OpenAI-compatible Chat Completions. The compatible path runs through one-shot CLI,
-embedded REPL, and authenticated worker surfaces; redirected output remains ANSI-free,
-and the Responses credential is absent from terminal and JSON output.
-
-## Agent telemetry
-
-Colossus persists timestamped run events in the local SQLite state database. The
-telemetry commands summarize those events into safe operational metadata without
-printing raw prompts, hidden reasoning, or raw tool outputs:
-
-```bash
-uv run colossus telemetry runs --limit 20
-uv run colossus telemetry show RUN_ID_OR_PREFIX
-uv run colossus telemetry metrics --limit 100
-```
-
-`telemetry runs` shows recent run-id prefixes, session prefixes, elapsed time, event
-counts, tool call/failure counts, error counts, research events, and subagent events.
-`telemetry show` accepts a full run id or a unique prefix and renders a bounded event
-timeline with tool names, exit codes, output byte counts, approval/risk summaries,
-research progress, and subagent status. `telemetry metrics` aggregates recent runs into
-run count, average/max elapsed time, event counts, tool failures, approvals, research
-activity, subagent activity, context compactions, and error totals.
-
-In the Rust runtime, REPL preferences are stored as encrypted canonical events in the
-selected redb state. Saved preferences include theme, multiline mode, model-output
-streaming, event detail, transcript density, and safe reasoning-summary visibility.
-Every update is policy authorized, audited, and automatically routed through an active
-worker; `/repl save` is therefore explicit but normally unnecessary because each setting
-command persists its replacement profile. Submitted REPL entries use the same encrypted,
-permit-bound presentation repository rather than a plaintext sidecar; consecutive
-duplicates are suppressed and oversized entries fail history persistence without blocking
-the requested command. Use `colossus preferences show|history|reset` for non-interactive
-inspection or reset. The frozen Python implementation keeps its legacy SQLite preferences
-and plaintext history separately, and Rust does not import them.
-
-In the frozen Python implementation, you can choose a one-launch startup theme with:
-
-```bash
-uv run colossus repl --theme high-contrast
-```
-
-The frozen Python built-ins are `default`, `mono`, `high-contrast`, `carrot`, and
-`hacker`. Its legacy JSON/TOML theme files live under the Colossus config directory:
-
-```text
-<config-dir>/colossus/themes/ocean.json
-```
-
-The file is data-only and may override a subset of prompt, toolbar, and trace styles:
-
-```json
-{
-  "name": "ocean",
-  "title": "colossus",
-  "caret": ">",
-  "continuation": "|",
-  "styles": {
-    "prompt.caret": "#00ffff bold",
-    "bottom-toolbar.key": "bg:#102a2a #00ffff bold"
-  },
-  "trace": {
-    "thinking": "bold cyan",
-    "tool_call": "bold #00afff",
-    "risk_assessment": "bold yellow"
-  },
-  "transcript": {
-    "user": "#d7ffd7 on #12331d",
-    "assistant": "#d7ffd7",
-    "tool": "bold #00d7ff",
-    "activity_spinner": "line"
-  }
-}
-```
-
-Unsupported style keys, non-string values, invalid Rich spinner names, and non-simple
-theme names are rejected at startup. Rust accepts this data-only legacy schema during
-cutover and maps its supported prompt, event, transcript, and spinner values into an
-immutable Rust palette snapshot.
-
-## Approval modes
-
-One-shot runs default to `deny` for approval-required tools. Use `ask` to prompt, or
-`risk-auto` to let the `risk_evaluator` model auto-approve only low-risk tool calls that
-explicitly recommend `allow`.
-
-```bash
-uv run colossus run --approval-mode ask "Use shell.run with argv [\"echo\", \"ok\"]."
-uv run colossus run --approval-mode risk-auto "Use shell.run with argv [\"echo\", \"ok\"]."
-```
-
-`risk-auto` still asks the user for medium/high/unclear calls, denies deterministic policy
-violations, and falls back to normal approval if risk review is unavailable.
-
-## Credentials
-
-For OpenAI Responses, set `provider.api_key_env` to the environment variable that holds
-the API key. If unset, Colossus falls back to `OPENAI_API_KEY`.
-
-```json
-{
-  "provider": {
-    "kind": "openai_responses",
-    "model": "gpt-4.1-mini",
-    "base_url": "https://api.openai.com/v1",
-    "api_key_env": "OPENAI_API_KEY",
-    "ca_bundle": null
-  },
-  "allow_user_skill_overrides": false
-}
-```
-
-Per-command overrides are available for local testing:
-
-```bash
-uv run colossus --provider openai-responses --api-key-env OPENAI_API_KEY run "hello"
-```
-
-`--api-key` is supported for one-off use, but an environment variable is preferred for
-shared shells and logs.
-
-## TLS trust
-
-Use global `http.ca_bundle` or `--http-ca-bundle` when Colossus-owned HTTPS clients
-need an enterprise or private CA. This applies to model providers, provider diagnostics,
-`web.fetch`, `docs.fetch`, and configured web search providers.
-
-The older provider-level `provider.ca_bundle` and `--ca-bundle` settings are still
-supported for model providers and override `http.ca_bundle` for provider calls.
-
-```bash
-uv run colossus --ca-bundle ./certs/company-ca.pem --provider local-openai-chat run "hello"
-```
-
-For mTLS or PKI-protected HTTP sites, configure a client certificate and optional key:
-
-```json
-{
-  "http": {
-    "ca_bundle": "./certs/company-ca.pem",
-    "client_cert": "./certs/client.pem",
-    "client_key": "./certs/client.key",
-    "client_key_password_env": "COLOSSUS_HTTP_CLIENT_KEY_PASSWORD"
-  }
-}
-```
-
-## HTTP proxy
-
-Use `http.proxy_url` or `--http-proxy` to send Colossus-owned HTTP clients through a
-proxy. Prefer `http.proxy_url_env` or `--http-proxy-env` when the proxy URL contains
-credentials:
-
-```json
-{
-  "http": {
-    "proxy_url_env": "COLOSSUS_HTTP_PROXY"
-  }
-}
-```
-
-Set `http.trust_env` to `false` or pass `--http-no-trust-env` to ignore standard proxy
-and certificate environment variables for Colossus-owned `httpx` clients.
-
-## Skill overrides
-
-Bundled skills are always available. Legacy user, user-global, and workspace skills can
-override earlier skills only when `allow_user_skill_overrides` is set to `true`. Keep
-this disabled in shared, regulated, or airgapped deployments unless the override source
-is reviewed and pinned.
-
-## Tool profiles
-
-The current built-in tool profile is offline-first. Local filesystem, git, patch, repo
-context, task, key decision, plan, and trace tools are available through policy and
-approval controls. Network-capable tools require explicit approval.
-`web.fetch` and `docs.fetch` can fetch bounded HTTP(S) responses when approved and
-network access exists; `web.search` and `mcp.call` remain adapter extension points.
-
-## Context compaction
-
-Key decisions are durable commitments, not memories. They store an interpreted
-future-facing decision plus intent and applicability, with any exact user wording kept as
-a source excerpt. Active key decisions are injected into prepared model context before
-compacted snapshots as binding guidance, while archived and superseded decisions remain
-historical state only.
-
-Memories are durable context, not instructions. Active memories can be global,
-repo-scoped, or session-scoped, are stored in SQLite, and are retrieved with the
-configured memory index. V1 supports `memory.index.kind = "sqlite_fts"`; the config
-shape is reserved for future index adapters such as vector stores.
-
-Context budgets are calculated as a percentage of the selected model window. Add exact
-model windows under `models.profiles.*.context_window_tokens` or the legacy
-`provider.model_context_windows`; unknown models use `context.default_context_window_tokens`.
-For ad-hoc model overrides, pass `--context-window-tokens` with `--model` so the REPL and
-context service do not fall back to the default window.
-Auto compaction reuses an existing snapshot until the unsummarized stale tail grows past
-the target budget, avoiding repeated model-assisted summarizer calls in long tool loops.
-If a provider's model catalog advertises a window, Colossus uses that as a best-effort
-default only when no explicit window is configured. This is useful for providers such as
-OpenRouter that include `context_length` in `/models`; OpenAI's official `/models`
-response only exposes basic model identity metadata, so explicit config is still needed
-there.
-
-```json
-{
-  "provider": {
-    "model": "local-model",
-    "model_context_windows": {
-      "local-model": 65536
-    }
-  },
-  "context": {
-    "compact_at_percent": 0.7,
-    "target_percent": 0.45,
-    "max_request_bytes": 900000,
-    "tool_schema_budget_percent": 0.02
-  }
-}
-```
-
-See [Context Compaction](CONTEXT.md) for commands and snapshot behavior.

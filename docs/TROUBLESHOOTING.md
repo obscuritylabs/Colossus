@@ -1,140 +1,122 @@
 # Troubleshooting
 
-Use this guide when Colossus behaves differently than expected. Most failures fall into
-one of four buckets: provider/model readiness, tool policy or approval, workspace scope,
-or credentials.
-
-## First Checks
+Start with the same bounded diagnostics for every Rust deployment:
 
 ```bash
-uv run colossus config show
-uv run colossus models list
-uv run colossus tools list
-uv run colossus run "Reply with exactly: ok"
+colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml state doctor
+colossus --config .colossus/config.yaml policy doctor
+colossus --config .colossus/config.yaml sandbox doctor
+colossus --config .colossus/config.yaml projection status
+colossus --config .colossus/config.yaml provider profiles
+colossus --config .colossus/config.yaml models routes
+colossus --config .colossus/config.yaml tools list
 ```
 
-If the echo provider is active, the run is a harness smoke test, not evidence that a real
-model endpoint is ready.
+These commands retain credential references and bounded metadata; they do not print
+secret values.
 
-## Local Model Endpoint Fails
+## Config Does Not Parse
 
-Check the selected provider and base URL:
+Rust YAML denies unknown fields. Compare exact camelCase/snake_case names with
+[Configuration](CONFIGURATION.md), then run `config show`. Common failures are:
+
+- a network provider without `baseUrl`;
+- an OpenAI Responses profile without `credentialReference`;
+- a remote HTTP origin absent from `sandbox.networkDestinations`;
+- relative sandbox filesystem/executable paths;
+- Git tools without exactly one executable named `git` or `git.exe`;
+- `shell.run` without an exact executable;
+- OCI images without immutable SHA-256 digests;
+- Windows `windows_job`, which intentionally fails closed for effects.
+
+## Echo Works But The Model Does Not
 
 ```bash
-uv run colossus --provider local-openai-chat \
-  --base-url http://localhost:8000/v1 \
-  provider doctor
+colossus --config .colossus/config.yaml echo ok
+colossus --config .colossus/config.yaml provider doctor PROFILE
+colossus --config .colossus/config.yaml provider models PROFILE
+colossus --config .colossus/config.yaml run \
+  "Reply with exactly: connected"
 ```
 
-Then try a tiny no-tools prompt:
+Check, in order: role-to-profile route, credential environment variable, provider policy
+action, exact network origin, TLS trust, model identifier, and response shape. HTTP 200
+without released assistant content is not a successful turn. Incomplete streams become
+unknown rather than synthesized completion.
+
+## Policy Denied An Effect
+
+Approval mode cannot repair a deny. Confirm the exact action in `policy.allow_actions`
+or `approval_actions`, then confirm the matching filesystem, executable, environment, or
+network obligation in `sandbox`.
+
+For an approval obligation, place the global flag before the subcommand:
 
 ```bash
-uv run colossus --provider local-openai-chat \
-  --base-url http://localhost:8000/v1 \
-  run "Reply with exactly: ok"
+colossus --config .colossus/config.yaml --approval-mode ask \
+  run "Apply the approved change"
 ```
 
-If the raw server returns HTTP 200 but Colossus reports no assistant content or tool
-calls, the model may be returning hidden reasoning without usable assistant output.
-Treat that as a model/endpoint behavior issue, not a successful turn.
+OPA transport failures, invalid/missing decision fields, unhealthy bundles, oversized
+input, or unverifiable decision-log masking fail closed. Use `policy doctor`.
 
 ## Tool Is Missing
 
-Run:
+`agent.tools` is an exact allowlist. Integration operations appear only after a connected
+canonical lifecycle; MCP operations require configured servers and tool allowlists;
+goal tools appear only during active goal lineage. Run `tools list` to see the actual
+catalog and effect identities.
+
+## Workspace Or Filesystem Looks Wrong
+
+The process working directory is the workspace. Restart Colossus from the intended
+repository and pass an absolute config path. Then ensure YAML contains a matching
+absolute root. Changing cwd does not add authorization.
+
+Symlinks, traversal, `.colossus` control-state writes, undeclared roots, oversized reads,
+and post-effect-denied content are intentionally unavailable.
+
+## Worker Problems
 
 ```bash
-uv run colossus tools list
+colossus --config .colossus/config.yaml worker --status
+colossus --config .colossus/config.yaml worker --shutdown
 ```
 
-Some tools are intentionally hidden by default:
+Only one redb writer lease is allowed. A healthy worker owns it; CLI/REPL use authenticated
+IPC. Wrong-key, stale, replayed, malformed, or incorrectly permissioned endpoints fail
+without embedded fallback. If no worker endpoint exists, the same runtime embeds safely.
 
-- `web.search` appears only when a search adapter is configured.
-- `mcp.call` appears only when MCP execution is explicitly configured.
-- `github.*`, `searxng.*`, `opensearch.*`, and `openapi.NAME.*` appear only after the
-  integration is connected.
-
-## Tool Requires Approval
-
-Network-capable tools, mutating tools, high-risk tools, and explicit approval-required
-tools pause unless the approval mode allows them.
+## Recovery Mode Or Audit Failure
 
 ```bash
-uv run colossus run --approval-mode ask "Use shell.run with argv [\"echo\", \"ok\"]."
-uv run colossus run --approval-mode full-access "Use shell.run with argv [\"echo\", \"ok\"]."
+colossus --config .colossus/config.yaml audit verify
+colossus --config .colossus/config.yaml audit anchor-status
+colossus --config .colossus/config.yaml audit show --limit 50
 ```
 
-`full-access` removes prompts for approval-required tools, but deterministic policy
-denies still apply.
+Chain, anchor, checkpoint, decryption, or projection-position failure activates read-only
+recovery and blocks new effects. Preserve the state file, key identity, secure anchor,
+and diagnostic output. Do not delete or rewrite records to make verification pass.
 
-## Workspace Looks Wrong
+An `outcome_unknown` event means execution may have escaped before terminal evidence.
+Investigate externally and use only the operation-specific explicit recovery path; never
+blindly rerun a non-idempotent effect.
 
-Show or set the workspace:
+## Memory Search Is Degraded
 
 ```bash
-uv run colossus run --workspace ../my-project "hello"
-uv run colossus tools list --workspace ../my-project
+colossus --config .colossus/config.yaml memories index status
+colossus --config .colossus/config.yaml memories index sync
+colossus --config .colossus/config.yaml memories index rebuild
 ```
 
-Inside the REPL:
+Canonical memories remain readable even when Tantivy or Chroma is unavailable. Rebuild
+is an explicit destructive replacement of only the disposable projection.
 
-```text
-/workspace show
-/workspace ../my-project
-```
+## Report Safely
 
-Filesystem, shell, repo, research, memories, context, and subagent behavior are scoped to
-the active workspace root.
-
-## Integration Auth Fails
-
-Use credential refs, not raw secrets:
-
-```bash
-export GITHUB_TOKEN=...
-uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
-uv run colossus integrations show github
-```
-
-If the environment variable is missing, Colossus will refuse to connect or create a
-pending-auth connection. Secret values should not appear in CLI output, model requests,
-transcripts, or audit payloads.
-
-## Web Search Or MCP Does Nothing
-
-Deep Research Mode can request repo, web, and MCP lanes, but unavailable lanes are
-recorded as warnings and skipped.
-
-```bash
-uv run colossus research "question" --source repo
-uv run colossus research "question" --source web
-```
-
-For web search, configure DuckDuckGo or SearXNG in [Configuration](CONFIGURATION.md).
-For MCP, configure explicit servers and allowlisted tools.
-
-## Context Feels Stale
-
-Inspect context:
-
-```text
-/context
-/compact
-/status
-```
-
-Context snapshots reduce provider input but raw messages remain persisted. Restoring an
-older snapshot changes future model input and is approval-required.
-
-## Still Stuck
-
-Capture:
-
-- the exact command,
-- `uv run colossus config show`,
-- `uv run colossus tools list`,
-- provider doctor output if a model endpoint is involved,
-- the active workspace path,
-- whether the failing tool requires approval.
-
-Avoid including raw API keys, bearer tokens, refresh tokens, private keys, or
-service-account JSON in reports.
+Include the exact command, bounded doctor output, run ID, effect action, policy decision
+ID/revision, and audit sequence. Never include API keys, tokens, authentication headers,
+private keys, key material, decrypted payloads, or unredacted quarantined content.

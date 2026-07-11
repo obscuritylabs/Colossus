@@ -1,56 +1,75 @@
 # Installation
 
-Colossus targets Python 3.12 and uses `uv` for reproducible local development.
+Colossus ships as one native Rust executable. It does not require Python at runtime and
+does not import Python-era configuration or SQLite state.
 
-## From a source checkout
+## Native Release Archive
 
-```bash
-uv sync --extra dev
-uv run colossus --help
-uv run colossus run "hello"
-```
+Verify the archive against its `.sha256` sidecar before extraction. Checksums protect
+transport integrity; use signed offline-bundle verification when publisher authenticity
+is required.
 
-The default `echo` provider does not require credentials or network access. It is useful
-for validating the CLI, audit path, skill loading, and orchestration loop in a fresh
-checkout.
-
-## Development environment
-
-Install development dependencies and run the release readiness checks:
+macOS and Linux:
 
 ```bash
-uv sync --extra dev
-./scripts/install-git-hooks.sh
-uv run pytest
-uv run ruff check .
-uv run mypy src/colossus
-uv run python -m build
+tar -xzf colossus-VERSION-TARGET.tar.gz
+./colossus-VERSION-TARGET/install.sh
+export PATH="$HOME/.local/bin:$PATH"
+colossus --version
 ```
 
-Generated wheels and source distributions are written to `dist/`.
+Windows PowerShell:
 
-## Installed command
+```powershell
+Expand-Archive colossus-VERSION-TARGET.zip
+.\colossus-VERSION-TARGET\install.ps1
+$env:PATH = "$HOME\.local\bin;$env:PATH"
+colossus.exe --version
+```
 
-The package exposes the `colossus` console script:
+Use `--prefix PATH` on Unix or `-Prefix PATH` on Windows for another installation
+root. Installers use a destination-local temporary file, reject linked package binaries
+and linked destination `bin` directories, and make no network request.
+
+## Source Checkout
+
+Install Rust 1.96, then build with the locked workspace:
 
 ```bash
-colossus run "hello"
-colossus repl
-colossus config init
-colossus skills list
-colossus tools list
-colossus bundle verify ./bundle
+cargo build --locked --manifest-path rust/Cargo.toml \
+  -p colossus-cli --bin colossus-rs
+rust/target/debug/colossus-rs --version
 ```
 
-When running from a checkout, prefix commands with `uv run`.
+For a network-isolated checkout whose Cargo cache is already populated, add `--offline`.
 
-## Platform paths
+## Initialize Fresh State
 
-Colossus uses platform-specific user directories through `platformdirs`:
+From the repository you want Colossus to operate on:
 
-- Config file: `config.json` under the user config directory for app name `colossus`.
-- Runtime data: state, audit logs, and user skills under the user data directory for
-  app name `colossus`.
+```bash
+colossus --config .colossus/config.yaml config init
+colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml run "offline smoke"
+colossus --config .colossus/config.yaml audit verify
+```
 
-Run `uv run colossus config init` to create the config file at the exact path for the
-current platform, then `uv run colossus config show` to inspect the resolved values.
+`config init` refuses to overwrite an existing file. It emits strict YAML with a unique
+platform-credential-store identity and a redb path beside the config. The first runtime
+open creates or retrieves mandatory journal and signing keys through Keychain, DPAPI, or
+Secret Service. Headless deployments may explicitly configure environment key references
+instead; plaintext journal fallback is never allowed.
+
+## Development Verification
+
+From `rust/`:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
+```
+
+See [Offline and Airgapped Operation](OFFLINE_AIRGAP.md) for isolated deployment and
+[Release Process](RELEASE.md) for native artifact production.

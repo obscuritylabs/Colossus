@@ -1,158 +1,98 @@
-# Workflows
+# Durable Workflows
 
-These recipes are small, repeatable paths for common Colossus tasks.
+Versioned YAML workflows are first-class Rust application primitives. Repository
+definitions live in `.colossus/workflows/*.yaml`; a configured user library may supply
+additional definitions. Every run pins exact content hash and provenance.
 
-## Smoke Test A Checkout
-
-```bash
-uv sync --extra dev
-uv run colossus run "hello"
-uv run colossus tools list
-uv run pytest
-```
-
-## Inspect A Repository
+## Validate, Register, And Run
 
 ```bash
-uv run colossus run --workspace ../my-project \
-  "Map the repository and identify the main test commands."
+colossus --config .colossus/config.yaml workflow validate \
+  .colossus/workflows/release.yaml
+colossus --config .colossus/config.yaml workflow register \
+  .colossus/workflows/release.yaml
+colossus --config .colossus/config.yaml workflow list
+colossus --config .colossus/config.yaml workflow show release 1.0.0
+colossus --config .colossus/config.yaml workflow run release 1.0.0 \
+  --inputs '{"branch":"main"}'
 ```
 
-Inside the REPL:
+Use `--inputs @inputs.json` for a policy-bound file read. Use `--queued` to leave the
+run for a worker rather than executing it in the initiating process.
 
-```text
-/workspace ../my-project
-/tools
-Inspect the repository and summarize the likely entry points.
+## Definition Shape
+
+<!-- rust-workflow-example:start -->
+```yaml
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: release
+  version: 1.0.0
+  description: Validate and report a native release
+inputs:
+  type: object
+  additionalProperties: false
+  required: [branch]
+  properties:
+    branch:
+      type: string
+outputs:
+  type: object
+capabilities:
+  - git.status
+maxConcurrency: 2
+stepBudget: 20
+steps:
+  - id: status
+    type: tool
+    tool: git.status
+    arguments: {}
+    idempotency: null
+  - id: report
+    type: emit
+    value:
+      ok: true
 ```
+<!-- rust-workflow-example:end -->
 
-## Make A Small Code Change
+The authoritative schema and examples live with the workflow crate tests. Validation is
+strict: unknown fields, executable inline code, excessive budgets, invalid expressions,
+direct/indirect call cycles, and call depth above 16 fail before registration.
+
+Supported step families are `agent`, `tool`, `workflow`, `approval`, `condition`,
+`parallel`, `foreach`, `wait_for_input`, and `emit`. Conditions use a bounded
+non-executable grammar for JSON-pointer lookup, existence, equality, comparison, and
+boolean operators. YAML cannot execute shell, Rust, JavaScript, Python, or Rego.
+
+## Durable Operations
 
 ```bash
-uv run colossus repl --workspace ../my-project --approval-mode ask
+colossus --config .colossus/config.yaml workflow status RUN_ID
+colossus --config .colossus/config.yaml workflow input RUN_ID \
+  '{"approved":true}'
+colossus --config .colossus/config.yaml workflow resume RUN_ID
+colossus --config .colossus/config.yaml workflow cancel RUN_ID
 ```
 
-Suggested REPL flow:
+Runs reconstruct from journal events with statuses `queued`, `running`, `waiting`,
+`completed`, `failed`, `cancelled`, and `interrupted`. Each repeated/nested step receives
+a scoped execution identity so one branch or iteration cannot consume another's permit,
+input, result, or idempotency proof.
 
-```text
-@skill:coding implement the requested fix
-/tools
-/status
-run the focused tests
-```
+Effectful retry is permitted only when the step declares an idempotency strategy.
+Compensation is explicit and separately authorized. A crash after an external effect
+starts but before its terminal event becomes `outcome_unknown`; resume refuses unsafe
+implicit replay.
 
-Review changes with normal git commands before committing.
-
-## Continue Prior Work
+## Worker Execution
 
 ```bash
-uv run colossus repl --resume
+colossus --config .colossus/config.yaml worker
+colossus --config .colossus/config.yaml worker --status
+colossus --config .colossus/config.yaml worker --once
 ```
 
-Inside the REPL:
-
-```text
-/resume
-/session show
-/tasks
-/decisions
-/context
-```
-
-## Run Deep Research
-
-Repository-only:
-
-```bash
-uv run colossus research --source repo \
-  "What are the highest-risk security boundaries in this checkout?"
-```
-
-Interactive:
-
-```text
-/research on
-How does the tool approval path work?
-/research sources
-```
-
-## Connect GitHub
-
-```bash
-export GITHUB_TOKEN=...
-uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
-uv run colossus tools list
-```
-
-Then ask for repository, issue, pull request, check, or release context. GitHub tools are
-network-capable, so they still require approval unless approval mode auto-approves them.
-
-## Connect Local SearXNG
-
-```bash
-docker compose -f docker-compose.searxng.yml up -d
-uv run colossus integrations connect searxng --base-url http://localhost:8888
-uv run colossus tools list
-```
-
-Then ask Colossus to search through the connected `searxng.search` tool. SearXNG tools
-are network-capable even when the endpoint is localhost, so approval policy still
-applies unless approval mode auto-approves them.
-
-## Connect OpenSearch
-
-Local development cluster:
-
-```bash
-docker compose -f docker-compose.opensearch.yml up -d
-uv run colossus integrations connect opensearch \
-  --base-url http://localhost:9200 \
-  --auth-type none
-uv run colossus tools list
-```
-
-Bearer or proxy-auth endpoint:
-
-```bash
-export OPENSEARCH_TOKEN=...
-uv run colossus integrations connect opensearch \
-  --base-url https://search.example.test \
-  --auth-type bearer \
-  --credential-ref env:OPENSEARCH_TOKEN
-```
-
-Then ask Colossus to search, inspect mappings, retrieve documents, or perform a
-single-document write through `opensearch.*` tools. Write tools are mutating high-risk
-tools and still require approval unless approval mode auto-approves them.
-
-Run the opt-in live connector smoke test:
-
-```bash
-COLOSSUS_OPENSEARCH_LIVE=1 \
-COLOSSUS_OPENSEARCH_URL=http://127.0.0.1:9200 \
-uv run pytest tests/test_opensearch_live.py
-```
-
-## Import An Internal API
-
-```bash
-export INTERNAL_API_TOKEN=...
-uv run colossus integrations import-openapi internal ./openapi.json \
-  --base-url https://internal.example.test \
-  --credential-ref env:INTERNAL_API_TOKEN
-uv run colossus tools list
-```
-
-Ask Colossus to use the generated `openapi.internal.*` tools. Keep write or mutation
-operations behind explicit approval.
-
-## Prepare Offline
-
-```bash
-uv run colossus tools list
-uv run colossus config show
-uv run pytest
-```
-
-Before isolation, prepare wheels, local model endpoints, and offline bundles. See
-[Offline and Airgapped Operation](OFFLINE_AIRGAP.md).
+The worker claims only queued runs, owns the canonical writer lease, and exposes the same
+authenticated application API used by CLI/REPL. Waiting or interrupted runs are never
+silently drained as new work.

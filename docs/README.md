@@ -1,61 +1,42 @@
 # Colossus Documentation
 
-Colossus is a secure, local-first CLI harness for agentic development. Start here if
-you are trying to install it, use it day to day, configure credentials, or understand
-how the codebase is put together.
+These pages document the active Rust runtime. Fresh installations use strict YAML,
+encrypted redb state, and the native `colossus` executable. Python 0.5 documentation is
+retained on `python-v0.5.0` and `python-legacy`.
 
 ## Start Here
 
-- [Getting Started](GETTING_STARTED.md): install from a source checkout, run the echo
-  smoke test, start the REPL, choose a workspace, and understand approval modes.
-- [User Guide](USER_GUIDE.md): everyday CLI and REPL usage for sessions, tools, context,
-  memories, skills, research, and integrations.
-- [Workflows](WORKFLOWS.md): copyable recipes for common Colossus jobs.
-- [Troubleshooting](TROUBLESHOOTING.md): local model, auth, tool, context, and network
-  failure patterns.
+- [Getting Started](GETTING_STARTED.md): install, initialize, run the offline smoke, and
+  connect a model provider.
+- [User Guide](USER_GUIDE.md): daily CLI, REPL, session, work, memory, research, and
+  worker operations.
+- [Configuration](CONFIGURATION.md): strict YAML, providers, policy, storage, sandbox,
+  memory, MCP, skills, and workflows.
+- [Troubleshooting](TROUBLESHOOTING.md): provider, key, policy, sandbox, worker, and
+  recovery diagnostics.
 
 ## Capabilities
 
-- [Built-in Tools](TOOLS.md): model-callable tool families, permissions, schemas, and
-  security notes.
-- [Integrations](INTEGRATIONS.md): GitHub, OpenAPI imports, MCP positioning,
-  credential refs, and auth boundaries.
-- [Skills](SKILLS.md): skill authoring, resources, required tools, and Skill Mode.
-- [Packs](PACKS.md): installable capability packages and executable boundaries.
-- [Context Compaction](CONTEXT.md): session history, snapshots, summaries, and context
-  model behavior.
+- [Built-in Tools](TOOLS.md)
+- [Workflows](WORKFLOWS.md)
+- [Integrations](INTEGRATIONS.md)
+- [Skills](SKILLS.md)
+- [Packs](PACKS.md)
+- [Context Compaction](CONTEXT.md)
+- [Offline and Airgapped Operation](OFFLINE_AIRGAP.md)
+- [Offline Bundle Format](BUNDLE_FORMAT.md)
 
-## Operators
+## Engineering And Operations
 
-- [Configuration](CONFIGURATION.md): full config schema, provider/model roles,
-  workspace, HTTP, credentials, approvals, and compaction settings.
-- [Security Model](SECURITY.md): trust boundaries, tool execution rules, approvals,
-  integration credentials, audit logs, and bundle handling.
-- [Offline and Airgapped Operation](OFFLINE_AIRGAP.md): offline-safe workflows and local
-  model endpoint setup.
-- [Offline Bundle Format](BUNDLE_FORMAT.md): bundle layout, manifest schema, and
-  verification.
-- [Release Process](RELEASE.md): release readiness, artifact review, tags, and
-  post-release checks.
+- [Architecture](ARCHITECTURE.md)
+- [Security Model](SECURITY.md)
+- [Rust Reconstruction Status](RUST_RECONSTRUCTION.md)
+- [Rust Acceptance Matrix](RUST_ACCEPTANCE_MATRIX.md)
+- [Feature Inventory](FEATURE_INVENTORY.md)
+- [Installation](INSTALLATION.md)
+- [Release Process](RELEASE.md)
+- [Contributing](CONTRIBUTING.md)
 
-## Developers
-
-- [Architecture](ARCHITECTURE.md): ports-and-adapters layering and service boundaries.
-- [Rust reconstruction status](RUST_RECONSTRUCTION.md): implemented alpha foundation,
-  commands, and remaining cutover milestones.
-- [Rust foundational acceptance matrix](RUST_ACCEPTANCE_MATRIX.md): requirement-to-test
-  evidence for AUDIT-01, AUTHZ-01, STORE-01, MEM-01, and FLOW-01.
-- [Product Requirements And Reconstruction Specification](FEATURE_INVENTORY.md):
-  implementation-neutral product contract, complete feature baseline, milestones, and
-  acceptance checklist for a clean reconstruction.
-- [Contributing](CONTRIBUTING.md): commit message expectations.
-- [Installation](INSTALLATION.md): source checkout and platform paths.
-
-## Documentation Principles
-
-- Put user journeys in the user docs first, then link to reference pages.
-- Keep the root README short: product overview, quick start, and docs links.
-- Keep secrets and credential values out of examples. Use refs such as
-  `env:GITHUB_TOKEN`.
-- When a CLI or REPL command changes, update the user guide, relevant feature page, and
-  configuration or security reference if the behavior affects those boundaries.
+User surfaces are interfaces only. When behavior changes, update the relevant guide and
+the authoritative architecture, security, feature, or acceptance contract in the same
+change.

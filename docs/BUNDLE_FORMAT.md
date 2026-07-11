@@ -1,41 +1,44 @@
 # Offline Bundle Format
 
-Offline bundles are directory-based artifacts that Colossus verifies without network
-access before use. The Rust verifier requires a strict `manifest.json`, a complete
-payload allowlist, SHA-256 checksums, and at least one trusted Ed25519 signature.
+An offline bundle is a directory whose complete payload is hash-allowlisted by a strict
+signed `manifest.json`. Verification uses no network and requires at least one Ed25519
+signature bound to an explicitly trusted publisher/key pair.
 
-## Required layout
+## Example Layout
 
 ```text
 bundle/
   manifest.json
-  wheelhouse/
-    colossus-0.1.0-py3-none-any.whl
-  skills/
-    example-skill/
-      manifest.json
-      SKILL.md
+  artifacts/
+    colossus-0.6.0-alpha.1-aarch64-apple-darwin.tar.gz
+    colossus-0.6.0-alpha.1-aarch64-apple-darwin.tar.gz.sha256
   sbom/
-    sbom.spdx.json
+    colossus.spdx.json
+  policy/
+    production-bundle.tar.gz
+  workflows/
+    release.yaml
 ```
 
-Every regular payload file must be listed in `manifest.files`. Undeclared files,
-symlinks, special filesystem entries, and non-normalized paths are rejected.
+Every regular payload file must appear in `files`. Undeclared files, missing files,
+symlinks, special entries, absolute/non-normalized paths, traversal, size mismatch, and
+hash mismatch fail verification.
 
-## Manifest schema
+## Manifest
 
 ```json
 {
   "format_version": 1,
-  "name": "colossus-offline-bundle",
-  "version": "0.1.0",
+  "name": "colossus-offline",
+  "version": "0.6.0-alpha.1",
   "publisher": "colossus",
-  "created_at": "2026-06-08T00:00:00Z",
+  "created_at": "2026-07-11T00:00:00Z",
+  "source_revision": "GIT_COMMIT",
   "files": [
     {
-      "path": "wheelhouse/colossus-0.1.0-py3-none-any.whl",
-      "sha256": "64-character lowercase hex digest",
-      "size": 1234
+      "path": "artifacts/colossus-0.6.0-alpha.1-aarch64-apple-darwin.tar.gz",
+      "sha256": "64-character-lowercase-hex-digest",
+      "size": 12345678
     }
   ],
   "signatures": [
@@ -48,50 +51,41 @@ symlinks, special filesystem entries, and non-normalized paths are rejected.
 }
 ```
 
-Verifier requirements:
+Version 1 denies unknown fields. Signatures cover compact UTF-8 JSON after strict
+deserialization, default materialization, recursive lexicographic object-key sorting,
+and replacement of `signatures` with an empty array. Array order remains significant.
 
-- `manifest.json` must exist at the bundle root.
-- `files` must be a list.
-- Each entry must be an object with string `path` and `sha256` fields.
-- Each listed path must point to a regular file under the bundle directory.
-- The SHA-256 digest of each file must match the manifest entry.
-- Every present size must match exactly.
-- Every payload file must be declared; symlinks and traversal are rejected.
-- At least one signature must resolve to an exact trusted publisher/key binding, and
-  every present signature must verify.
+Every present signature must use Ed25519, resolve to the exact publisher/key binding,
+and verify. An unknown or malformed additional signature fails even when another
+signature is valid.
 
-Recommended metadata:
+## Establish Trust And Verify
 
-- `format_version`: bundle manifest format version.
-- `name`: human-readable bundle name.
-- `version`: Colossus or release version represented by the bundle.
-- `created_at`: UTC timestamp.
-- `source_revision`: Git commit or signed source provenance.
-- `files`: include SBOM, release notes, lock material, and any detached artifact
-  signatures as normal hash-listed payloads.
-- `signatures`: embedded Ed25519 signatures over compact UTF-8 JSON after strict
-  deserialization, default materialization, recursive lexicographic object-key sorting,
-  and clearing this array. Array order remains significant.
-
-## Verification
+Trust is an audited, approval-required local lifecycle:
 
 ```bash
-cargo run --offline -q --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- \
-  bundle verify ./bundle
+colossus --config .colossus/config.yaml --approval-mode ask \
+  packs trust add colossus --public-key BASE64_ED25519_PUBLIC_KEY
+colossus --config .colossus/config.yaml packs trust list
+colossus --config .colossus/config.yaml bundle verify ./bundle
 ```
 
-Verification fails if the manifest is missing or malformed, a file is missing,
-undeclared, oversized, linked, outside the bundle, or mismatched, or a signature is
-missing, unknown, malformed, or invalid. The retained evidence includes manifest hash,
-trusted key id, source revision, file count, and total verified bytes.
+Verification returns bounded evidence: bundle name/version, canonical manifest hash,
+file count, total verified bytes, trusted key ID, and optional source revision. It does
+not install or execute payloads.
 
-## Release expectations
+## Production Contents
 
-Production bundles should include:
+A production bundle should hash-list:
 
-- Rust executables for each represented target plus source needed for compliance.
-- `rust/Cargo.lock` and any vendored crate source required for airgapped rebuilds.
-- SBOM output for the package and bundled dependencies.
-- Embedded manifest signatures and hash-listed detached release-artifact signatures.
-- Skill manifests and skill content intended for the isolated environment.
-- A copy of the release notes and security policy.
+- native archive(s), installers, and SHA-256 sidecars for represented targets;
+- SBOM and detached artifact-signature material;
+- exact source revision, license, release notes, security policy, and Rust lockfiles;
+- any reviewed OPA bundles, workflows, skills, packs, MCP servers, local model assets,
+  or Chroma dependencies needed inside the airgap;
+- vendored crate source only when reproducible source rebuilding inside the airgap is an
+  explicit requirement.
+
+Bundle verification authenticates the payload set. Each native archive still goes
+through its clean-prefix installer smoke and the installed runtime still performs
+`audit verify` and secure-anchor checks.

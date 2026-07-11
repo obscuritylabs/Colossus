@@ -1033,6 +1033,11 @@ A reconstruction is complete only when all applicable checks pass:
   wired; a real Windows filesystem/network isolation backend remains required.
 - [x] Production and independent fuzz dependency graphs enforce locked registry sources,
   explicit licenses and versions, banned crates, and warnings-denied RustSec audits.
+- [x] Active installation, configuration, user, tool, context, skill, integration,
+  workflow, troubleshooting, release, pack, and bundle documentation uses only the Rust
+  YAML/CLI/state contract; executable acceptance parses published examples, validates the
+  workflow definition, confirms documented command routes, and rejects Python-era
+  operator signatures.
 - [ ] Formatting, warnings-denied lint, workspace tests, fuzzing, dependency/license and
   vulnerability policy, and macOS/Linux/Windows arm64/x64 release smoke tests pass.
   The six-target native runner/build/execute/package matrix is implemented; this remains

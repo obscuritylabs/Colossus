@@ -1,200 +1,257 @@
 # User Guide
 
-This guide describes how to use Colossus as a local coding and research agent.
+This guide covers the active Rust CLI and REPL. All examples assume an installed
+`colossus` binary and a strict `.colossus/config.yaml` initialized for the current
+repository.
 
-## One-Shot Runs
-
-Use `run` for a single prompt:
+## One-Shot Agent Runs
 
 ```bash
-uv run colossus run "Summarize this repository"
-uv run colossus run --workspace ../my-project "Find likely failing tests"
-uv run colossus run --stream --events compact "Inspect the tool surface"
-uv run colossus run --max-turns 40 "Work until the requested change is verified"
+colossus --config .colossus/config.yaml run "Summarize this repository"
+colossus --config .colossus/config.yaml run --stream \
+  "Inspect the active tool surface"
+colossus --config .colossus/config.yaml run --max-turns 12 \
+  "Implement and verify the requested change"
+colossus --config .colossus/config.yaml run --role research_worker \
+  "Collect repository evidence"
 ```
 
-Use `--approval-mode ask` when you want approval prompts for risky tools, and
-`--approval-mode full-access` when you intentionally want no prompts for
-approval-required tools.
+`run` prints a stable JSON result. `--stream` writes policy-released deltas and events to
+stderr while preserving JSON on stdout. Every run creates or attaches to a durable
+session and records the provider/effect lifecycle in the encrypted journal.
+
+Global approval mode precedes the subcommand:
+
+```bash
+colossus --config .colossus/config.yaml --approval-mode ask \
+  run "Write the approved file"
+```
+
+`deny` is the noninteractive default. `ask`, `risk-auto`, and `full-access` satisfy only
+approval obligations; none can override a policy deny or add sandbox capabilities.
 
 ## REPL
 
-Start the REPL:
-
 ```bash
-uv run colossus repl
+colossus --config .colossus/config.yaml repl
+colossus --config .colossus/config.yaml repl --resume
+colossus --config .colossus/config.yaml repl --session SESSION_ID
 ```
 
-Core commands:
+Useful commands include:
 
 ```text
 /help
-/status
-/agent show|max-turns N
+/session show
+/resume
+/work
 /tools
-/workspace [PATH]
-/session show|resume|latest|new
-/sessions [LIMIT]
-/resume [LIMIT]
-/context
-/compact
+/context status
+/tasks
+/decisions
+/plans
+/goals
+/agents
+/memories
+/research QUESTION
+/workflow list
+/audit verify
 /exit
 ```
 
-Display commands:
+Presentation is local durable state, not model context:
 
 ```text
-/stream on|raw|off
-/events compact|verbose|off
-/reasoning on|off
-/transcript comfortable|compact
-/theme [NAME]
-/repl prefs|save|reset
+/theme
+/theme preview ocean
+/theme save ocean
+/events compact
+/stream on
+/reasoning off
+/transcript compact
+/multiline toggle
+/repl save
 ```
 
-## Sessions
+Redirected output remains control-sequence-free. REPL history and preferences are
+encrypted journal records.
 
-Sessions are local SQLite records. Start fresh by default, resume explicitly, or pick
-from recent sessions:
+## Sessions And Context
 
 ```bash
-uv run colossus run --resume "continue where we left off"
-uv run colossus repl --resume
-uv run colossus sessions list
-uv run colossus sessions show SESSION_ID
+colossus --config .colossus/config.yaml sessions list
+colossus --config .colossus/config.yaml sessions show SESSION_ID
+colossus --config .colossus/config.yaml sessions messages SESSION_ID
+colossus --config .colossus/config.yaml sessions new "Release review"
+colossus --config .colossus/config.yaml run --resume "Continue"
 ```
 
-Inside the REPL:
-
-```text
-/resume
-/sessions
-/session resume SESSION_ID
-/session new
-```
-
-## Tools
-
-Inspect the active model-callable catalog:
+Context snapshots never delete canonical messages:
 
 ```bash
-uv run colossus tools list
+colossus --config .colossus/config.yaml context status SESSION_ID
+colossus --config .colossus/config.yaml context compact SESSION_ID
+colossus --config .colossus/config.yaml context list SESSION_ID
+colossus --config .colossus/config.yaml context restore SESSION_ID SNAPSHOT_ID
 ```
 
-Inside the REPL:
+Automatic compaction preserves a configured recent tail, injects active decisions and
+relevant memories, and uses the `context_summarizer` role when available. Invalid or
+unavailable summaries fall back deterministically while raw history remains intact.
 
-```text
-/tools
-```
+## Durable Work
 
-The catalog is composed from built-ins plus configured integration tools. Network-capable
-and mutation tools still pass through policy, approval, and audit. See
-[Built-in Tools](TOOLS.md) for full details.
-
-## Context, Decisions, And Memories
-
-Colossus persists session history and can compact older context into snapshots.
-
-```text
-/context
-/compact
-```
-
-Task, decision, and memory commands help keep long work coherent:
-
-```text
-/tasks
-/decision This API boundary must stay in application, not interfaces
-/decisions
-/memory Remember that this repo prefers env credential refs
-/memories
-```
-
-Memories are context, not instructions. Do not store secrets in memories.
-
-## Skills
-
-Skill Mode is enabled for normal agent turns. Activate skills with prompt mentions,
-one-shot options, or REPL sticky state:
+Tasks, decisions, plans, goals, and subagents are canonical event-sourced records:
 
 ```bash
-uv run colossus run --skill coding "Implement the approved plan"
+colossus --config .colossus/config.yaml tasks create SESSION_ID \
+  "Run release gates" --description "Capture the outputs"
+colossus --config .colossus/config.yaml tasks list --session SESSION_ID
+
+colossus --config .colossus/config.yaml decisions create SESSION_ID \
+  "Storage authority" "The encrypted journal is authoritative" --priority high
+colossus --config .colossus/config.yaml decisions list --session SESSION_ID
+
+colossus --config .colossus/config.yaml plans create SESSION_ID \
+  "Cut a release" --step "Run gates" --step "Build archives"
+colossus --config .colossus/config.yaml --approval-mode ask plans approve PLAN_ID
+
+colossus --config .colossus/config.yaml goals run \
+  "Complete the approved plan" --session SESSION_ID --max-iterations 5
+colossus --config .colossus/config.yaml goals show GOAL_ID
+
+colossus --config .colossus/config.yaml agents queue SESSION_ID \
+  "Review the storage adapter"
+colossus --config .colossus/config.yaml agents drain
 ```
 
-```text
-@skill:coding implement this
-/skill show
-/skill use coding
-/skill drop coding
-```
+Goal iterations and subagent turns reuse the ordinary provider, tool, policy, context,
+and journal services. Interrupted effects become unknown; they are never silently
+replayed.
 
-Create repo-local skills under `.agents/skills` directly, or ask the model to help craft
-one with the bundled authoring skill:
-
-```text
-@skill:skill-creator create a release checklist skill
-/skill new release-checklist
-/skill validate /path/to/skills/release-checklist
-```
+## Memories
 
 ```bash
-uv run colossus skills new release-checklist
-uv run colossus skills new release-checklist --agent-compatible --resources references,tests
-uv run colossus skills new release-checklist --pack ./my-pack
-uv run colossus skills install .agents/skills/release-checklist
-uv run colossus skills validate /path/to/skills/release-checklist
+colossus --config .colossus/config.yaml memories create \
+  "This repository requires warnings-as-errors Clippy" --scope repository \
+  --scope-id REPOSITORY_ID --kind constraint
+colossus --config .colossus/config.yaml memories search "Clippy" \
+  --repository REPOSITORY_ID
+colossus --config .colossus/config.yaml memories index status
+colossus --config .colossus/config.yaml memories archive MEMORY_ID
 ```
 
-Use packs for skills that need executable tools, binaries, Docker assets, MCP servers, or
-integration metadata. See [Skills](SKILLS.md) and [Packs](PACKS.md) for authoring and
-safety guidance.
+The journal owns lifecycle state. Tantivy and optional Chroma return disposable
+candidates; Colossus reloads canonical records and reapplies status, expiry, scope, and
+policy before release. Store no secret values in memory text.
 
-## Deep Research
-
-Deep Research Mode collects bounded repository evidence and optional configured web/MCP
-sources into a persisted cited report.
+## Skills And Packs
 
 ```bash
-uv run colossus research "How does context compaction work?"
-uv run colossus research --workspace ../my-project "Find risky code paths" --source repo
+colossus --config .colossus/config.yaml skills list
+colossus --config .colossus/config.yaml skills show coding
+colossus --config .colossus/config.yaml skills compose \
+  "Implement this" --skill coding
+colossus --config .colossus/config.yaml run --skill coding \
+  "Implement the approved change"
 ```
 
-Inside the REPL:
-
-```text
-/research on
-/research show
-/research sources
-/research How should integrations be secured?
-```
-
-Web search and MCP collection only run when configured and approved. Disabled lanes are
-recorded as limitations rather than bypassed.
-
-## Integrations
-
-Integrations are hidden until configured and connected:
+Authorable installed skills use guarded operations:
 
 ```bash
-uv run colossus integrations list
-uv run colossus integrations show github
-uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
-uv run colossus integrations connect searxng --base-url http://localhost:8888
-uv run colossus integrations connect opensearch \
-  --base-url http://localhost:9200 \
-  --auth-type none
-uv run colossus tools list
+colossus --config .colossus/config.yaml --approval-mode ask \
+  skills scaffold release-checklist "Review a native release" \
+  --resource-dir references
+colossus --config .colossus/config.yaml skills inspect release-checklist
+colossus --config .colossus/config.yaml skills validate release-checklist
 ```
 
-Inside the REPL:
+Skills are data-only instructions and resources. Executables belong in verified packs:
 
-```text
-/integrations list
-/integrations show github
-/integrations connect github --credential-ref env:GITHUB_TOKEN
-/integrations connect searxng --base-url http://localhost:8888
-/integrations connect opensearch --base-url http://localhost:9200 --auth-type none
+```bash
+colossus --config .colossus/config.yaml packs verify ./pack
+colossus --config .colossus/config.yaml --approval-mode ask packs install ./pack
+colossus --config .colossus/config.yaml packs list
 ```
 
-See [Integrations](INTEGRATIONS.md) for GitHub, SearXNG, OpenSearch, OpenAPI import, MCP
-positioning, and credential rules.
+## Research
+
+```bash
+colossus --config .colossus/config.yaml research run \
+  "How does effect authorization work?" --source repo --depth standard
+colossus --config .colossus/config.yaml research list
+colossus --config .colossus/config.yaml research show RESEARCH_RUN_ID
+colossus --config .colossus/config.yaml research sources RESEARCH_RUN_ID
+colossus --config .colossus/config.yaml research claims RESEARCH_RUN_ID
+```
+
+Repository evidence works offline. Web and MCP lanes run only when explicitly configured,
+policy-allowed, and post-effect released; unavailable lanes become durable limitations.
+
+## Workflows
+
+```bash
+colossus --config .colossus/config.yaml workflow validate \
+  .colossus/workflows/release.yaml
+colossus --config .colossus/config.yaml workflow register \
+  .colossus/workflows/release.yaml
+colossus --config .colossus/config.yaml workflow run release 1.0.0 \
+  --inputs '{"branch":"main"}'
+colossus --config .colossus/config.yaml workflow status WORKFLOW_RUN_ID
+```
+
+Definitions are exact-content hash pinned. A changed file is a new trust identity.
+Effectful retries require an explicit idempotency strategy; recovery records abandoned
+attempts as interrupted or unknown instead of rerunning them.
+
+## Integrations And MCP
+
+```bash
+colossus --config .colossus/config.yaml integrations list
+colossus --config .colossus/config.yaml --approval-mode ask \
+  integrations connect github --credential-reference env:GITHUB_TOKEN
+colossus --config .colossus/config.yaml integrations show github
+colossus --config .colossus/config.yaml integrations call \
+  github.repository.get '{"owner":"example","repo":"project"}'
+
+colossus --config .colossus/config.yaml mcp servers
+colossus --config .colossus/config.yaml mcp tools --server local-docs
+colossus --config .colossus/config.yaml mcp call \
+  local-docs search_docs '{"query":"authorization"}'
+```
+
+Connections remain hidden from model tools until canonical connect events exist.
+Credentials are references, resolved after authorization, and removed from quarantined
+results before release.
+
+## Worker
+
+The optional worker owns the redb writer lease and serves authenticated local IPC:
+
+```bash
+colossus --config .colossus/config.yaml worker
+colossus --config .colossus/config.yaml worker --status
+colossus --config .colossus/config.yaml worker --shutdown
+colossus --config .colossus/config.yaml worker --once
+```
+
+CLI and REPL operations auto-discover a healthy worker. Authentication or protocol
+failure is surfaced and never downgraded to embedded execution; only an unavailable
+endpoint permits embedded fallback.
+
+## Audit And Diagnostics
+
+```bash
+colossus --config .colossus/config.yaml audit verify
+colossus --config .colossus/config.yaml audit show --limit 20
+colossus --config .colossus/config.yaml audit anchor-status
+colossus --config .colossus/config.yaml state doctor
+colossus --config .colossus/config.yaml policy doctor
+colossus --config .colossus/config.yaml sandbox doctor
+colossus --config .colossus/config.yaml projection status
+colossus --config .colossus/config.yaml telemetry runs
+```
+
+Audit commands expose bounded redacted envelope evidence, never decrypted payload bodies.
+Startup verification failure puts the runtime into read-only recovery mode and blocks new
+effects.

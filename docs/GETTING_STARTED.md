@@ -59,7 +59,6 @@ Useful first commands:
 
 ```text
 /help
-/status
 /tools
 /work
 /context status

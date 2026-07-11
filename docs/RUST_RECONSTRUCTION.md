@@ -343,6 +343,12 @@ cutover. The following planned work remains:
   implemented; skill resources remain non-executable. Configured stdio MCP discovery,
   invocation, and research collection are implemented through the normal sandbox and
   gateway boundaries.
+- The active root and operator documentation now describes only the Rust executable,
+  strict YAML/redb state, policy/sandbox, workflow, extension, and native distribution
+  contracts. An executable documentation test parses the published configuration,
+  validates the workflow example, confirms documented command families, and rejects
+  Python-era operator signatures. Historical Python implementation detail remains only
+  in explicitly labeled architecture/security legacy sections and the frozen branch/tag.
 - The first fully green remote native sandbox/runtime and six-target release-artifact
   matrices.
 

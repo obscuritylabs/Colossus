@@ -1,153 +1,70 @@
 # Context Compaction
 
-Colossus keeps raw session messages and run events append-only, then builds a compacted
-working context only when sending a request to a model. Compaction is an optimization
-layer, not the source of truth.
+Canonical session messages remain immutable encrypted events. Compaction creates a
+derived snapshot for future provider requests; it never rewrites or deletes history.
 
-Automatic compaction runs before provider turns, not during an in-flight tool call.
-When model-assisted summaries are enabled, a new snapshot may use the configured
-`context_summarizer` model role. After a snapshot exists, Colossus reuses it while the
-unsummarized stale tail remains within the target budget; this prevents long goal or
-tool loops from paying for a new summarizer call after every small tool result.
+Before every provider turn Colossus estimates the complete request, including
+instructions and tool schemas. At the configured threshold it appends a snapshot and an
+activation event to the same optimistic session stream. Provider input becomes the
+active snapshot plus the preserved recent tail.
 
-## Defaults
+## Configuration
 
-- Auto compaction is enabled.
-- Unknown models use a `32768` token context window.
-- Compaction starts at 70% of the configured model window.
-- Compacted context targets 45% of the configured model window.
-- The newest 8 messages are kept uncompressed by default.
-- Model-assisted summaries are best-effort; deterministic compaction always works
-  offline.
-- `max_request_bytes` is disabled by default. Set it for local endpoints that reject
-  large HTTP request bodies before token context is exhausted.
-- When `max_request_bytes` is set, default all-tool agents advertise at most 2% of that
-  budget as initial tool schemas. Set `tool_schema_budget_percent` to `null` to disable
-  this startup cap.
-
-Configure model-specific windows:
-
-```json
-{
-  "provider": {
-    "kind": "local_openai_chat",
-    "model": "local-model",
-    "base_url": "http://localhost:12434/v1",
-    "api_key_env": null,
-    "ca_bundle": null,
-    "model_context_windows": {
-      "local-model": 65536
-    }
-  },
-  "context": {
-    "auto_compaction": true,
-    "default_context_window_tokens": 32768,
-    "compact_at_percent": 0.7,
-    "target_percent": 0.45,
-    "recent_tail_messages": 8,
-    "model_assisted": true,
-    "max_request_bytes": 900000,
-    "tool_schema_budget_percent": 0.02
-  },
-  "allow_user_skill_overrides": false
-}
+```yaml
+context:
+  autoCompaction: true
+  contextWindowTokens: 32768
+  compactAtPercent: 70
+  targetPercent: 45
+  preserveRecentMessages: 8
+  modelAssisted: true
 ```
 
-`max_request_bytes` is a serialized HTTP request-body guard, not a context-window token
-setting. It can trim older conversation turns before a provider call.
-`tool_schema_budget_percent` is a startup guard for the initial request: when an agent
-uses the default empty `tools` list, Colossus sends a prioritized subset of tool schemas
-within that share of `max_request_bytes`, preferring discovery tools such as
-`tool.search`. Tools returned by `tool.search` are advertised on following model turns.
-Explicit agent tool lists are not silently reduced. If
-explicit tool schemas and instructions alone exceed the cap, Colossus fails before
-calling the endpoint and reports the fixed request size so you can reduce that agent's
-tool catalog or raise the endpoint body limit.
+`contextWindowTokens` is the deterministic fallback budget. `targetPercent` must be
+below `compactAtPercent`; percentages are integer values. The preserved recent messages
+are never summarized automatically.
 
-Colossus can also discover model windows from provider catalogs when they expose that
-metadata. Discovered values fill gaps only: explicit `models.profiles.*.context_window_tokens`,
-CLI `--context-window-tokens`, and legacy `provider.model_context_windows` values take
-precedence. OpenRouter-compatible model catalogs commonly include `context_length`;
-official OpenAI model catalogs do not currently include context windows.
+When `modelAssisted` is enabled, the `context_summarizer` provider role receives a normal
+policy-bound model request. Invalid, failed, echo-only, or unavailable summaries fall
+back to deterministic extraction. Raw history remains the authority either way.
 
 ## Commands
 
 ```bash
-uv run colossus sessions list
-uv run colossus sessions show SESSION_ID
-uv run colossus run --resume "continue the latest session"
-uv run colossus repl --session SESSION_ID
-uv run colossus repl --resume
-uv run colossus context show --session SESSION_ID
-uv run colossus context compact --session SESSION_ID
-uv run colossus context snapshots --session SESSION_ID
-uv run colossus context restore SNAPSHOT_ID
+colossus --config .colossus/config.yaml sessions list
+colossus --config .colossus/config.yaml sessions messages SESSION_ID
+colossus --config .colossus/config.yaml context status SESSION_ID
+colossus --config .colossus/config.yaml context compact SESSION_ID
+colossus --config .colossus/config.yaml context list SESSION_ID
+colossus --config .colossus/config.yaml context restore SESSION_ID SNAPSHOT_ID
 ```
 
-The REPL supports:
+In the REPL:
 
-- `/resume`
-- `/sessions`
-- `/session show`
-- `/session resume SESSION_ID`
-- `/session latest`
-- `/session new`
-- `/compact`
-- `/context`
-- `/context snapshots`
-- `/context restore SNAPSHOT_ID`
-
-`--resume` and `/session latest` continue the most recently updated persisted session.
-`/resume` lists recent sessions and prompts for a numbered choice. Resume loads full
-prior message context for future model turns and prints only a compact session summary;
-it does not replay the entire transcript by default.
-
-Deep Research Mode participates in the same session history. A research run receives a
-bounded prior-message context block, and its final cited report is appended as an
-assistant message for later non-research turns. Raw research source records remain in the
-research tables and are available through `/research sources`; they are not automatically
-pasted into every later chat prompt.
-
-`context show`, `/context`, `/status`, and the REPL toolbar report the effective prompt
-estimate after the active snapshot is applied. When a snapshot is active, they also show
-the raw append-only history estimate separately. Raw history can remain above the
-threshold while the effective prompt sent to the model is below it.
-
-Compact event output distinguishes new snapshots from reuse: compact mode highlights
-new automatic compaction, while verbose mode can also show reused snapshots.
-
-For one-off provider/model overrides, set the model window on the command line:
-
-```bash
-uv run colossus --provider local-openai-chat \
-  --model "nex-agi/nex-n2-pro:free" \
-  --context-window-tokens 131072 \
-  repl
+```text
+/context status
+/context compact
+/context list
+/context restore SNAPSHOT_ID
 ```
 
-## Model-Callable Tools
+Restore changes only the active derived snapshot and therefore requires its own policy
+decision. It does not delete later messages or mutate the selected snapshot.
 
-The built-in context tools are:
+## Composition Order
 
-- `context.show`
-- `context.compact`
-- `context.snapshots`
-- `context.restore`
+The prepared model context contains, in order:
 
-`context.restore` requires approval because it changes which snapshot is active for
-future model requests. It does not delete or rewrite raw messages.
+1. Run instructions and active skill material.
+2. Active key decisions as binding commitments.
+3. Relevant active memories as non-instructional background.
+4. The active compacted snapshot, when one exists.
+5. The preserved canonical recent-message tail.
 
-## Snapshot Contents
+Every turn records a `context.prepared.v1` event with bounded budgeting metadata. A
+projection can be rebuilt, but the session stream and encrypted snapshots remain
+canonical.
 
-Snapshots store:
-
-- source message range,
-- summary,
-- pinned user facts,
-- open tasks,
-- files or artifacts mentioned by tool outputs,
-- compact tool-result summaries,
-- strategy: `deterministic` or `hybrid-model`.
-
-If model-assisted compaction fails or is unavailable, Colossus keeps the deterministic
-snapshot and continues.
+Research final reports are appended as normal assistant messages. Raw research sources
+and claims remain in their canonical research streams and are not pasted into every
+later prompt.
