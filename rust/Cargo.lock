@@ -717,6 +717,7 @@ name = "colossus-integrations"
 version = "0.6.0-alpha.1"
 dependencies = [
  "async-trait",
+ "base64",
  "colossus-contracts",
  "colossus-policy",
  "colossus-ports",

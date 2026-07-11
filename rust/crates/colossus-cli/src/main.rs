@@ -1074,6 +1074,7 @@ enum IntegrationAuthMode {
     None,
     Bearer,
     ApiKey,
+    Basic,
     ServiceAccount,
 }
 
@@ -1086,6 +1087,26 @@ enum IntegrationsAction {
     },
     /// Show one canonical connection without resolving credentials.
     Show { name: String },
+    /// Connect a first-party GitHub, SearXNG, or OpenSearch adapter.
+    Connect {
+        name: String,
+        #[arg(long)]
+        base_url: Option<String>,
+        #[arg(long, value_enum)]
+        auth_type: Option<IntegrationAuthMode>,
+        #[arg(long)]
+        credential_reference: Option<String>,
+        #[arg(long)]
+        username_reference: Option<String>,
+        #[arg(long)]
+        password_reference: Option<String>,
+        #[arg(long, default_value = "Authorization")]
+        auth_header: String,
+        #[arg(long)]
+        auth_scheme: Option<String>,
+        #[arg(long = "scope")]
+        scopes: Vec<String>,
+    },
     /// Import a JSON OpenAPI 3 document (approval required).
     ImportOpenapi {
         name: String,
@@ -1107,6 +1128,23 @@ enum IntegrationsAction {
     Disconnect { name: String },
     /// Invoke one connected operation with a JSON argument object.
     Call { tool: String, arguments: String },
+}
+
+fn integration_auth(
+    mode: IntegrationAuthMode,
+    header: String,
+    scheme: Option<String>,
+) -> IntegrationAuth {
+    match mode {
+        IntegrationAuthMode::None => IntegrationAuth::None,
+        IntegrationAuthMode::Bearer => IntegrationAuth::Bearer {
+            header,
+            scheme: scheme.unwrap_or_else(|| "Bearer".into()),
+        },
+        IntegrationAuthMode::ApiKey => IntegrationAuth::ApiKey { header, scheme },
+        IntegrationAuthMode::Basic => IntegrationAuth::Basic { header },
+        IntegrationAuthMode::ServiceAccount => IntegrationAuth::ServiceAccount { header },
+    }
 }
 
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
@@ -1347,7 +1385,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /integrations | /integration show|call|disconnect | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1425,6 +1463,23 @@ async fn repl(
                     print_json(&runtime.telemetry_metrics(Some(&active_session_id), 100)?)?;
                 } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
                     print_json(&runtime.telemetry_run(run_id.trim(), 500)?)?;
+                } else if line == "/integrations" {
+                    print_json(&runtime.list_integrations(100)?)?;
+                } else if let Some(name) = line.strip_prefix("/integration show ") {
+                    print_json(
+                        &runtime
+                            .get_integration(name.trim())?
+                            .ok_or_else(|| cli_error(format!("integration not found: {name}")))?,
+                    )?;
+                } else if let Some(name) = line.strip_prefix("/integration disconnect ") {
+                    print_json(&runtime.disconnect_integration(name.trim()).await?)?;
+                } else if let Some(arguments) = line.strip_prefix("/integration call ") {
+                    let (tool, arguments) = arguments
+                        .trim()
+                        .split_once(' ')
+                        .ok_or_else(|| cli_error("usage: /integration call TOOL JSON"))?;
+                    let arguments: Value = serde_json::from_str(arguments.trim())?;
+                    print_json(&runtime.call_integration_tool(tool, arguments).await?)?;
                 } else if line == "/skills" {
                     let skills = runtime
                         .list_skills()?
@@ -2090,6 +2145,43 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .get_integration(&name)?
                     .ok_or_else(|| cli_error(format!("integration not found: {name}")))?,
             )?,
+            IntegrationsAction::Connect {
+                name,
+                base_url,
+                auth_type,
+                credential_reference,
+                username_reference,
+                password_reference,
+                auth_header,
+                auth_scheme,
+                scopes,
+            } => {
+                let mode = auth_type.unwrap_or(match name.as_str() {
+                    "github" => IntegrationAuthMode::Bearer,
+                    "searxng" if credential_reference.is_some() => IntegrationAuthMode::ApiKey,
+                    _ => IntegrationAuthMode::None,
+                });
+                let auth = integration_auth(mode, auth_header, auth_scheme);
+                let mut named = BTreeMap::new();
+                if let Some(reference) = username_reference {
+                    named.insert("username".into(), reference);
+                }
+                if let Some(reference) = password_reference {
+                    named.insert("password".into(), reference);
+                }
+                print_json(
+                    &runtime
+                        .connect_native_integration(
+                            &name,
+                            base_url.as_deref(),
+                            auth,
+                            credential_reference.as_deref(),
+                            &named,
+                            &scopes,
+                        )
+                        .await?,
+                )?;
+            }
             IntegrationsAction::ImportOpenapi {
                 name,
                 spec,
@@ -2106,20 +2198,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     format!("@{spec}")
                 };
                 let document = parse_json_argument(&runtime, &source).await?;
-                let auth = match auth_type {
-                    IntegrationAuthMode::None => IntegrationAuth::None,
-                    IntegrationAuthMode::Bearer => IntegrationAuth::Bearer {
-                        header: auth_header,
-                        scheme: auth_scheme.unwrap_or_else(|| "Bearer".into()),
-                    },
-                    IntegrationAuthMode::ApiKey => IntegrationAuth::ApiKey {
-                        header: auth_header,
-                        scheme: auth_scheme,
-                    },
-                    IntegrationAuthMode::ServiceAccount => IntegrationAuth::ServiceAccount {
-                        header: auth_header,
-                    },
-                };
+                let auth = integration_auth(auth_type, auth_header, auth_scheme);
                 print_json(
                     &runtime
                         .import_openapi_integration(

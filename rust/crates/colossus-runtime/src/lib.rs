@@ -1442,9 +1442,13 @@ impl Runtime {
                 for action in ["skill.scaffold", "skill.write", "skill.install"] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
-                for action in ["integration.openapi.import", "integration.disconnect"]
-                    .into_iter()
-                    .chain(integration_actions.iter().map(String::as_str))
+                for action in [
+                    "integration.openapi.import",
+                    "integration.connect",
+                    "integration.disconnect",
+                ]
+                .into_iter()
+                .chain(integration_actions.iter().map(String::as_str))
                 {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
@@ -1604,6 +1608,7 @@ impl Runtime {
                 "skill.resource.list".to_owned(),
                 "skill.resource.read".to_owned(),
                 "integration.openapi.import".to_owned(),
+                "integration.connect".to_owned(),
                 "integration.disconnect".to_owned(),
                 "integration.invoke".to_owned(),
             ]),
@@ -2008,16 +2013,29 @@ impl Runtime {
                 .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
         request.capabilities = vec![operation.action().into()];
-        if let IntegrationRequest::ImportOpenApi {
-            credential_reference: Some(reference),
-            ..
-        } = &operation
-        {
-            request.credential_references = vec![colossus_contracts::CredentialReference {
-                reference: reference.clone(),
+        let references = match &operation {
+            IntegrationRequest::ImportOpenApi {
+                credential_reference,
+                ..
+            } => credential_reference.iter().cloned().collect::<Vec<_>>(),
+            IntegrationRequest::ConnectNative {
+                credential_reference,
+                credential_references,
+                ..
+            } => credential_reference
+                .iter()
+                .cloned()
+                .chain(credential_references.values().cloned())
+                .collect(),
+            _ => Vec::new(),
+        };
+        request.credential_references = references
+            .into_iter()
+            .map(|reference| colossus_contracts::CredentialReference {
+                reference,
                 value_hash: None,
-            }];
-        }
+            })
+            .collect();
         let released = self
             .gateway
             .execute(request, self.integration_executor.as_ref())
@@ -2065,6 +2083,31 @@ impl Runtime {
                 base_url: base_url.map(Into::into),
                 auth,
                 credential_reference: credential_reference.map(Into::into),
+                scopes: scopes.to_vec(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Connect one first-party native integration through policy and approval.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_native_integration(
+        &self,
+        name: &str,
+        base_url: Option<&str>,
+        auth: IntegrationAuth,
+        credential_reference: Option<&str>,
+        credential_references: &BTreeMap<String, String>,
+        scopes: &[String],
+    ) -> Result<IntegrationConnection, RuntimeError> {
+        serde_json::from_value(
+            self.execute_integration_operation(IntegrationRequest::ConnectNative {
+                name: name.into(),
+                base_url: base_url.map(Into::into),
+                auth,
+                credential_reference: credential_reference.map(Into::into),
+                credential_references: credential_references.clone(),
                 scopes: scopes.to_vec(),
             })
             .await?,

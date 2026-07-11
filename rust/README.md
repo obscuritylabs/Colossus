@@ -43,6 +43,12 @@ cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
   --credential-reference env:DEMO_API_TOKEN
 cargo run -p colossus-cli --bin colossus-rs -- integrations list
 cargo run -p colossus-cli --bin colossus-rs -- tools list
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
+  integrations connect github --credential-reference env:GITHUB_TOKEN
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
+  integrations connect searxng --base-url http://127.0.0.1:8888 --auth-type none
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
+  integrations connect opensearch --base-url http://127.0.0.1:9200 --auth-type none
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
@@ -97,8 +103,15 @@ approval by default, enforce the configured exact origin and output/timeout boun
 resolve credential handles only inside the permit-bearing adapter, quarantine every
 response for post-effect policy, and redact an exact credential value if an upstream
 echoes it. Re-import to change a connection; disconnecting appends history rather than
-deleting it. Native GitHub/OpenSearch connection compilation and configured MCP remain
-the next integration slices.
+deleting it.
+
+Native GitHub, SearXNG, and OpenSearch connections use the same lifecycle and gateway.
+GitHub exposes repository, issue, pull-request, check, and release reads. SearXNG exposes
+normalized search and health results. OpenSearch exposes cluster/index discovery,
+document search/retrieval, and independently authorized index/update/delete mutations.
+Bearer/API-key secrets and OpenSearch Basic username/password values are resolved only
+after authorization; canonical state and policy inputs retain their `env:` handles.
+Configured MCP remains the next integration slice.
 
 Normal runs create a durable session automatically and return its id. Use
 `run --session ID` for an exact session, `run --resume` for the most recently updated

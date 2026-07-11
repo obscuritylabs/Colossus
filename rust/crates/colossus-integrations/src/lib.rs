@@ -3,6 +3,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, CredentialReference, EffectRequest, EventClassification, ExecutionContext,
     IntegrationAuth, IntegrationConnection, IntegrationKind, IntegrationOperation,
@@ -15,7 +16,11 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use url::Url;
 
@@ -204,6 +209,21 @@ pub enum IntegrationRequest {
         /// Declared scopes.
         scopes: Vec<String>,
     },
+    /// Compile and persist one built-in native connector.
+    ConnectNative {
+        /// `github`, `searxng`, or `opensearch`.
+        name: String,
+        /// Optional endpoint override.
+        base_url: Option<String>,
+        /// Credential placement.
+        auth: IntegrationAuth,
+        /// Single bearer/API-key handle.
+        credential_reference: Option<String>,
+        /// Named handles such as username/password.
+        credential_references: BTreeMap<String, String>,
+        /// Declared scopes.
+        scopes: Vec<String>,
+    },
     /// Explicitly disconnect one canonical connection.
     Disconnect {
         /// Connection name.
@@ -225,6 +245,7 @@ impl IntegrationRequest {
     pub fn action(&self) -> &str {
         match self {
             Self::ImportOpenApi { .. } => "integration.openapi.import",
+            Self::ConnectNative { .. } => "integration.connect",
             Self::Disconnect { .. } => "integration.disconnect",
             Self::Invoke { tool_name, .. } => tool_name,
         }
@@ -233,7 +254,9 @@ impl IntegrationRequest {
     /// Canonical resource identity.
     pub fn resource(&self) -> String {
         match self {
-            Self::ImportOpenApi { name, .. } | Self::Disconnect { name } => {
+            Self::ImportOpenApi { name, .. }
+            | Self::ConnectNative { name, .. }
+            | Self::Disconnect { name } => {
                 format!("integration:{name}")
             }
             Self::Invoke {
@@ -291,6 +314,7 @@ impl IntegrationExecutor {
                 status: connection.status,
                 title: connection.title,
                 credential_reference: connection.credential_reference,
+                credential_references: connection.credential_references,
                 tools: connection
                     .operations
                     .into_iter()
@@ -321,7 +345,7 @@ impl IntegrationExecutor {
                 .iter()
                 .any(|operation| operation.tool.name == tool_name)
             {
-                let credentials = connection
+                let mut credentials = connection
                     .credential_reference
                     .as_ref()
                     .map(|reference| {
@@ -331,6 +355,13 @@ impl IntegrationExecutor {
                         }]
                     })
                     .unwrap_or_default();
+                credentials.extend(connection.credential_references.values().map(|reference| {
+                    CredentialReference {
+                        reference: reference.clone(),
+                        value_hash: None,
+                    }
+                }));
+                credentials.sort_by(|left, right| left.reference.cmp(&right.reference));
                 return Ok(Some((
                     IntegrationRequest::Invoke {
                         connection: connection.name,
@@ -381,6 +412,46 @@ impl IntegrationExecutor {
             .map_err(execution)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn connect_native(
+        &self,
+        _permit: &ExecutionPermit,
+        actor: Actor,
+        name: &str,
+        base_url: Option<&str>,
+        auth: &IntegrationAuth,
+        credential_reference: Option<&str>,
+        credential_references: &BTreeMap<String, String>,
+        scopes: &[String],
+    ) -> Result<IntegrationConnection, ExecutionError> {
+        let existing = self.repository.get_integration(name).map_err(execution)?;
+        let now = now().map_err(execution)?;
+        let mut connection = compile_native(
+            name,
+            base_url,
+            auth.clone(),
+            credential_reference.map(Into::into),
+            credential_references.clone(),
+            scopes.to_vec(),
+            existing
+                .as_ref()
+                .map_or_else(|| now.clone(), |value| value.connected_at.clone()),
+            now,
+        )
+        .map_err(execution)?;
+        let missing_single =
+            credential_reference.is_some_and(|reference| resolve_environment(reference).is_err());
+        let missing_named = credential_references
+            .values()
+            .any(|reference| resolve_environment(reference).is_err());
+        if missing_single || missing_named {
+            connection.status = IntegrationStatus::PendingAuth;
+        }
+        self.repository
+            .save_integration(connection, actor)
+            .map_err(execution)
+    }
+
     async fn invoke(
         &self,
         permit: &ExecutionPermit,
@@ -405,10 +476,23 @@ impl IntegrationExecutor {
             .map_err(execution)?
             .validate(arguments)
             .map_err(execution)?;
-        let mut url = operation_url(&connection, operation, arguments)?;
-        add_query(&mut url, operation, arguments)?;
-        require_origin(&url, permit)?;
-        let method = reqwest::Method::from_bytes(operation.method.as_bytes()).map_err(execution)?;
+        let prepared = if connection.kind == IntegrationKind::Native {
+            prepare_native_request(&connection, tool_name, arguments)?
+        } else {
+            let mut url = operation_url(&connection, operation, arguments)?;
+            add_query(&mut url, operation, arguments)?;
+            PreparedHttpRequest {
+                method: reqwest::Method::from_bytes(operation.method.as_bytes())
+                    .map_err(execution)?,
+                url,
+                body: operation
+                    .accepts_body
+                    .then(|| arguments.get("body").cloned())
+                    .flatten(),
+            }
+        };
+        require_origin(&prepared.url, permit)?;
+        let PreparedHttpRequest { method, url, body } = prepared;
         let mut request = self
             .client
             .request(method.clone(), url)
@@ -420,13 +504,30 @@ impl IntegrationExecutor {
             .as_deref()
             .map(resolve_environment)
             .transpose()?;
-        if let Some(secret) = credential_value.as_deref() {
-            let (name, value) = auth_header(&connection.auth, secret)?;
+        let credential_values = connection
+            .credential_references
+            .iter()
+            .map(|(name, reference)| Ok((name.clone(), resolve_environment(reference)?)))
+            .collect::<Result<BTreeMap<_, _>, ExecutionError>>()?;
+        let mut sensitive_values = credential_value.iter().cloned().collect::<Vec<_>>();
+        sensitive_values.extend(credential_values.values().cloned());
+        if let Some((name, value)) = auth_header(
+            &connection.auth,
+            credential_value.as_deref(),
+            &credential_values,
+        )? {
+            if let Ok(value) = value.to_str() {
+                sensitive_values.push(value.into());
+                if let Some((_, token)) = value.split_once(' ') {
+                    sensitive_values.push(token.into());
+                }
+            }
             request = request.header(name, value);
         }
-        if operation.accepts_body
-            && let Some(body) = arguments.get("body")
-        {
+        if connection.name == "github" {
+            request = request.header("x-github-api-version", "2022-11-28");
+        }
+        if let Some(body) = body.as_ref() {
             request = request.json(body);
         }
         let response = request.send().await.map_err(|error| {
@@ -456,11 +557,12 @@ impl IntegrationExecutor {
         )
         .map_err(execution)?;
         let mut bytes = bounded_response(response, limit.saturating_sub(1_024)).await?;
-        if let Some(secret) = credential_value.as_deref() {
+        for secret in &sensitive_values {
             bytes = redact_exact_secret(&bytes, secret.as_bytes());
         }
         let result = serde_json::from_slice(&bytes)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+        let result = normalize_native_response(&connection, tool_name, arguments, result)?;
         Ok(json!({
             "status_code": status,
             "content_type": content_type,
@@ -525,6 +627,24 @@ impl EffectExecutor for IntegrationExecutor {
                 &scopes,
             )?)
             .map_err(execution)?,
+            IntegrationRequest::ConnectNative {
+                name,
+                base_url,
+                auth,
+                credential_reference,
+                credential_references,
+                scopes,
+            } => serde_json::to_value(self.connect_native(
+                &permit,
+                request.actor.clone(),
+                &name,
+                base_url.as_deref(),
+                &auth,
+                credential_reference.as_deref(),
+                &credential_references,
+                &scopes,
+            )?)
+            .map_err(execution)?,
             IntegrationRequest::Disconnect { name } => serde_json::to_value(
                 self.repository
                     .disconnect_integration(
@@ -566,6 +686,11 @@ pub fn compile_openapi(
 ) -> Result<IntegrationConnection, StoreError> {
     validate_name(name)?;
     validate_auth(&auth)?;
+    if matches!(auth, IntegrationAuth::Basic { .. }) {
+        return Err(StoreError::Adapter(
+            "OpenAPI imports do not accept named basic-auth credentials".into(),
+        ));
+    }
     validate_credential_reference(credential_reference.as_deref())?;
     let bytes = serde_json::to_vec(document).map_err(adapter)?;
     if bytes.len() > MAX_SCHEMA_BYTES {
@@ -662,6 +787,7 @@ pub fn compile_openapi(
         base_url,
         auth,
         credential_reference,
+        credential_references: BTreeMap::new(),
         scopes,
         operations,
         manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
@@ -670,6 +796,326 @@ pub fn compile_openapi(
     };
     validate_connection(&connection)?;
     Ok(connection)
+}
+
+/// Compile one first-party native connector into strict dynamic tool contracts.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_native(
+    name: &str,
+    base_url: Option<&str>,
+    auth: IntegrationAuth,
+    credential_reference: Option<String>,
+    credential_references: BTreeMap<String, String>,
+    scopes: Vec<String>,
+    connected_at: String,
+    updated_at: String,
+) -> Result<IntegrationConnection, StoreError> {
+    let (title, description, default_url, operations) = match name {
+        "github" => (
+            "GitHub",
+            "Native GitHub connector for repositories, issues, pull requests, checks, and releases.",
+            "https://api.github.com",
+            github_operations()?,
+        ),
+        "searxng" => (
+            "SearXNG",
+            "Native local/private metasearch connector for normalized SearXNG JSON results.",
+            "http://127.0.0.1:8888",
+            searxng_operations()?,
+        ),
+        "opensearch" => (
+            "OpenSearch",
+            "Native OpenSearch connector for document search, retrieval, indexing, updates, deletes, mappings, and cluster health.",
+            "http://127.0.0.1:9200",
+            opensearch_operations()?,
+        ),
+        _ => {
+            return Err(StoreError::Adapter(
+                "native integration must be github, searxng, or opensearch".into(),
+            ));
+        }
+    };
+    validate_native_auth(
+        name,
+        &auth,
+        credential_reference.as_deref(),
+        &credential_references,
+    )?;
+    let base_url = base_url.unwrap_or(default_url).to_owned();
+    validate_base_url(&base_url)?;
+    for reference in credential_references.values() {
+        validate_credential_reference(Some(reference))?;
+    }
+    let required_refs = usize::from(credential_reference.is_some()) + credential_references.len();
+    let status = if auth_requires_credential(&auth) && required_refs == 0 {
+        IntegrationStatus::PendingAuth
+    } else {
+        IntegrationStatus::Connected
+    };
+    let manifest = serde_json::to_vec(&json!({
+        "name": name,
+        "base_url": base_url,
+        "auth": auth,
+        "operations": operations,
+    }))
+    .map_err(adapter)?;
+    let scopes = if scopes.is_empty() && name == "github" {
+        vec!["repo".into(), "workflow".into()]
+    } else {
+        scopes
+    };
+    let connection = IntegrationConnection {
+        name: name.into(),
+        kind: IntegrationKind::Native,
+        status,
+        title: title.into(),
+        description: description.into(),
+        base_url,
+        auth,
+        credential_reference,
+        credential_references,
+        scopes,
+        operations,
+        manifest_sha256: format!("{:x}", Sha256::digest(manifest)),
+        connected_at,
+        updated_at,
+    };
+    validate_connection(&connection)?;
+    Ok(connection)
+}
+
+fn native_operation(
+    name: &str,
+    description: &str,
+    schema: Value,
+    method: &str,
+    path: &str,
+    max_output_bytes: u64,
+) -> Result<IntegrationOperation, StoreError> {
+    jsonschema::validator_for(&schema).map_err(adapter)?;
+    Ok(IntegrationOperation {
+        tool: ToolSpec {
+            name: name.into(),
+            description: description.into(),
+            input_schema: schema,
+            effect_action: Some(name.into()),
+            capability: Some("integration.invoke".into()),
+            max_output_bytes,
+        },
+        operation_id: name
+            .split_once('.')
+            .map_or(name, |(_, operation)| operation)
+            .into(),
+        method: method.into(),
+        path: path.into(),
+        path_parameters: Vec::new(),
+        query_parameters: Vec::new(),
+        accepts_body: !matches!(method, "GET" | "DELETE"),
+    })
+}
+
+fn github_operations() -> Result<Vec<IntegrationOperation>, StoreError> {
+    let bounded = || json!({"type":"integer","minimum":1,"maximum":100});
+    Ok(vec![
+        native_operation(
+            "github.repos",
+            "List repositories visible to the connected GitHub token.",
+            json!({"type":"object","additionalProperties":false,"properties":{
+                "visibility":{"type":"string","enum":["all","public","private"],"default":"all"},
+                "max_results":bounded()
+            }}),
+            "GET",
+            "/user/repos",
+            64_000,
+        )?,
+        native_operation(
+            "github.issues",
+            "List issues for a GitHub repository.",
+            github_repo_schema(
+                json!({
+                    "state":{"type":"string","enum":["open","closed","all"],"default":"open"},
+                    "max_results":bounded()
+                }),
+                &[],
+            ),
+            "GET",
+            "/repos/{owner}/{repo}/issues",
+            64_000,
+        )?,
+        native_operation(
+            "github.pull_requests",
+            "List pull requests for a GitHub repository.",
+            github_repo_schema(
+                json!({
+                    "state":{"type":"string","enum":["open","closed","all"],"default":"open"},
+                    "max_results":bounded()
+                }),
+                &[],
+            ),
+            "GET",
+            "/repos/{owner}/{repo}/pulls",
+            64_000,
+        )?,
+        native_operation(
+            "github.checks",
+            "List check runs for a GitHub commit ref.",
+            github_repo_schema(
+                json!({
+                    "ref":{"type":"string","minLength":1,"maxLength":512},
+                    "max_results":bounded()
+                }),
+                &["ref"],
+            ),
+            "GET",
+            "/repos/{owner}/{repo}/commits/{ref}/check-runs",
+            64_000,
+        )?,
+        native_operation(
+            "github.releases",
+            "List releases for a GitHub repository.",
+            github_repo_schema(json!({"max_results":bounded()}), &[]),
+            "GET",
+            "/repos/{owner}/{repo}/releases",
+            64_000,
+        )?,
+    ])
+}
+
+fn github_repo_schema(extra: Value, extra_required: &[&str]) -> Value {
+    let mut properties = Map::from_iter([
+        (
+            "owner".into(),
+            json!({"type":"string","minLength":1,"maxLength":256}),
+        ),
+        (
+            "repo".into(),
+            json!({"type":"string","minLength":1,"maxLength":256}),
+        ),
+    ]);
+    if let Some(extra) = extra.as_object() {
+        properties.extend(extra.clone());
+    }
+    let required = ["owner", "repo"]
+        .into_iter()
+        .chain(extra_required.iter().copied())
+        .collect::<Vec<_>>();
+    json!({
+        "type":"object",
+        "additionalProperties":false,
+        "properties":properties,
+        "required":required
+    })
+}
+
+fn searxng_operations() -> Result<Vec<IntegrationOperation>, StoreError> {
+    Ok(vec![
+        native_operation(
+            "searxng.search",
+            "Search a configured SearXNG instance and return normalized results.",
+            json!({"type":"object","additionalProperties":false,"properties":{
+                "query":{"type":"string","minLength":1,"maxLength":4096},
+                "max_results":{"type":"integer","minimum":1,"maximum":20,"default":10}
+            },"required":["query"]}),
+            "GET",
+            "/search",
+            128_000,
+        )?,
+        native_operation(
+            "searxng.health",
+            "Check that a configured SearXNG instance returns JSON results.",
+            json!({"type":"object","additionalProperties":false,"properties":{}}),
+            "GET",
+            "/search",
+            16_000,
+        )?,
+    ])
+}
+
+fn opensearch_operations() -> Result<Vec<IntegrationOperation>, StoreError> {
+    let empty = || json!({"type":"object","additionalProperties":false,"properties":{}});
+    let index = || json!({"type":"string","minLength":1,"maxLength":1024});
+    let id = || json!({"type":"string","minLength":1,"maxLength":1024});
+    let refresh = || json!({"type":"string","enum":["false","true","wait_for"]});
+    Ok(vec![
+        native_operation(
+            "opensearch.info",
+            "Fetch basic OpenSearch endpoint information.",
+            empty(),
+            "GET",
+            "/",
+            16_000,
+        )?,
+        native_operation(
+            "opensearch.health",
+            "Fetch OpenSearch cluster health.",
+            empty(),
+            "GET",
+            "/_cluster/health",
+            16_000,
+        )?,
+        native_operation(
+            "opensearch.list_indices",
+            "List OpenSearch indices through the JSON cat API.",
+            empty(),
+            "GET",
+            "/_cat/indices",
+            64_000,
+        )?,
+        native_operation(
+            "opensearch.get_mapping",
+            "Fetch an OpenSearch index mapping.",
+            json!({"type":"object","additionalProperties":false,"properties":{"index":index()},"required":["index"]}),
+            "GET",
+            "/{index}/_mapping",
+            64_000,
+        )?,
+        native_operation(
+            "opensearch.search",
+            "Run a bounded OpenSearch query.",
+            json!({"type":"object","additionalProperties":false,"properties":{
+            "index":index(),"query":{"type":"object"},
+            "size":{"type":"integer","minimum":1,"maximum":100,"default":10},
+            "from":{"type":"integer","minimum":0,"maximum":10000,"default":0},
+            "source_includes":{"type":"array","maxItems":256,"items":{"type":"string","maxLength":1024}},
+            "sort":{"type":"array","maxItems":64,"items":{"type":"object"}}
+        },"required":["index","query"]}),
+            "POST",
+            "/{index}/_search",
+            128_000,
+        )?,
+        native_operation(
+            "opensearch.get_document",
+            "Fetch one OpenSearch document.",
+            json!({"type":"object","additionalProperties":false,"properties":{"index":index(),"id":id()},"required":["index","id"]}),
+            "GET",
+            "/{index}/_doc/{id}",
+            64_000,
+        )?,
+        native_operation(
+            "opensearch.index_document",
+            "Create or replace one OpenSearch document.",
+            json!({"type":"object","additionalProperties":false,"properties":{"index":index(),"id":id(),"document":{"type":"object"},"refresh":refresh()},"required":["index","document"]}),
+            "POST",
+            "/{index}/_doc",
+            32_000,
+        )?,
+        native_operation(
+            "opensearch.update_document",
+            "Partially update one OpenSearch document.",
+            json!({"type":"object","additionalProperties":false,"properties":{"index":index(),"id":id(),"doc":{"type":"object"},"doc_as_upsert":{"type":"boolean"},"refresh":refresh()},"required":["index","id","doc"]}),
+            "POST",
+            "/{index}/_update/{id}",
+            32_000,
+        )?,
+        native_operation(
+            "opensearch.delete_document",
+            "Delete one OpenSearch document.",
+            json!({"type":"object","additionalProperties":false,"properties":{"index":index(),"id":id(),"refresh":refresh()},"required":["index","id"]}),
+            "DELETE",
+            "/{index}/_doc/{id}",
+            32_000,
+        )?,
+    ])
 }
 
 fn compile_operation(
@@ -867,6 +1313,9 @@ fn validate_connection(connection: &IntegrationConnection) -> Result<(), StoreEr
     validate_base_url(&connection.base_url)?;
     validate_auth(&connection.auth)?;
     validate_credential_reference(connection.credential_reference.as_deref())?;
+    for reference in connection.credential_references.values() {
+        validate_credential_reference(Some(reference))?;
+    }
     if connection.title.trim().is_empty()
         || connection.title.len() > 512
         || connection.description.len() > MAX_DESCRIPTION_BYTES
@@ -885,28 +1334,36 @@ fn validate_connection(connection: &IntegrationConnection) -> Result<(), StoreEr
             "integration connection violates identity or size bounds".into(),
         ));
     }
-    if auth_requires_credential(&connection.auth)
-        && connection.status == IntegrationStatus::Connected
-        && connection.credential_reference.is_none()
+    if connection.status == IntegrationStatus::Connected
+        && !credentials_satisfy_auth(
+            &connection.auth,
+            connection.credential_reference.as_deref(),
+            &connection.credential_references,
+        )
     {
         return Err(StoreError::Adapter(
             "connected authenticated integration requires a credential reference".into(),
         ));
     }
-    if !auth_requires_credential(&connection.auth) && connection.credential_reference.is_some() {
+    if !auth_requires_credential(&connection.auth)
+        && (connection.credential_reference.is_some()
+            || !connection.credential_references.is_empty())
+    {
         return Err(StoreError::Adapter(
             "auth-none integrations cannot retain a credential reference".into(),
         ));
     }
     let mut names = BTreeSet::new();
     for operation in &connection.operations {
+        let valid_prefix = match connection.kind {
+            IntegrationKind::OpenApi => format!("openapi.{}.", connection.name),
+            IntegrationKind::Native => format!("{}.", connection.name),
+            IntegrationKind::Mcp => format!("mcp.{}.", connection.name),
+        };
         if !names.insert(operation.tool.name.as_str())
             || operation.tool.effect_action.as_deref() != Some(&operation.tool.name)
             || operation.tool.capability.as_deref() != Some("integration.invoke")
-            || !operation
-                .tool
-                .name
-                .starts_with(&format!("openapi.{}.", connection.name))
+            || !operation.tool.name.starts_with(&valid_prefix)
             || !matches!(
                 operation.method.as_str(),
                 "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
@@ -1023,6 +1480,7 @@ fn validate_auth(auth: &IntegrationAuth) -> Result<(), StoreError> {
         {
             Ok(())
         }
+        IntegrationAuth::Basic { header } if valid_header(header) => Ok(()),
         IntegrationAuth::ServiceAccount { header } if valid_header(header) => Ok(()),
         _ => Err(StoreError::Adapter(
             "integration auth header or scheme is invalid".into(),
@@ -1064,6 +1522,66 @@ fn auth_requires_credential(auth: &IntegrationAuth) -> bool {
     !matches!(auth, IntegrationAuth::None)
 }
 
+fn credentials_satisfy_auth(
+    auth: &IntegrationAuth,
+    credential_reference: Option<&str>,
+    credential_references: &BTreeMap<String, String>,
+) -> bool {
+    match auth {
+        IntegrationAuth::None => credential_reference.is_none() && credential_references.is_empty(),
+        IntegrationAuth::Basic { .. } => {
+            credential_reference.is_none()
+                && credential_references.len() == 2
+                && credential_references.contains_key("username")
+                && credential_references.contains_key("password")
+        }
+        _ => credential_reference.is_some() && credential_references.is_empty(),
+    }
+}
+
+fn validate_native_auth(
+    name: &str,
+    auth: &IntegrationAuth,
+    credential_reference: Option<&str>,
+    credential_references: &BTreeMap<String, String>,
+) -> Result<(), StoreError> {
+    validate_auth(auth)?;
+    validate_credential_reference(credential_reference)?;
+    let supported = match name {
+        "github" => matches!(auth, IntegrationAuth::Bearer { .. }),
+        "searxng" => matches!(
+            auth,
+            IntegrationAuth::None | IntegrationAuth::Bearer { .. } | IntegrationAuth::ApiKey { .. }
+        ),
+        "opensearch" => matches!(
+            auth,
+            IntegrationAuth::None | IntegrationAuth::Bearer { .. } | IntegrationAuth::Basic { .. }
+        ),
+        _ => false,
+    };
+    if !supported {
+        return Err(StoreError::Adapter(
+            "native integration auth type is not supported".into(),
+        ));
+    }
+    let partial_basic = matches!(auth, IntegrationAuth::Basic { .. })
+        && !credential_references.is_empty()
+        && !credentials_satisfy_auth(auth, credential_reference, credential_references);
+    let misplaced = match auth {
+        IntegrationAuth::None => {
+            credential_reference.is_some() || !credential_references.is_empty()
+        }
+        IntegrationAuth::Basic { .. } => credential_reference.is_some(),
+        _ => !credential_references.is_empty(),
+    };
+    if partial_basic || misplaced {
+        return Err(StoreError::Adapter(
+            "native integration credential references do not match its auth type".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_environment(reference: &str) -> Result<String, ExecutionError> {
     let name = reference
         .strip_prefix("env:")
@@ -1080,25 +1598,40 @@ fn validate_request_credentials(
     disclosed: &[CredentialReference],
     repository: &dyn ExtensionRepository,
 ) -> Result<(), ExecutionError> {
-    let expected = match operation {
+    let mut expected = match operation {
         IntegrationRequest::ImportOpenApi {
             credential_reference,
             ..
-        } => credential_reference.clone(),
-        IntegrationRequest::Disconnect { .. } => None,
+        } => credential_reference.iter().cloned().collect::<Vec<_>>(),
+        IntegrationRequest::ConnectNative {
+            credential_reference,
+            credential_references,
+            ..
+        } => credential_reference
+            .iter()
+            .cloned()
+            .chain(credential_references.values().cloned())
+            .collect(),
+        IntegrationRequest::Disconnect { .. } => Vec::new(),
         IntegrationRequest::Invoke { connection, .. } => repository
             .get_integration(connection)
             .map_err(execution)?
-            .and_then(|connection| connection.credential_reference),
+            .map(|connection| {
+                connection
+                    .credential_reference
+                    .into_iter()
+                    .chain(connection.credential_references.into_values())
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
-    let matches = match expected.as_deref() {
-        None => disclosed.is_empty(),
-        Some(expected) => {
-            disclosed.len() == 1
-                && disclosed[0].reference == expected
-                && disclosed[0].value_hash.is_none()
-        }
-    };
+    expected.sort();
+    let mut actual = disclosed
+        .iter()
+        .map(|reference| reference.reference.clone())
+        .collect::<Vec<_>>();
+    actual.sort();
+    let matches = expected == actual && disclosed.iter().all(|value| value.value_hash.is_none());
     if matches {
         Ok(())
     } else {
@@ -1110,23 +1643,454 @@ fn validate_request_credentials(
 
 fn auth_header(
     auth: &IntegrationAuth,
-    secret: &str,
-) -> Result<(HeaderName, HeaderValue), ExecutionError> {
+    secret: Option<&str>,
+    named: &BTreeMap<String, String>,
+) -> Result<Option<(HeaderName, HeaderValue)>, ExecutionError> {
     let (header, value) = match auth {
-        IntegrationAuth::None => return Err(execution("credential supplied for auth none")),
-        IntegrationAuth::Bearer { header, scheme } => (header, format!("{scheme} {secret}")),
+        IntegrationAuth::None => return Ok(None),
+        IntegrationAuth::Bearer { header, scheme } => (
+            header,
+            format!(
+                "{scheme} {}",
+                secret.ok_or_else(|| execution("bearer credential is unavailable"))?
+            ),
+        ),
         IntegrationAuth::ApiKey { header, scheme } => (
             header,
-            scheme
-                .as_ref()
-                .map_or_else(|| secret.into(), |scheme| format!("{scheme} {secret}")),
+            scheme.as_ref().map_or_else(
+                || {
+                    secret
+                        .ok_or_else(|| execution("API-key credential is unavailable"))
+                        .map(Into::into)
+                },
+                |scheme| {
+                    secret
+                        .ok_or_else(|| execution("API-key credential is unavailable"))
+                        .map(|secret| format!("{scheme} {secret}"))
+                },
+            )?,
         ),
-        IntegrationAuth::ServiceAccount { header } => (header, secret.into()),
+        IntegrationAuth::Basic { header } => {
+            let username = named
+                .get("username")
+                .ok_or_else(|| execution("basic-auth username is unavailable"))?;
+            let password = named
+                .get("password")
+                .ok_or_else(|| execution("basic-auth password is unavailable"))?;
+            (
+                header,
+                format!("Basic {}", BASE64.encode(format!("{username}:{password}"))),
+            )
+        }
+        IntegrationAuth::ServiceAccount { header } => (
+            header,
+            secret
+                .ok_or_else(|| execution("service-account credential is unavailable"))?
+                .into(),
+        ),
     };
-    Ok((
+    Ok(Some((
         HeaderName::from_bytes(header.as_bytes()).map_err(execution)?,
         HeaderValue::from_str(&value).map_err(execution)?,
-    ))
+    )))
+}
+
+struct PreparedHttpRequest {
+    method: reqwest::Method,
+    url: Url,
+    body: Option<Value>,
+}
+
+fn prepare_native_request(
+    connection: &IntegrationConnection,
+    tool_name: &str,
+    arguments: &Value,
+) -> Result<PreparedHttpRequest, ExecutionError> {
+    let arguments = arguments
+        .as_object()
+        .ok_or_else(|| execution("native integration arguments must be an object"))?;
+    match connection.name.as_str() {
+        "github" => github_request(connection, tool_name, arguments),
+        "searxng" => searxng_request(connection, tool_name, arguments),
+        "opensearch" => opensearch_request(connection, tool_name, arguments),
+        _ => Err(execution("unsupported native integration")),
+    }
+}
+
+fn github_request(
+    connection: &IntegrationConnection,
+    tool_name: &str,
+    arguments: &Map<String, Value>,
+) -> Result<PreparedHttpRequest, ExecutionError> {
+    let max_results = bounded_integer(arguments, "max_results", 30, 1, 100)?;
+    let (path, query) = match tool_name {
+        "github.repos" => (
+            "/user/repos".into(),
+            vec![
+                (
+                    "visibility",
+                    optional_string(arguments, "visibility")
+                        .unwrap_or("all")
+                        .into(),
+                ),
+                ("per_page", max_results.to_string()),
+            ],
+        ),
+        "github.issues" => (
+            format!(
+                "/repos/{}/{}/issues",
+                native_segment(arguments, "owner")?,
+                native_segment(arguments, "repo")?
+            ),
+            vec![
+                (
+                    "state",
+                    optional_string(arguments, "state").unwrap_or("open").into(),
+                ),
+                ("per_page", max_results.to_string()),
+            ],
+        ),
+        "github.pull_requests" => (
+            format!(
+                "/repos/{}/{}/pulls",
+                native_segment(arguments, "owner")?,
+                native_segment(arguments, "repo")?
+            ),
+            vec![
+                (
+                    "state",
+                    optional_string(arguments, "state").unwrap_or("open").into(),
+                ),
+                ("per_page", max_results.to_string()),
+            ],
+        ),
+        "github.checks" => (
+            format!(
+                "/repos/{}/{}/commits/{}/check-runs",
+                native_segment(arguments, "owner")?,
+                native_segment(arguments, "repo")?,
+                native_segment(arguments, "ref")?
+            ),
+            vec![("per_page", max_results.to_string())],
+        ),
+        "github.releases" => (
+            format!(
+                "/repos/{}/{}/releases",
+                native_segment(arguments, "owner")?,
+                native_segment(arguments, "repo")?
+            ),
+            vec![("per_page", max_results.to_string())],
+        ),
+        _ => return Err(execution("unsupported GitHub integration tool")),
+    };
+    let mut url = native_url(connection, &path)?;
+    append_pairs(&mut url, query);
+    Ok(PreparedHttpRequest {
+        method: reqwest::Method::GET,
+        url,
+        body: None,
+    })
+}
+
+fn searxng_request(
+    connection: &IntegrationConnection,
+    tool_name: &str,
+    arguments: &Map<String, Value>,
+) -> Result<PreparedHttpRequest, ExecutionError> {
+    let mut url = native_url(connection, "/search")?;
+    let query = match tool_name {
+        "searxng.search" => required_string(arguments, "query")?,
+        "searxng.health" => "colossus",
+        _ => return Err(execution("unsupported SearXNG integration tool")),
+    };
+    append_pairs(
+        &mut url,
+        vec![("q", query.into()), ("format", "json".into())],
+    );
+    Ok(PreparedHttpRequest {
+        method: reqwest::Method::GET,
+        url,
+        body: None,
+    })
+}
+
+fn opensearch_request(
+    connection: &IntegrationConnection,
+    tool_name: &str,
+    arguments: &Map<String, Value>,
+) -> Result<PreparedHttpRequest, ExecutionError> {
+    let mut query = Vec::<(&str, String)>::new();
+    let (method, path, body) = match tool_name {
+        "opensearch.info" => (reqwest::Method::GET, "/".into(), None),
+        "opensearch.health" => (reqwest::Method::GET, "/_cluster/health".into(), None),
+        "opensearch.list_indices" => {
+            query.push(("format", "json".into()));
+            (reqwest::Method::GET, "/_cat/indices".into(), None)
+        }
+        "opensearch.get_mapping" => (
+            reqwest::Method::GET,
+            format!("/{}/_mapping", opensearch_index(arguments)?),
+            None,
+        ),
+        "opensearch.search" => {
+            let mut body = Map::from_iter([
+                (
+                    "query".into(),
+                    arguments
+                        .get("query")
+                        .cloned()
+                        .ok_or_else(|| execution("OpenSearch query is required"))?,
+                ),
+                (
+                    "size".into(),
+                    json!(bounded_integer(arguments, "size", 10, 1, 100)?),
+                ),
+                (
+                    "from".into(),
+                    json!(bounded_integer(arguments, "from", 0, 0, 10_000)?),
+                ),
+            ]);
+            for name in ["source_includes", "sort"] {
+                if let Some(value) = arguments.get(name) {
+                    body.insert(
+                        if name == "source_includes" {
+                            "_source"
+                        } else {
+                            name
+                        }
+                        .into(),
+                        value.clone(),
+                    );
+                }
+            }
+            (
+                reqwest::Method::POST,
+                format!("/{}/_search", opensearch_index(arguments)?),
+                Some(Value::Object(body)),
+            )
+        }
+        "opensearch.get_document" => (
+            reqwest::Method::GET,
+            format!(
+                "/{}/_doc/{}",
+                opensearch_index(arguments)?,
+                native_segment(arguments, "id")?
+            ),
+            None,
+        ),
+        "opensearch.index_document" => {
+            add_refresh(arguments, &mut query)?;
+            let document = arguments
+                .get("document")
+                .cloned()
+                .ok_or_else(|| execution("OpenSearch document is required"))?;
+            if let Some(id) = optional_string(arguments, "id").filter(|value| !value.is_empty()) {
+                (
+                    reqwest::Method::PUT,
+                    format!(
+                        "/{}/_doc/{}",
+                        opensearch_index(arguments)?,
+                        encode_path_segment(id)
+                    ),
+                    Some(document),
+                )
+            } else {
+                (
+                    reqwest::Method::POST,
+                    format!("/{}/_doc", opensearch_index(arguments)?),
+                    Some(document),
+                )
+            }
+        }
+        "opensearch.update_document" => {
+            add_refresh(arguments, &mut query)?;
+            let mut body = Map::from_iter([(
+                "doc".into(),
+                arguments
+                    .get("doc")
+                    .cloned()
+                    .ok_or_else(|| execution("OpenSearch update doc is required"))?,
+            )]);
+            if let Some(value) = arguments.get("doc_as_upsert") {
+                body.insert("doc_as_upsert".into(), value.clone());
+            }
+            (
+                reqwest::Method::POST,
+                format!(
+                    "/{}/_update/{}",
+                    opensearch_index(arguments)?,
+                    native_segment(arguments, "id")?
+                ),
+                Some(Value::Object(body)),
+            )
+        }
+        "opensearch.delete_document" => {
+            add_refresh(arguments, &mut query)?;
+            (
+                reqwest::Method::DELETE,
+                format!(
+                    "/{}/_doc/{}",
+                    opensearch_index(arguments)?,
+                    native_segment(arguments, "id")?
+                ),
+                None,
+            )
+        }
+        _ => return Err(execution("unsupported OpenSearch integration tool")),
+    };
+    let mut url = native_url(connection, &path)?;
+    append_pairs(&mut url, query);
+    Ok(PreparedHttpRequest { method, url, body })
+}
+
+fn normalize_native_response(
+    connection: &IntegrationConnection,
+    tool_name: &str,
+    arguments: &Value,
+    result: Value,
+) -> Result<Value, ExecutionError> {
+    if connection.name != "searxng" {
+        return Ok(result);
+    }
+    let results = result
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| execution("SearXNG response must contain a results array"))?;
+    if tool_name == "searxng.health" {
+        return Ok(json!({"status":"ok","result_count":results.len().min(1)}));
+    }
+    let max_results = arguments
+        .as_object()
+        .map(|values| bounded_integer(values, "max_results", 10, 1, 20))
+        .transpose()?
+        .unwrap_or(10) as usize;
+    let normalized = results
+        .iter()
+        .take(max_results)
+        .filter_map(Value::as_object)
+        .map(|source| {
+            let mut metadata = source.clone();
+            for key in ["title", "url", "content"] {
+                metadata.remove(key);
+            }
+            json!({
+                "title": source.get("title").and_then(Value::as_str).unwrap_or_default(),
+                "url": source.get("url").and_then(Value::as_str).unwrap_or_default(),
+                "content": source.get("content").and_then(Value::as_str).unwrap_or_default(),
+                "metadata": metadata,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "query": arguments.get("query").and_then(Value::as_str).unwrap_or_default(),
+        "count": normalized.len(),
+        "results": normalized,
+    }))
+}
+
+fn native_url(connection: &IntegrationConnection, path: &str) -> Result<Url, ExecutionError> {
+    let parsed = Url::parse(&connection.base_url).map_err(execution)?;
+    if connection.name == "searxng"
+        && path == "/search"
+        && parsed.path().trim_end_matches('/') == "/search"
+    {
+        return Ok(parsed);
+    }
+    let mut base = connection.base_url.clone();
+    if !base.ends_with('/') {
+        base.push('/');
+    }
+    Url::parse(&base)
+        .map_err(execution)?
+        .join(path.trim_start_matches('/'))
+        .map_err(execution)
+}
+
+fn append_pairs(url: &mut Url, pairs: Vec<(&str, String)>) {
+    let mut query = url.query_pairs_mut();
+    for (name, value) in pairs {
+        query.append_pair(name, &value);
+    }
+}
+
+fn required_string<'a>(
+    arguments: &'a Map<String, Value>,
+    name: &str,
+) -> Result<&'a str, ExecutionError> {
+    arguments
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| execution(format!("integration argument {name} is required")))
+}
+
+fn optional_string<'a>(arguments: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
+    arguments.get(name).and_then(Value::as_str)
+}
+
+fn native_segment(arguments: &Map<String, Value>, name: &str) -> Result<String, ExecutionError> {
+    Ok(encode_path_segment(required_string(arguments, name)?))
+}
+
+fn opensearch_index(arguments: &Map<String, Value>) -> Result<String, ExecutionError> {
+    let value = required_string(arguments, "index")?;
+    if value.contains(['/', '\\']) || matches!(value, "." | "..") {
+        return Err(execution(
+            "OpenSearch index contains an unsafe path segment",
+        ));
+    }
+    Ok(encode_path_segment_with(value, b",*"))
+}
+
+fn encode_path_segment_with(value: &str, additionally_safe: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'.' | b'_' | b'~')
+            || additionally_safe.contains(&byte)
+        {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
+fn bounded_integer(
+    arguments: &Map<String, Value>,
+    name: &str,
+    default: i64,
+    minimum: i64,
+    maximum: i64,
+) -> Result<i64, ExecutionError> {
+    let value = arguments
+        .get(name)
+        .and_then(Value::as_i64)
+        .unwrap_or(default);
+    if (minimum..=maximum).contains(&value) {
+        Ok(value)
+    } else {
+        Err(execution(format!(
+            "integration argument {name} is outside its bound"
+        )))
+    }
+}
+
+fn add_refresh(
+    arguments: &Map<String, Value>,
+    query: &mut Vec<(&'static str, String)>,
+) -> Result<(), ExecutionError> {
+    if let Some(refresh) = optional_string(arguments, "refresh") {
+        if !matches!(refresh, "false" | "true" | "wait_for") {
+            return Err(execution("invalid OpenSearch refresh value"));
+        }
+        query.push(("refresh", refresh.into()));
+    }
+    Ok(())
 }
 
 fn operation_url(
@@ -1282,15 +2246,15 @@ impl ReqwestErrorClass for reqwest::Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest, compile_openapi,
-        redact_exact_secret,
+        EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest, compile_native,
+        compile_openapi, normalize_native_response, prepare_native_request, redact_exact_secret,
     };
     use colossus_contracts::{DecisionOutcome, IntegrationAuth, IntegrationStatus};
     use colossus_policy::{EffectExecutor, system_actor};
     use colossus_ports::{EventJournal, ExtensionRepository};
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
-    use std::sync::Arc;
+    use std::{collections::BTreeMap, sync::Arc};
 
     fn document() -> serde_json::Value {
         json!({
@@ -1495,5 +2459,91 @@ mod tests {
             .await
             .expect_err("mismatched disclosure must fail");
         assert!(error.to_string().contains("credential disclosure"));
+    }
+
+    #[test]
+    fn native_manifests_cover_github_searxng_and_opensearch_auth_contracts() {
+        let github = compile_native(
+            "github",
+            None,
+            IntegrationAuth::Bearer {
+                header: "Authorization".into(),
+                scheme: "Bearer".into(),
+            },
+            None,
+            BTreeMap::new(),
+            Vec::new(),
+            "created".into(),
+            "updated".into(),
+        )
+        .expect("GitHub");
+        assert_eq!(github.status, IntegrationStatus::PendingAuth);
+        assert_eq!(github.operations.len(), 5);
+        assert_eq!(github.scopes, ["repo", "workflow"]);
+
+        let searxng = compile_native(
+            "searxng",
+            Some("https://search.example.test/search"),
+            IntegrationAuth::None,
+            None,
+            BTreeMap::new(),
+            Vec::new(),
+            "created".into(),
+            "updated".into(),
+        )
+        .expect("SearXNG");
+        let prepared = prepare_native_request(
+            &searxng,
+            "searxng.search",
+            &json!({"query":"rust agents","max_results":2}),
+        )
+        .expect("request");
+        assert_eq!(prepared.url.path(), "/search");
+        assert_eq!(prepared.url.query(), Some("q=rust+agents&format=json"));
+        let normalized = normalize_native_response(
+            &searxng,
+            "searxng.search",
+            &json!({"query":"rust agents","max_results":1}),
+            json!({"results":[
+                {"title":"One","url":"https://one.test","content":"First","engine":"demo"},
+                {"title":"Two","url":"https://two.test","content":"Second"}
+            ]}),
+        )
+        .expect("normalize");
+        assert_eq!(normalized["count"], 1);
+        assert_eq!(normalized["results"][0]["metadata"]["engine"], "demo");
+
+        let basic = BTreeMap::from([
+            ("username".into(), "env:OPENSEARCH_USER".into()),
+            ("password".into(), "env:OPENSEARCH_PASSWORD".into()),
+        ]);
+        let opensearch = compile_native(
+            "opensearch",
+            Some("https://search.example.test"),
+            IntegrationAuth::Basic {
+                header: "Authorization".into(),
+            },
+            None,
+            basic,
+            Vec::new(),
+            "created".into(),
+            "updated".into(),
+        )
+        .expect("OpenSearch");
+        assert_eq!(opensearch.status, IntegrationStatus::Connected);
+        assert_eq!(opensearch.operations.len(), 9);
+        let prepared = prepare_native_request(
+            &opensearch,
+            "opensearch.update_document",
+            &json!({
+                "index":"notes-*","id":"a b","doc":{"status":"done"},
+                "doc_as_upsert":true,"refresh":"wait_for"
+            }),
+        )
+        .expect("update request");
+        assert_eq!(prepared.method, reqwest::Method::POST);
+        assert_eq!(prepared.url.path(), "/notes-*/_update/a%20b");
+        assert_eq!(prepared.url.query(), Some("refresh=wait_for"));
+        assert_eq!(prepared.body.expect("body")["doc_as_upsert"], true);
     }
 }

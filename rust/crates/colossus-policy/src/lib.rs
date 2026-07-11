@@ -546,7 +546,7 @@ fn redact_hard_secrets(value: &mut Value) {
     match value {
         Value::Object(object) => {
             for (key, child) in object {
-                if is_hard_secret_key(key) {
+                if is_hard_secret_key(key) && !is_environment_credential_reference(child) {
                     let bytes = serde_json::to_vec(child).unwrap_or_default();
                     *child = json!({
                         "redacted": true,
@@ -561,6 +561,18 @@ fn redact_hard_secrets(value: &mut Value) {
         Value::Array(array) => array.iter_mut().for_each(redact_hard_secrets),
         _ => {}
     }
+}
+
+fn is_environment_credential_reference(value: &Value) -> bool {
+    value.as_str().is_some_and(|value| {
+        value.strip_prefix("env:").is_some_and(|name| {
+            let mut bytes = name.bytes();
+            bytes
+                .next()
+                .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+                && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        })
+    })
 }
 
 fn disclosure_summary(request: &EffectRequest) -> Value {
@@ -1907,7 +1919,8 @@ mod tests {
                     serde_json::json!({
                         "message": "safe",
                         "api_key": "must-not-leak",
-                        "headers": {"authorization": "Bearer secret"}
+                        "headers": {"authorization": "Bearer secret"},
+                        "credential_references": {"password": "env:SAFE_PASSWORD_REF"}
                     }),
                 ),
                 &executor,
@@ -1924,6 +1937,10 @@ mod tests {
         assert_eq!(
             request.content["headers"]["authorization"]["redacted"],
             true
+        );
+        assert_eq!(
+            request.content["credential_references"]["password"],
+            "env:SAFE_PASSWORD_REF"
         );
         assert!(
             !serde_json::to_string(&request)
