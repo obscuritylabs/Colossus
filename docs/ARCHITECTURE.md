@@ -182,6 +182,12 @@ their declared ID, while nested repeated work receives bounded paths such as
 idempotency, retry, effect context, and child-workflow links use that scoped identity.
 Replay therefore cannot apply one `foreach` item's result or approval to another item.
 
+Interactive work refresh is an application-layer aggregate, not terminal-owned state.
+`Runtime::work_state` reconstructs a bounded exact-session snapshot of tasks, active
+decisions, actionable plans, current goals, and nonterminal subagents. The `work` CLI,
+embedded `/work`, and worker-backed `/work` all use this same contract; the authenticated
+worker never grants clients direct repository access.
+
 See [Rust Reconstruction Status](RUST_RECONSTRUCTION.md) for the current implementation
 line and remaining milestones.
 

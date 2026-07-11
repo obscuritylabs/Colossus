@@ -68,6 +68,9 @@ obsolete Go launcher.
   cascade. Repeated and parallel steps use durable scoped execution identities, so
   per-item inputs, effects, idempotency keys, retries, and child links reconstruct without
   cross-iteration reuse.
+- A bounded session work-state snapshot composes tasks, active decisions, actionable
+  plans, current goals, and nonterminal subagents for `work`, embedded `/work`, and the
+  authenticated worker REPL without duplicating repository logic in interfaces.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   a disposable Tantivy lexical index with event-id idempotency, durable replay position,
   retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry
@@ -227,6 +230,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- w
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow register .colossus/workflows/offline-echo.yaml
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}' --queued
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- work --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- repl
 ```
 

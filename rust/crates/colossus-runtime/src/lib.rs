@@ -19,6 +19,7 @@ use colossus_contracts::{
     SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult,
     SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus,
     TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
+    WorkStateSnapshot,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -3510,6 +3511,52 @@ impl Runtime {
         self.work
             .list_goals(session_id, status, limit)
             .map_err(Into::into)
+    }
+
+    /// Refresh bounded actionable work for one exact durable session.
+    pub fn work_state(&self, session_id: &str) -> Result<WorkStateSnapshot, RuntimeError> {
+        self.get_session(session_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("session {session_id}")))?;
+        let tasks = self.work.list_tasks(Some(session_id), None, 1_000)?;
+        let open_task_count = tasks
+            .iter()
+            .filter(|task| !matches!(task.status, TaskStatus::Completed | TaskStatus::Cancelled))
+            .count();
+        let active_decisions =
+            self.work
+                .list_decisions(Some(session_id), Some(DecisionStatus::Active), 1_000)?;
+        let actionable_plans = self
+            .work
+            .list_plans(Some(session_id), None, 1_000)?
+            .into_iter()
+            .filter(|plan| matches!(plan.status, PlanStatus::Draft | PlanStatus::Approved))
+            .collect();
+        let current_goals = self
+            .work
+            .list_goals(Some(session_id), None, 1_000)?
+            .into_iter()
+            .filter(|goal| goal.status != GoalStatus::Complete)
+            .collect();
+        let current_subagents = self
+            .work
+            .list_subagents(Some(session_id), None, 1_000)?
+            .into_iter()
+            .filter(|job| {
+                matches!(
+                    job.status,
+                    SubagentStatus::Queued | SubagentStatus::Running | SubagentStatus::Interrupted
+                )
+            })
+            .collect();
+        Ok(WorkStateSnapshot {
+            session_id: session_id.into(),
+            tasks,
+            open_task_count,
+            active_decisions,
+            actionable_plans,
+            current_goals,
+            current_subagents,
+        })
     }
 
     /// Create a durable draft plan through the effect gateway.

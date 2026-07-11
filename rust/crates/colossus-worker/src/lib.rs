@@ -180,6 +180,11 @@ pub enum WorkerOperation {
     },
     /// Resolve the newest session.
     SessionLatest,
+    /// Refresh bounded actionable work for one session.
+    WorkState {
+        /// Exact session identifier.
+        session_id: String,
+    },
     /// Show context budget status.
     ContextStatus {
         /// Exact session identifier.
@@ -1216,6 +1221,7 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::SessionList { .. } => "session_list",
         WorkerOperation::SessionMessages { .. } => "session_messages",
         WorkerOperation::SessionLatest => "session_latest",
+        WorkerOperation::WorkState { .. } => "work_state",
         WorkerOperation::ContextStatus { .. } => "context_status",
         WorkerOperation::ContextList { .. } => "context_list",
         WorkerOperation::ContextCompact { .. } => "context_compact",
@@ -1452,6 +1458,9 @@ async fn dispatch(
             runtime.session_messages(&session_id)?,
         )?),
         WorkerOperation::SessionLatest => Ok(serde_json::to_value(runtime.latest_session()?)?),
+        WorkerOperation::WorkState { session_id } => {
+            Ok(serde_json::to_value(runtime.work_state(&session_id)?)?)
+        }
         WorkerOperation::ContextStatus { session_id } => Ok(serde_json::to_value(
             runtime.context_status(&session_id).await?,
         )?),

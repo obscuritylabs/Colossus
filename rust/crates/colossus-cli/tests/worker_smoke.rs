@@ -322,6 +322,13 @@ sandbox:
     );
     let goal: Value = serde_json::from_slice(&goal.stdout).expect("goal JSON");
     assert_eq!(goal["goal"]["iteration_budget"], 1);
+    let work = run(binary, &config, &["work", "--session", session_id]);
+    assert!(work.status.success());
+    let work: Value = serde_json::from_slice(&work.stdout).expect("worker work state JSON");
+    assert_eq!(work["session_id"], session_id);
+    assert_eq!(work["open_task_count"], 0);
+    assert_eq!(work["actionable_plans"].as_array().map(Vec::len), Some(1));
+    assert_eq!(work["current_goals"].as_array().map(Vec::len), Some(1));
 
     let agent = run(
         binary,
@@ -455,7 +462,7 @@ sandbox:
         binary,
         &config,
         &["repl", "--session", session_id],
-        "/sessions\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
+        "/sessions\n/work\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
     );
     assert!(
         repl.status.success(),
@@ -595,7 +602,7 @@ steps:
         binary,
         &config,
         &["repl", "--session", session_id],
-        "/session show\n/exit\n",
+        "/session show\n/work\n/exit\n",
     );
     assert!(
         embedded_repl.status.success(),

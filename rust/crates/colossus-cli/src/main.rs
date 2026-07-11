@@ -287,6 +287,12 @@ enum Command {
     Tools(ToolsCommand),
     /// Create, inspect, and resume durable sessions.
     Sessions(SessionsCommand),
+    /// Refresh bounded actionable work for a session.
+    Work {
+        /// Exact session; defaults to the latest session.
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Inspect, compact, and restore durable long-session context.
     Context(ContextCommand),
     /// Create and inspect durable session tasks.
@@ -1651,7 +1657,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1672,6 +1678,8 @@ async fn repl(
                     print_json(&runtime.tool_specs())?;
                 } else if line == "/sessions" {
                     print_json(&runtime.list_sessions(20)?)?;
+                } else if line == "/work" {
+                    print_json(&runtime.work_state(&active_session_id)?)?;
                 } else if line == "/tasks" {
                     print_json(&runtime.list_tasks(Some(&active_session_id), None, 100)?)?;
                 } else if line == "/decisions" {
@@ -2181,6 +2189,25 @@ async fn dispatch_to_worker_if_active(
                 return Err("session not found".into());
             }
             print_json(&result)?;
+            Ok(true)
+        }
+        Command::Work { session } => {
+            let session_id = if let Some(session_id) = session {
+                session_id.clone()
+            } else {
+                client
+                    .call(WorkerOperation::SessionLatest)
+                    .await?
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| cli_error("worker latest session response has no id"))?
+                    .to_owned()
+            };
+            print_json(
+                &client
+                    .call(WorkerOperation::WorkState { session_id })
+                    .await?,
+            )?;
             Ok(true)
         }
         Command::Context(command) => {
@@ -2829,7 +2856,7 @@ async fn worker_repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -2852,6 +2879,14 @@ async fn worker_repl(
                     print_json(
                         &client
                             .call(WorkerOperation::SessionList { limit: 20 })
+                            .await?,
+                    )?;
+                } else if line == "/work" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::WorkState {
+                                session_id: active_session_id.clone(),
+                            })
                             .await?,
                     )?;
                 } else if line == "/tasks" {
@@ -3536,6 +3571,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 print_json(&runtime.create_session(title.as_deref())?)?;
             }
         },
+        Command::Work { session } => {
+            let session_id = session
+                .map(Ok)
+                .unwrap_or_else(|| runtime.latest_session().map(|session| session.id))?;
+            print_json(&runtime.work_state(&session_id)?)?;
+        }
         Command::Context(command) => match command.command {
             ContextAction::Status { session_id } => {
                 print_json(&runtime.context_status(&session_id).await?)?;

@@ -684,6 +684,26 @@ pub struct SubagentQueueStatus {
     pub available_slots: usize,
 }
 
+/// Bounded session-scoped work state for interactive refresh and application clients.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkStateSnapshot {
+    /// Exact owning session.
+    pub session_id: String,
+    /// All bounded task records, including terminal history.
+    pub tasks: Vec<TaskRecord>,
+    /// Number of tasks not completed or cancelled.
+    pub open_task_count: usize,
+    /// Binding active decisions.
+    pub active_decisions: Vec<KeyDecision>,
+    /// Draft or approved plans that remain actionable.
+    pub actionable_plans: Vec<PlanRecord>,
+    /// Active or blocked goals that remain relevant.
+    pub current_goals: Vec<GoalRecord>,
+    /// Queued, running, or interrupted child jobs.
+    pub current_subagents: Vec<SubagentJob>,
+}
+
 /// Configured research depth controlling bounded query and worker budgets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

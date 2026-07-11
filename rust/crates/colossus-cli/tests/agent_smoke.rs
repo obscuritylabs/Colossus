@@ -536,6 +536,19 @@ sandbox:
         serde_json::from_slice(&queued_status.stdout).expect("queue status JSON");
     assert_eq!(queued_status["queued"], 4);
     assert_eq!(queued_status["max_concurrent"], 2);
+    let work = run(binary, &config, &["work", "--session", &session_id]);
+    assert!(
+        work.status.success(),
+        "{}",
+        String::from_utf8_lossy(&work.stderr)
+    );
+    let work: Value = serde_json::from_slice(&work.stdout).expect("work state JSON");
+    assert_eq!(work["session_id"], session_id);
+    assert_eq!(work["tasks"].as_array().map(Vec::len), Some(1));
+    assert_eq!(work["open_task_count"], 0);
+    assert_eq!(work["active_decisions"].as_array().map(Vec::len), Some(1));
+    assert_eq!(work["current_goals"].as_array().map(Vec::len), Some(1));
+    assert_eq!(work["current_subagents"].as_array().map(Vec::len), Some(4));
     let drained_agents = run(binary, &config, &["agents", "drain"]);
     assert!(
         drained_agents.status.success(),
@@ -550,6 +563,14 @@ sandbox:
     assert_eq!(child["status"], "completed");
     assert_eq!(child["final_output"], "child complete 0");
     assert!(child["child_run_id"].as_str().is_some());
+    let refreshed = run(binary, &config, &["work", "--session", &session_id]);
+    let refreshed: Value =
+        serde_json::from_slice(&refreshed.stdout).expect("refreshed work state JSON");
+    assert!(
+        refreshed["current_subagents"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
 
     let audit = run(binary, &config, &["audit", "show", "--limit", "1000"]);
     assert!(audit.status.success());
