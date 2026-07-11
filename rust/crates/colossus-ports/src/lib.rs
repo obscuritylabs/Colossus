@@ -11,7 +11,7 @@ use colossus_contracts::{
     ProviderEvent, ProviderRoute, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun,
     ResearchSource, SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord,
     SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
-    WorkflowDefinition, WorkflowRun,
+    UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -219,6 +219,13 @@ pub trait ToolExecutor: Send + Sync {
         call: ToolCall,
         context: ExecutionContext,
     ) -> Result<ToolResult, ToolError>;
+}
+
+/// Optional interactive interface used only when a surface can safely ask the user.
+#[async_trait]
+pub trait UserPromptProvider: Send + Sync {
+    /// Present one bounded question and return the user's bounded answer.
+    async fn prompt(&self, request: UserPromptRequest) -> Result<UserPromptResponse, ToolError>;
 }
 
 /// Supplies journal encryption keys without a plaintext fallback.

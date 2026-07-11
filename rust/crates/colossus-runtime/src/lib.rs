@@ -10,15 +10,15 @@ use colossus_contracts::{
     EventClassification, ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord,
     GoalRunResult, GoalStatus, IntegrationAuth, IntegrationConnection, IntegrationSummary,
     KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole,
-    ModelRequest, NewEvent, PackInstallation, PackVerification, PlanRecord, PlanStatus, PlanStep,
-    PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
-    QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
-    ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage, SessionSummary,
-    SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult,
-    SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
-    SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
-    TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
+    ModelRequest, ModelToolDefinition, NewEvent, PackInstallation, PackVerification, PlanRecord,
+    PlanStatus, PlanStep, PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo,
+    ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn,
+    PublisherTrust, QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun,
+    ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
+    SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection,
+    SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult,
+    SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus,
+    TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -51,7 +51,7 @@ use colossus_ports::{
     EventJournal, ExtensionRepository, KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever,
     ModelProvider, ModelProviderError, PolicyDecisionPoint, ProjectionStore, ProviderEventObserver,
     ResearchRepository, SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor,
-    ToolRegistry, WorkRepository, WorkflowRepository,
+    ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
@@ -78,6 +78,7 @@ use colossus_workflow::{
     EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,
     WorkflowError, WorkflowService, validate_definition,
 };
+use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1816,7 +1817,7 @@ pub struct Runtime {
     pack_process_executor: Arc<PackProcessExecutor>,
     integration_executor: Arc<IntegrationExecutor>,
     sessions: Arc<dyn SessionRepository>,
-    context: Arc<ContextService>,
+    context_executor: Arc<ContextEffectExecutor>,
     work: Arc<dyn WorkRepository>,
     work_executor: Arc<WorkEffectExecutor>,
     memory_executor: Arc<MemoryEffectExecutor>,
@@ -1849,6 +1850,15 @@ impl Runtime {
     pub fn open_with_approval(
         config: &RuntimeConfig,
         approvals: Arc<dyn ApprovalProvider>,
+    ) -> Result<Self, RuntimeError> {
+        Self::open_with_interfaces(config, approvals, None)
+    }
+
+    /// Compose the runtime with optional interactive interface ports.
+    pub fn open_with_interfaces(
+        config: &RuntimeConfig,
+        approvals: Arc<dyn ApprovalProvider>,
+        user_prompts: Option<Arc<dyn UserPromptProvider>>,
     ) -> Result<Self, RuntimeError> {
         let workspace = fs::canonicalize(std::env::current_dir()?)?;
         let repository_id = repository_identity(&workspace);
@@ -2006,10 +2016,26 @@ impl Runtime {
                     "skill.inspect",
                     "skill.read",
                     "skill.validate",
+                    "repo.map",
+                    "repo.symbol_search",
+                    "repo.references",
+                    "repo.file_summary",
+                    "context.show",
+                    "context.snapshots",
+                    "patch.preview",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
                 for action in ["skill.scaffold", "skill.write", "skill.install"] {
+                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
+                }
+                for action in [
+                    "context.compact",
+                    "context.restore",
+                    "patch.apply",
+                    "patch.reverse",
+                    "trace.export",
+                ] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
                 for action in ["pack.verify", "bundle.verify"] {
@@ -2178,6 +2204,18 @@ impl Runtime {
             "git.status".to_owned(),
             "git.diff".to_owned(),
             "git.show".to_owned(),
+            "repo.map".to_owned(),
+            "repo.symbol_search".to_owned(),
+            "repo.references".to_owned(),
+            "repo.file_summary".to_owned(),
+            "context.show".to_owned(),
+            "context.compact".to_owned(),
+            "context.snapshots".to_owned(),
+            "context.restore".to_owned(),
+            "patch.preview".to_owned(),
+            "patch.apply".to_owned(),
+            "patch.reverse".to_owned(),
+            "trace.export".to_owned(),
             "network.http".to_owned(),
             "task.create".to_owned(),
             "task.update".to_owned(),
@@ -2278,7 +2316,16 @@ impl Runtime {
             limit: config.memory.retrieval_limit,
             repository_id: repository_id.clone(),
         });
-        let mut active_tools = config.agent.tools.clone();
+        let mut active_tools = config
+            .agent
+            .tools
+            .iter()
+            .filter(|name| name.as_str() != "user.ask" || user_prompts.is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        if user_prompts.is_some() && !active_tools.iter().any(|name| name == "user.ask") {
+            active_tools.push("user.ask".into());
+        }
         for goal_tool in ["goal.show", "goal.update"] {
             if !active_tools.iter().any(|name| name == goal_tool) {
                 active_tools.push(goal_tool.into());
@@ -2326,7 +2373,23 @@ impl Runtime {
         let research_executor = Arc::new(ResearchEffectExecutor {
             service: research_service,
         });
-        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+        let context_repository: Arc<dyn ContextRepository> =
+            Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
+        let context = Arc::new(
+            ContextService::new(
+                config.context.clone(),
+                Arc::clone(&sessions),
+                context_repository,
+                Arc::clone(&model_provider),
+            )?
+            .with_work_repository(Arc::clone(&work))
+            .with_memory_retriever(memory_retriever),
+        );
+        let context_executor = Arc::new(ContextEffectExecutor {
+            service: Arc::clone(&context),
+            tool_definitions: colossus_tools::model_definitions(tool_registry.as_ref()),
+        });
+        let gateway_tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
             process: Some(Arc::clone(&process_executor) as Arc<dyn EffectExecutor>),
@@ -2337,8 +2400,8 @@ impl Runtime {
             pack_processes: Some(Arc::clone(&pack_process_executor)),
             integrations: Some(Arc::clone(&integration_executor)),
             mcp: Some(Arc::clone(&mcp_executor)),
-            workspace,
-            repository_id,
+            workspace: workspace.clone(),
+            repository_id: repository_id.clone(),
             executables: config
                 .sandbox
                 .executables
@@ -2352,18 +2415,30 @@ impl Runtime {
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         });
-        let context_repository: Arc<dyn ContextRepository> =
-            Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
-        let context = Arc::new(
-            ContextService::new(
-                config.context.clone(),
-                Arc::clone(&sessions),
-                context_repository,
-                Arc::clone(&model_provider),
-            )?
-            .with_work_repository(Arc::clone(&work))
-            .with_memory_retriever(memory_retriever),
-        );
+        let trace_tool_executor: Arc<dyn ToolExecutor> = Arc::new(TraceToolExecutor {
+            journal: Arc::clone(&journal),
+            gateway: Arc::clone(&gateway),
+            filesystem: Arc::clone(&filesystem_executor),
+            workspace,
+            inner: gateway_tool_executor,
+        });
+        let context_tool_executor: Arc<dyn ToolExecutor> = Arc::new(ContextToolExecutor {
+            gateway: Arc::clone(&gateway),
+            context: Arc::clone(&context_executor),
+            inner: trace_tool_executor,
+        });
+        let interface_tool_executor: Arc<dyn ToolExecutor> = if let Some(prompts) = user_prompts {
+            Arc::new(InteractiveToolExecutor {
+                prompts,
+                inner: context_tool_executor,
+            })
+        } else {
+            context_tool_executor
+        };
+        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(DiscoverableToolExecutor {
+            registry: Arc::clone(&tool_registry),
+            inner: interface_tool_executor,
+        });
         let agent = Arc::new(
             AgentService::new(
                 Arc::clone(&journal),
@@ -2404,7 +2479,7 @@ impl Runtime {
             pack_process_executor,
             integration_executor,
             sessions,
-            context,
+            context_executor,
             work,
             work_executor,
             memory_executor,
@@ -3107,36 +3182,75 @@ impl Runtime {
     }
 
     /// Show active context budget and canonical-history size for one session.
-    pub fn context_status(&self, session_id: &str) -> Result<ContextStatus, RuntimeError> {
-        self.context.status(session_id).map_err(Into::into)
+    pub async fn context_status(&self, session_id: &str) -> Result<ContextStatus, RuntimeError> {
+        serde_json::from_value(
+            self.execute_context_operation(ContextOperation::Show {
+                session_id: session_id.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// List immutable context snapshots for one session.
-    pub fn context_snapshots(
+    pub async fn context_snapshots(
         &self,
         session_id: &str,
     ) -> Result<Vec<ContextSnapshot>, RuntimeError> {
-        self.context.list_snapshots(session_id).map_err(Into::into)
+        serde_json::from_value(
+            self.execute_context_operation(ContextOperation::Snapshots {
+                session_id: session_id.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Force a new context snapshot while preserving every canonical message.
     pub async fn compact_context(&self, session_id: &str) -> Result<PreparedContext, RuntimeError> {
-        let definitions = colossus_tools::model_definitions(self.tools.as_ref());
-        self.context
-            .compact(session_id, "You are Colossus.", &definitions)
-            .await
-            .map_err(Into::into)
+        serde_json::from_value(
+            self.execute_context_operation(ContextOperation::Compact {
+                session_id: session_id.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Activate an existing snapshot for subsequent provider turns.
-    pub fn restore_context(
+    pub async fn restore_context(
         &self,
         session_id: &str,
         snapshot_id: &str,
     ) -> Result<ContextSnapshot, RuntimeError> {
-        self.context
-            .restore(session_id, snapshot_id)
-            .map_err(Into::into)
+        serde_json::from_value(
+            self.execute_context_operation(ContextOperation::Restore {
+                session_id: session_id.into(),
+                snapshot_id: snapshot_id.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    async fn execute_context_operation(
+        &self,
+        operation: ContextOperation,
+    ) -> Result<Value, RuntimeError> {
+        let session_id = operation.session_id().to_owned();
+        let output = execute_context_effect(
+            self.gateway.as_ref(),
+            self.context_executor.as_ref(),
+            terminal_actor(),
+            ExecutionContext {
+                correlation_id: Uuid::now_v7().to_string(),
+                session_id: Some(session_id),
+                ..ExecutionContext::default()
+            },
+            operation,
+        )
+        .await?;
+        serde_json::from_str(&output).map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Current task, decision, plan, and goal snapshots.
@@ -4830,6 +4944,852 @@ fn model_gateway_error(error: GatewayError) -> ModelProviderError {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum RepositoryOperation {
+    Map {
+        path: String,
+        max_files: usize,
+    },
+    SymbolSearch {
+        pattern: String,
+        path: String,
+        max_results: usize,
+    },
+    References {
+        symbol: String,
+        path: String,
+        max_results: usize,
+    },
+    FileSummary {
+        path: String,
+        max_lines: usize,
+    },
+}
+
+impl RepositoryOperation {
+    fn action(&self) -> &'static str {
+        match self {
+            Self::Map { .. } => "repo.map",
+            Self::SymbolSearch { .. } => "repo.symbol_search",
+            Self::References { .. } => "repo.references",
+            Self::FileSummary { .. } => "repo.file_summary",
+        }
+    }
+
+    fn resource(&self) -> &str {
+        match self {
+            Self::Map { path, .. }
+            | Self::SymbolSearch { path, .. }
+            | Self::References { path, .. }
+            | Self::FileSummary { path, .. } => path,
+        }
+    }
+}
+
+struct RepositoryEffectExecutor {
+    workspace: PathBuf,
+}
+
+impl RepositoryEffectExecutor {
+    fn resolve(&self, relative: &str) -> Result<PathBuf, ExecutionError> {
+        let requested = Path::new(relative);
+        if relative.contains('\0')
+            || requested.is_absolute()
+            || requested.components().any(|component| {
+                matches!(component, std::path::Component::ParentDir)
+                    || matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
+            })
+        {
+            return Err(ExecutionError::Failed(
+                "repository paths must remain inside the workspace and outside control state"
+                    .into(),
+            ));
+        }
+        let joined = self.workspace.join(requested);
+        if fs::symlink_metadata(&joined)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(ExecutionError::Failed(
+                "repository operation roots cannot be symbolic links".into(),
+            ));
+        }
+        let canonical =
+            fs::canonicalize(&joined).map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if !canonical.starts_with(&self.workspace) {
+            return Err(ExecutionError::Failed(
+                "repository path escaped the active workspace".into(),
+            ));
+        }
+        Ok(canonical)
+    }
+
+    fn files(&self, root: &Path, maximum: usize) -> Result<(Vec<PathBuf>, bool), ExecutionError> {
+        let mut files = Vec::new();
+        let mut truncated = false;
+        let hard_limit = maximum.clamp(1, 5_000);
+        let walker = WalkBuilder::new(root)
+            .follow_links(false)
+            .hidden(false)
+            .git_ignore(true)
+            .git_exclude(true)
+            .parents(false)
+            .build();
+        for entry in walker {
+            let entry = entry.map_err(|error| ExecutionError::Failed(error.to_string()))?;
+            let relative = entry.path().strip_prefix(&self.workspace).map_err(|_| {
+                ExecutionError::Failed("repository walk escaped the active workspace".into())
+            })?;
+            if relative.components().any(|component| {
+                matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
+            }) {
+                continue;
+            }
+            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+                continue;
+            }
+            let canonical = fs::canonicalize(entry.path())
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+            if !canonical.starts_with(&self.workspace) {
+                return Err(ExecutionError::Failed(
+                    "repository walk escaped the active workspace".into(),
+                ));
+            }
+            if files.len() == hard_limit {
+                truncated = true;
+                break;
+            }
+            files.push(canonical);
+        }
+        files.sort();
+        Ok((files, truncated))
+    }
+
+    fn relative(&self, path: &Path) -> Result<String, ExecutionError> {
+        path.strip_prefix(&self.workspace)
+            .map(|path| {
+                if path.as_os_str().is_empty() {
+                    ".".into()
+                } else {
+                    path.to_string_lossy().into_owned()
+                }
+            })
+            .map_err(|_| ExecutionError::Failed("repository result escaped workspace".into()))
+    }
+
+    fn bounded_text(&self, path: &Path) -> Result<Option<String>, ExecutionError> {
+        let metadata =
+            fs::metadata(path).map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if metadata.len() > 1024 * 1024 {
+            return Ok(None);
+        }
+        let bytes = fs::read(path).map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if bytes.contains(&0) {
+            return Ok(None);
+        }
+        Ok(String::from_utf8(bytes).ok())
+    }
+
+    fn map(&self, path: &str, max_files: usize) -> Result<Value, ExecutionError> {
+        let root = self.resolve(path)?;
+        if !root.is_dir() {
+            return Err(ExecutionError::Failed(
+                "repo.map path must be a directory".into(),
+            ));
+        }
+        let (files, truncated) = self.files(&root, max_files.clamp(1, 1_000))?;
+        let entries = files
+            .iter()
+            .map(|file| {
+                let metadata = fs::metadata(file)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+                Ok(json!({
+                    "path": self.relative(file)?,
+                    "bytes": metadata.len(),
+                    "extension": file.extension().and_then(|value| value.to_str()),
+                }))
+            })
+            .collect::<Result<Vec<_>, ExecutionError>>()?;
+        let mut extension_counts = BTreeMap::<String, usize>::new();
+        for entry in &entries {
+            let extension = entry
+                .get("extension")
+                .and_then(Value::as_str)
+                .unwrap_or("[none]");
+            *extension_counts.entry(extension.into()).or_default() += 1;
+        }
+        Ok(json!({
+            "root": self.relative(&root)?,
+            "files": entries,
+            "file_count": entries.len(),
+            "extension_counts": extension_counts,
+            "truncated": truncated,
+        }))
+    }
+
+    fn symbol_search(
+        &self,
+        path: &str,
+        pattern: &str,
+        max_results: usize,
+    ) -> Result<Value, ExecutionError> {
+        let root = self.resolve(path)?;
+        if !root.is_dir() {
+            return Err(ExecutionError::Failed(
+                "repository symbol search path must be a directory".into(),
+            ));
+        }
+        let maximum = max_results.clamp(1, 500);
+        let (files, files_truncated) = self.files(&root, 5_000)?;
+        let mut symbols = Vec::new();
+        let mut truncated = files_truncated;
+        'files: for file in files {
+            let Some(content) = self.bounded_text(&file)? else {
+                continue;
+            };
+            for (index, line) in content.lines().enumerate() {
+                let Some(mut symbol) = structural_symbol(line) else {
+                    continue;
+                };
+                let matched = ["kind", "name", "text"].into_iter().any(|field| {
+                    symbol
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value.contains(pattern))
+                });
+                if !matched {
+                    continue;
+                }
+                symbol["path"] = Value::String(self.relative(&file)?);
+                symbol["line"] = json!(index + 1);
+                symbols.push(symbol);
+                if symbols.len() == maximum {
+                    truncated = true;
+                    break 'files;
+                }
+            }
+        }
+        Ok(json!({
+            "query": pattern,
+            "symbols": symbols,
+            "match_count": symbols.len(),
+            "truncated": truncated,
+        }))
+    }
+
+    fn search(
+        &self,
+        path: &str,
+        needle: &str,
+        max_results: usize,
+    ) -> Result<Value, ExecutionError> {
+        let root = self.resolve(path)?;
+        if !root.is_dir() {
+            return Err(ExecutionError::Failed(
+                "repository search path must be a directory".into(),
+            ));
+        }
+        let maximum = max_results.clamp(1, 500);
+        let (files, files_truncated) = self.files(&root, 5_000)?;
+        let mut matches = Vec::new();
+        let mut truncated = files_truncated;
+        'files: for file in files {
+            let Some(content) = self.bounded_text(&file)? else {
+                continue;
+            };
+            for (index, line) in content.lines().enumerate() {
+                for offset in line.match_indices(needle).map(|(offset, _)| offset) {
+                    if !token_match(line, offset, needle.len()) {
+                        continue;
+                    }
+                    matches.push(json!({
+                        "path": self.relative(&file)?,
+                        "line": index + 1,
+                        "column": offset + 1,
+                        "text": bounded_tool_text(line.trim(), 400),
+                    }));
+                    if matches.len() == maximum {
+                        truncated = true;
+                        break 'files;
+                    }
+                }
+            }
+        }
+        Ok(json!({
+            "query": needle,
+            "references": matches,
+            "match_count": matches.len(),
+            "truncated": truncated,
+        }))
+    }
+
+    fn file_summary(&self, path: &str, max_lines: usize) -> Result<Value, ExecutionError> {
+        let file = self.resolve(path)?;
+        if !file.is_file() {
+            return Err(ExecutionError::Failed(
+                "repo.file_summary path must be a file".into(),
+            ));
+        }
+        let content = self.bounded_text(&file)?.ok_or_else(|| {
+            ExecutionError::Failed("repo.file_summary requires bounded UTF-8 text".into())
+        })?;
+        let line_count = content.lines().count();
+        let preview = content
+            .lines()
+            .take(max_lines.clamp(1, 500))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let symbols = content
+            .lines()
+            .filter_map(structural_symbol)
+            .take(200)
+            .collect::<Vec<_>>();
+        let imports = content
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                line.starts_with("import ")
+                    || line.starts_with("from ")
+                    || line.starts_with("use ")
+                    || line.starts_with("mod ")
+                    || line.starts_with("const ")
+                    || line.starts_with("let ")
+                    || line.starts_with("var ")
+            })
+            .take(100)
+            .map(|line| bounded_tool_text(line, 500))
+            .collect::<Vec<_>>();
+        let headings = content
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('#'))
+            .take(100)
+            .map(|line| bounded_tool_text(line, 500))
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "path": self.relative(&file)?,
+            "bytes": content.len(),
+            "line_count": line_count,
+            "extension": file.extension().and_then(|value| value.to_str()),
+            "imports": imports,
+            "headings": headings,
+            "symbols": symbols,
+            "preview": preview,
+            "preview_truncated": line_count > max_lines.clamp(1, 500),
+        }))
+    }
+}
+
+#[async_trait]
+impl EffectExecutor for RepositoryEffectExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let operation: RepositoryOperation = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        let expected_resource = self.resolve(operation.resource())?;
+        if request.action != operation.action()
+            || Path::new(&request.resource) != expected_resource.as_path()
+        {
+            return Err(ExecutionError::Failed(
+                "repository request does not match its validated operation".into(),
+            ));
+        }
+        let value = match operation {
+            RepositoryOperation::Map { path, max_files } => self.map(&path, max_files)?,
+            RepositoryOperation::SymbolSearch {
+                pattern,
+                path,
+                max_results,
+            } => self.symbol_search(&path, &pattern, max_results)?,
+            RepositoryOperation::References {
+                symbol,
+                path,
+                max_results,
+            } => self.search(&path, &symbol, max_results)?,
+            RepositoryOperation::FileSummary { path, max_lines } => {
+                self.file_summary(&path, max_lines)?
+            }
+        };
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&value)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
+    }
+}
+
+fn token_match(line: &str, offset: usize, length: usize) -> bool {
+    let before = line[..offset].chars().next_back();
+    let after = line[offset + length..].chars().next();
+    !before.is_some_and(symbol_character) && !after.is_some_and(symbol_character)
+}
+
+fn symbol_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+fn structural_symbol(line: &str) -> Option<Value> {
+    let trimmed = line.trim_start();
+    let (prefix, kind) = [
+        ("pub async fn ", "function"),
+        ("async fn ", "function"),
+        ("pub fn ", "function"),
+        ("fn ", "function"),
+        ("pub struct ", "struct"),
+        ("struct ", "struct"),
+        ("pub enum ", "enum"),
+        ("enum ", "enum"),
+        ("pub trait ", "trait"),
+        ("trait ", "trait"),
+        ("class ", "class"),
+        ("def ", "function"),
+        ("function ", "function"),
+        ("interface ", "interface"),
+        ("type ", "type"),
+        ("pub const ", "constant"),
+        ("const ", "constant"),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| trimmed.starts_with(prefix))?;
+    let name = trimmed[prefix.len()..]
+        .chars()
+        .take_while(|character| symbol_character(*character) || *character == '$')
+        .collect::<String>();
+    if name.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "kind": kind,
+        "name": name,
+        "text": bounded_tool_text(trimmed, 300),
+    }))
+}
+
+struct DiscoverableToolExecutor {
+    registry: Arc<dyn ToolRegistry>,
+    inner: Arc<dyn ToolExecutor>,
+}
+
+#[async_trait]
+impl ToolExecutor for DiscoverableToolExecutor {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        if call.name != "tool.search" {
+            return self.inner.execute(call, context).await;
+        }
+        let query = required_tool_string(&call, "query")?
+            .trim()
+            .to_ascii_lowercase();
+        let terms = query.split_whitespace().collect::<Vec<_>>();
+        let limit = usize::try_from(optional_tool_u64(&call, "max_results")?.unwrap_or(10))
+            .unwrap_or(50)
+            .clamp(1, 50);
+        let mut matches = self
+            .registry
+            .list_specs()
+            .into_iter()
+            .filter_map(|spec| {
+                let name = spec.name.to_ascii_lowercase();
+                let description = spec.description.to_ascii_lowercase();
+                if !terms
+                    .iter()
+                    .all(|term| name.contains(term) || description.contains(term))
+                {
+                    return None;
+                }
+                let score = usize::from(name == query) * 1_000
+                    + usize::from(name.contains(&query)) * 500
+                    + terms.iter().filter(|term| name.contains(**term)).count() * 50
+                    + terms
+                        .iter()
+                        .filter(|term| description.contains(**term))
+                        .count()
+                        * 10;
+                Some((score, spec))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|(left_score, left), (right_score, right)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        let truncated = matches.len() > limit;
+        matches.truncate(limit);
+        let tools = matches
+            .into_iter()
+            .map(|(score, spec)| {
+                json!({
+                    "name": spec.name,
+                    "description": spec.description,
+                    "effect_action": spec.effect_action,
+                    "capability": spec.capability,
+                    "score": score,
+                })
+            })
+            .collect::<Vec<_>>();
+        let output = serde_json::to_string(&json!({
+            "query": query,
+            "tools": tools,
+            "truncated": truncated,
+        }))
+        .map_err(|error| ToolError::Failed(error.to_string()))?;
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output: bounded_tool_text(&output, 256 * 1024),
+            exit_code: 0,
+        })
+    }
+}
+
+struct InteractiveToolExecutor {
+    prompts: Arc<dyn UserPromptProvider>,
+    inner: Arc<dyn ToolExecutor>,
+}
+
+#[async_trait]
+impl ToolExecutor for InteractiveToolExecutor {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        if call.name != "user.ask" {
+            return self.inner.execute(call, context).await;
+        }
+        let choices = optional_tool_string_array(&call, "choices")?.unwrap_or_default();
+        let allow_free_form = optional_tool_bool(&call, "allow_free_form")?.unwrap_or(true);
+        if choices.is_empty() && !allow_free_form {
+            return Err(ToolError::InvalidArguments {
+                tool: call.name,
+                message: "user.ask requires choices when free-form answers are disabled".into(),
+            });
+        }
+        let response = self
+            .prompts
+            .prompt(UserPromptRequest {
+                question: required_tool_string(&call, "question")?.into(),
+                choices: choices.clone(),
+                allow_free_form,
+            })
+            .await?;
+        if response.answer.is_empty()
+            || response.answer.len() > 64 * 1024
+            || response
+                .selected_index
+                .is_some_and(|index| choices.get(index) != Some(&response.answer))
+            || (!allow_free_form && !choices.iter().any(|choice| choice == &response.answer))
+        {
+            return Err(ToolError::Failed(
+                "interactive prompt returned an invalid or out-of-contract answer".into(),
+            ));
+        }
+        let output = serde_json::to_string(&response)
+            .map_err(|error| ToolError::Failed(error.to_string()))?;
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output: bounded_tool_text(&output, 64 * 1024),
+            exit_code: 0,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum ContextOperation {
+    Show {
+        session_id: String,
+    },
+    Compact {
+        session_id: String,
+    },
+    Snapshots {
+        session_id: String,
+    },
+    Restore {
+        session_id: String,
+        snapshot_id: String,
+    },
+}
+
+impl ContextOperation {
+    fn action(&self) -> &'static str {
+        match self {
+            Self::Show { .. } => "context.show",
+            Self::Compact { .. } => "context.compact",
+            Self::Snapshots { .. } => "context.snapshots",
+            Self::Restore { .. } => "context.restore",
+        }
+    }
+
+    fn session_id(&self) -> &str {
+        match self {
+            Self::Show { session_id }
+            | Self::Compact { session_id }
+            | Self::Snapshots { session_id }
+            | Self::Restore { session_id, .. } => session_id,
+        }
+    }
+
+    fn resource(&self) -> String {
+        format!("session:{}", self.session_id())
+    }
+}
+
+struct ContextEffectExecutor {
+    service: Arc<ContextService>,
+    tool_definitions: Vec<ModelToolDefinition>,
+}
+
+#[async_trait]
+impl EffectExecutor for ContextEffectExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let operation: ContextOperation = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if request.action != operation.action()
+            || request.resource != operation.resource()
+            || request.context.session_id.as_deref() != Some(operation.session_id())
+        {
+            return Err(ExecutionError::Failed(
+                "context request does not match its validated session operation".into(),
+            ));
+        }
+        let value = match operation {
+            ContextOperation::Show { session_id } => serde_json::to_value(
+                self.service
+                    .status(&session_id)
+                    .map_err(context_execution_error)?,
+            ),
+            ContextOperation::Compact { session_id } => serde_json::to_value(
+                self.service
+                    .compact_with_context(
+                        &session_id,
+                        "You are Colossus.",
+                        &self.tool_definitions,
+                        request.context.clone(),
+                    )
+                    .await
+                    .map_err(context_execution_error)?,
+            ),
+            ContextOperation::Snapshots { session_id } => serde_json::to_value(
+                self.service
+                    .list_snapshots(&session_id)
+                    .map_err(context_execution_error)?,
+            ),
+            ContextOperation::Restore {
+                session_id,
+                snapshot_id,
+            } => serde_json::to_value(
+                self.service
+                    .restore_as(&session_id, &snapshot_id, request.actor.clone())
+                    .map_err(context_execution_error)?,
+            ),
+        }
+        .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&value)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
+    }
+}
+
+fn context_execution_error(error: ContextError) -> ExecutionError {
+    ExecutionError::Failed(error.to_string())
+}
+
+struct ContextToolExecutor {
+    gateway: Arc<EffectGateway>,
+    context: Arc<ContextEffectExecutor>,
+    inner: Arc<dyn ToolExecutor>,
+}
+
+#[async_trait]
+impl ToolExecutor for ContextToolExecutor {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        let operation = match call.name.as_str() {
+            "context.show" => ContextOperation::Show {
+                session_id: context_tool_session(&context)?,
+            },
+            "context.compact" => ContextOperation::Compact {
+                session_id: context_tool_session(&context)?,
+            },
+            "context.snapshots" => ContextOperation::Snapshots {
+                session_id: context_tool_session(&context)?,
+            },
+            "context.restore" => ContextOperation::Restore {
+                session_id: context_tool_session(&context)?,
+                snapshot_id: required_tool_string(&call, "snapshot_id")?.into(),
+            },
+            _ => return self.inner.execute(call, context).await,
+        };
+        let output = execute_context_effect(
+            self.gateway.as_ref(),
+            self.context.as_ref(),
+            model_actor(&call, &context),
+            context,
+            operation,
+        )
+        .await
+        .map_err(tool_gateway_error)?;
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output: bounded_tool_text(&output, 1024 * 1024),
+            exit_code: 0,
+        })
+    }
+}
+
+fn context_tool_session(context: &ExecutionContext) -> Result<String, ToolError> {
+    context
+        .session_id
+        .clone()
+        .ok_or_else(|| ToolError::Denied("context tools require an active session".into()))
+}
+
+async fn execute_context_effect(
+    gateway: &EffectGateway,
+    executor: &ContextEffectExecutor,
+    actor: Actor,
+    context: ExecutionContext,
+    operation: ContextOperation,
+) -> Result<String, GatewayError> {
+    let action = operation.action().to_owned();
+    let resource = operation.resource();
+    let mut request = effect_request(
+        actor,
+        &action,
+        resource,
+        serde_json::to_value(operation)
+            .map_err(|error| GatewayError::Contract(error.to_string()))?,
+    );
+    request.capabilities = vec![action];
+    request.context = context;
+    let result = gateway.execute(request, executor).await?;
+    String::from_utf8(result.bytes)
+        .map_err(|_| GatewayError::Execution("context result returned non-UTF-8".into()))
+}
+
+struct TraceToolExecutor {
+    journal: Arc<dyn EventJournal>,
+    gateway: Arc<EffectGateway>,
+    filesystem: Arc<FilesystemExecutor>,
+    workspace: PathBuf,
+    inner: Arc<dyn ToolExecutor>,
+}
+
+#[async_trait]
+impl ToolExecutor for TraceToolExecutor {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        if !matches!(call.name.as_str(), "trace.show" | "trace.export") {
+            return self.inner.execute(call, context).await;
+        }
+        let run_id = context
+            .run_id
+            .as_deref()
+            .ok_or_else(|| ToolError::Denied("trace tools require an active run".into()))?;
+        let default_limit = if call.name == "trace.show" { 200 } else { 500 };
+        let limit =
+            usize::try_from(optional_tool_u64(&call, "max_events")?.unwrap_or(default_limit))
+                .unwrap_or(1_000)
+                .clamp(1, 1_000);
+        let snapshot = trace_snapshot(self.journal.as_ref(), run_id, limit)?;
+        let output = if call.name == "trace.show" {
+            serde_json::to_string(&snapshot)
+                .map_err(|error| ToolError::Failed(error.to_string()))?
+        } else {
+            let path = model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
+            let display_path = workspace_relative(&self.workspace, &path)?;
+            let text = serde_json::to_string_pretty(&snapshot)
+                .map_err(|error| ToolError::Failed(error.to_string()))?;
+            let mut request = effect_request(
+                model_actor(&call, &context),
+                "trace.export",
+                path.display().to_string(),
+                json!({
+                    "operation": "write",
+                    "display_path": display_path,
+                    "text": text,
+                    "mode": "overwrite",
+                }),
+            );
+            request.capabilities = vec!["trace.export".into()];
+            request.context = context;
+            let result = self
+                .gateway
+                .execute(request, self.filesystem.as_ref())
+                .await
+                .map_err(tool_gateway_error)?;
+            String::from_utf8(result.bytes)
+                .map_err(|_| ToolError::Failed("trace export result is non-UTF-8".into()))?
+        };
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output: bounded_tool_text(&output, 1024 * 1024),
+            exit_code: 0,
+        })
+    }
+}
+
+fn trace_snapshot(
+    journal: &dyn EventJournal,
+    run_id: &str,
+    limit: usize,
+) -> Result<Value, ToolError> {
+    let events = journal
+        .read_stream(&format!("run:{run_id}"))
+        .map_err(|error| ToolError::Failed(error.to_string()))?;
+    let truncated = events.len() > limit;
+    let start = events.len().saturating_sub(limit);
+    let events = events[start..]
+        .iter()
+        .map(|event| {
+            json!({
+                "event_id": event.event_id,
+                "global_sequence": event.global_sequence,
+                "stream_version": event.stream_version,
+                "event_type": event.event_type,
+                "classification": event.classification,
+                "actor": event.actor,
+                "context": event.context,
+                "occurred_at": event.occurred_at,
+                "payload_hash": event.payload.plaintext_hash,
+                "record_hash": event.record_hash,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "available": !events.is_empty(),
+        "run_id": run_id,
+        "events": events,
+        "truncated": truncated,
+    }))
+}
+
 struct GatewayToolExecutor {
     gateway: Arc<EffectGateway>,
     filesystem: Arc<FilesystemExecutor>,
@@ -5302,6 +6262,42 @@ impl GatewayToolExecutor {
             .map_err(|error| ToolError::Failed(error.to_string()))
     }
 
+    async fn execute_repository_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+        operation: RepositoryOperation,
+    ) -> Result<String, ToolError> {
+        let action = operation.action().to_owned();
+        let resource =
+            fs::canonicalize(model_workspace_path(&self.workspace, operation.resource())?)
+                .map_err(|error| ToolError::Failed(error.to_string()))?
+                .display()
+                .to_string();
+        let mut request = effect_request(
+            model_actor(call, &context),
+            &action,
+            resource,
+            serde_json::to_value(operation)
+                .map_err(|error| ToolError::Failed(error.to_string()))?,
+        );
+        request.capabilities = vec![action];
+        request.context = context;
+        let repository = RepositoryEffectExecutor {
+            workspace: self.workspace.clone(),
+        };
+        let result = self
+            .gateway
+            .execute(request, &repository)
+            .await
+            .map_err(tool_gateway_error)?;
+        let output = String::from_utf8(result.bytes)
+            .map_err(|_| ToolError::Failed("repository result returned non-UTF-8".into()))?;
+        serde_json::from_str::<Value>(&output)
+            .map_err(|error| ToolError::Failed(format!("invalid repository result: {error}")))?;
+        Ok(bounded_tool_text(&output, 1024 * 1024))
+    }
+
     async fn execute_filesystem_mutation(
         &self,
         call: &ToolCall,
@@ -5326,6 +6322,50 @@ impl GatewayToolExecutor {
             .map_err(|_| ToolError::Failed("filesystem mutation returned non-UTF-8".into()))?;
         serde_json::from_str::<Value>(&output)
             .map_err(|error| ToolError::Failed(format!("invalid mutation result: {error}")))?;
+        Ok(bounded_tool_text(&output, 1024 * 1024))
+    }
+
+    async fn execute_patch_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+    ) -> Result<String, ToolError> {
+        let path = model_workspace_path(&self.workspace, required_tool_string(call, "path")?)?;
+        let display_path = workspace_relative(&self.workspace, &path)?;
+        let (old, new) = if call.name == "patch.reverse" {
+            (
+                required_tool_string(call, "new")?,
+                required_tool_string(call, "old")?,
+            )
+        } else {
+            (
+                required_tool_string(call, "old")?,
+                required_tool_string(call, "new")?,
+            )
+        };
+        let mut request = effect_request(
+            model_actor(call, &context),
+            &call.name,
+            path.display().to_string(),
+            json!({
+                "operation": "replace",
+                "display_path": display_path,
+                "old": old,
+                "new": new,
+                "replace_all": optional_tool_bool(call, "replace_all")?.unwrap_or(false),
+            }),
+        );
+        request.capabilities = vec![call.name.clone()];
+        request.context = context;
+        let result = self
+            .gateway
+            .execute(request, self.filesystem.as_ref())
+            .await
+            .map_err(tool_gateway_error)?;
+        let output = String::from_utf8(result.bytes)
+            .map_err(|_| ToolError::Failed("patch result returned non-UTF-8".into()))?;
+        serde_json::from_str::<Value>(&output)
+            .map_err(|error| ToolError::Failed(format!("invalid patch result: {error}")))?;
         Ok(bounded_tool_text(&output, 1024 * 1024))
     }
 
@@ -5711,6 +6751,67 @@ impl ToolExecutor for GatewayToolExecutor {
                     "truncated": process.truncated,
                 }))
                 .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
+            "repo.map" => {
+                self.execute_repository_tool(
+                    &call,
+                    context,
+                    RepositoryOperation::Map {
+                        path: optional_tool_string(&call, "path")?.unwrap_or(".").into(),
+                        max_files: usize::try_from(
+                            optional_tool_u64(&call, "max_files")?.unwrap_or(200),
+                        )
+                        .unwrap_or(1_000),
+                    },
+                )
+                .await?
+            }
+            "repo.symbol_search" => {
+                self.execute_repository_tool(
+                    &call,
+                    context,
+                    RepositoryOperation::SymbolSearch {
+                        pattern: required_tool_string(&call, "pattern")?.into(),
+                        path: optional_tool_string(&call, "path")?.unwrap_or(".").into(),
+                        max_results: usize::try_from(
+                            optional_tool_u64(&call, "max_results")?.unwrap_or(100),
+                        )
+                        .unwrap_or(500),
+                    },
+                )
+                .await?
+            }
+            "repo.references" => {
+                self.execute_repository_tool(
+                    &call,
+                    context,
+                    RepositoryOperation::References {
+                        symbol: required_tool_string(&call, "symbol")?.into(),
+                        path: optional_tool_string(&call, "path")?.unwrap_or(".").into(),
+                        max_results: usize::try_from(
+                            optional_tool_u64(&call, "max_results")?.unwrap_or(100),
+                        )
+                        .unwrap_or(500),
+                    },
+                )
+                .await?
+            }
+            "repo.file_summary" => {
+                self.execute_repository_tool(
+                    &call,
+                    context,
+                    RepositoryOperation::FileSummary {
+                        path: required_tool_string(&call, "path")?.into(),
+                        max_lines: usize::try_from(
+                            optional_tool_u64(&call, "max_lines")?.unwrap_or(120),
+                        )
+                        .unwrap_or(500),
+                    },
+                )
+                .await?
+            }
+            "patch.preview" | "patch.apply" | "patch.reverse" => {
+                self.execute_patch_tool(&call, context).await?
             }
             "shell.run" => {
                 let argv = required_tool_string_array(&call, "argv")?;
@@ -6231,7 +7332,7 @@ impl ToolExecutor for GatewayToolExecutor {
                 self.execute_mcp_tool(&call, context, &server, &tool, arguments)
                     .await?
             }
-            "network.http" => {
+            "network.http" | "web.fetch" | "docs.fetch" => {
                 let url = required_tool_string(&call, "url")?;
                 let mut request = effect_request(
                     model_actor(&call, &context),
@@ -7943,17 +9044,19 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 #[cfg(test)]
 mod tests {
     use super::{
-        GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, MemoryEmbeddingConfig,
-        PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput, ProviderProfileConfig,
-        ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig, SkillEffectExecutor,
-        SkillOperation, SkillScaffoldResult, WorkEffectExecutor, goal_objective_from_plan,
-        recover_interrupted_subagents, recover_unknown_effects,
+        ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
+        GatewayMemoryRetriever, GatewayToolExecutor, InteractiveToolExecutor, MemoryEffectExecutor,
+        MemoryEmbeddingConfig, PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
+        ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig,
+        SkillEffectExecutor, SkillOperation, SkillScaffoldResult, TraceToolExecutor,
+        WorkEffectExecutor, goal_objective_from_plan, recover_interrupted_subagents,
+        recover_unknown_effects,
     };
     use colossus_contracts::{
         Actor, ActorType, CredentialReference, DecisionOutcome, EffectRequest, EventClassification,
-        ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus, ModelRequest,
-        NewEvent, PlanRecord, PlanStatus, PlanStep, ProviderEvent, ProviderRoute, ProviderTurn,
-        QuarantinedEffectResult, SubagentStatus, TaskStatus, ToolCall,
+        ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus, ModelMessage,
+        ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep, ProviderEvent,
+        ProviderRoute, ProviderTurn, QuarantinedEffectResult, SubagentStatus, TaskStatus, ToolCall,
     };
     use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
     use colossus_ports::{
@@ -7964,7 +9067,7 @@ mod tests {
         FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
     };
     use colossus_testkit::InMemoryEventJournal;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::{
         collections::{BTreeMap, VecDeque},
         fs,
@@ -7973,6 +9076,37 @@ mod tests {
     use tempfile::tempdir;
 
     struct SecretEchoProcess;
+
+    struct UnusedToolExecutor;
+
+    struct FixedUserPrompt;
+
+    #[async_trait::async_trait]
+    impl colossus_ports::UserPromptProvider for FixedUserPrompt {
+        async fn prompt(
+            &self,
+            request: colossus_contracts::UserPromptRequest,
+        ) -> Result<colossus_contracts::UserPromptResponse, colossus_ports::ToolError> {
+            assert_eq!(request.question, "Choose a runtime");
+            assert_eq!(request.choices, ["Rust", "Python"]);
+            assert!(!request.allow_free_form);
+            Ok(colossus_contracts::UserPromptResponse {
+                answer: "Rust".into(),
+                selected_index: Some(0),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ToolExecutor for UnusedToolExecutor {
+        async fn execute(
+            &self,
+            _call: ToolCall,
+            _context: ExecutionContext,
+        ) -> Result<colossus_contracts::ToolResult, colossus_ports::ToolError> {
+            panic!("tool.search must not delegate")
+        }
+    }
 
     #[async_trait::async_trait]
     impl colossus_policy::EffectExecutor for SecretEchoProcess {
@@ -10142,6 +11276,551 @@ surprise: true
                 )
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn trace_tools_expose_metadata_only_and_export_through_the_gateway() {
+        let workspace = tempdir().expect("workspace");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "run:trace-run".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "model.request.prepared.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::Model,
+                    id: "trace-model".into(),
+                },
+                context: ExecutionContext {
+                    correlation_id: "trace-run".into(),
+                    run_id: Some("trace-run".into()),
+                    ..ExecutionContext::default()
+                },
+                payload: json!({"secret": "must-not-export"}),
+            })
+            .expect("trace event");
+        let policy = colossus_policy::BuiltInPolicy::offline_default()
+            .with_post_effect(true)
+            .with_action("trace.export", DecisionOutcome::RequireApproval)
+            .with_filesystem_root(workspace.path().display().to_string(), "write");
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test-operator".into(),
+            }),
+            colossus_policy::SafetyKernel::new(["trace.export".into()]),
+            [47_u8; 32],
+        ));
+        let executor = TraceToolExecutor {
+            journal: Arc::clone(&journal),
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            workspace: workspace.path().to_path_buf(),
+            inner: Arc::new(UnusedToolExecutor),
+        };
+        let context = ExecutionContext {
+            correlation_id: "trace-run".into(),
+            run_id: Some("trace-run".into()),
+            ..ExecutionContext::default()
+        };
+        let shown = executor
+            .execute(
+                ToolCall {
+                    call_id: "trace-show".into(),
+                    name: "trace.show".into(),
+                    arguments: json!({}),
+                },
+                context.clone(),
+            )
+            .await
+            .expect("trace show");
+        let shown: Value = serde_json::from_str(&shown.output).expect("trace JSON");
+        assert_eq!(shown["available"], true);
+        assert_eq!(
+            shown["events"][0]["event_type"],
+            "model.request.prepared.v1"
+        );
+        assert!(!shown.to_string().contains("must-not-export"));
+        assert!(!shown.to_string().contains("ciphertext"));
+
+        let exported = executor
+            .execute(
+                ToolCall {
+                    call_id: "trace-export".into(),
+                    name: "trace.export".into(),
+                    arguments: json!({"path": "trace.json"}),
+                },
+                context,
+            )
+            .await
+            .expect("trace export");
+        let exported: Value = serde_json::from_str(&exported.output).expect("export JSON");
+        assert_eq!(exported["path"], "trace.json");
+        let content = fs::read_to_string(workspace.path().join("trace.json")).expect("export");
+        assert!(content.contains("model.request.prepared.v1"));
+        assert!(!content.contains("must-not-export"));
+        assert!(!content.contains("ciphertext"));
+        let event_types = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"approval.granted.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn model_patch_tools_preview_apply_and_reverse_exact_text_under_policy() {
+        let workspace = tempdir().expect("workspace");
+        let target = workspace.path().join("note.txt");
+        fs::write(&target, "alpha\nbeta\n").expect("fixture");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = colossus_policy::BuiltInPolicy::offline_default()
+            .with_post_effect(true)
+            .with_action("patch.preview", DecisionOutcome::Allow)
+            .with_action("patch.apply", DecisionOutcome::RequireApproval)
+            .with_action("patch.reverse", DecisionOutcome::RequireApproval)
+            .with_filesystem_root(workspace.path().display().to_string(), "write");
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test-operator".into(),
+            }),
+            colossus_policy::SafetyKernel::new([
+                "patch.preview".into(),
+                "patch.apply".into(),
+                "patch.reverse".into(),
+            ]),
+            [46_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
+            skills: None,
+            pack_processes: None,
+            integrations: None,
+            mcp: None,
+            workspace: workspace.path().to_path_buf(),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        };
+        let arguments = || json!({"path": "note.txt", "old": "beta", "new": "gamma"});
+        let invoke = |name: &str| ToolCall {
+            call_id: format!("call-{name}"),
+            name: name.into(),
+            arguments: arguments(),
+        };
+
+        let preview = executor
+            .execute(invoke("patch.preview"), ExecutionContext::default())
+            .await
+            .expect("preview");
+        assert!(preview.output.contains("+gamma"));
+        assert_eq!(fs::read_to_string(&target).expect("read"), "alpha\nbeta\n");
+        let applied = executor
+            .execute(invoke("patch.apply"), ExecutionContext::default())
+            .await
+            .expect("apply");
+        let applied: Value = serde_json::from_str(&applied.output).expect("apply JSON");
+        assert_eq!(applied["changed_line_ranges"][0]["start"], 2);
+        assert_eq!(fs::read_to_string(&target).expect("read"), "alpha\ngamma\n");
+        executor
+            .execute(invoke("patch.reverse"), ExecutionContext::default())
+            .await
+            .expect("reverse");
+        assert_eq!(fs::read_to_string(&target).expect("read"), "alpha\nbeta\n");
+        let event_types = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"approval.granted.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn context_tools_authorize_reads_and_mutations_with_session_bound_provenance() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        sessions
+            .create_session(
+                "session-context",
+                Some("Context tools"),
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "test-user".into(),
+                },
+            )
+            .expect("session");
+        for (index, (role, content)) in [
+            (ModelMessageRole::User, "Remember the Rust boundary."),
+            (ModelMessageRole::Assistant, "The boundary is retained."),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sessions
+                .append_message(
+                    "session-context",
+                    "run-context",
+                    ModelMessage {
+                        role,
+                        content: content.into(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    Actor {
+                        actor_type: ActorType::User,
+                        id: format!("message-{index}"),
+                    },
+                )
+                .expect("message");
+        }
+        let provider = Arc::new(WorkScriptedProvider {
+            turns: Mutex::new(VecDeque::new()),
+            requests: Mutex::new(Vec::new()),
+        });
+        let context_service = Arc::new(
+            colossus_context::ContextService::new(
+                colossus_context::ContextConfig {
+                    model_assisted: false,
+                    ..colossus_context::ContextConfig::default()
+                },
+                Arc::clone(&sessions),
+                Arc::new(colossus_context::EventSourcedContextRepository::new(
+                    Arc::clone(&journal),
+                )),
+                provider as Arc<dyn ModelProvider>,
+            )
+            .expect("context service"),
+        );
+        let registry: Arc<dyn colossus_ports::ToolRegistry> = Arc::new(
+            colossus_tools::StaticToolRegistry::builtins(&[
+                "context.show".into(),
+                "context.compact".into(),
+                "context.snapshots".into(),
+                "context.restore".into(),
+            ])
+            .expect("tools"),
+        );
+        let context_executor = Arc::new(ContextEffectExecutor {
+            service: context_service,
+            tool_definitions: colossus_tools::model_definitions(registry.as_ref()),
+        });
+        let actions = [
+            "context.show",
+            "context.compact",
+            "context.snapshots",
+            "context.restore",
+        ];
+        let mut policy = colossus_policy::BuiltInPolicy::offline_default().with_post_effect(true);
+        for action in &actions {
+            policy = policy.with_action(
+                *action,
+                if matches!(*action, "context.compact" | "context.restore") {
+                    DecisionOutcome::RequireApproval
+                } else {
+                    DecisionOutcome::Allow
+                },
+            );
+        }
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test-operator".into(),
+            }),
+            colossus_policy::SafetyKernel::new(actions.map(str::to_owned)),
+            [45_u8; 32],
+        ));
+        let executor = ContextToolExecutor {
+            gateway,
+            context: context_executor,
+            inner: Arc::new(UnusedToolExecutor),
+        };
+        let execution_context = ExecutionContext {
+            correlation_id: "run-context".into(),
+            session_id: Some("session-context".into()),
+            run_id: Some("run-context".into()),
+            ..ExecutionContext::default()
+        };
+        let call = |name: &str, arguments: Value| ToolCall {
+            call_id: format!("call-{name}"),
+            name: name.into(),
+            arguments,
+        };
+
+        let shown = executor
+            .execute(call("context.show", json!({})), execution_context.clone())
+            .await
+            .expect("context show");
+        let shown: Value = serde_json::from_str(&shown.output).expect("show JSON");
+        assert_eq!(shown["session_id"], "session-context");
+
+        let compacted = executor
+            .execute(
+                call("context.compact", json!({})),
+                execution_context.clone(),
+            )
+            .await
+            .expect("context compact");
+        let compacted: Value = serde_json::from_str(&compacted.output).expect("compact JSON");
+        let snapshot_id = compacted["snapshot_id"]
+            .as_str()
+            .expect("snapshot id")
+            .to_owned();
+        assert_eq!(compacted["snapshot_created"], true);
+
+        let snapshots = executor
+            .execute(
+                call("context.snapshots", json!({})),
+                execution_context.clone(),
+            )
+            .await
+            .expect("context snapshots");
+        let snapshots: Value = serde_json::from_str(&snapshots.output).expect("snapshots JSON");
+        assert_eq!(snapshots.as_array().map(Vec::len), Some(1));
+
+        executor
+            .execute(
+                call("context.restore", json!({"snapshot_id": snapshot_id})),
+                execution_context,
+            )
+            .await
+            .expect("context restore");
+        let session_events = journal
+            .read_stream("session:session-context")
+            .expect("session events");
+        let created = session_events
+            .iter()
+            .find(|event| event.event_type == "context.snapshot.created.v1")
+            .expect("snapshot created event");
+        assert_eq!(created.actor.actor_type, ActorType::Model);
+        assert_eq!(created.actor.id, "run:run-context");
+        let event_types = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"approval.granted.v1".into()));
+        assert!(event_types.contains(&"effect.release_requested.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn user_ask_uses_only_an_explicit_interactive_interface_port() {
+        let executor = InteractiveToolExecutor {
+            prompts: Arc::new(FixedUserPrompt),
+            inner: Arc::new(UnusedToolExecutor),
+        };
+        let result = executor
+            .execute(
+                ToolCall {
+                    call_id: "ask".into(),
+                    name: "user.ask".into(),
+                    arguments: json!({
+                        "question": "Choose a runtime",
+                        "choices": ["Rust", "Python"],
+                        "allow_free_form": false,
+                    }),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("user answer");
+        let answer: Value = serde_json::from_str(&result.output).expect("answer JSON");
+        assert_eq!(answer["answer"], "Rust");
+        assert_eq!(answer["selected_index"], 0);
+    }
+
+    #[tokio::test]
+    async fn tool_search_returns_only_ranked_active_catalog_entries() {
+        let registry: Arc<dyn colossus_ports::ToolRegistry> = Arc::new(
+            colossus_tools::StaticToolRegistry::builtins(&[
+                "tool.search".into(),
+                "repo.map".into(),
+                "repo.symbol_search".into(),
+                "repo.references".into(),
+                "repo.file_summary".into(),
+                "echo".into(),
+            ])
+            .expect("catalog"),
+        );
+        let executor = DiscoverableToolExecutor {
+            registry,
+            inner: Arc::new(UnusedToolExecutor),
+        };
+        let result = executor
+            .execute(
+                ToolCall {
+                    call_id: "search".into(),
+                    name: "tool.search".into(),
+                    arguments: json!({"query": "repository", "max_results": 2}),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("tool search");
+        let output: Value = serde_json::from_str(&result.output).expect("search JSON");
+        assert_eq!(output["tools"].as_array().map(Vec::len), Some(2));
+        assert_eq!(output["truncated"], true);
+        assert!(output["tools"].as_array().is_some_and(|tools| {
+            tools.iter().all(|tool| {
+                tool["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("repo."))
+            })
+        }));
+    }
+
+    #[tokio::test]
+    async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confined() {
+        let workspace = tempdir().expect("workspace");
+        fs::create_dir_all(workspace.path().join("src")).expect("src");
+        fs::create_dir_all(workspace.path().join(".colossus")).expect("control state");
+        fs::write(
+            workspace.path().join("src/lib.rs"),
+            "pub struct Widget {}\nfn use_widget(value: Widget) {}\nstruct WidgetFactory {}\n",
+        )
+        .expect("source");
+        fs::write(workspace.path().join("README.md"), "# Example\n").expect("readme");
+        fs::write(
+            workspace.path().join(".colossus/secret"),
+            "must stay hidden",
+        )
+        .expect("control state");
+        fs::write(workspace.path().join("binary.bin"), b"a\0b").expect("binary");
+        let workspace_path = fs::canonicalize(workspace.path()).expect("canonical workspace");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let actions = [
+            "repo.map",
+            "repo.symbol_search",
+            "repo.references",
+            "repo.file_summary",
+        ];
+        let mut policy = colossus_policy::BuiltInPolicy::offline_default()
+            .with_post_effect(true)
+            .with_filesystem_read_root(workspace_path.display().to_string());
+        for action in actions {
+            policy = policy.with_action(action, DecisionOutcome::Allow);
+        }
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(actions.map(str::to_owned)),
+            [44_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
+            skills: None,
+            pack_processes: None,
+            integrations: None,
+            mcp: None,
+            workspace: workspace_path,
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        };
+        let invoke = |name: &str, arguments: Value| ToolCall {
+            call_id: format!("call-{name}"),
+            name: name.into(),
+            arguments,
+        };
+
+        let mapped = executor
+            .execute(
+                invoke("repo.map", json!({"path": ".", "max_files": 10})),
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("repository map");
+        let mapped: Value = serde_json::from_str(&mapped.output).expect("map JSON");
+        let mapped_paths = mapped["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .filter_map(|file| file["path"].as_str())
+            .collect::<Vec<_>>();
+        assert!(mapped_paths.contains(&"src/lib.rs"));
+        assert!(!mapped_paths.iter().any(|path| path.contains(".colossus")));
+
+        let symbols = executor
+            .execute(
+                invoke(
+                    "repo.symbol_search",
+                    json!({"pattern": "Widget", "max_results": 10}),
+                ),
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("symbol search");
+        let symbols: Value = serde_json::from_str(&symbols.output).expect("symbols JSON");
+        assert_eq!(symbols["match_count"], 3);
+
+        let references = executor
+            .execute(
+                invoke(
+                    "repo.references",
+                    json!({"symbol": "Widget", "max_results": 10}),
+                ),
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("references");
+        let references: Value = serde_json::from_str(&references.output).expect("references JSON");
+        assert_eq!(references["match_count"], 2);
+
+        let summary = executor
+            .execute(
+                invoke(
+                    "repo.file_summary",
+                    json!({"path": "src/lib.rs", "max_lines": 2}),
+                ),
+                ExecutionContext::default(),
+            )
+            .await
+            .expect("file summary");
+        let summary: Value = serde_json::from_str(&summary.output).expect("summary JSON");
+        assert_eq!(summary["line_count"], 3);
+        assert_eq!(summary["preview_truncated"], true);
+        assert!(
+            summary["symbols"]
+                .as_array()
+                .is_some_and(|items| items.len() == 3)
+        );
+
+        assert!(
+            executor
+                .execute(
+                    invoke("repo.file_summary", json!({"path": "../outside"})),
+                    ExecutionContext::default(),
+                )
+                .await
+                .is_err()
+        );
+        let event_types = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"effect.requested.v1".into()));
+        assert!(event_types.contains(&"effect.release_requested.v1".into()));
     }
 
     struct FakeProcessExecutor {

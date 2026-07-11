@@ -87,10 +87,13 @@ obsolete Go launcher.
   configurable 1..=100 turn bound (24 by default), strict pre-policy JSON Schema
   validation, assistant/tool call-ID continuation for Responses and compatible chat,
   bounded two-attempt malformed-argument recovery, correlated tool results, explicit
-  max-turn exhaustion, and model-visible `echo`, `filesystem.list`, `filesystem.read`,
-  `filesystem.search`, `filesystem.write`, `filesystem.replace`, `git.status`,
-  `git.diff`, `git.show`, `shell.run`, and `network.http` tools. Effectful tools execute
-  through the existing gateway; only `echo` is active by default. Workspace
+  max-turn exhaustion, and the complete required offline catalog: filesystem, Git,
+  structured shell, interactive user question, durable work, plan/goal, exact patch,
+  repository context, subagent, discovery, trace, context, skill/resource, and echo
+  tools. Configured MCP plus `web.fetch`, `docs.fetch`, and `network.http` use the same
+  strict catalog. Effectful tools execute through the existing gateway; only `echo` is
+  active by default, while `user.ask` is injected only for a real interactive embedded
+  REPL. Workspace
   listing/search returns relative paths, does not follow links,
   excludes Colossus/Git control state, searches bounded UTF-8 files, and releases results
   only after post-effect policy authorization. Text create/overwrite/append/replace is
@@ -246,9 +249,8 @@ cutover. The following planned work remains:
 - Durable Plan Mode, single-use approval, plan-to-goal handoff, bounded Goal Mode, and
   durable subagents are implemented. The durable memory, task/decision, and context
   budget/snapshot boundaries, durable multi-turn loop, bounded malformed-tool recovery,
-  strict catalog validation, pure echo,
-  permit-bound file list/read/search/write/replace, Git inspection, structured shell
-  execution, and permit-bound HTTP GET are implemented.
+  strict catalog validation, and the complete P0 offline/network tool surface are
+  implemented through the normal permission, quarantine, and audit boundaries.
 - Live Windows named-pipe acceptance.
 - Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,

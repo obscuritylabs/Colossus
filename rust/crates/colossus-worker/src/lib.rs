@@ -1450,11 +1450,11 @@ async fn dispatch(
             runtime.session_messages(&session_id)?,
         )?),
         WorkerOperation::SessionLatest => Ok(serde_json::to_value(runtime.latest_session()?)?),
-        WorkerOperation::ContextStatus { session_id } => {
-            Ok(serde_json::to_value(runtime.context_status(&session_id)?)?)
-        }
+        WorkerOperation::ContextStatus { session_id } => Ok(serde_json::to_value(
+            runtime.context_status(&session_id).await?,
+        )?),
         WorkerOperation::ContextList { session_id } => Ok(serde_json::to_value(
-            runtime.context_snapshots(&session_id)?,
+            runtime.context_snapshots(&session_id).await?,
         )?),
         WorkerOperation::ContextCompact { session_id } => Ok(serde_json::to_value(
             runtime.compact_context(&session_id).await?,
@@ -1463,7 +1463,7 @@ async fn dispatch(
             session_id,
             snapshot_id,
         } => Ok(serde_json::to_value(
-            runtime.restore_context(&session_id, &snapshot_id)?,
+            runtime.restore_context(&session_id, &snapshot_id).await?,
         )?),
         WorkerOperation::TelemetryRuns { session_id, limit } => Ok(serde_json::to_value(
             runtime.telemetry_runs(session_id.as_deref(), limit.clamp(1, 1_000))?,

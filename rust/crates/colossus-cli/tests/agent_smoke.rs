@@ -217,7 +217,17 @@ sandbox:
     assert_eq!(status["message_count"], 6);
     assert_eq!(status["active_snapshot_id"], Value::Null);
 
-    let compacted = run(binary, &config, &["context", "compact", &session_id]);
+    let compacted = run(
+        binary,
+        &config,
+        &[
+            "--approval-mode",
+            "full-access",
+            "context",
+            "compact",
+            &session_id,
+        ],
+    );
     assert!(
         compacted.status.success(),
         "{}",
@@ -241,7 +251,14 @@ sandbox:
     let restored = run(
         binary,
         &config,
-        &["context", "restore", &session_id, &snapshot_id],
+        &[
+            "--approval-mode",
+            "full-access",
+            "context",
+            "restore",
+            &session_id,
+            &snapshot_id,
+        ],
     );
     assert!(restored.status.success());
     let messages_after = run(binary, &config, &["sessions", "messages", &session_id]);

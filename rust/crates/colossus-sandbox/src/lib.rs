@@ -217,6 +217,10 @@ impl EffectExecutor for FilesystemExecutor {
             }
             "filesystem.search" => search_files(&target, &request.content, max_output),
             "filesystem.write" => write_file(&target, &request.content, max_output),
+            "patch.preview" => preview_patch(&target, &request.content, max_output),
+            "patch.apply" | "patch.reverse" | "trace.export" => {
+                write_file(&target, &request.content, max_output)
+            }
             _ => Err(adapter_failure("unsupported filesystem action")),
         }
     }
@@ -224,9 +228,9 @@ impl EffectExecutor for FilesystemExecutor {
 
 fn filesystem_mode(action: &str) -> Result<&'static str, ExecutionError> {
     match action {
-        "filesystem.read" | "filesystem.list" | "filesystem.search" => Ok("read"),
+        "filesystem.read" | "filesystem.list" | "filesystem.search" | "patch.preview" => Ok("read"),
         "filesystem.metadata" => Ok("metadata"),
-        "filesystem.write" => Ok("write"),
+        "filesystem.write" | "patch.apply" | "patch.reverse" | "trace.export" => Ok("write"),
         _ => Err(adapter_failure("unsupported filesystem action")),
     }
 }
@@ -587,6 +591,53 @@ fn write_file(
         bytes: encoded,
         effect_succeeded: true,
     })
+}
+
+fn preview_patch(
+    target: &Path,
+    content: &Value,
+    max_output: usize,
+) -> Result<QuarantinedEffectResult, ExecutionError> {
+    let original = existing_text(target, max_output)?
+        .ok_or_else(|| adapter_failure("patch.preview requires an existing file"))?;
+    let old = content
+        .get("old")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| adapter_failure("patch.preview old text is absent"))?;
+    let new = content
+        .get("new")
+        .and_then(Value::as_str)
+        .ok_or_else(|| adapter_failure("patch.preview new text is absent"))?;
+    let replace_all = content
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let occurrences = original.matches(old).count();
+    if occurrences == 0 {
+        return Err(adapter_failure("patch.preview old text was not found"));
+    }
+    if occurrences > 1 && !replace_all {
+        return Err(adapter_failure("patch.preview old text is ambiguous"));
+    }
+    let updated = if replace_all {
+        original.replace(old, new)
+    } else {
+        original.replacen(old, new, 1)
+    };
+    if updated.len() > max_output {
+        return Err(adapter_failure("patch preview exceeds the permitted bound"));
+    }
+    let display_path = mutation_display_path(content, target);
+    bounded_json(
+        json!({
+            "path": display_path,
+            "replacements": if replace_all { occurrences } else { 1 },
+            "diff": compact_unified_diff(display_path, &original, &updated, max_output / 2),
+            "changed_line_ranges": changed_line_ranges(&original, &updated),
+        }),
+        max_output,
+    )
 }
 
 fn existing_text(target: &Path, max_bytes: usize) -> Result<Option<String>, ExecutionError> {
@@ -3312,6 +3363,98 @@ mod tests {
                 .is_some_and(|diff| { diff.contains("-hello hello") && diff.contains("+hi hi") })
         );
         assert_eq!(std::fs::read_to_string(target).expect("read"), "hi hi");
+    }
+
+    #[tokio::test]
+    async fn patch_preview_apply_and_reverse_are_permit_bound_and_atomic() {
+        let directory = tempdir().expect("directory");
+        let target = directory.path().join("note.txt");
+        std::fs::write(&target, "alpha\nbeta\n").expect("fixture");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_post_effect(true)
+            .with_action("patch.preview", DecisionOutcome::Allow)
+            .with_action("patch.apply", DecisionOutcome::RequireApproval)
+            .with_action("patch.reverse", DecisionOutcome::RequireApproval)
+            .with_filesystem_root(directory.path().display().to_string(), "write");
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test-operator".into(),
+            }),
+            SafetyKernel::new([
+                "patch.preview".into(),
+                "patch.apply".into(),
+                "patch.reverse".into(),
+            ]),
+            [41_u8; 32],
+        );
+        let effect = |action: &str, old: &str, new: &str| {
+            let mut request = effect_request(
+                system_actor("test"),
+                action,
+                target.display().to_string(),
+                json!({
+                    "operation": "replace",
+                    "display_path": "note.txt",
+                    "old": old,
+                    "new": new,
+                    "replace_all": false,
+                }),
+            );
+            request.capabilities = vec![action.into()];
+            request
+        };
+        let preview = gateway
+            .execute(
+                effect("patch.preview", "beta", "gamma"),
+                &FilesystemExecutor::new(),
+            )
+            .await
+            .expect("preview");
+        let preview: serde_json::Value =
+            serde_json::from_slice(&preview.bytes).expect("preview JSON");
+        assert!(
+            preview["diff"]
+                .as_str()
+                .is_some_and(|diff| diff.contains("+gamma"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read"),
+            "alpha\nbeta\n"
+        );
+
+        gateway
+            .execute(
+                effect("patch.apply", "beta", "gamma"),
+                &FilesystemExecutor::new(),
+            )
+            .await
+            .expect("apply");
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read"),
+            "alpha\ngamma\n"
+        );
+        gateway
+            .execute(
+                effect("patch.reverse", "gamma", "beta"),
+                &FilesystemExecutor::new(),
+            )
+            .await
+            .expect("reverse");
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read"),
+            "alpha\nbeta\n"
+        );
+        let event_types = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"approval.granted.v1".into()));
+        assert!(event_types.contains(&"effect.release_requested.v1".into()));
     }
 
     #[tokio::test]

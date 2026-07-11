@@ -370,7 +370,7 @@ impl SafetyKernel {
                 ));
             }
         }
-        if decision.outcome == DecisionOutcome::Allow && request.action.starts_with("filesystem.") {
+        if decision.outcome == DecisionOutcome::Allow && is_filesystem_action(&request.action) {
             validate_filesystem_containment(request, obligations)?;
         }
         if decision.outcome == DecisionOutcome::Allow
@@ -421,6 +421,15 @@ fn is_process_action(action: &str) -> bool {
                 | "git.show"
                 | "mcp.tools"
                 | "mcp.call"
+        )
+}
+
+fn is_filesystem_action(action: &str) -> bool {
+    action.starts_with("filesystem.")
+        || action.starts_with("repo.")
+        || matches!(
+            action,
+            "patch.preview" | "patch.apply" | "patch.reverse" | "trace.export"
         )
 }
 
@@ -509,7 +518,10 @@ fn validate_filesystem_containment(
     request: &EffectRequest,
     obligations: &PolicyObligations,
 ) -> Result<(), GatewayError> {
-    let requested_mode = if request.action.contains("write") || request.action.contains("patch") {
+    let requested_mode = if request.action.contains("write")
+        || matches!(request.action.as_str(), "patch.apply" | "patch.reverse")
+        || request.action == "trace.export"
+    {
         "write"
     } else if request.action.contains("metadata") {
         "metadata"

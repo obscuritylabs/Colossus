@@ -1759,6 +1759,28 @@ pub struct ToolResult {
     pub exit_code: i32,
 }
 
+/// Bounded model-authored question presented only by an interactive interface.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserPromptRequest {
+    /// User-visible question.
+    pub question: String,
+    /// Optional bounded suggested answers.
+    pub choices: Vec<String>,
+    /// Whether an answer outside the choices is accepted.
+    pub allow_free_form: bool,
+}
+
+/// User answer returned to the model as an ordinary bounded tool result.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserPromptResponse {
+    /// Exact bounded answer supplied by the user.
+    pub answer: String,
+    /// Selected zero-based choice index, when a suggestion was selected.
+    pub selected_index: Option<usize>,
+}
+
 /// Provider-neutral request for one model turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

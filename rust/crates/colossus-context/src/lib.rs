@@ -323,8 +323,18 @@ impl ContextService {
         session_id: &str,
         snapshot_id: &str,
     ) -> Result<ContextSnapshot, ContextError> {
+        self.restore_as(session_id, snapshot_id, user_actor())
+    }
+
+    /// Explicitly restore a snapshot with immutable caller provenance.
+    pub fn restore_as(
+        &self,
+        session_id: &str,
+        snapshot_id: &str,
+        actor: Actor,
+    ) -> Result<ContextSnapshot, ContextError> {
         self.snapshots
-            .activate(session_id, snapshot_id, user_actor())
+            .activate(session_id, snapshot_id, actor)
             .map_err(Into::into)
     }
 
@@ -335,6 +345,27 @@ impl ContextService {
         instructions: &str,
         tools: &[ModelToolDefinition],
     ) -> Result<PreparedContext, ContextError> {
+        self.compact_with_context(
+            session_id,
+            instructions,
+            tools,
+            ExecutionContext {
+                correlation_id: Uuid::now_v7().to_string(),
+                session_id: Some(session_id.into()),
+                ..ExecutionContext::default()
+            },
+        )
+        .await
+    }
+
+    /// Force a snapshot while retaining the initiating execution provenance.
+    pub async fn compact_with_context(
+        &self,
+        session_id: &str,
+        instructions: &str,
+        tools: &[ModelToolDefinition],
+        context: ExecutionContext,
+    ) -> Result<PreparedContext, ContextError> {
         let records = self.sessions.list_messages(session_id)?;
         if records.is_empty() {
             return Err(ContextError::Configuration(format!(
@@ -342,19 +373,8 @@ impl ContextService {
             )));
         }
         let messages = records.into_iter().map(|record| record.message).collect();
-        self.prepare(
-            session_id,
-            instructions,
-            messages,
-            tools,
-            ExecutionContext {
-                correlation_id: Uuid::now_v7().to_string(),
-                session_id: Some(session_id.into()),
-                ..ExecutionContext::default()
-            },
-            true,
-        )
-        .await
+        self.prepare(session_id, instructions, messages, tools, context, true)
+            .await
     }
 
     async fn create_snapshot(
@@ -369,6 +389,7 @@ impl ContextService {
                 "cannot compact an empty message range".into(),
             ));
         }
+        let actor = context_actor(&context);
         let source = &source[..source_end];
         let mut snapshot = deterministic_snapshot(session_id, source);
         if self.config.model_assisted
@@ -381,9 +402,7 @@ impl ContextService {
             snapshot.summary = truncate_bytes(&summary, MAX_SUMMARY_BYTES);
             snapshot.strategy = "hybrid_model".into();
         }
-        self.snapshots
-            .create(snapshot, system_actor())
-            .map_err(Into::into)
+        self.snapshots.create(snapshot, actor).map_err(Into::into)
     }
 
     fn decision_message(&self, session_id: &str) -> Result<Option<ModelMessage>, ContextError> {
@@ -930,11 +949,26 @@ fn truncate_bytes(value: &str, limit: usize) -> String {
     format!("{}...", &value[..end])
 }
 
-fn system_actor() -> Actor {
-    Actor {
-        actor_type: ActorType::System,
-        id: "context-service".into(),
+fn context_actor(context: &ExecutionContext) -> Actor {
+    if let Some(id) = &context.subagent_id {
+        return Actor {
+            actor_type: ActorType::Subagent,
+            id: format!("subagent:{id}"),
+        };
     }
+    if let Some(id) = &context.workflow_id {
+        return Actor {
+            actor_type: ActorType::Workflow,
+            id: format!("workflow:{id}"),
+        };
+    }
+    if let Some(id) = &context.run_id {
+        return Actor {
+            actor_type: ActorType::Model,
+            id: format!("run:{id}"),
+        };
+    }
+    user_actor()
 }
 
 fn user_actor() -> Actor {

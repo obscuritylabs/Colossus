@@ -30,6 +30,7 @@ colossus-tools.workspace = true
 colossus-workflow.workspace = true
 colossus-work.workspace = true
 hex.workspace = true
+ignore.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde-saphyr.workspace = true

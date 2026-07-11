@@ -6,10 +6,13 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
     MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
-    ResearchSourceKind, SubagentStatus, TaskStatus,
+    ResearchSourceKind, SubagentStatus, TaskStatus, UserPromptRequest, UserPromptResponse,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
-use colossus_ports::{ApprovalProvider, ModelProviderError, PolicyError, ProviderEventObserver};
+use colossus_ports::{
+    ApprovalProvider, ModelProviderError, PolicyError, ProviderEventObserver, ToolError,
+    UserPromptProvider,
+};
 use colossus_runtime::{Runtime, RuntimeConfig};
 use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
 use reedline::{DefaultPrompt, Reedline, Signal};
@@ -55,6 +58,64 @@ enum ApprovalMode {
 struct TerminalApproval {
     risk_unavailable: bool,
     lock: Mutex<()>,
+}
+
+struct TerminalUserPrompt {
+    lock: Mutex<()>,
+}
+
+#[async_trait]
+impl UserPromptProvider for TerminalUserPrompt {
+    async fn prompt(&self, request: UserPromptRequest) -> Result<UserPromptResponse, ToolError> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| ToolError::Failed("user prompt terminal lock is poisoned".into()))?;
+        eprintln!("{}", request.question);
+        for (index, choice) in request.choices.iter().enumerate() {
+            eprintln!("  {}. {}", index + 1, choice);
+        }
+        for _ in 0..3 {
+            if request.choices.is_empty() {
+                eprint!("Answer: ");
+            } else if request.allow_free_form {
+                eprint!("Choose a number or enter an answer: ");
+            } else {
+                eprint!("Choose a number: ");
+            }
+            io::stderr()
+                .flush()
+                .map_err(|error| ToolError::Failed(error.to_string()))?;
+            let mut answer = String::new();
+            io::stdin()
+                .read_line(&mut answer)
+                .map_err(|error| ToolError::Failed(error.to_string()))?;
+            let answer = answer.trim();
+            if answer.is_empty() {
+                return Err(ToolError::Failed("user cancelled the question".into()));
+            }
+            if let Ok(index) = answer.parse::<usize>()
+                && let Some(choice) = index
+                    .checked_sub(1)
+                    .and_then(|index| request.choices.get(index))
+            {
+                return Ok(UserPromptResponse {
+                    answer: choice.clone(),
+                    selected_index: Some(index - 1),
+                });
+            }
+            if request.allow_free_form {
+                return Ok(UserPromptResponse {
+                    answer: answer.into(),
+                    selected_index: request.choices.iter().position(|choice| choice == answer),
+                });
+            }
+            eprintln!("Enter one of the numbered choices.");
+        }
+        Err(ToolError::Failed(
+            "user did not provide a valid choice after three attempts".into(),
+        ))
+    }
 }
 
 #[async_trait]
@@ -1788,13 +1849,17 @@ async fn repl(
                             .await?,
                     )?;
                 } else if line == "/context" || line == "/context status" {
-                    print_json(&runtime.context_status(&active_session_id)?)?;
+                    print_json(&runtime.context_status(&active_session_id).await?)?;
                 } else if line == "/context list" {
-                    print_json(&runtime.context_snapshots(&active_session_id)?)?;
+                    print_json(&runtime.context_snapshots(&active_session_id).await?)?;
                 } else if line == "/context compact" {
                     print_json(&runtime.compact_context(&active_session_id).await?)?;
                 } else if let Some(snapshot_id) = line.strip_prefix("/context restore ") {
-                    print_json(&runtime.restore_context(&active_session_id, snapshot_id.trim())?)?;
+                    print_json(
+                        &runtime
+                            .restore_context(&active_session_id, snapshot_id.trim())
+                            .await?,
+                    )?;
                 } else if line == "/session" || line == "/session show" {
                     print_json(
                         &runtime
@@ -3378,7 +3443,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     let approvals = approval_provider(&cli.command, cli.approval_mode);
-    let runtime = Runtime::open_with_approval(&config, approvals)?;
+    let user_prompts: Option<Arc<dyn UserPromptProvider>> =
+        (matches!(&cli.command, Command::Repl { .. }) && io::stdin().is_terminal()).then(|| {
+            Arc::new(TerminalUserPrompt {
+                lock: Mutex::new(()),
+            }) as Arc<dyn UserPromptProvider>
+        });
+    let runtime = Runtime::open_with_interfaces(&config, approvals, user_prompts)?;
     match cli.command {
         Command::Config(_) => unreachable!("handled before runtime construction"),
         Command::Audit(command) => match command.command {
@@ -3460,10 +3531,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
         Command::Context(command) => match command.command {
             ContextAction::Status { session_id } => {
-                print_json(&runtime.context_status(&session_id)?)?;
+                print_json(&runtime.context_status(&session_id).await?)?;
             }
             ContextAction::List { session_id } => {
-                print_json(&runtime.context_snapshots(&session_id)?)?;
+                print_json(&runtime.context_snapshots(&session_id).await?)?;
             }
             ContextAction::Compact { session_id } => {
                 print_json(&runtime.compact_context(&session_id).await?)?;
@@ -3471,7 +3542,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ContextAction::Restore {
                 session_id,
                 snapshot_id,
-            } => print_json(&runtime.restore_context(&session_id, &snapshot_id)?)?,
+            } => print_json(&runtime.restore_context(&session_id, &snapshot_id).await?)?,
         },
         Command::Tasks(command) => match command.command {
             TasksAction::List {

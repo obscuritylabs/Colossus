@@ -131,6 +131,14 @@ until post-effect policy allows release. Windows native filesystem/network isola
 remains fail-closed, and Windows OCI path mapping stays disabled until its live platform
 suite passes.
 
+The strict Rust tool catalog implements the complete required offline surface. Repository
+mapping/search, context reads and mutations, exact patching, and trace export use private
+runtime adapters and the normal policy gateway; `tool.search` and metadata-only
+`trace.show` remain pure bounded computation. `user.ask` is an optional interface port
+injected only for an interactive embedded REPL, so workers, one-shot commands, and
+scripted input cannot unexpectedly read from a terminal. `web.fetch` and `docs.fetch`
+share the permit-bound exact-origin HTTP capability and quarantine path.
+
 The journal is authoritative. Application state is reconstructed by replay, and redb
 atomically appends events, advances stream/global versions, and queues projection work.
 Named projection workers consume that outbox in global order and atomically commit

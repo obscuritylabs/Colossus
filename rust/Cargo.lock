@@ -955,6 +955,7 @@ dependencies = [
  "colossus-work",
  "colossus-workflow",
  "hex",
+ "ignore",
  "serde",
  "serde-saphyr",
  "serde_json",

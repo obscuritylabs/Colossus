@@ -149,6 +149,110 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 32_768,
         },
         ToolSpec {
+            name: "user.ask".into(),
+            description: "Ask the user one bounded question when an interactive interface is available."
+                .into(),
+            input_schema: object_schema_with(
+                json!({
+                    "question": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "choices": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "uniqueItems": true,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 512},
+                        "default": []
+                    },
+                    "allow_free_form": {"type": "boolean", "default": true}
+                }),
+                &["question"],
+                json!({
+                    "allOf": [{
+                        "if": {"properties": {"allow_free_form": {"const": false}}, "required": ["allow_free_form"]},
+                        "then": {"properties": {"choices": {"minItems": 1}}, "required": ["choices"]}
+                    }]
+                }),
+            ),
+            effect_action: None,
+            capability: None,
+            max_output_bytes: 64 * 1024,
+        },
+        ToolSpec {
+            name: "tool.search".into(),
+            description: "Search the active strict tool catalog by name and description.".into(),
+            input_schema: object_schema(
+                json!({
+                    "query": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}
+                }),
+                &["query"],
+            ),
+            effect_action: None,
+            capability: None,
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "context.show".into(),
+            description: "Show bounded context-budget state for the active session.".into(),
+            input_schema: object_schema(json!({}), &[]),
+            effect_action: Some("context.show".into()),
+            capability: Some("context.show".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "context.compact".into(),
+            description: "Create and activate a durable context snapshot without deleting history."
+                .into(),
+            input_schema: object_schema(json!({}), &[]),
+            effect_action: Some("context.compact".into()),
+            capability: Some("context.compact".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "context.snapshots".into(),
+            description: "List immutable context snapshots for the active session.".into(),
+            input_schema: object_schema(json!({}), &[]),
+            effect_action: Some("context.snapshots".into()),
+            capability: Some("context.snapshots".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "context.restore".into(),
+            description: "Activate an existing context snapshot for future provider turns.".into(),
+            input_schema: object_schema(
+                json!({"snapshot_id": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["snapshot_id"],
+            ),
+            effect_action: Some("context.restore".into()),
+            capability: Some("context.restore".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "trace.show".into(),
+            description: "Show bounded metadata-only events for the active run.".into(),
+            input_schema: object_schema(
+                json!({"max_events": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200}}),
+                &[],
+            ),
+            effect_action: None,
+            capability: None,
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "trace.export".into(),
+            description: "Export bounded metadata-only events for the active run to a workspace file."
+                .into(),
+            input_schema: object_schema(
+                json!({
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "max_events": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 500}
+                }),
+                &["path"],
+            ),
+            effect_action: Some("trace.export".into()),
+            capability: Some("trace.export".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "filesystem.list".into(),
             description: "List one policy-permitted workspace directory.".into(),
             input_schema: object_schema(
@@ -258,6 +362,93 @@ fn builtin_specs() -> Vec<ToolSpec> {
             effect_action: Some("git.show".into()),
             capability: Some("git.show".into()),
             max_output_bytes: 64 * 1024,
+        },
+        ToolSpec {
+            name: "repo.map".into(),
+            description: "Map bounded policy-permitted repository files without following links."
+                .into(),
+            input_schema: object_schema(
+                json!({
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "."},
+                    "max_files": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200}
+                }),
+                &[],
+            ),
+            effect_action: Some("repo.map".into()),
+            capability: Some("repo.map".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "repo.symbol_search".into(),
+            description: "Search bounded UTF-8 repository text for a symbol or declaration."
+                .into(),
+            input_schema: object_schema(
+                json!({
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "."},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}
+                }),
+                &["pattern"],
+            ),
+            effect_action: Some("repo.symbol_search".into()),
+            capability: Some("repo.symbol_search".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "repo.references".into(),
+            description: "Find bounded repository references to an exact symbol token.".into(),
+            input_schema: object_schema(
+                json!({
+                    "symbol": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "."},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}
+                }),
+                &["symbol"],
+            ),
+            effect_action: Some("repo.references".into()),
+            capability: Some("repo.references".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "repo.file_summary".into(),
+            description: "Summarize one bounded UTF-8 repository file with structural hints."
+                .into(),
+            input_schema: object_schema(
+                json!({
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "max_lines": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}
+                }),
+                &["path"],
+            ),
+            effect_action: Some("repo.file_summary".into()),
+            capability: Some("repo.file_summary".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "patch.preview".into(),
+            description: "Preview an exact bounded text patch without mutating the file.".into(),
+            input_schema: patch_schema(),
+            effect_action: Some("patch.preview".into()),
+            capability: Some("patch.preview".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "patch.apply".into(),
+            description: "Apply an exact bounded text patch atomically inside the workspace."
+                .into(),
+            input_schema: patch_schema(),
+            effect_action: Some("patch.apply".into()),
+            capability: Some("patch.apply".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "patch.reverse".into(),
+            description: "Atomically reverse an exact bounded text patch inside the workspace."
+                .into(),
+            input_schema: patch_schema(),
+            effect_action: Some("patch.reverse".into()),
+            capability: Some("patch.reverse".into()),
+            max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
             name: "shell.run".into(),
@@ -724,17 +915,51 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "web.fetch".into(),
+            description: "Fetch one exact policy-permitted HTTP(S) URL into bounded quarantine."
+                .into(),
+            input_schema: fetch_schema(),
+            effect_action: Some("network.http".into()),
+            capability: Some("network.http".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "docs.fetch".into(),
+            description: "Fetch one exact policy-permitted documentation URL into bounded quarantine."
+                .into(),
+            input_schema: fetch_schema(),
+            effect_action: Some("network.http".into()),
+            capability: Some("network.http".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "network.http".into(),
             description: "Fetch one exact policy-permitted HTTP(S) URL with GET.".into(),
-            input_schema: object_schema(
-                json!({"url": {"type": "string", "minLength": 1, "maxLength": 8192}}),
-                &["url"],
-            ),
+            input_schema: fetch_schema(),
             effect_action: Some("network.http".into()),
             capability: Some("network.http".into()),
             max_output_bytes: 1024 * 1024,
         },
     ]
+}
+
+fn fetch_schema() -> Value {
+    object_schema(
+        json!({"url": {"type": "string", "minLength": 1, "maxLength": 8192}}),
+        &["url"],
+    )
+}
+
+fn patch_schema() -> Value {
+    object_schema(
+        json!({
+            "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "old": {"type": "string", "minLength": 1, "maxLength": 1048576},
+            "new": {"type": "string", "maxLength": 1048576},
+            "replace_all": {"type": "boolean", "default": false}
+        }),
+        &["path", "old", "new"],
+    )
 }
 
 fn object_schema(properties: Value, required: &[&str]) -> Value {
@@ -835,6 +1060,165 @@ mod tests {
             }),
             Err(ToolError::Unknown(_))
         ));
+    }
+
+    #[test]
+    fn tool_search_is_pure_bounded_and_strict() {
+        let registry = StaticToolRegistry::builtins(&["tool.search".into()]).expect("catalog");
+        let spec = registry.list_specs().pop().expect("tool search");
+        assert_eq!(spec.name, "tool.search");
+        assert!(spec.effect_action.is_none());
+        assert!(spec.capability.is_none());
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "search".into(),
+                    name: "tool.search".into(),
+                    arguments: json!({"query": "repository", "max_results": 5}),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "search".into(),
+                name: "tool.search".into(),
+                arguments: json!({"query": "", "max_results": 51}),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+    }
+
+    #[test]
+    fn user_ask_is_pure_bounded_and_requires_valid_choices() {
+        let registry = StaticToolRegistry::builtins(&["user.ask".into()]).expect("catalog");
+        let spec = registry.list_specs().pop().expect("user ask");
+        assert!(spec.effect_action.is_none());
+        assert!(spec.capability.is_none());
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "ask".into(),
+                    name: "user.ask".into(),
+                    arguments: json!({
+                        "question": "Continue?",
+                        "choices": ["Yes", "No"],
+                        "allow_free_form": false,
+                    }),
+                })
+                .is_ok()
+        );
+        for arguments in [
+            json!({"question": ""}),
+            json!({"question": "Continue?", "allow_free_form": false}),
+            json!({"question": "Continue?", "choices": ["Yes", "Yes"]}),
+        ] {
+            assert!(matches!(
+                registry.validate(&ToolCall {
+                    call_id: "ask".into(),
+                    name: "user.ask".into(),
+                    arguments,
+                }),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn context_tools_are_session_implicit_and_effect_identified() {
+        let registry = StaticToolRegistry::builtins(&[
+            "context.show".into(),
+            "context.compact".into(),
+            "context.snapshots".into(),
+            "context.restore".into(),
+        ])
+        .expect("catalog");
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
+            assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+        }
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "show".into(),
+                    name: "context.show".into(),
+                    arguments: json!({}),
+                })
+                .is_ok()
+        );
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "restore".into(),
+                    name: "context.restore".into(),
+                    arguments: json!({"snapshot_id": "snapshot-1"}),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "show".into(),
+                name: "context.show".into(),
+                arguments: json!({"session_id": "caller-controlled"}),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+    }
+
+    #[test]
+    fn trace_tools_keep_run_identity_implicit_and_export_effectful() {
+        let registry = StaticToolRegistry::builtins(&["trace.show".into(), "trace.export".into()])
+            .expect("catalog");
+        let specs = registry.list_specs();
+        let shown = specs
+            .iter()
+            .find(|spec| spec.name == "trace.show")
+            .expect("show");
+        assert!(shown.effect_action.is_none());
+        let exported = specs
+            .iter()
+            .find(|spec| spec.name == "trace.export")
+            .expect("export");
+        assert_eq!(exported.effect_action.as_deref(), Some("trace.export"));
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "show".into(),
+                    name: "trace.show".into(),
+                    arguments: json!({"max_events": 10}),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "show".into(),
+                name: "trace.show".into(),
+                arguments: json!({"run_id": "caller-controlled"}),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+    }
+
+    #[test]
+    fn fetch_tools_share_the_exact_network_permission_identity() {
+        let registry = StaticToolRegistry::builtins(&[
+            "web.fetch".into(),
+            "docs.fetch".into(),
+            "network.http".into(),
+        ])
+        .expect("catalog");
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some("network.http"));
+            assert_eq!(spec.capability.as_deref(), Some("network.http"));
+            assert!(
+                registry
+                    .validate(&ToolCall {
+                        call_id: "fetch".into(),
+                        name: spec.name,
+                        arguments: json!({"url": "https://example.test/docs"}),
+                    })
+                    .is_ok()
+            );
+        }
     }
 
     #[test]
@@ -1016,6 +1400,83 @@ mod tests {
                 call_id: "shell".into(),
                 name: "shell.run".into(),
                 arguments: json!({"argv": []}),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+    }
+
+    #[test]
+    fn repository_context_tools_are_strict_and_effect_identified() {
+        let registry = StaticToolRegistry::builtins(&[
+            "repo.map".into(),
+            "repo.symbol_search".into(),
+            "repo.references".into(),
+            "repo.file_summary".into(),
+        ])
+        .expect("catalog");
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
+            assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+        }
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "map".into(),
+                    name: "repo.map".into(),
+                    arguments: json!({"path": "src", "max_files": 20}),
+                })
+                .is_ok()
+        );
+        for (name, arguments) in [
+            ("repo.map", json!({"max_files": 1001})),
+            ("repo.symbol_search", json!({"pattern": ""})),
+            ("repo.references", json!({"symbol": "Name", "extra": true})),
+            (
+                "repo.file_summary",
+                json!({"path": "src/lib.rs", "max_lines": 0}),
+            ),
+        ] {
+            assert!(matches!(
+                registry.validate(&ToolCall {
+                    call_id: "invalid".into(),
+                    name: name.into(),
+                    arguments,
+                }),
+                Err(ToolError::InvalidArguments { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn patch_tools_share_strict_exact_replacement_schema() {
+        let registry = StaticToolRegistry::builtins(&[
+            "patch.preview".into(),
+            "patch.apply".into(),
+            "patch.reverse".into(),
+        ])
+        .expect("catalog");
+        for spec in registry.list_specs() {
+            assert_eq!(spec.effect_action.as_deref(), Some(spec.name.as_str()));
+            assert_eq!(spec.capability.as_deref(), Some(spec.name.as_str()));
+            assert!(
+                registry
+                    .validate(&ToolCall {
+                        call_id: "patch".into(),
+                        name: spec.name,
+                        arguments: json!({
+                            "path": "src/lib.rs",
+                            "old": "before",
+                            "new": "after",
+                        }),
+                    })
+                    .is_ok()
+            );
+        }
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "patch".into(),
+                name: "patch.apply".into(),
+                arguments: json!({"path": "src/lib.rs", "old": "", "new": "after"}),
             }),
             Err(ToolError::InvalidArguments { .. })
         ));
