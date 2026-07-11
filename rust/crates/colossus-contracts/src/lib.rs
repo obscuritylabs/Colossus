@@ -681,6 +681,156 @@ pub struct SubagentQueueStatus {
     pub available_slots: usize,
 }
 
+/// Configured research depth controlling bounded query and worker budgets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchDepth {
+    /// Minimal evidence collection for a fast answer.
+    Quick,
+    /// Balanced default collection and synthesis.
+    Standard,
+    /// Largest configured evidence budget.
+    Deep,
+}
+
+/// Supported research evidence lane.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchSourceKind {
+    /// Read-only evidence from the active repository.
+    Repo,
+    /// Policy-authorized web evidence.
+    Web,
+    /// Policy-authorized MCP evidence.
+    Mcp,
+}
+
+/// Durable research lifecycle status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchStatus {
+    /// Planning, collection, extraction, or synthesis is active.
+    Running,
+    /// A cited report and its evidence were durably committed.
+    Completed,
+    /// The run terminated with bounded failure evidence.
+    Failed,
+}
+
+/// Durable outcome for one planned evidence lane and query.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchLaneStatus {
+    /// Evidence collection has not reached a terminal outcome.
+    Pending,
+    /// The lane produced zero or more bounded source records.
+    Completed,
+    /// Configuration intentionally disabled this lane.
+    Disabled,
+    /// Policy denied the lane before evidence was released.
+    Denied,
+    /// The adapter or provider failed with a known outcome.
+    Failed,
+    /// A bounded scheduler skipped the lane.
+    Skipped,
+}
+
+/// Canonical outcome of one query against one research lane.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchLane {
+    /// Stable lane identifier inside the run.
+    pub id: String,
+    /// Planned query supplied to the adapter.
+    pub query: String,
+    /// Evidence adapter class.
+    pub kind: ResearchSourceKind,
+    /// Current durable outcome.
+    pub status: ResearchLaneStatus,
+    /// Bounded limitation or outcome detail.
+    pub message: String,
+    /// Number of canonical source records produced by this lane.
+    pub source_count: usize,
+    /// UTC last-update timestamp.
+    pub updated_at: String,
+}
+
+/// Canonical bounded evidence record retained with a research run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchSource {
+    /// Stable source identifier.
+    pub id: String,
+    /// Owning research run.
+    pub run_id: String,
+    /// Stable report label such as `R1`.
+    pub label: String,
+    /// Evidence adapter class.
+    pub kind: ResearchSourceKind,
+    /// Human-readable source title.
+    pub title: String,
+    /// Bounded source URI or repository path.
+    pub uri: String,
+    /// Bounded released evidence content.
+    pub content: String,
+    /// Query that produced this source.
+    pub query: String,
+    /// Bounded non-secret metadata.
+    pub metadata: std::collections::BTreeMap<String, String>,
+    /// UTC creation timestamp.
+    pub created_at: String,
+}
+
+/// One extracted statement tied to canonical source labels.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchClaim {
+    /// Stable claim identifier.
+    pub id: String,
+    /// Owning research run.
+    pub run_id: String,
+    /// Bounded claim text.
+    pub text: String,
+    /// One or more canonical evidence labels.
+    pub source_labels: Vec<String>,
+    /// UTC creation timestamp.
+    pub created_at: String,
+}
+
+/// Canonical research run reconstructed from immutable events.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchRun {
+    /// Stable run identifier.
+    pub id: String,
+    /// Owning session identifier.
+    pub session_id: String,
+    /// Original research question.
+    pub question: String,
+    /// Configured evidence depth.
+    pub depth: ResearchDepth,
+    /// Requested evidence lanes in stable order.
+    pub source_kinds: Vec<ResearchSourceKind>,
+    /// Current durable lifecycle state.
+    pub status: ResearchStatus,
+    /// Planned bounded query list.
+    pub queries: Vec<String>,
+    /// Per-query lane outcomes, including denied and unavailable work.
+    pub lanes: Vec<ResearchLane>,
+    /// Explicit limitations carried into synthesis.
+    pub limitations: Vec<String>,
+    /// Final citation-bearing Markdown report.
+    pub report: String,
+    /// Bounded terminal failure detail.
+    pub error: String,
+    /// UTC creation timestamp.
+    pub created_at: String,
+    /// UTC last-update timestamp.
+    pub updated_at: String,
+    /// UTC terminal timestamp.
+    pub completed_at: Option<String>,
+}
+
 /// Provenance for a durable key decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

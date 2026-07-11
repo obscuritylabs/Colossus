@@ -816,6 +816,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-research"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "colossus-contracts",
+ "colossus-ports",
+ "colossus-testkit",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "colossus-runtime"
 version = "0.6.0-alpha.1"
 dependencies = [

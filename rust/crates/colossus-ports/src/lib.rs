@@ -8,8 +8,9 @@ use colossus_contracts::{
     ExecutionContext, GoalRecord, GoalStatus, KeyDecision, MemoryRecord, ModelMessage,
     ModelRequest, ModelToolDefinition, NewEvent, PlanRecord, PlanStatus, PolicyDecision,
     PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute, ProviderTurn,
-    SessionMessage, SessionSummary, SignedCheckpoint, SubagentJob, SubagentStatus, TaskRecord,
-    TaskStatus, ToolCall, ToolResult, ToolSpec, WorkflowDefinition, WorkflowRun,
+    ResearchClaim, ResearchRun, ResearchSource, SessionMessage, SessionSummary, SignedCheckpoint,
+    SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
+    WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -469,8 +470,40 @@ pub trait MemoryRepository: Send + Sync {
         actor: Actor,
     ) -> Result<(MemoryRecord, MemoryRecord), StoreError>;
 }
-/// Research source, claim, and report repository.
-pub trait ResearchRepository: AggregateRepository {}
+/// Canonical event-sourced research runs, evidence, and claims.
+pub trait ResearchRepository: Send + Sync {
+    /// Create one running research aggregate.
+    fn create_run(&self, run: ResearchRun, actor: Actor) -> Result<ResearchRun, StoreError>;
+
+    /// Append a validated lifecycle/progress update.
+    fn update_run(&self, run: ResearchRun, actor: Actor) -> Result<ResearchRun, StoreError>;
+
+    /// Reconstruct one canonical run.
+    fn get_run(&self, id: &str) -> Result<Option<ResearchRun>, StoreError>;
+
+    /// List bounded runs with optional session filtering.
+    fn list_runs(
+        &self,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ResearchRun>, StoreError>;
+
+    /// Append one canonical evidence source with a stable label.
+    fn add_source(
+        &self,
+        source: ResearchSource,
+        actor: Actor,
+    ) -> Result<ResearchSource, StoreError>;
+
+    /// List source records in stable label order.
+    fn list_sources(&self, run_id: &str) -> Result<Vec<ResearchSource>, StoreError>;
+
+    /// Append one source-backed canonical claim.
+    fn add_claim(&self, claim: ResearchClaim, actor: Actor) -> Result<ResearchClaim, StoreError>;
+
+    /// List claims in durable append order.
+    fn list_claims(&self, run_id: &str) -> Result<Vec<ResearchClaim>, StoreError>;
+}
 /// Skills, resources, packs, and trust repository.
 pub trait ExtensionRepository: AggregateRepository {}
 
