@@ -2508,6 +2508,8 @@ mod platform {
     pub type ClientStream = NamedPipeClient;
     pub type ServerStream = NamedPipeServer;
 
+    const ERROR_PIPE_BUSY: i32 = 231;
+
     pub struct Listener {
         endpoint: String,
         next: Option<NamedPipeServer>,
@@ -2538,12 +2540,13 @@ mod platform {
     }
 
     pub async fn connect(endpoint: &str) -> Result<ClientStream, std::io::Error> {
-        let deadline = Instant::now() + Duration::from_millis(450);
+        let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             match ClientOptions::new().open(endpoint) {
                 Ok(client) => return Ok(client),
                 Err(error)
-                    if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::WouldBlock)
+                    if (matches!(error.kind(), ErrorKind::NotFound | ErrorKind::WouldBlock)
+                        || error.raw_os_error() == Some(ERROR_PIPE_BUSY))
                         && Instant::now() < deadline =>
                 {
                     sleep(Duration::from_millis(10)).await;

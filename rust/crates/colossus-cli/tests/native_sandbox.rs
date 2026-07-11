@@ -9,6 +9,10 @@ use std::{
     net::TcpListener,
     path::Path,
     process::{Command, Output},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -118,9 +122,11 @@ sandbox:
         String::from_utf8_lossy(&doctor.stderr)
     );
     let doctor: Value = serde_json::from_slice(&doctor.stdout).expect("doctor JSON");
-    if doctor["native_supported"] != Value::Bool(true) {
-        return;
-    }
+    assert_eq!(
+        doctor["native_supported"],
+        Value::Bool(true),
+        "native sandbox acceptance cannot silently skip: {doctor}"
+    );
 
     let nonzero = run(
         binary,
@@ -186,6 +192,25 @@ sandbox:
         "symlink escape unexpectedly succeeded"
     );
 
+    let traversal_path = allowed.join("..").join("denied").join("denied.txt");
+    let traversal = run(
+        binary,
+        &config,
+        &[
+            "process",
+            "run",
+            "/bin/cat",
+            "--cwd",
+            allowed.to_str().expect("allowed path"),
+            "--",
+            traversal_path.to_str().expect("traversal path"),
+        ],
+    );
+    assert!(
+        !traversal.status.success(),
+        "parent traversal unexpectedly escaped the filesystem grant"
+    );
+
     let environment = run(
         binary,
         &config,
@@ -206,6 +231,26 @@ sandbox:
             .decode(environment["stdout_base64"].as_str().expect("stdout"))
             .expect("base64"),
         b"SAFE=yes\n"
+    );
+
+    let blocked_environment = run(
+        binary,
+        &config,
+        &[
+            "process",
+            "run",
+            "/usr/bin/env",
+            "--cwd",
+            allowed.to_str().expect("allowed path"),
+            "--env",
+            "BLOCKED=yes",
+        ],
+    );
+    assert!(
+        !blocked_environment.status.success()
+            && String::from_utf8_lossy(&blocked_environment.stderr).contains("not allowed"),
+        "undeclared environment variable reached the helper: {}",
+        String::from_utf8_lossy(&blocked_environment.stderr)
     );
 
     let marker = allowed.join("child-escaped");
@@ -273,6 +318,34 @@ sandbox:
         "normal-exit descendant escaped its process group"
     );
 
+    let memory_config = directory.path().join("memory-config.yaml");
+    fs::write(
+        &memory_config,
+        fs::read_to_string(&config)
+            .expect("read config")
+            .replace("  maxMemoryBytes: 268435456", "  maxMemoryBytes: 1"),
+    )
+    .expect("memory config");
+    let memory_limited = run(
+        binary,
+        &memory_config,
+        &[
+            "process",
+            "run",
+            "/bin/sleep",
+            "--cwd",
+            allowed.to_str().expect("allowed path"),
+            "--",
+            "30",
+        ],
+    );
+    assert!(
+        !memory_limited.status.success()
+            && String::from_utf8_lossy(&memory_limited.stderr).contains("memory limit"),
+        "process memory limit was not enforced: {}",
+        String::from_utf8_lossy(&memory_limited.stderr)
+    );
+
     let direct_timeout = run(
         binary,
         &config,
@@ -299,6 +372,31 @@ sandbox:
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("network listener");
         let address = listener.local_addr().expect("network address");
         let origin = format!("http://{address}");
+        let denied_listener = TcpListener::bind(("127.0.0.1", 0)).expect("denied listener");
+        denied_listener
+            .set_nonblocking(true)
+            .expect("nonblocking denied listener");
+        let denied_address = denied_listener.local_addr().expect("denied address");
+        let denied_connected = Arc::new(AtomicBool::new(false));
+        let denied_stop = Arc::new(AtomicBool::new(false));
+        let connected = Arc::clone(&denied_connected);
+        let stop = Arc::clone(&denied_stop);
+        let denied_server = thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                match denied_listener.accept() {
+                    Ok((mut stream, _)) => {
+                        connected.store(true, Ordering::Release);
+                        let _ = stream
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nescaped");
+                        return;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
         let updated = fs::read_to_string(&config).expect("read config").replace(
             "  networkDestinations: []",
             &format!("  networkDestinations:\n    - {origin}"),
@@ -312,8 +410,7 @@ sandbox:
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
                 .expect("network write");
         });
-        let denied_port = address.port().saturating_add(1);
-        let denied_url = format!("http://127.0.0.1:{denied_port}/");
+        let denied_url = format!("http://{denied_address}/");
         let denied_network = run(
             binary,
             &config,
@@ -326,9 +423,14 @@ sandbox:
                 "--",
                 "--fail",
                 "--silent",
+                "--noproxy",
+                "*",
                 &denied_url,
             ],
         );
+        denied_stop.store(true, Ordering::Release);
+        denied_server.join().expect("denied server thread");
+        let raw_egress_connected = denied_connected.load(Ordering::Acquire);
         assert!(
             denied_network.status.success(),
             "blocked network command did not return a known process outcome: {}",
@@ -338,6 +440,10 @@ sandbox:
             serde_json::from_slice(&denied_network.stdout).expect("denied network JSON");
         assert_eq!(denied_network["success"], false);
         assert_ne!(denied_network["exit_code"], 0);
+        assert!(
+            !raw_egress_connected,
+            "sandboxed process established raw network egress outside its proxy grant"
+        );
         let allowed_url = format!("{origin}/");
         let allowed_network = run(
             binary,

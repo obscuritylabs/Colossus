@@ -325,6 +325,14 @@ The Linux jobs also reject artifacts that `file` does not identify as statically
 Checksums detect transfer corruption; use signed bundle verification when authenticity is
 required.
 
+The separate runtime matrices execute native Seatbelt/Landlock acceptance on macOS and
+Linux arm64/x64 and the authenticated worker suite over Windows named pipes on Windows
+arm64/x64. The Unix suite treats unavailable kernel isolation as a failure and exercises
+filesystem traversal, environment, descendant, process-count, memory, timeout, proxy,
+and raw-egress boundaries. Windows process execution remains fail-closed: CI proves the
+reserved backend cannot silently downgrade, but it is not considered a completed Windows
+filesystem/network sandbox.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings

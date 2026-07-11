@@ -101,6 +101,17 @@ credentials, and bounds relay lifetime. Explicit IP-literal origins may opt into
 local addresses. Direct HTTP effects use the same exact-origin and pinned-resolution
 rules and remain quarantined until post-effect authorization.
 
+Native Seatbelt/Landlock acceptance is mandatory on macOS and Linux arm64/x64; a runner
+that reports isolation unavailable fails instead of skipping. The live suite attempts
+symlink and `..` traversal, undeclared environment use, descendant escape after timeout
+and normal leader exit, process-count and memory exhaustion, unlisted proxy destinations,
+and direct `NO_PROXY`/raw-socket bypass. Windows worker IPC is exercised over named pipes
+on native arm64/x64 runners with wrong-key and replay-resistant authentication. Windows
+process isolation is still unavailable: `windows_job` is rejected before adapter
+execution, and live tests verify that no marker process is launched. Broker execution is
+possible only through the existing explicit downgrade obligation and is not represented
+as sandbox isolation.
+
 The OCI backend constructs Docker/Podman invocations with no network, a read-only root,
 all capabilities dropped, `no-new-privileges`, bounded PIDs/memory, and only explicit
 bind mounts and environment names. The target starts through a fixed `env -i` bootstrap,

@@ -31,6 +31,10 @@ obsolete Go launcher.
   research/skill/pack/integration/MCP/process/network routing, clean shutdown, and
   automatic embedded fallback. Worker and embedded REPLs share the implemented
   slash-command surface and support interactive or scripted line-oriented input.
+- The complete worker acceptance suite is cross-platform and wired to native Windows x64
+  and arm64 CI. It proves named-pipe readiness, parallel authenticated clients, wrong-key
+  rejection before operation disclosure, single-writer ownership, every implemented CLI
+  route, clean shutdown, and embedded fallback.
 - Restartable projection workers with optimistic per-projection positions, atomic redb
   record/position commits, deterministic rebuilds, lag/readiness diagnostics, and
   default session, work, memory, and workflow reducers. Session and work repository
@@ -66,6 +70,12 @@ obsolete Go launcher.
   proxies; bounded output and resources; post-effect HTTP/file quarantine; and hardened
   OCI command construction. Broker downgrades require an explicit configuration and
   policy grant.
+- A required native sandbox matrix on macOS and Linux arm64/x64. Acceptance no longer
+  silently skips when Seatbelt or Landlock is unavailable and covers symlink and parent
+  traversal, environment clearing/rejection, child cleanup after timeout and normal exit,
+  process-count and memory limits, exact proxy egress, and raw proxy-bypass attempts.
+  Windows process isolation remains reserved and fail-closed; its native x64/arm64 suite
+  proves that the unavailable backend cannot downgrade or create a marker file.
 - Live Docker acceptance for bind mounts, immutable/preloaded workload and proxy images,
   environment clearing, read-only roots, proxy-only networking, raw-egress denial,
   timeouts, cancellation cleanup, and audited unknown outcomes. The same suite is wired
@@ -294,8 +304,8 @@ obligations to be present in the YAML configuration.
 This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
 cutover. The following planned work remains:
 
-- Podman revalidation of the new proxy-only network path and Windows filesystem/network
-  runtime acceptance. Native macOS/Linux isolation, live Docker execution/recovery, OCI
+- Podman revalidation of the new proxy-only network path and a real Windows filesystem/
+  network isolation backend. Native macOS/Linux isolation, live Docker execution/recovery, OCI
   command and allowlist-proxy hardening, the native allowlist proxy, authenticated
   helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
   tests are implemented. CI compiles every
@@ -305,7 +315,8 @@ cutover. The following planned work remains:
   budget/snapshot boundaries, durable multi-turn loop, bounded malformed-tool recovery,
   strict catalog validation, and the complete P0 offline/network tool surface are
   implemented through the normal permission, quarantine, and audit boundaries.
-- Live Windows named-pipe acceptance.
+- The first fully green remote Windows x64/arm64 named-pipe runtime matrix. The
+  cross-platform suite and CI jobs are implemented.
 - User-authored theme files, editor-buffer counters, and broader live provider/tool-use
   terminal acceptance. Five typed built-in palettes, encrypted REPL history with bounded
   hydration, prompt-safe in-place activity refresh, a cached embedded/worker status prompt,
@@ -320,7 +331,7 @@ cutover. The following planned work remains:
   implemented; skill resources remain non-executable. Configured stdio MCP discovery,
   invocation, and research collection are implemented through the normal sandbox and
   gateway boundaries.
-- The full Windows/Linux sandbox runtime matrix and the first fully green remote run of
-  the implemented six-target native release-artifact matrix.
+- The first fully green remote native sandbox/runtime and six-target release-artifact
+  matrices.
 
 Rust is promoted to the repository root only after those P0+P1 acceptance checks pass.

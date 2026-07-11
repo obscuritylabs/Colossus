@@ -1,13 +1,12 @@
 //! Cross-process single-writer worker and authenticated local IPC acceptance.
 
-#![cfg(unix)]
-
 use serde_json::Value;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::{
     fs,
     io::Write as _,
-    os::unix::fs::PermissionsExt as _,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Child, Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -62,16 +61,18 @@ fn run_with_input(binary: &Path, config: &Path, arguments: &[&str], input: &str)
     child.wait_with_output().expect("wait for Colossus")
 }
 
-fn wait_for(path: &Path, timeout: Duration) {
+fn wait_for_worker(binary: &Path, config: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
-    while !path.exists() && Instant::now() < deadline {
+    let mut last_error = String::new();
+    while Instant::now() < deadline {
+        let status = run(binary, config, &["worker", "--status"]);
+        if status.status.success() {
+            return;
+        }
+        last_error = String::from_utf8_lossy(&status.stderr).into_owned();
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(
-        path.exists(),
-        "worker endpoint was not created: {}",
-        path.display()
-    );
+    panic!("worker endpoint did not become ready: {last_error}");
 }
 
 fn wait_for_exit(child: &mut Child, timeout: Duration) {
@@ -87,10 +88,27 @@ fn worker_owns_lease_routes_streams_rejects_wrong_key_and_shuts_down_cleanly() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
-    let socket = PathBuf::from(format!("{}.worker.sock", state.display()));
+    #[cfg(unix)]
+    let socket = std::path::PathBuf::from(format!("{}.worker.sock", state.display()));
     let anchor = directory.path().join("anchor.json");
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
+    #[cfg(unix)]
+    let process_executable = Path::new("/bin/echo").to_path_buf();
+    #[cfg(windows)]
+    let process_executable = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"))
+        .join("System32")
+        .join("cmd.exe");
+    let state_yaml = serde_json::to_string(&state.to_string_lossy()).expect("state YAML path");
+    let anchor_yaml = serde_json::to_string(&anchor.to_string_lossy()).expect("anchor YAML path");
+    let workflows_yaml =
+        serde_json::to_string(&workflows.to_string_lossy()).expect("workflow YAML path");
+    let workspace_yaml =
+        serde_json::to_string(&directory.path().to_string_lossy()).expect("workspace YAML path");
+    let process_executable_yaml =
+        serde_json::to_string(&process_executable.to_string_lossy()).expect("executable YAML path");
     let config = directory.path().join("config.yaml");
     fs::write(
         &config,
@@ -136,7 +154,7 @@ sandbox:
   filesystem:
     - root: {workspace}
       mode: read
-  executables: [/bin/echo]
+  executables: [{process_executable}]
   environment: []
   networkDestinations: []
   timeoutMs: 5000
@@ -145,10 +163,11 @@ sandbox:
   maxMemoryBytes: 67108864
   maxConcurrency: 1
 "#,
-            state = state.display(),
-            anchor = anchor.display(),
-            workflows = workflows.display(),
-            workspace = directory.path().display(),
+            state = state_yaml,
+            anchor = anchor_yaml,
+            workflows = workflows_yaml,
+            workspace = workspace_yaml,
+            process_executable = process_executable_yaml,
         ),
     )
     .expect("config");
@@ -160,7 +179,8 @@ sandbox:
         .spawn()
         .expect("start worker");
     let mut worker = ChildGuard(child);
-    wait_for(&socket, Duration::from_secs(5));
+    wait_for_worker(binary, &config, Duration::from_secs(10));
+    #[cfg(unix)]
     assert_eq!(
         fs::metadata(&socket)
             .expect("socket metadata")
@@ -446,19 +466,21 @@ sandbox:
     let research: Value = serde_json::from_slice(&research.stdout).expect("research JSON");
     assert_eq!(research["session_id"], session_id);
 
-    let process = run(
-        binary,
-        &config,
-        &[
-            "process",
-            "run",
-            "/bin/echo",
-            "--cwd",
-            directory.path().to_str().expect("workspace path"),
-            "--",
-            "worker-process",
-        ],
-    );
+    let process_executable = process_executable.to_string_lossy();
+    let workspace = directory.path().to_string_lossy();
+    let mut process_arguments = vec![
+        "process",
+        "run",
+        process_executable.as_ref(),
+        "--cwd",
+        workspace.as_ref(),
+        "--",
+    ];
+    #[cfg(unix)]
+    process_arguments.push("worker-process");
+    #[cfg(windows)]
+    process_arguments.extend(["/D", "/S", "/C", "echo worker-process"]);
+    let process = run(binary, &config, &process_arguments);
     assert!(
         process.status.success(),
         "{}",
@@ -639,6 +661,7 @@ steps:
     let shutdown: Value = serde_json::from_slice(&shutdown.stdout).expect("shutdown JSON");
     assert_eq!(shutdown["stopping"], true);
     wait_for_exit(&mut worker.0, Duration::from_secs(5));
+    #[cfg(unix)]
     assert!(!socket.exists());
 
     let audit_output = run(binary, &config, &["audit", "show", "--limit", "10000"]);

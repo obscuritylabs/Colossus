@@ -127,6 +127,76 @@ jobs:
       - name: Compile every target
         run: cargo check --locked --workspace --all-targets
 
+  rust-native-sandbox:
+    name: Rust native sandbox (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    needs: rust
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-15-intel
+          - macos-14
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: rust
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+
+      - name: Cache native sandbox target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          key: native-sandbox-${{ matrix.runner }}
+
+      - name: Run native isolation and escape acceptance
+        run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
+
+  rust-windows-runtime:
+    name: Rust Windows named pipe and fail-closed sandbox (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    needs: rust
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - windows-2025
+          - windows-11-arm
+    defaults:
+      run:
+        working-directory: rust
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+
+      - name: Cache Windows runtime target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          key: windows-runtime-${{ matrix.runner }}
+
+      - name: Run authenticated named-pipe and process fail-closed acceptance
+        run: >-
+          cargo test --locked -p colossus-cli
+          --test worker_smoke --test windows_sandbox -- --nocapture
+
   rust-fuzz:
     name: Rust bounded libFuzzer smoke
     runs-on: ubuntu-latest
