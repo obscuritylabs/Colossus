@@ -59,7 +59,7 @@ providers:
     primary: echo
 agent:
   maxTurns: 4
-  tools: [echo]
+  tools: [echo, filesystem.list, filesystem.read, filesystem.search]
 sandbox:
   backend: native
   profile: agent-test-v1
@@ -68,7 +68,9 @@ sandbox:
   ociRuntime: null
   ociImage: null
   ociProxyImage: null
-  filesystem: []
+  filesystem:
+    - root: {workspace}
+      mode: read
   executables: []
   environment: []
   networkDestinations: []
@@ -81,6 +83,7 @@ sandbox:
             state = state.display(),
             anchor = anchor.display(),
             workflows = workflows.display(),
+            workspace = directory.path().display(),
         ),
     )
     .expect("config");
@@ -92,8 +95,12 @@ sandbox:
         String::from_utf8_lossy(&tools.stderr)
     );
     let tools: Value = serde_json::from_slice(&tools.stdout).expect("tool JSON");
+    assert_eq!(tools.as_array().map(Vec::len), Some(4));
     assert_eq!(tools[0]["name"], "echo");
     assert_eq!(tools[0]["effect_action"], Value::Null);
+    assert_eq!(tools[1]["name"], "filesystem.list");
+    assert_eq!(tools[2]["name"], "filesystem.read");
+    assert_eq!(tools[3]["name"], "filesystem.search");
 
     let output = run(
         binary,

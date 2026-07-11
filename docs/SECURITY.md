@@ -204,6 +204,14 @@ They are reachable through normal workspace filesystem tools and can be checked 
 repository. `.colossus` remains a denied control directory for generic workspace tools
 because it is reserved for Colossus-owned runtime/control files.
 
+In Rust agent turns, filesystem paths are resolved relative to the workspace captured
+when the runtime opens; absolute paths, parent traversal, and `.colossus` components are
+rejected before policy. Listing and search then cross the normal filesystem effect
+identity, containment checks, one-use permit, bounded adapter, quarantine, and
+post-effect decision. Search does not follow symlinks, skips `.colossus` and `.git`,
+ignores binary/non-UTF-8 or oversized files, and caps both match count and released
+output.
+
 Packs are the executable distribution boundary. Skills can include code files as
 resources, but Colossus does not execute scripts directly from skill directories.
 Executable tools, MCP servers, binaries, Docker assets, docs, and tests must be declared

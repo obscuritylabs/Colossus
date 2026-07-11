@@ -13,7 +13,10 @@ use colossus_policy::{
 };
 use command_group::CommandGroup as _;
 use futures::{StreamExt as _, stream::FuturesUnordered};
+use globset::{Glob, GlobMatcher};
 use hmac::{Hmac, Mac};
+use ignore::WalkBuilder;
+use regex::{Regex, RegexBuilder};
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -206,6 +209,7 @@ impl EffectExecutor for FilesystemExecutor {
                 entries.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
                 bounded_json(json!({"entries": entries}), max_output)
             }
+            "filesystem.search" => search_files(&target, &request.content, max_output),
             "filesystem.write" => {
                 let bytes = proposed_write_bytes(&request.content, max_output)?;
                 atomic_write(&target, &bytes)?;
@@ -221,11 +225,193 @@ impl EffectExecutor for FilesystemExecutor {
 
 fn filesystem_mode(action: &str) -> Result<&'static str, ExecutionError> {
     match action {
-        "filesystem.read" | "filesystem.list" => Ok("read"),
+        "filesystem.read" | "filesystem.list" | "filesystem.search" => Ok("read"),
         "filesystem.metadata" => Ok("metadata"),
         "filesystem.write" => Ok("write"),
         _ => Err(adapter_failure("unsupported filesystem action")),
     }
+}
+
+const MAX_SEARCH_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_SEARCH_LINE_BYTES: usize = 4096;
+
+fn search_files(
+    root: &Path,
+    content: &Value,
+    max_output: usize,
+) -> Result<QuarantinedEffectResult, ExecutionError> {
+    if !root.is_dir() {
+        return Err(adapter_failure(
+            "filesystem.search requires a directory root",
+        ));
+    }
+    let pattern = content
+        .get("pattern")
+        .and_then(Value::as_str)
+        .ok_or_else(|| adapter_failure("filesystem.search pattern is absent"))?;
+    if pattern.is_empty() || pattern.len() > 4096 {
+        return Err(adapter_failure(
+            "filesystem.search pattern must contain 1..=4096 bytes",
+        ));
+    }
+    let case_sensitive = content
+        .get("case_sensitive")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let regex_enabled = content
+        .get("regex")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let max_matches = content
+        .get("max_matches")
+        .and_then(Value::as_u64)
+        .unwrap_or(100);
+    if !(1..=1000).contains(&max_matches) {
+        return Err(adapter_failure(
+            "filesystem.search max_matches must be in 1..=1000",
+        ));
+    }
+    let glob = content
+        .get("glob")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            Glob::new(value)
+                .map(|glob| glob.compile_matcher())
+                .map_err(adapter_failure)
+        })
+        .transpose()?;
+    let matcher = SearchMatcher::new(pattern, regex_enabled, case_sensitive)?;
+    let mut matches = Vec::new();
+    let mut truncated = false;
+    let mut walker = WalkBuilder::new(root);
+    walker
+        .follow_links(false)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .max_filesize(Some(MAX_SEARCH_FILE_BYTES));
+    for entry in walker.build().filter_map(Result::ok) {
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
+            continue;
+        }
+        let relative = path.strip_prefix(root).map_err(adapter_failure)?;
+        if is_control_path(relative) || !glob_matches(glob.as_ref(), relative) {
+            continue;
+        }
+        let Ok(bytes) = fs::read(path) else {
+            continue;
+        };
+        if bytes.len() > usize::try_from(MAX_SEARCH_FILE_BYTES).unwrap_or(usize::MAX)
+            || bytes.contains(&0)
+        {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        for (line_index, line) in text.lines().enumerate() {
+            let Some(column) = matcher.find(line) else {
+                continue;
+            };
+            matches.push(json!({
+                "path": relative.to_string_lossy(),
+                "line": line_index.saturating_add(1),
+                "column": column.saturating_add(1),
+                "text": bounded_search_line(line),
+            }));
+            if matches.len() >= usize::try_from(max_matches).unwrap_or(usize::MAX) {
+                truncated = true;
+                break;
+            }
+            if serde_json::to_vec(&json!({"matches": matches, "truncated": false}))
+                .is_ok_and(|bytes| bytes.len() > max_output)
+            {
+                matches.pop();
+                truncated = true;
+                break;
+            }
+        }
+        if truncated {
+            break;
+        }
+    }
+    bounded_json(
+        json!({"matches": matches, "truncated": truncated}),
+        max_output,
+    )
+}
+
+enum SearchMatcher {
+    Regex(Regex),
+    Literal {
+        pattern: String,
+        case_sensitive: bool,
+    },
+}
+
+impl SearchMatcher {
+    fn new(
+        pattern: &str,
+        regex_enabled: bool,
+        case_sensitive: bool,
+    ) -> Result<Self, ExecutionError> {
+        if regex_enabled {
+            RegexBuilder::new(pattern)
+                .case_insensitive(!case_sensitive)
+                .size_limit(1024 * 1024)
+                .build()
+                .map(Self::Regex)
+                .map_err(adapter_failure)
+        } else {
+            Ok(Self::Literal {
+                pattern: if case_sensitive {
+                    pattern.into()
+                } else {
+                    pattern.to_lowercase()
+                },
+                case_sensitive,
+            })
+        }
+    }
+
+    fn find(&self, line: &str) -> Option<usize> {
+        match self {
+            Self::Regex(regex) => regex.find(line).map(|found| found.start()),
+            Self::Literal {
+                pattern,
+                case_sensitive,
+            } if *case_sensitive => line.find(pattern),
+            Self::Literal { pattern, .. } => line.to_lowercase().find(pattern),
+        }
+    }
+}
+
+fn glob_matches(matcher: Option<&GlobMatcher>, relative: &Path) -> bool {
+    matcher.is_none_or(|matcher| matcher.is_match(relative))
+}
+
+fn is_control_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let value = component.as_os_str();
+        value == ".colossus" || value == ".git"
+    })
+}
+
+fn bounded_search_line(line: &str) -> &str {
+    if line.len() <= MAX_SEARCH_LINE_BYTES {
+        return line;
+    }
+    let mut end = MAX_SEARCH_LINE_BYTES;
+    while !line.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    &line[..end]
 }
 
 fn authorized_path(
@@ -2763,6 +2949,56 @@ mod tests {
             .await
             .expect("write");
         assert_eq!(std::fs::read_to_string(target).expect("read"), "durable");
+    }
+
+    #[tokio::test]
+    async fn filesystem_search_is_bounded_utf8_only_and_skips_control_state() {
+        let directory = tempdir().expect("directory");
+        std::fs::create_dir_all(directory.path().join("src")).expect("src");
+        std::fs::create_dir_all(directory.path().join(".colossus")).expect("control");
+        std::fs::write(
+            directory.path().join("src/example.rs"),
+            "first\nNeedle here\nneedle again\n",
+        )
+        .expect("fixture");
+        std::fs::write(directory.path().join("src/blob.bin"), b"needle\0hidden")
+            .expect("binary fixture");
+        std::fs::write(directory.path().join(".colossus/secret"), "needle secret")
+            .expect("control fixture");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("filesystem.search", DecisionOutcome::Allow)
+            .with_filesystem_read_root(directory.path().display().to_string());
+        let gateway = EffectGateway::new(
+            journal,
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["filesystem.search".into()]),
+            [4_u8; 32],
+        );
+        let mut request = effect_request(
+            system_actor("test"),
+            "filesystem.search",
+            directory.path().display().to_string(),
+            json!({
+                "pattern": "needle",
+                "regex": false,
+                "case_sensitive": false,
+                "glob": "**/*.rs",
+                "max_matches": 1,
+            }),
+        );
+        request.capabilities = vec!["filesystem.search".into()];
+        let result = gateway
+            .execute(request, &FilesystemExecutor::new())
+            .await
+            .expect("search");
+        let value: serde_json::Value = serde_json::from_slice(&result.bytes).expect("JSON");
+        assert_eq!(value["matches"][0]["path"], "src/example.rs");
+        assert_eq!(value["matches"][0]["line"], 2);
+        assert_eq!(value["matches"][0]["column"], 1);
+        assert_eq!(value["truncated"], true);
+        assert_eq!(value["matches"].as_array().map(Vec::len), Some(1));
     }
 
     #[tokio::test]

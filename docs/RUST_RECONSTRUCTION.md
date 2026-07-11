@@ -70,9 +70,11 @@ obsolete Go launcher.
   configurable 1..=100 turn bound (24 by default), strict pre-policy JSON Schema
   validation, assistant/tool call-ID continuation for Responses and compatible chat,
   bounded two-attempt malformed-argument recovery, correlated tool results, explicit
-  max-turn exhaustion, and model-visible `echo`, `filesystem.read`, and `network.http`
-  tools. Effectful tools execute through the existing gateway; only `echo` is active by
-  default.
+  max-turn exhaustion, and model-visible `echo`, `filesystem.list`, `filesystem.read`,
+  `filesystem.search`, and `network.http` tools. Effectful tools execute through the
+  existing gateway; only `echo` is active by default. Workspace listing/search returns
+  relative paths, does not follow links, excludes Colossus/Git control state, searches
+  bounded UTF-8 files, and releases results only after post-effect policy authorization.
 - Canonical event-sourced sessions with stable UUIDv7 ids, bounded titles and previews,
   append-only user/assistant/tool messages, optimistic stream versions, newest-first
   discovery, exact and latest resume, provider-history restoration, and restart
@@ -146,11 +148,11 @@ cutover. The following planned work remains:
   helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
-- Incremental provider transport streaming, remaining core filesystem/search/write/git/
-  process tools, usage accounting, and plans. The durable memory, task/decision, and
+- Incremental provider transport streaming, remaining core filesystem write/replace,
+  Git/process tools, usage accounting, and plans. The durable memory, task/decision, and
   context budget/snapshot boundaries, durable
   multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
-  permit-bound file reads, and permit-bound HTTP GET are implemented.
+  permit-bound file list/read/search, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
 - Goals, durable subagents, research/citations, skills/resources, telemetry, packs,

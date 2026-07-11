@@ -41,10 +41,13 @@ hex = "0.4.3"
 hmac = "0.12.1"
 futures = "0.3.31"
 fs4 = "0.13.1"
+globset = "0.4.18"
+ignore = "0.4.28"
 jsonschema = "0.33.0"
 keyring = "4.1.4"
 nono = { version = "=0.67.1", default-features = false }
 redb = "4.1.0"
+regex = "1.13.0"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 reedline = "0.49.0"
 sysinfo = { version = "=0.39.5", default-features = false, features = ["system"] }

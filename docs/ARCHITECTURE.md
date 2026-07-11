@@ -141,6 +141,13 @@ arguments before policy and approval handling, then records policy and completio
 events. CLI and REPL code may list or render tools, but must not implement model, tool,
 policy, or state behavior.
 
+The Rust workspace tools preserve this split: `colossus-tools` owns strict model-visible
+schemas, `colossus-runtime` resolves workspace-relative resources and constructs typed
+effect requests, and `colossus-sandbox` performs permit-bound filesystem operations.
+Recursive search is an in-process adapter rather than an implicit subprocess, respects
+ignore files, does not follow links, skips runtime/VCS control directories, and returns
+only bounded UTF-8 matches through the post-effect release gate.
+
 Provider adapters remain strict about malformed tool-call argument payloads. When a
 provider raises the standard invalid tool-argument `ProviderError`, the orchestrator may
 perform a bounded recovery turn by emitting a recoverable `ErrorEvent`, appending a

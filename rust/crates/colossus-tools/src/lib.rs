@@ -149,6 +149,17 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 32_768,
         },
         ToolSpec {
+            name: "filesystem.list".into(),
+            description: "List one policy-permitted workspace directory.".into(),
+            input_schema: object_schema(
+                json!({"path": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "."}}),
+                &[],
+            ),
+            effect_action: Some("filesystem.list".into()),
+            capability: Some("filesystem.list".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "filesystem.read".into(),
             description: "Read one policy-permitted UTF-8 text file.".into(),
             input_schema: object_schema(
@@ -157,6 +168,25 @@ fn builtin_specs() -> Vec<ToolSpec> {
             ),
             effect_action: Some("filesystem.read".into()),
             capability: Some("filesystem.read".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
+            name: "filesystem.search".into(),
+            description: "Search policy-permitted UTF-8 workspace files without following links."
+                .into(),
+            input_schema: object_schema(
+                json!({
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096, "default": "."},
+                    "glob": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "regex": {"type": "boolean", "default": true},
+                    "case_sensitive": {"type": "boolean", "default": true},
+                    "max_matches": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
+                }),
+                &["pattern"],
+            ),
+            effect_action: Some("filesystem.search".into()),
+            capability: Some("filesystem.search".into()),
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
@@ -221,5 +251,45 @@ mod tests {
                 Err(ToolError::InvalidArguments { .. })
             ));
         }
+    }
+
+    #[test]
+    fn workspace_read_tools_have_strict_bounded_schemas() {
+        let registry = StaticToolRegistry::builtins(&[
+            "filesystem.list".into(),
+            "filesystem.read".into(),
+            "filesystem.search".into(),
+        ])
+        .expect("catalog");
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "call-list".into(),
+                    name: "filesystem.list".into(),
+                    arguments: json!({}),
+                })
+                .is_ok()
+        );
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "call-search".into(),
+                    name: "filesystem.search".into(),
+                    arguments: json!({
+                        "pattern": "needle",
+                        "regex": false,
+                        "max_matches": 1000,
+                    }),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "call-search".into(),
+                name: "filesystem.search".into(),
+                arguments: json!({"pattern": "needle", "max_matches": 1001}),
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
     }
 }

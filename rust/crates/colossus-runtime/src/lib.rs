@@ -933,7 +933,14 @@ impl Runtime {
                         config.sandbox.max_memory_bytes,
                         config.sandbox.max_concurrency,
                     );
-                policy = policy.with_action("filesystem.read", DecisionOutcome::Allow);
+                for action in [
+                    "filesystem.read",
+                    "filesystem.list",
+                    "filesystem.metadata",
+                    "filesystem.search",
+                ] {
+                    policy = policy.with_action(action, DecisionOutcome::Allow);
+                }
                 for root in [&config.workflows.repository, &config.workflows.user] {
                     if let Ok(root) = absolute_path(root).and_then(fs::canonicalize) {
                         policy = policy.with_filesystem_read_root(root.display().to_string());
@@ -1038,6 +1045,7 @@ impl Runtime {
                 "filesystem.read".to_owned(),
                 "filesystem.list".to_owned(),
                 "filesystem.metadata".to_owned(),
+                "filesystem.search".to_owned(),
                 "filesystem.write".to_owned(),
                 "process.spawn".to_owned(),
                 "network.http".to_owned(),
@@ -1080,6 +1088,7 @@ impl Runtime {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
             http: Arc::clone(&http_executor),
+            workspace: fs::canonicalize(std::env::current_dir()?)?,
         });
         let context_repository: Arc<dyn ContextRepository> =
             Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
@@ -2092,6 +2101,7 @@ struct GatewayToolExecutor {
     gateway: Arc<EffectGateway>,
     filesystem: Arc<FilesystemExecutor>,
     http: Arc<HttpExecutor>,
+    workspace: PathBuf,
 }
 
 #[async_trait]
@@ -2103,9 +2113,57 @@ impl ToolExecutor for GatewayToolExecutor {
     ) -> Result<ToolResult, ToolError> {
         let output = match call.name.as_str() {
             "echo" => bounded_tool_text(required_tool_string(&call, "text")?, 32_768),
-            "filesystem.read" => {
-                let path = absolute_path(Path::new(required_tool_string(&call, "path")?))
+            "filesystem.list" => {
+                let input = optional_tool_string(&call, "path")?.unwrap_or(".");
+                let path = model_workspace_path(&self.workspace, input)?;
+                let mut request = effect_request(
+                    model_actor(&call),
+                    "filesystem.list",
+                    path.display().to_string(),
+                    json!({}),
+                );
+                request.capabilities = vec!["filesystem.list".into()];
+                request.context = context;
+                let result = self
+                    .gateway
+                    .execute(request, self.filesystem.as_ref())
+                    .await
+                    .map_err(tool_gateway_error)?;
+                let value: Value = serde_json::from_slice(&result.bytes)
                     .map_err(|error| ToolError::Failed(error.to_string()))?;
+                let entries = value
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| {
+                        ToolError::Failed("filesystem.list returned invalid JSON".into())
+                    })?;
+                let entries = entries
+                    .iter()
+                    .filter(|entry| {
+                        !entry
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .is_some_and(|name| matches!(name, ".colossus" | ".git"))
+                    })
+                    .map(|entry| {
+                        let mut entry = entry.clone();
+                        let name = entry.get("name").and_then(Value::as_str).ok_or_else(|| {
+                            ToolError::Failed("filesystem.list entry name is absent".into())
+                        })?;
+                        entry["path"] =
+                            Value::String(workspace_relative(&self.workspace, &path.join(name))?);
+                        Ok(entry)
+                    })
+                    .collect::<Result<Vec<_>, ToolError>>()?;
+                serde_json::to_string(&json!({
+                    "root": workspace_relative(&self.workspace, &path)?,
+                    "entries": entries,
+                }))
+                .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
+            "filesystem.read" => {
+                let path =
+                    model_workspace_path(&self.workspace, required_tool_string(&call, "path")?)?;
                 let mut request = effect_request(
                     model_actor(&call),
                     "filesystem.read",
@@ -2125,6 +2183,48 @@ impl ToolExecutor for GatewayToolExecutor {
                     })?,
                     1024 * 1024,
                 )
+            }
+            "filesystem.search" => {
+                let input = optional_tool_string(&call, "path")?.unwrap_or(".");
+                let path = model_workspace_path(&self.workspace, input)?;
+                let content = json!({
+                    "pattern": required_tool_string(&call, "pattern")?,
+                    "glob": optional_tool_string(&call, "glob")?,
+                    "regex": optional_tool_bool(&call, "regex")?.unwrap_or(true),
+                    "case_sensitive": optional_tool_bool(&call, "case_sensitive")?.unwrap_or(true),
+                    "max_matches": optional_tool_u64(&call, "max_matches")?.unwrap_or(100),
+                });
+                let mut request = effect_request(
+                    model_actor(&call),
+                    "filesystem.search",
+                    path.display().to_string(),
+                    content,
+                );
+                request.capabilities = vec!["filesystem.search".into()];
+                request.context = context;
+                let result = self
+                    .gateway
+                    .execute(request, self.filesystem.as_ref())
+                    .await
+                    .map_err(tool_gateway_error)?;
+                let mut value: Value = serde_json::from_slice(&result.bytes)
+                    .map_err(|error| ToolError::Failed(error.to_string()))?;
+                let matches = value
+                    .get_mut("matches")
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| {
+                        ToolError::Failed("filesystem.search returned invalid JSON".into())
+                    })?;
+                for matched in matches {
+                    let relative = matched
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| ToolError::Failed("search match path is absent".into()))?;
+                    matched["path"] =
+                        Value::String(workspace_relative(&self.workspace, &path.join(relative))?);
+                }
+                serde_json::to_string(&value)
+                    .map_err(|error| ToolError::Failed(error.to_string()))?
             }
             "network.http" => {
                 let url = required_tool_string(&call, "url")?;
@@ -2166,6 +2266,73 @@ fn required_tool_string<'a>(call: &'a ToolCall, field: &str) -> Result<&'a str, 
             tool: call.name.clone(),
             message: format!("{field} must be a string"),
         })
+}
+
+fn optional_tool_string<'a>(call: &'a ToolCall, field: &str) -> Result<Option<&'a str>, ToolError> {
+    match call.arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be a string"),
+        }),
+    }
+}
+
+fn optional_tool_bool(call: &ToolCall, field: &str) -> Result<Option<bool>, ToolError> {
+    match call.arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be a boolean"),
+        }),
+    }
+}
+
+fn optional_tool_u64(call: &ToolCall, field: &str) -> Result<Option<u64>, ToolError> {
+    match call.arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(value)) => {
+            value
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: format!("{field} must be a non-negative integer"),
+                })
+        }
+        Some(_) => Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be an integer"),
+        }),
+    }
+}
+
+fn model_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf, ToolError> {
+    let requested = Path::new(input);
+    if requested.is_absolute()
+        || requested.components().any(|component| {
+            matches!(component, std::path::Component::ParentDir)
+                || component.as_os_str() == ".colossus"
+        })
+    {
+        return Err(ToolError::Denied(
+            "model filesystem paths must be workspace-relative and outside .colossus".into(),
+        ));
+    }
+    Ok(workspace.join(requested))
+}
+
+fn workspace_relative(workspace: &Path, path: &Path) -> Result<String, ToolError> {
+    let relative = path
+        .strip_prefix(workspace)
+        .map_err(|_| ToolError::Denied("filesystem result escaped the active workspace".into()))?;
+    if relative.as_os_str().is_empty() {
+        Ok(".".into())
+    } else {
+        Ok(relative.to_string_lossy().into_owned())
+    }
 }
 
 fn bounded_tool_text(text: &str, max_bytes: usize) -> String {
@@ -2884,13 +3051,14 @@ surprise: true
             gateway,
             filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            workspace: allowed.path().to_path_buf(),
         };
         let result = executor
             .execute(
                 ToolCall {
                     call_id: "call-1".into(),
                     name: "filesystem.read".into(),
-                    arguments: json!({"path": file}),
+                    arguments: json!({"path": "note.txt"}),
                 },
                 ExecutionContext {
                     correlation_id: "run-1".into(),
@@ -2912,5 +3080,92 @@ surprise: true
                 .iter()
                 .any(|event| event.event_type == "effect.completed.v1")
         );
+    }
+
+    #[tokio::test]
+    async fn agent_list_and_search_tools_return_only_workspace_relative_results() {
+        let allowed = tempdir().expect("allowed root");
+        fs::create_dir_all(allowed.path().join("src")).expect("src");
+        fs::create_dir_all(allowed.path().join(".colossus")).expect("control");
+        fs::create_dir_all(allowed.path().join(".git")).expect("git control");
+        fs::write(
+            allowed.path().join("src/example.rs"),
+            "fn transition_to_rust() {}\n",
+        )
+        .expect("fixture");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = colossus_policy::BuiltInPolicy::offline_default()
+            .with_action("filesystem.list", DecisionOutcome::Allow)
+            .with_action("filesystem.search", DecisionOutcome::Allow)
+            .with_filesystem_read_root(allowed.path().display().to_string());
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new([
+                "filesystem.list".into(),
+                "filesystem.search".into(),
+            ]),
+            [5_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            workspace: allowed.path().to_path_buf(),
+        };
+        let context = ExecutionContext {
+            correlation_id: "run-1".into(),
+            run_id: Some("run-1".into()),
+            ..ExecutionContext::default()
+        };
+        let listed = executor
+            .execute(
+                ToolCall {
+                    call_id: "call-list".into(),
+                    name: "filesystem.list".into(),
+                    arguments: json!({"path": "."}),
+                },
+                context.clone(),
+            )
+            .await
+            .expect("list");
+        let listed: serde_json::Value = serde_json::from_str(&listed.output).expect("list JSON");
+        assert_eq!(listed["root"], ".");
+        assert_eq!(listed["entries"].as_array().map(Vec::len), Some(1));
+        assert_eq!(listed["entries"][0]["path"], "src");
+
+        let searched = executor
+            .execute(
+                ToolCall {
+                    call_id: "call-search".into(),
+                    name: "filesystem.search".into(),
+                    arguments: json!({
+                        "path": ".",
+                        "pattern": "transition_to_rust",
+                        "regex": false,
+                    }),
+                },
+                context,
+            )
+            .await
+            .expect("search");
+        let searched: serde_json::Value =
+            serde_json::from_str(&searched.output).expect("search JSON");
+        assert_eq!(searched["matches"][0]["path"], "src/example.rs");
+        assert_eq!(searched["matches"][0]["line"], 1);
+
+        let denied = executor
+            .execute(
+                ToolCall {
+                    call_id: "call-control".into(),
+                    name: "filesystem.list".into(),
+                    arguments: json!({"path": ".colossus"}),
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .expect_err("control directory denied");
+        assert!(matches!(denied, colossus_ports::ToolError::Denied(_)));
     }
 }
