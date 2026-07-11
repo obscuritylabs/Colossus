@@ -370,11 +370,13 @@ error totals without exposing raw prompts, hidden reasoning, or raw tool outputs
 default. CLI and future TUI surfaces call the service for run lists, timelines, and
 aggregate metrics rather than querying redb or parsing transcript text directly.
 
-Saved REPL preferences are typed contracts exposed through `PresentationRepository`.
-The Rust runtime uses an encrypted event-sourced adapter and sends every preference
-mutation through the effect gateway before appending a replacement-profile event. The
-CLI and authenticated worker only coordinate the application operation; they do not
-write presentation files or canonical storage directly. Pure semantic rendering remains
-in `colossus-presentation` and preference values never enter provider routing, policy,
+Saved REPL preferences and bounded submitted-input history are exposed through
+`PresentationRepository`. The Rust runtime uses an encrypted event-sourced adapter and
+sends every preference or history mutation through the effect gateway before appending
+its canonical event. Reedline receives only the newest 1,000 decrypted entries through
+the application API; it never owns a plaintext history file. The CLI and authenticated
+worker only coordinate the application operation; they do not write presentation files
+or canonical storage directly. Pure semantic rendering remains in
+`colossus-presentation`, and preference values never enter provider routing, policy,
 tool, approval, or prompt-composition decisions. The frozen Python implementation's
-SQLite preference records are legacy state and are not imported into Rust.
+SQLite preference records and plaintext history are legacy state and are not imported.

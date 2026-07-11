@@ -21,8 +21,9 @@ use colossus_presentation::{
 use colossus_runtime::{Runtime, RuntimeConfig};
 use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
 use reedline::{
-    EditCommand, Emacs, KeyCode, KeyModifiers, Prompt, PromptEditMode, PromptHistorySearch,
-    PromptHistorySearchStatus, Reedline, ReedlineEvent, Signal, default_emacs_keybindings,
+    EditCommand, Emacs, FileBackedHistory, History, HistoryItem, KeyCode, KeyModifiers, Prompt,
+    PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline, ReedlineEvent,
+    Signal, default_emacs_keybindings,
 };
 use serde_json::{Value, json};
 use std::{
@@ -63,6 +64,8 @@ enum ApprovalMode {
     /// Grant approval obligations automatically without expanding policy permissions.
     FullAccess,
 }
+
+const REPL_HISTORY_CAPACITY: usize = 1_000;
 
 impl ApprovalMode {
     const fn as_str(self) -> &'static str {
@@ -590,6 +593,11 @@ struct PreferencesCommand {
 enum PreferencesAction {
     /// Show the strict effective local profile.
     Show,
+    /// Show newest encrypted REPL history entries in chronological order.
+    History {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
     /// Restore and persist default presentation preferences.
     Reset,
 }
@@ -1659,9 +1667,14 @@ enum PresentationCommandResult {
     Save,
 }
 
-fn repl_editor(multiline: bool) -> Reedline {
+fn repl_editor(multiline: bool, history_entries: &[String]) -> Result<Reedline, Box<dyn Error>> {
+    let mut history = FileBackedHistory::new(REPL_HISTORY_CAPACITY)?;
+    for entry in history_entries {
+        history.save(HistoryItem::from_command_line(entry))?;
+    }
+    let editor = Reedline::create().with_history(Box::new(history));
     if !multiline {
-        return Reedline::create();
+        return Ok(editor);
     }
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
@@ -1670,7 +1683,17 @@ fn repl_editor(multiline: bool) -> Reedline {
         ReedlineEvent::Edit(vec![EditCommand::InsertNewline]),
     );
     keybindings.add_binding(KeyModifiers::ALT, KeyCode::Enter, ReedlineEvent::Submit);
-    Reedline::create().with_edit_mode(Box::new(Emacs::new(keybindings)))
+    Ok(editor.with_edit_mode(Box::new(Emacs::new(keybindings))))
+}
+
+fn remember_history_entry(history_entries: &mut Vec<String>, entry: &str) {
+    if history_entries.last().is_some_and(|last| last == entry) {
+        return;
+    }
+    if history_entries.len() == REPL_HISTORY_CAPACITY {
+        history_entries.remove(0);
+    }
+    history_entries.push(entry.into());
 }
 
 fn handle_presentation_command(
@@ -2155,7 +2178,8 @@ async fn repl(
     approval_mode: ApprovalMode,
 ) -> Result<(), Box<dyn Error>> {
     let mut preferences = runtime.presentation_preferences()?;
-    let mut editor = repl_editor(preferences.multiline);
+    let mut history_entries = runtime.repl_history(REPL_HISTORY_CAPACITY)?;
+    let mut editor = repl_editor(preferences.multiline, &history_entries)?;
     let stdin = io::stdin();
     let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
     let mut active_session_id = if resume_latest {
@@ -2193,6 +2217,10 @@ async fn repl(
                 if line.is_empty() {
                     continue;
                 }
+                match runtime.append_repl_history(line).await {
+                    Ok(entry) => remember_history_entry(&mut history_entries, &entry),
+                    Err(error) => eprintln!("history was not persisted: {error}"),
+                }
                 if matches!(line, "/quit" | "/exit") {
                     break;
                 }
@@ -2207,7 +2235,7 @@ async fn repl(
                             .await?;
                         print_json(&preferences)?;
                         if prior_multiline != preferences.multiline {
-                            editor = repl_editor(preferences.multiline);
+                            editor = repl_editor(preferences.multiline, &history_entries)?;
                         }
                         continue;
                     }
@@ -3395,6 +3423,9 @@ async fn dispatch_to_worker_if_active(
         Command::Preferences(command) => {
             let operation = match command.command {
                 PreferencesAction::Show => WorkerOperation::PresentationGet,
+                PreferencesAction::History { limit } => {
+                    WorkerOperation::PresentationHistory { limit }
+                }
                 PreferencesAction::Reset => WorkerOperation::PresentationSave {
                     preferences: ReplPreferences::default(),
                 },
@@ -3437,7 +3468,14 @@ async fn worker_repl(
     let mut preferences = serde_json::from_value::<ReplPreferences>(
         client.call(WorkerOperation::PresentationGet).await?,
     )?;
-    let mut editor = repl_editor(preferences.multiline);
+    let mut history_entries = serde_json::from_value::<Vec<String>>(
+        client
+            .call(WorkerOperation::PresentationHistory {
+                limit: REPL_HISTORY_CAPACITY,
+            })
+            .await?,
+    )?;
+    let mut editor = repl_editor(preferences.multiline, &history_entries)?;
     let stdin = io::stdin();
     let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
     let mut sticky_skills = Vec::<String>::new();
@@ -3458,6 +3496,16 @@ async fn worker_repl(
                 if line.is_empty() {
                     continue;
                 }
+                match client
+                    .call(WorkerOperation::PresentationHistoryAppend { entry: line.into() })
+                    .await
+                {
+                    Ok(value) => match serde_json::from_value::<String>(value) {
+                        Ok(entry) => remember_history_entry(&mut history_entries, &entry),
+                        Err(error) => eprintln!("history was not persisted: {error}"),
+                    },
+                    Err(error) => eprintln!("history was not persisted: {error}"),
+                }
                 if matches!(line, "/quit" | "/exit") {
                     break;
                 }
@@ -3476,7 +3524,7 @@ async fn worker_repl(
                         )?;
                         print_json(&preferences)?;
                         if prior_multiline != preferences.multiline {
-                            editor = repl_editor(preferences.multiline);
+                            editor = repl_editor(preferences.multiline, &history_entries)?;
                         }
                         continue;
                     }
@@ -4145,6 +4193,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Config(_) => unreachable!("handled before runtime construction"),
         Command::Preferences(command) => match command.command {
             PreferencesAction::Show => print_json(&runtime.presentation_preferences()?)?,
+            PreferencesAction::History { limit } => {
+                print_json(&runtime.repl_history(limit.clamp(1, REPL_HISTORY_CAPACITY))?)?
+            }
             PreferencesAction::Reset => print_json(
                 &runtime
                     .save_presentation_preferences(ReplPreferences::default())

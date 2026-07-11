@@ -1205,11 +1205,22 @@ fn read_optional(path: Option<&PathBuf>) -> Result<Option<Vec<u8>>, RuntimeError
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum PresentationOperation {
     Save { preferences: ReplPreferences },
+    AppendHistory { entry: String },
 }
 
 impl PresentationOperation {
     const fn action(&self) -> &'static str {
-        "presentation.preferences.update"
+        match self {
+            Self::Save { .. } => "presentation.preferences.update",
+            Self::AppendHistory { .. } => "presentation.history.append",
+        }
+    }
+
+    const fn resource(&self) -> &'static str {
+        match self {
+            Self::Save { .. } => "presentation:repl",
+            Self::AppendHistory { .. } => "presentation:history",
+        }
     }
 }
 
@@ -2044,6 +2055,7 @@ impl Runtime {
                     "context.snapshots",
                     "patch.preview",
                     "presentation.preferences.update",
+                    "presentation.history.append",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
@@ -2239,6 +2251,7 @@ impl Runtime {
             "patch.reverse".to_owned(),
             "trace.export".to_owned(),
             "presentation.preferences.update".to_owned(),
+            "presentation.history.append".to_owned(),
             "network.http".to_owned(),
             "task.create".to_owned(),
             "task.update".to_owned(),
@@ -3186,6 +3199,34 @@ impl Runtime {
             terminal_actor(),
             action,
             "presentation:repl",
+            serde_json::to_value(&operation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![action.into()];
+        let result = self
+            .gateway
+            .execute(request, self.presentation_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Reconstruct newest encrypted REPL history entries in chronological order.
+    pub fn repl_history(&self, limit: usize) -> Result<Vec<String>, RuntimeError> {
+        self.presentation.list_history(limit).map_err(Into::into)
+    }
+
+    /// Append one REPL history entry through policy, permit, and audit boundaries.
+    pub async fn append_repl_history(&self, entry: &str) -> Result<String, RuntimeError> {
+        let operation = PresentationOperation::AppendHistory {
+            entry: entry.into(),
+        };
+        let action = operation.action();
+        let resource = operation.resource();
+        let mut request = effect_request(
+            terminal_actor(),
+            action,
+            resource,
             serde_json::to_value(&operation)
                 .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
@@ -8729,20 +8770,29 @@ impl EffectExecutor for PresentationEffectExecutor {
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let operation: PresentationOperation = serde_json::from_value(request.content.clone())
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
-        if request.action != operation.action() || request.resource != "presentation:repl" {
+        if request.action != operation.action() || request.resource != operation.resource() {
             return Err(ExecutionError::Failed(
                 "presentation request does not match its authorized content".into(),
             ));
         }
-        let PresentationOperation::Save { preferences } = operation;
-        let preferences = self
-            .repository
-            .save(preferences, request.actor.clone())
-            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        let output = match operation {
+            PresentationOperation::Save { preferences } => serde_json::to_vec(
+                &self
+                    .repository
+                    .save(preferences, request.actor.clone())
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+            PresentationOperation::AppendHistory { entry } => serde_json::to_vec(
+                &self
+                    .repository
+                    .append_history(entry, request.actor.clone())
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+        }
+        .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         Ok(QuarantinedEffectResult {
             media_type: "application/json".into(),
-            bytes: serde_json::to_vec(&preferences)
-                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            bytes: output,
             effect_succeeded: true,
         })
     }
@@ -9385,6 +9435,47 @@ mod tests {
                 .expect("preference stream")
                 .len(),
             1
+        );
+
+        let history_operation = PresentationOperation::AppendHistory {
+            entry: "secret prompt".into(),
+        };
+        let mut history_request = effect_request(
+            terminal_actor(),
+            history_operation.action(),
+            history_operation.resource(),
+            serde_json::to_value(&history_operation).expect("history operation"),
+        );
+        history_request.capabilities = vec![history_operation.action().into()];
+        let history_gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                BuiltInPolicy::offline_default()
+                    .with_action(history_operation.action(), DecisionOutcome::Allow),
+            ),
+            Arc::new(DenyApproval),
+            SafetyKernel::new([history_operation.action().into()]),
+            [63_u8; 32],
+        );
+        history_gateway
+            .execute(history_request, &executor)
+            .await
+            .expect("authorized encrypted history append");
+        assert_eq!(
+            repository.list_history(10).expect("history"),
+            ["secret prompt"]
+        );
+        let history_event = journal
+            .read_stream("presentation:history")
+            .expect("history stream")
+            .into_iter()
+            .next()
+            .expect("history event");
+        assert_eq!(history_event.event_type, "presentation.history.appended.v1");
+        assert!(
+            !serde_json::to_string(&history_event)
+                .expect("history envelope")
+                .contains("secret prompt")
         );
     }
 

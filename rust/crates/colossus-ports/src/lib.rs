@@ -359,6 +359,12 @@ pub trait PresentationRepository: Send + Sync {
         preferences: ReplPreferences,
         actor: Actor,
     ) -> Result<ReplPreferences, StoreError>;
+
+    /// Reconstruct the newest bounded submitted REPL entries in chronological order.
+    fn list_history(&self, limit: usize) -> Result<Vec<String>, StoreError>;
+
+    /// Append one encrypted REPL history entry, deduplicating consecutive submissions.
+    fn append_history(&self, entry: String, actor: Actor) -> Result<String, StoreError>;
 }
 
 /// Shared context preparation boundary used by every agent provider turn.

@@ -192,10 +192,20 @@ pub enum WorkerOperation {
     },
     /// Reconstruct the canonical presentation profile.
     PresentationGet,
+    /// Reconstruct newest encrypted REPL history entries.
+    PresentationHistory {
+        /// Maximum entries in chronological order.
+        limit: usize,
+    },
     /// Persist a complete presentation profile through the runtime gateway.
     PresentationSave {
         /// Strict complete replacement profile.
         preferences: ReplPreferences,
+    },
+    /// Append one encrypted REPL history entry through the runtime gateway.
+    PresentationHistoryAppend {
+        /// Exact submitted entry.
+        entry: String,
     },
     /// Show context budget status.
     ContextStatus {
@@ -1236,7 +1246,9 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::SessionLatest => "session_latest",
         WorkerOperation::WorkState { .. } => "work_state",
         WorkerOperation::PresentationGet => "presentation_get",
+        WorkerOperation::PresentationHistory { .. } => "presentation_history",
         WorkerOperation::PresentationSave { .. } => "presentation_save",
+        WorkerOperation::PresentationHistoryAppend { .. } => "presentation_history_append",
         WorkerOperation::ContextStatus { .. } => "context_status",
         WorkerOperation::ContextList { .. } => "context_list",
         WorkerOperation::ContextCompact { .. } => "context_compact",
@@ -1482,8 +1494,14 @@ async fn dispatch(
         WorkerOperation::PresentationGet => {
             Ok(serde_json::to_value(runtime.presentation_preferences()?)?)
         }
+        WorkerOperation::PresentationHistory { limit } => Ok(serde_json::to_value(
+            runtime.repl_history(limit.clamp(1, 1_000))?,
+        )?),
         WorkerOperation::PresentationSave { preferences } => Ok(serde_json::to_value(
             runtime.save_presentation_preferences(preferences).await?,
+        )?),
+        WorkerOperation::PresentationHistoryAppend { entry } => Ok(serde_json::to_value(
+            runtime.append_repl_history(&entry).await?,
         )?),
         WorkerOperation::ContextStatus { session_id } => Ok(serde_json::to_value(
             runtime.context_status(&session_id).await?,

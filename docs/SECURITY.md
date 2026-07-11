@@ -505,13 +505,15 @@ activity as model reasoning.
 
 ## REPL Themes And Preferences
 
-Rust REPL preferences are strict typed records in the encrypted event journal. Updates
-cross the same policy, permit, and audit boundary as other durable mutations and route
-through authenticated worker IPC when the worker owns the writer lease. They control
+Rust REPL preferences and submitted-input history are strict records in the encrypted
+event journal. Updates cross the same policy, permit, and audit boundary as other durable
+mutations and route through authenticated worker IPC when the worker owns the writer
+lease. Reedline is hydrated into bounded memory and never receives a plaintext history
+file; audit envelopes and projections do not disclose entry contents. Preferences control
 display behavior only and do not change provider, policy, tool, approval, capability, or
 prompt decisions. Built-in themes are data-only identities; executable plugins are not
-loaded through the presentation path, and unknown preference schemas fail closed. The
-frozen Python implementation retains its legacy SQLite preference records separately.
+loaded through the presentation path, and unknown schemas fail closed. The frozen Python
+implementation retains its legacy SQLite preferences and plaintext history separately.
 
 ## Audit Logs
 

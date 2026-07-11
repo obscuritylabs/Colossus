@@ -784,6 +784,11 @@ The REPL includes:
 The REPL persists display preferences for theme, multiline composition, streaming mode,
 event detail, transcript density, and reasoning-summary visibility. Preferences affect
 rendering only and MUST NOT change provider, policy, tool, or approval behavior.
+Submitted input history MUST be encrypted in the authoritative journal and persisted
+through the normal policy/permit/audit boundary. Rust MUST NOT silently create or reuse a
+plaintext history sidecar. Embedded and authenticated-worker REPLs MUST hydrate the same
+bounded newest entries, suppress consecutive duplicates, and keep history persistence
+failure from blocking the requested command.
 
 ### 18.4 Rendering
 
@@ -958,6 +963,8 @@ A reconstruction is complete only when all applicable checks pass:
 - [x] Research records planned queries, lane decisions, source labels, worker progress,
   citations, synthesis choice, and limitations.
 - [ ] Compact and verbose renderers cover every event type and every tool family.
+- [x] Embedded and worker REPL history has bounded hydration, encrypted permit-bound
+  persistence, restart parity, consecutive deduplication, and redacted audit envelopes.
 - [x] Telemetry derives correct duration and counts from persisted event timestamps.
 - [ ] Credentials remain references until adapter execution and never appear in model or
   user-visible diagnostic payloads.

@@ -503,6 +503,21 @@ sandbox:
     assert!(!repl_stdout.contains("\x1b[2K"));
     assert!(!repl_stderr.contains("\x1b[2K"));
 
+    let history = run(
+        binary,
+        &config,
+        &["preferences", "history", "--limit", "1000"],
+    );
+    assert!(
+        history.status.success(),
+        "{}",
+        String::from_utf8_lossy(&history.stderr)
+    );
+    let history: Vec<String> = serde_json::from_slice(&history.stdout).expect("REPL history JSON");
+    assert!(history.iter().any(|entry| entry == "tasks-through-worker"));
+    assert!(history.iter().any(|entry| entry == "/context status"));
+    assert_eq!(history.last().map(String::as_str), Some("/exit"));
+
     let preferences = run(binary, &config, &["preferences", "show"]);
     assert!(preferences.status.success());
     let preferences: Value = serde_json::from_slice(&preferences.stdout).expect("preferences JSON");
@@ -615,9 +630,10 @@ steps:
     wait_for_exit(&mut worker.0, Duration::from_secs(5));
     assert!(!socket.exists());
 
-    let audit = run(binary, &config, &["audit", "show", "--limit", "1000"]);
-    assert!(audit.status.success());
-    let audit: Value = serde_json::from_slice(&audit.stdout).expect("audit JSON");
+    let audit_output = run(binary, &config, &["audit", "show", "--limit", "10000"]);
+    assert!(audit_output.status.success());
+    let audit_text = String::from_utf8_lossy(&audit_output.stdout);
+    let audit: Value = serde_json::from_slice(&audit_output.stdout).expect("audit JSON");
     assert!(audit.as_array().is_some_and(|events| {
         events
             .iter()
@@ -634,6 +650,13 @@ steps:
                 && event["stream_id"] == "presentation:repl"
         })
     }));
+    assert!(audit.as_array().is_some_and(|events| {
+        events.iter().any(|event| {
+            event["event_type"] == "presentation.history.appended.v1"
+                && event["stream_id"] == "presentation:history"
+        })
+    }));
+    assert!(!audit_text.contains("tasks-through-worker"));
 
     let embedded = run(binary, &config, &["run", "embedded-fallback"]);
     assert!(embedded.status.success());
@@ -654,6 +677,17 @@ steps:
     let embedded_stdout = String::from_utf8_lossy(&embedded_repl.stdout);
     assert!(embedded_stdout.contains(session_id));
     assert!(embedded_stdout.contains("[work] session="));
+
+    let embedded_history = run(
+        binary,
+        &config,
+        &["preferences", "history", "--limit", "1000"],
+    );
+    assert!(embedded_history.status.success());
+    let embedded_history: Vec<String> =
+        serde_json::from_slice(&embedded_history.stdout).expect("embedded history JSON");
+    assert!(embedded_history.iter().any(|entry| entry == "/repl reset"));
+    assert_eq!(embedded_history.last().map(String::as_str), Some("/exit"));
 
     let reset_preferences = run(binary, &config, &["preferences", "show"]);
     let reset_preferences: Value =

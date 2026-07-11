@@ -14,6 +14,10 @@ use thiserror::Error;
 
 const PREFERENCES_STREAM: &str = "presentation:repl";
 const PREFERENCES_UPDATED: &str = "presentation.preferences.updated.v1";
+const HISTORY_STREAM: &str = "presentation:history";
+const HISTORY_APPENDED: &str = "presentation.history.appended.v1";
+const MAX_HISTORY_ENTRIES: usize = 1_000;
+const MAX_HISTORY_ENTRY_BYTES: usize = 1024 * 1024;
 const COMPACT_PREVIEW_CHARS: usize = 240;
 const VERBOSE_PREVIEW_CHARS: usize = 8 * 1024;
 
@@ -91,6 +95,77 @@ impl PresentationRepository for EventSourcedPresentationRepository {
         })?;
         Ok(preferences)
     }
+
+    fn list_history(&self, limit: usize) -> Result<Vec<String>, StoreError> {
+        if !(1..=MAX_HISTORY_ENTRIES).contains(&limit) {
+            return Err(StoreError::Adapter(format!(
+                "history limit must be between 1 and {MAX_HISTORY_ENTRIES}"
+            )));
+        }
+        let events = self.journal.read_stream(HISTORY_STREAM)?;
+        let skip = events.len().saturating_sub(limit);
+        events
+            .iter()
+            .skip(skip)
+            .map(|event| {
+                if event.event_type != HISTORY_APPENDED {
+                    return Err(StoreError::Verification(
+                        "presentation history contains an unknown event".into(),
+                    ));
+                }
+                let payload = self.journal.decrypt_payload(event)?;
+                let entry = payload
+                    .get("entry")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        StoreError::Verification("presentation history entry is absent".into())
+                    })?;
+                validate_history_entry(entry)?;
+                Ok(entry.into())
+            })
+            .collect()
+    }
+
+    fn append_history(&self, entry: String, actor: Actor) -> Result<String, StoreError> {
+        validate_history_entry(&entry)?;
+        let events = self.journal.read_stream(HISTORY_STREAM)?;
+        if let Some(event) = events.last() {
+            if event.event_type != HISTORY_APPENDED {
+                return Err(StoreError::Verification(
+                    "presentation history contains an unknown event".into(),
+                ));
+            }
+            let payload = self.journal.decrypt_payload(event)?;
+            if payload.get("entry").and_then(Value::as_str) == Some(entry.as_str()) {
+                return Ok(entry);
+            }
+        }
+        let expected_stream_version =
+            u64::try_from(events.len()).map_err(|error| StoreError::Adapter(error.to_string()))?;
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id: HISTORY_STREAM.into(),
+            expected_stream_version,
+            classification: EventClassification::Domain,
+            event_type: HISTORY_APPENDED.into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: HISTORY_STREAM.into(),
+                ..ExecutionContext::default()
+            },
+            payload: json!({"entry": &entry}),
+        })?;
+        Ok(entry)
+    }
+}
+
+fn validate_history_entry(entry: &str) -> Result<(), StoreError> {
+    if entry.trim().is_empty() || entry.len() > MAX_HISTORY_ENTRY_BYTES {
+        return Err(StoreError::Adapter(format!(
+            "history entry must be nonempty and at most {MAX_HISTORY_ENTRY_BYTES} bytes"
+        )));
+    }
+    Ok(())
 }
 
 /// Pure semantic renderer over already released contracts.

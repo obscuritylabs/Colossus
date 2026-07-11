@@ -402,7 +402,9 @@ Composer behavior:
 
 - Single-line mode is the default; `Enter` submits.
 - Multiline mode makes `Enter` insert a newline and `Esc+Enter` submit.
-- Prompt history is stored as `repl_history.txt` under the Colossus data directory.
+- The frozen Python REPL stores prompt history in `repl_history.txt`. The Rust REPL does
+  not reuse that plaintext file; it stores submitted entries as encrypted canonical
+  events in the fresh Rust journal and hydrates only the newest 1,000 into Reedline.
 
 Runtime controls:
 
@@ -444,9 +446,10 @@ time in place and clears that transient line before model text or a terminal eve
 continues to emit stable, escape-free lines when output is redirected. Embedded and
 authenticated-worker REPL prompts share a cached status line with the active session,
 resolved primary model/profile, context and message budget, open/total work, approval
-mode, display preferences, and last run status. Persistent Reedline history, full theme
-palettes, and cursor/draft counters remain cutover UX work; Reedline's prompt contract
-does not currently expose editor-buffer counters.
+mode, display preferences, and last run status. Reedline history is hydrated from the
+newest 1,000 encrypted journal entries and persists through the authenticated worker or
+embedded runtime. Full theme palettes and cursor/draft counters remain cutover UX work;
+Reedline's prompt contract does not currently expose editor-buffer counters.
 
 ## Agent telemetry
 
@@ -473,9 +476,12 @@ selected redb state. Saved preferences include theme, multiline mode, model-outp
 streaming, event detail, transcript density, and safe reasoning-summary visibility.
 Every update is policy authorized, audited, and automatically routed through an active
 worker; `/repl save` is therefore explicit but normally unnecessary because each setting
-command persists its replacement profile. Use `colossus-rs preferences show|reset` for
-non-interactive inspection or reset. The frozen Python implementation keeps its legacy
-SQLite preferences separately and Rust does not import them.
+command persists its replacement profile. Submitted REPL entries use the same encrypted,
+permit-bound presentation repository rather than a plaintext sidecar; consecutive
+duplicates are suppressed and oversized entries fail history persistence without blocking
+the requested command. Use `colossus-rs preferences show|history|reset` for non-interactive
+inspection or reset. The frozen Python implementation keeps its legacy SQLite preferences
+and plaintext history separately, and Rust does not import them.
 
 You can choose a one-launch startup theme with:
 
