@@ -44,9 +44,16 @@ subagent tools remain subject to their policy actions and resource obligations.
 Durable research uses `research.maxSources` (1..=100) and `research.maxWorkers`
 (1..=16). Add `research.run` to the built-in policy before invoking it. Repository
 collection is read-only and each search independently crosses the gateway and
-post-effect release check. Unconfigured web and MCP lanes are retained as explicit
-limitations; source labels, claims, lane outcomes, and the final cited report are
-reconstructed from the encrypted journal. The report is also appended to its session.
+post-effect release check. Configure a SearXNG JSON endpoint with
+`research.search.kind: searxng`, add its exact origin to
+`sandbox.networkDestinations`, and allow `network.http` to enable the web lane.
+Unconfigured web and MCP lanes are retained as explicit limitations.
+`research_planner`, `research_worker`, and `research_synthesizer` use normal
+gateway-bound provider roles; invalid or unavailable model output produces a durable
+deterministic fallback instead of weakening citation checks. Source labels, claims,
+lane/progress outcomes, and the final cited report are reconstructed from the encrypted
+journal. The report is also appended to its session, and abandoned runs become
+`interrupted` on restart without implicit retry.
 
 Normal runs create a durable session automatically and return its id. Use
 `run --session ID` for an exact session, `run --resume` for the most recently updated

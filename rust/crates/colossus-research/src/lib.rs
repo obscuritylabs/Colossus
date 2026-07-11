@@ -5,8 +5,9 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, EventClassification, ExecutionContext, ModelMessage, ModelMessageRole,
-    NewEvent, ResearchClaim, ResearchDepth, ResearchLane, ResearchLaneStatus, ResearchRun,
-    ResearchSource, ResearchSourceKind, ResearchStatus,
+    NewEvent, ResearchClaim, ResearchDepth, ResearchLane, ResearchLaneStatus, ResearchPhase,
+    ResearchProgress, ResearchProgressStatus, ResearchRun, ResearchSource, ResearchSourceKind,
+    ResearchStatus,
 };
 use colossus_ports::{EventJournal, ResearchRepository, SessionRepository, StoreError};
 use serde_json::{Value, json};
@@ -26,6 +27,7 @@ const MAX_REPORT_BYTES: usize = 512 * 1024;
 const MAX_METADATA_BYTES: usize = 64 * 1024;
 const MAX_QUERIES: usize = 100;
 const MAX_LANES: usize = 300;
+const MAX_PROGRESS: usize = 2_000;
 const MAX_SOURCES: usize = 100;
 const MAX_CLAIMS: usize = 1_000;
 const MAX_LIST: usize = 1_000;
@@ -61,6 +63,25 @@ fn validate_run(run: &ResearchRun) -> Result<(), StoreError> {
             && !lane.updated_at.is_empty()
             && (lane.status == ResearchLaneStatus::Completed || lane.source_count == 0)
     });
+    let progress_ids = run
+        .progress
+        .iter()
+        .map(|progress| &progress.id)
+        .collect::<BTreeSet<_>>();
+    let progress_valid = run.progress.iter().all(|progress| {
+        valid_id(&progress.id)
+            && !progress.action.trim().is_empty()
+            && progress.action.len() <= MAX_QUERY_BYTES
+            && progress.message.len() <= MAX_QUERY_BYTES
+            && progress.created_at.len() <= 128
+            && !progress.created_at.is_empty()
+            && progress
+                .current
+                .zip(progress.total)
+                .is_none_or(|(current, total)| {
+                    total <= MAX_PROGRESS && current >= 1 && current <= total
+                })
+    });
     let lifecycle_valid = match run.status {
         ResearchStatus::Running => {
             run.completed_at.is_none() && run.report.is_empty() && run.error.is_empty()
@@ -68,7 +89,9 @@ fn validate_run(run: &ResearchRun) -> Result<(), StoreError> {
         ResearchStatus::Completed => {
             run.completed_at.is_some() && !run.report.trim().is_empty() && run.error.is_empty()
         }
-        ResearchStatus::Failed => run.completed_at.is_some() && !run.error.trim().is_empty(),
+        ResearchStatus::Failed | ResearchStatus::Interrupted => {
+            run.completed_at.is_some() && !run.error.trim().is_empty()
+        }
     };
     if !valid_id(&run.id)
         || !valid_id(&run.session_id)
@@ -84,6 +107,9 @@ fn validate_run(run: &ResearchRun) -> Result<(), StoreError> {
         || run.lanes.len() > MAX_LANES
         || lane_ids.len() != run.lanes.len()
         || !lanes_valid
+        || run.progress.len() > MAX_PROGRESS
+        || progress_ids.len() != run.progress.len()
+        || !progress_valid
         || run
             .limitations
             .iter()
@@ -237,7 +263,10 @@ impl EventSourcedResearchRepository {
 impl ResearchRepository for EventSourcedResearchRepository {
     fn create_run(&self, run: ResearchRun, actor: Actor) -> Result<ResearchRun, StoreError> {
         validate_run(&run)?;
-        if run.status != ResearchStatus::Running || !run.queries.is_empty() || !run.lanes.is_empty()
+        if run.status != ResearchStatus::Running
+            || !run.queries.is_empty()
+            || !run.lanes.is_empty()
+            || !run.progress.is_empty()
         {
             return Err(StoreError::Adapter(
                 "new research runs must begin running before planning".into(),
@@ -267,6 +296,7 @@ impl ResearchRepository for EventSourcedResearchRepository {
             || current.created_at != run.created_at
             || !run.queries.starts_with(&current.queries)
             || !run.lanes.starts_with(&current.lanes)
+            || !run.progress.starts_with(&current.progress)
             || !run.limitations.starts_with(&current.limitations)
         {
             return Err(StoreError::Adapter(
@@ -511,6 +541,29 @@ pub trait ResearchCollector: Send + Sync {
     ) -> ResearchCollection;
 }
 
+/// Optional model-assisted planner, claim worker, and report synthesizer.
+/// Implementations must route every turn through the provider effect gateway.
+#[async_trait]
+pub trait ResearchModel: Send + Sync {
+    /// Produce a bounded query plan. Invalid output is discarded by the service.
+    async fn plan(&self, run: &ResearchRun) -> Result<Vec<String>, String>;
+
+    /// Extract bounded claims supported by exactly one supplied canonical source.
+    async fn extract(
+        &self,
+        run: &ResearchRun,
+        source: &ResearchSource,
+    ) -> Result<Vec<String>, String>;
+
+    /// Produce Markdown using only canonical citation labels.
+    async fn synthesize(
+        &self,
+        run: &ResearchRun,
+        sources: &[ResearchSource],
+        claims: &[ResearchClaim],
+    ) -> Result<String, String>;
+}
+
 /// Bounds for one durable research orchestration run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResearchLimits {
@@ -534,6 +587,7 @@ pub struct ResearchService {
     repository: Arc<dyn ResearchRepository>,
     sessions: Arc<dyn SessionRepository>,
     collector: Arc<dyn ResearchCollector>,
+    model: Option<Arc<dyn ResearchModel>>,
     limits: ResearchLimits,
 }
 
@@ -545,6 +599,17 @@ impl ResearchService {
         collector: Arc<dyn ResearchCollector>,
         limits: ResearchLimits,
     ) -> Result<Self, StoreError> {
+        Self::new_with_model(repository, sessions, collector, None, limits)
+    }
+
+    /// Compose canonical state with gateway-bound collection and optional model roles.
+    pub fn new_with_model(
+        repository: Arc<dyn ResearchRepository>,
+        sessions: Arc<dyn SessionRepository>,
+        collector: Arc<dyn ResearchCollector>,
+        model: Option<Arc<dyn ResearchModel>>,
+        limits: ResearchLimits,
+    ) -> Result<Self, StoreError> {
         if !(1..=100).contains(&limits.max_sources) || !(1..=16).contains(&limits.max_workers) {
             return Err(StoreError::Adapter(
                 "research limits require max_sources 1..=100 and max_workers 1..=16".into(),
@@ -554,6 +619,7 @@ impl ResearchService {
             repository,
             sessions,
             collector,
+            model,
             limits,
         })
     }
@@ -580,6 +646,7 @@ impl ResearchService {
             status: ResearchStatus::Running,
             queries: Vec::new(),
             lanes: Vec::new(),
+            progress: Vec::new(),
             limitations: Vec::new(),
             report: String::new(),
             error: String::new(),
@@ -588,7 +655,47 @@ impl ResearchService {
             completed_at: None,
         };
         self.repository.create_run(run.clone(), actor.clone())?;
-        run.queries = plan_queries(&run.question, depth);
+        run.progress.push(progress(
+            ResearchPhase::Planning,
+            "queries",
+            ResearchProgressStatus::Started,
+            "Planning bounded research queries.",
+            None,
+            None,
+        )?);
+        self.persist(&mut run, &actor)?;
+        let fallback_queries = plan_queries(&run.question, depth);
+        let (queries, planning_status, planning_message) = match &self.model {
+            Some(model) => match model.plan(&run).await.and_then(|queries| {
+                normalize_queries(queries, query_budget(depth))
+                    .ok_or_else(|| "planner returned invalid or empty queries".into())
+            }) {
+                Ok(queries) => (
+                    queries,
+                    ResearchProgressStatus::Completed,
+                    "Accepted model-generated research queries.".to_owned(),
+                ),
+                Err(error) => (
+                    fallback_queries,
+                    ResearchProgressStatus::Fallback,
+                    format!("Used deterministic queries: {}", bounded_message(&error)),
+                ),
+            },
+            None => (
+                fallback_queries,
+                ResearchProgressStatus::Fallback,
+                "Used deterministic queries because no research model is configured.".into(),
+            ),
+        };
+        run.queries = queries;
+        run.progress.push(progress(
+            ResearchPhase::Planning,
+            "queries",
+            planning_status,
+            &planning_message,
+            Some(run.queries.len()),
+            Some(run.queries.len()),
+        )?);
         run.updated_at = now()?;
         self.repository.update_run(run.clone(), actor.clone())?;
 
@@ -607,6 +714,15 @@ impl ResearchService {
                         &message,
                         0,
                     )?);
+                    run.progress.push(progress(
+                        ResearchPhase::Collecting,
+                        format!("lane:{kind:?}"),
+                        ResearchProgressStatus::Skipped,
+                        &message,
+                        None,
+                        None,
+                    )?);
+                    self.persist(&mut run, &actor)?;
                     continue;
                 }
                 worker_count = worker_count.saturating_add(1);
@@ -661,14 +777,54 @@ impl ResearchService {
                     &collection.message,
                     saved,
                 )?);
+                run.progress.push(progress(
+                    ResearchPhase::Collecting,
+                    format!("lane:{kind:?}"),
+                    if collection.status == ResearchLaneStatus::Completed {
+                        ResearchProgressStatus::Completed
+                    } else {
+                        ResearchProgressStatus::Failed
+                    },
+                    &collection.message,
+                    None,
+                    None,
+                )?);
                 run.updated_at = now()?;
                 self.repository.update_run(run.clone(), actor.clone())?;
             }
         }
 
         let sources = self.repository.list_sources(&run.id)?;
-        for source in &sources {
-            if let Some(text) = first_evidence_sentence(&source.content) {
+        for (index, source) in sources.iter().enumerate() {
+            let fallback = first_evidence_sentence(&source.content)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let (texts, status, message) = match &self.model {
+                Some(model) => match model.extract(&run, source).await.and_then(|claims| {
+                    normalize_claims(claims).ok_or_else(|| "worker returned invalid claims".into())
+                }) {
+                    Ok(claims) => (
+                        claims,
+                        ResearchProgressStatus::Completed,
+                        format!("Accepted claims for {}.", source.label),
+                    ),
+                    Err(error) => (
+                        fallback,
+                        ResearchProgressStatus::Fallback,
+                        format!(
+                            "Used deterministic extraction for {}: {}",
+                            source.label,
+                            bounded_message(&error)
+                        ),
+                    ),
+                },
+                None => (
+                    fallback,
+                    ResearchProgressStatus::Fallback,
+                    format!("Used deterministic extraction for {}.", source.label),
+                ),
+            };
+            for text in texts {
                 self.repository.add_claim(
                     ResearchClaim {
                         id: Uuid::now_v7().to_string(),
@@ -680,9 +836,60 @@ impl ResearchService {
                     actor.clone(),
                 )?;
             }
+            run.progress.push(progress(
+                ResearchPhase::Workers,
+                format!("source:{}", source.label),
+                status,
+                &message,
+                Some(index.saturating_add(1)),
+                Some(sources.len()),
+            )?);
+            self.persist(&mut run, &actor)?;
         }
         let claims = self.repository.list_claims(&run.id)?;
-        run.report = synthesize(&run, &sources, &claims);
+        run.progress.push(progress(
+            ResearchPhase::Synthesis,
+            "report",
+            ResearchProgressStatus::Started,
+            "Assembling a citation-bounded report.",
+            None,
+            None,
+        )?);
+        self.persist(&mut run, &actor)?;
+        let fallback_report = synthesize(&run, &sources, &claims);
+        let (report, synthesis_status, synthesis_message) = match &self.model {
+            Some(model) => match model.synthesize(&run, &sources, &claims).await {
+                Ok(report) if report_citations_valid(&report, &sources) => (
+                    report,
+                    ResearchProgressStatus::Completed,
+                    "Accepted model-synthesized cited report.".to_owned(),
+                ),
+                Ok(_) => (
+                    fallback_report,
+                    ResearchProgressStatus::Fallback,
+                    "Used deterministic report because model citations were invalid.".into(),
+                ),
+                Err(error) => (
+                    fallback_report,
+                    ResearchProgressStatus::Fallback,
+                    format!("Used deterministic report: {}", bounded_message(&error)),
+                ),
+            },
+            None => (
+                fallback_report,
+                ResearchProgressStatus::Fallback,
+                "Used deterministic report because no research model is configured.".into(),
+            ),
+        };
+        run.report = report;
+        run.progress.push(progress(
+            ResearchPhase::Synthesis,
+            "report",
+            synthesis_status,
+            &synthesis_message,
+            None,
+            None,
+        )?);
         run.status = ResearchStatus::Completed;
         run.updated_at = now()?;
         run.completed_at = Some(run.updated_at.clone());
@@ -703,22 +910,127 @@ impl ResearchService {
         )?;
         Ok(run)
     }
+
+    /// Mark every abandoned running process as interrupted without retrying collection or models.
+    pub fn recover_interrupted(&self, actor: Actor) -> Result<Vec<ResearchRun>, StoreError> {
+        let mut recovered = Vec::new();
+        for mut run in self.repository.list_runs(None, MAX_LIST)? {
+            if run.status != ResearchStatus::Running {
+                continue;
+            }
+            let timestamp = now()?;
+            run.status = ResearchStatus::Interrupted;
+            run.error = "process exited before the research run reached a terminal event; outcome is interrupted and was not retried".into();
+            run.progress.push(progress(
+                ResearchPhase::Recovery,
+                "interrupt",
+                ResearchProgressStatus::Failed,
+                &run.error,
+                None,
+                None,
+            )?);
+            run.updated_at = timestamp.clone();
+            run.completed_at = Some(timestamp);
+            self.repository.update_run(run.clone(), actor.clone())?;
+            recovered.push(run);
+        }
+        Ok(recovered)
+    }
+
+    fn persist(&self, run: &mut ResearchRun, actor: &Actor) -> Result<(), StoreError> {
+        run.updated_at = now()?;
+        self.repository.update_run(run.clone(), actor.clone())?;
+        Ok(())
+    }
 }
 
 fn now() -> Result<String, StoreError> {
     OffsetDateTime::now_utc().format(&Rfc3339).map_err(adapter)
 }
 
-fn plan_queries(question: &str, depth: ResearchDepth) -> Vec<String> {
-    let count = match depth {
+fn progress(
+    phase: ResearchPhase,
+    action: impl Into<String>,
+    status: ResearchProgressStatus,
+    message: &str,
+    current: Option<usize>,
+    total: Option<usize>,
+) -> Result<ResearchProgress, StoreError> {
+    Ok(ResearchProgress {
+        id: Uuid::now_v7().to_string(),
+        phase,
+        action: action.into(),
+        status,
+        message: bounded_message(message),
+        current,
+        total,
+        created_at: now()?,
+    })
+}
+
+fn bounded_message(message: &str) -> String {
+    message.chars().take(MAX_QUERY_BYTES).collect()
+}
+
+fn query_budget(depth: ResearchDepth) -> usize {
+    match depth {
         ResearchDepth::Quick => 1,
-        ResearchDepth::Standard => 2,
-        ResearchDepth::Deep => 3,
-    };
+        ResearchDepth::Standard => 3,
+        ResearchDepth::Deep => 6,
+    }
+}
+
+fn normalize_queries(queries: Vec<String>, limit: usize) -> Option<Vec<String>> {
+    let mut unique = BTreeSet::new();
+    let queries = queries
+        .into_iter()
+        .map(|query| query.trim().to_owned())
+        .filter(|query| {
+            !query.is_empty()
+                && query.len() <= MAX_QUERY_BYTES
+                && unique.insert(query.to_ascii_lowercase())
+        })
+        .take(limit)
+        .collect::<Vec<_>>();
+    (!queries.is_empty()).then_some(queries)
+}
+
+fn normalize_claims(claims: Vec<String>) -> Option<Vec<String>> {
+    let mut unique = BTreeSet::new();
+    let claims = claims
+        .into_iter()
+        .map(|claim| claim.trim().to_owned())
+        .filter(|claim| {
+            !claim.is_empty()
+                && claim.len() <= MAX_QUESTION_BYTES
+                && unique.insert(claim.to_ascii_lowercase())
+        })
+        .take(8)
+        .collect::<Vec<_>>();
+    (!claims.is_empty()).then_some(claims)
+}
+
+fn report_citations_valid(report: &str, sources: &[ResearchSource]) -> bool {
+    if report.trim().is_empty() || report.len() > MAX_REPORT_BYTES {
+        return false;
+    }
+    let known = sources
+        .iter()
+        .map(|source| source.label.clone())
+        .collect::<BTreeSet<_>>();
+    let cited = citation_labels(report);
+    cited.iter().all(|label| known.contains(label)) && (sources.is_empty() || !cited.is_empty())
+}
+
+fn plan_queries(question: &str, depth: ResearchDepth) -> Vec<String> {
+    let count = query_budget(depth);
     [
         question.to_owned(),
         format!("{question} implementation"),
         format!("{question} tests limitations"),
+        format!("{question} architecture boundaries"),
+        format!("{question} security failure modes"),
+        format!("{question} operations recovery"),
     ]
     .into_iter()
     .take(count)
@@ -789,12 +1101,13 @@ fn synthesize(run: &ResearchRun, sources: &[ResearchSource], claims: &[ResearchC
 mod tests {
     use super::{
         EventSourcedResearchRepository, ResearchCollection, ResearchCollector, ResearchLimits,
-        ResearchService, ResearchSourceDraft,
+        ResearchModel, ResearchService, ResearchSourceDraft,
     };
     use async_trait::async_trait;
     use colossus_contracts::{
         Actor, ActorType, ResearchClaim, ResearchDepth, ResearchLane, ResearchLaneStatus,
-        ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus,
+        ResearchPhase, ResearchProgressStatus, ResearchRun, ResearchSource, ResearchSourceKind,
+        ResearchStatus,
     };
     use colossus_ports::{ResearchRepository, SessionRepository};
     use colossus_session::EventSourcedSessionRepository;
@@ -802,6 +1115,32 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     struct OfflineCollector;
+
+    struct StructuredModel;
+
+    #[async_trait]
+    impl ResearchModel for StructuredModel {
+        async fn plan(&self, _run: &ResearchRun) -> Result<Vec<String>, String> {
+            Ok(vec!["model query".into()])
+        }
+
+        async fn extract(
+            &self,
+            _run: &ResearchRun,
+            _source: &ResearchSource,
+        ) -> Result<Vec<String>, String> {
+            Ok(vec!["Model-backed claim.".into()])
+        }
+
+        async fn synthesize(
+            &self,
+            _run: &ResearchRun,
+            _sources: &[ResearchSource],
+            _claims: &[ResearchClaim],
+        ) -> Result<String, String> {
+            Ok("# Model report\n\nModel-backed claim [R1].".into())
+        }
+    }
 
     #[async_trait]
     impl ResearchCollector for OfflineCollector {
@@ -850,6 +1189,7 @@ mod tests {
             status: ResearchStatus::Running,
             queries: Vec::new(),
             lanes: Vec::new(),
+            progress: Vec::new(),
             limitations: Vec::new(),
             report: String::new(),
             error: String::new(),
@@ -982,14 +1322,101 @@ mod tests {
             .await
             .expect("research");
         assert_eq!(run.status, ResearchStatus::Completed);
-        assert_eq!(run.queries.len(), 2);
-        assert_eq!(run.lanes.len(), 4);
+        assert_eq!(run.queries.len(), 3);
+        assert_eq!(run.lanes.len(), 6);
         assert!(run.limitations.iter().any(|item| item.contains("Web")));
+        assert!(
+            run.progress
+                .iter()
+                .any(|item| item.status == ResearchProgressStatus::Fallback)
+        );
         assert!(run.report.contains("[R1]"));
         assert_eq!(repository.list_sources(&run.id).expect("sources").len(), 2);
         let messages = sessions.list_messages("session-1").expect("messages");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].run_id, run.id);
         assert_eq!(messages[0].message.content, run.report);
+    }
+
+    #[tokio::test]
+    async fn valid_model_phases_replace_fallbacks_without_weakening_citations() {
+        let journal = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn ResearchRepository> =
+            Arc::new(EventSourcedResearchRepository::new(journal.clone()));
+        let sessions = Arc::new(EventSourcedSessionRepository::new(journal));
+        sessions
+            .create_session("session-1", Some("Research"), actor())
+            .expect("session");
+        let service = ResearchService::new_with_model(
+            repository.clone(),
+            sessions,
+            Arc::new(OfflineCollector),
+            Some(Arc::new(StructuredModel)),
+            ResearchLimits {
+                max_sources: 2,
+                max_workers: 2,
+            },
+        )
+        .expect("service");
+        let run = service
+            .run(
+                "session-1",
+                "How does audit work?",
+                ResearchDepth::Quick,
+                vec![ResearchSourceKind::Repo],
+                actor(),
+            )
+            .await
+            .expect("research");
+        assert_eq!(run.queries, vec!["model query"]);
+        assert_eq!(run.report, "# Model report\n\nModel-backed claim [R1].");
+        assert!(
+            run.progress
+                .iter()
+                .filter(|progress| matches!(
+                    progress.phase,
+                    ResearchPhase::Planning | ResearchPhase::Workers | ResearchPhase::Synthesis
+                ))
+                .all(|progress| progress.status != ResearchProgressStatus::Fallback)
+        );
+        assert_eq!(
+            repository.list_claims(&run.id).expect("claims")[0].text,
+            "Model-backed claim."
+        );
+    }
+
+    #[test]
+    fn startup_recovery_interrupts_running_research_without_retrying() {
+        let journal = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn ResearchRepository> =
+            Arc::new(EventSourcedResearchRepository::new(journal.clone()));
+        let sessions = Arc::new(EventSourcedSessionRepository::new(journal));
+        sessions
+            .create_session("session-1", Some("Research"), actor())
+            .expect("session");
+        let running = repository.create_run(run(), actor()).expect("run");
+        let service = ResearchService::new(
+            repository.clone(),
+            sessions,
+            Arc::new(OfflineCollector),
+            ResearchLimits::default(),
+        )
+        .expect("service");
+        let recovered = service.recover_interrupted(actor()).expect("recover");
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].status, ResearchStatus::Interrupted);
+        assert!(recovered[0].error.contains("not retried"));
+        assert_eq!(
+            service.recover_interrupted(actor()).expect("again").len(),
+            0
+        );
+        assert_eq!(
+            repository
+                .get_run(&running.id)
+                .expect("get")
+                .expect("record")
+                .status,
+            ResearchStatus::Interrupted
+        );
     }
 }

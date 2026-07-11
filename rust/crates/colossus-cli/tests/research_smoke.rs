@@ -1,7 +1,15 @@
 //! Credential-free end-to-end durable research CLI smoke test.
 
 use serde_json::Value;
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    io::{Read as _, Write as _},
+    net::TcpListener,
+    path::Path,
+    process::Command,
+    thread,
+    time::{Duration, Instant},
+};
 use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "5555555555555555555555555555555555555555555555555555555555555555";
@@ -33,6 +41,34 @@ fn repository_research_crosses_gateway_and_reconstructs_citations() {
     let state = directory.path().join("state.redb");
     let anchor = directory.path().join("anchor.json");
     let config = directory.path().join("config.yaml");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("search listener");
+    listener.set_nonblocking(true).expect("nonblocking search");
+    let search_address = listener.local_addr().expect("search address");
+    let search_server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "search request timed out");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("search connection: {error}"),
+            }
+        };
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).expect("search request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(request.contains("GET /search?q=audit&format=json"));
+        let body = r#"{"results":[{"url":"https://example.test/audit","title":"External audit","content":"External evidence is policy released.","engine":"test"}]}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .expect("search response");
+    });
     fs::write(
         &config,
         format!(
@@ -47,7 +83,7 @@ storage:
     anchor_path: {anchor}
 policy:
   kind: built_in
-  allow_actions: [research.run]
+  allow_actions: [research.run, network.http]
   approval_actions: []
   require_post_effect: true
 workflows:
@@ -56,6 +92,10 @@ workflows:
 research:
   maxSources: 5
   maxWorkers: 2
+  search:
+    kind: searxng
+    endpoint: http://{search_address}/search
+    userAgent: colossus-test
 sandbox:
   backend: native
   profile: research-test-v1
@@ -69,7 +109,7 @@ sandbox:
       mode: read
   executables: []
   environment: []
-  networkDestinations: []
+  networkDestinations: [http://{search_address}]
   timeoutMs: 5000
   maxOutputBytes: 1048576
   maxProcesses: 4
@@ -80,6 +120,7 @@ sandbox:
             anchor = anchor.display(),
             workflows = workflows.display(),
             workspace = directory.path().display(),
+            search_address = search_address,
         ),
     )
     .expect("config");
@@ -89,7 +130,7 @@ sandbox:
         &config,
         directory.path(),
         &[
-            "research", "run", "audit", "--depth", "quick", "--source", "repo",
+            "research", "run", "audit", "--depth", "quick", "--source", "repo,web",
         ],
     );
     assert!(
@@ -97,14 +138,33 @@ sandbox:
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    search_server.join().expect("search server");
     let research: Value = serde_json::from_slice(&output.stdout).expect("research JSON");
     assert_eq!(research["status"], "completed");
     assert_eq!(research["lanes"][0]["status"], "completed");
     assert_eq!(research["lanes"][0]["source_count"], 1);
+    assert_eq!(research["lanes"][1]["status"], "completed");
+    assert_eq!(research["lanes"][1]["source_count"], 1);
     assert!(
         research["report"]
             .as_str()
             .is_some_and(|report| report.contains("[R1]"))
+    );
+    let progress = research["progress"].as_array().expect("progress");
+    assert!(
+        progress
+            .iter()
+            .any(|item| { item["phase"] == "planning" && item["status"] == "fallback" })
+    );
+    assert!(
+        progress
+            .iter()
+            .any(|item| { item["phase"] == "workers" && item["status"] == "fallback" })
+    );
+    assert!(
+        progress
+            .iter()
+            .any(|item| { item["phase"] == "synthesis" && item["status"] == "fallback" })
     );
     let run_id = research["id"].as_str().expect("run id");
 
@@ -118,6 +178,9 @@ sandbox:
     let sources: Value = serde_json::from_slice(&sources.stdout).expect("sources JSON");
     assert_eq!(sources[0]["label"], "R1");
     assert_eq!(sources[0]["uri"], "evidence.md");
+    assert_eq!(sources[1]["label"], "R2");
+    assert_eq!(sources[1]["kind"], "web");
+    assert_eq!(sources[1]["uri"], "https://example.test/audit");
 
     let verify = run(binary, &config, directory.path(), &["audit", "verify"]);
     assert!(verify.status.success());

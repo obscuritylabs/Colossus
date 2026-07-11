@@ -715,6 +715,8 @@ pub enum ResearchStatus {
     Completed,
     /// The run terminated with bounded failure evidence.
     Failed,
+    /// Process loss abandoned the run; it is never silently retried.
+    Interrupted,
 }
 
 /// Durable outcome for one planned evidence lane and query.
@@ -753,6 +755,60 @@ pub struct ResearchLane {
     pub source_count: usize,
     /// UTC last-update timestamp.
     pub updated_at: String,
+}
+
+/// Durable research orchestration phase.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchPhase {
+    /// Bounded query generation.
+    Planning,
+    /// Evidence adapter execution.
+    Collecting,
+    /// Source-backed claim extraction.
+    Workers,
+    /// Citation-bearing report assembly.
+    Synthesis,
+    /// Startup abandonment detection without implicit retry.
+    Recovery,
+}
+
+/// Durable progress outcome for one phase action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchProgressStatus {
+    /// Work has started.
+    Started,
+    /// Work completed using its preferred implementation.
+    Completed,
+    /// Deterministic fallback completed after an unavailable or invalid model result.
+    Fallback,
+    /// Work was skipped by a configured bound.
+    Skipped,
+    /// Work failed with a known bounded outcome.
+    Failed,
+}
+
+/// Canonical bounded progress record retained in the research aggregate.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchProgress {
+    /// Stable progress identifier.
+    pub id: String,
+    /// Orchestration phase.
+    pub phase: ResearchPhase,
+    /// Stable action label such as `queries` or `source:R1`.
+    pub action: String,
+    /// Current action outcome.
+    pub status: ResearchProgressStatus,
+    /// Bounded human-readable detail.
+    pub message: String,
+    /// Optional one-based position.
+    pub current: Option<usize>,
+    /// Optional bounded total.
+    pub total: Option<usize>,
+    /// UTC timestamp.
+    pub created_at: String,
 }
 
 /// Canonical bounded evidence record retained with a research run.
@@ -817,6 +873,9 @@ pub struct ResearchRun {
     pub queries: Vec<String>,
     /// Per-query lane outcomes, including denied and unavailable work.
     pub lanes: Vec<ResearchLane>,
+    /// Ordered durable phase activity, including deterministic fallbacks.
+    #[serde(default)]
+    pub progress: Vec<ResearchProgress>,
     /// Explicit limitations carried into synthesis.
     pub limitations: Vec<String>,
     /// Final citation-bearing Markdown report.
