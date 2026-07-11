@@ -79,7 +79,11 @@ obsolete Go launcher.
   streaming adds durable run start/completion, tool start/result, recoverability, phase,
   and elapsed-time events. Semantic renderers distinguish file, shell, Git, work,
   context, repository, skill, web, MCP, trace, integration, pack, and generic result
-  families. Raw provider frames and hidden reasoning never enter this presentation path.
+  families. Interactive terminals refresh phase/tool elapsed activity in place while
+  redirected output remains escape-free. Embedded and worker prompts render cached
+  session, routed model, context, work, approval, preference, and last-run status through
+  bounded application operations. Raw provider frames and hidden reasoning never enter
+  this presentation path.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   a disposable Tantivy lexical index with event-id idempotency, durable replay position,
   retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry
@@ -275,9 +279,10 @@ cutover. The following planned work remains:
   strict catalog validation, and the complete P0 offline/network tool surface are
   implemented through the normal permission, quarantine, and audit boundaries.
 - Live Windows named-pipe acceptance.
-- Prompt-safe in-place activity refresh, full theme palettes/status bar, and broader live
-  provider/tool-use terminal acceptance. Durable correlated run envelopes, semantic
-  tool-family results, recoverability labels, and phase/action elapsed lines are implemented.
+- Persistent REPL history, full theme palettes, editor-buffer counters, and broader live
+  provider/tool-use terminal acceptance. Prompt-safe in-place activity refresh, a cached
+  embedded/worker status prompt, durable correlated run envelopes, semantic tool-family
+  results, recoverability labels, and phase/action elapsed lines are implemented.
 - Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,

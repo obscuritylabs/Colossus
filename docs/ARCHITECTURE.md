@@ -354,10 +354,12 @@ file, shell, Git, work, context, repository, skill, web, MCP, trace, integration
 and generic tool families. Renderers may show provider-supplied safe reasoning summaries,
 but they never receive raw provider frames or hidden chain-of-thought fields.
 
-The REPL composer state and built-in themes also live in the interface layer. They may
-render cached model, approval, session, prompt, and context status, but they must
-continue to call application services for orchestration and context data rather than
-owning those behaviors.
+The REPL composer state and built-in themes also live in the interface layer. Embedded
+and authenticated-worker prompts render cached model, approval, session, context,
+work-state, and presentation status. Cache refreshes use bounded application/worker
+operations after status-affecting commands rather than querying repositories or creating
+per-keystroke audit traffic. The interface must continue to call application services
+for orchestration and context data rather than owning those behaviors.
 
 ## Telemetry And Observability
 

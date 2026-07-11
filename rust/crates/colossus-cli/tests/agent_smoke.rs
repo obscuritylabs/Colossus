@@ -117,6 +117,7 @@ sandbox:
     assert!(streamed.contains("[activity] responding"));
     assert!(streamed.contains("offline agent"));
     assert!(streamed.contains("[activity] completed"));
+    assert!(!streamed.contains("\x1b[2K"));
     assert!(
         output.status.success(),
         "{}",

@@ -176,6 +176,18 @@ sandbox:
     assert_eq!(status["ready"], true);
     assert_eq!(status["protocol_version"], 2);
 
+    let route = run(binary, &config, &["models", "route", "primary"]);
+    assert!(
+        route.status.success(),
+        "{}",
+        String::from_utf8_lossy(&route.stderr)
+    );
+    let route: Value = serde_json::from_slice(&route.stdout).expect("provider route JSON");
+    assert_eq!(route["role"], "primary");
+    assert_eq!(route["profile"], "echo");
+    assert_eq!(route["provider"], "echo");
+    assert_eq!(route["model"], "echo");
+
     thread::scope(|scope| {
         let config = &config;
         let handles = (0..8)
@@ -208,6 +220,7 @@ sandbox:
     assert!(worker_stream.contains("[activity] responding"));
     assert!(worker_stream.contains("worker-stream"));
     assert!(worker_stream.contains("[activity] completed"));
+    assert!(!worker_stream.contains("\x1b[2K"));
     let result: Value = serde_json::from_slice(&streamed.stdout).expect("run JSON");
     assert_eq!(result["output"], "worker-stream");
     assert_eq!(result["profile"], "echo");
@@ -475,6 +488,7 @@ sandbox:
         String::from_utf8_lossy(&repl.stderr)
     );
     let repl_stdout = String::from_utf8_lossy(&repl.stdout);
+    let repl_stderr = String::from_utf8_lossy(&repl.stderr);
     assert!(repl_stdout.contains("Colossus Rust REPL via authenticated worker"));
     assert!(repl_stdout.contains(session_id));
     assert!(repl_stdout.contains("worker IPC replacement"));
@@ -486,6 +500,8 @@ sandbox:
     assert!(repl_stdout.contains("global_sequence"));
     assert!(!repl_stdout.contains("not yet available through worker IPC"));
     assert!(!repl_stdout.contains("unknown REPL command"));
+    assert!(!repl_stdout.contains("\x1b[2K"));
+    assert!(!repl_stderr.contains("\x1b[2K"));
 
     let preferences = run(binary, &config, &["preferences", "show"]);
     assert!(preferences.status.success());

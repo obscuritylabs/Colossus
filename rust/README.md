@@ -20,6 +20,7 @@ cargo run -p colossus-cli --bin colossus-rs -- provider profiles
 cargo run -p colossus-cli --bin colossus-rs -- provider doctor
 cargo run -p colossus-cli --bin colossus-rs -- provider models
 cargo run -p colossus-cli --bin colossus-rs -- models routes
+cargo run -p colossus-cli --bin colossus-rs -- models route primary
 cargo run -p colossus-cli --bin colossus-rs -- tools list
 cargo run -p colossus-cli --bin colossus-rs -- sessions list
 cargo run -p colossus-cli --bin colossus-rs -- run --resume 'Continue the latest session'
@@ -220,7 +221,10 @@ durable before display. Compact rendering uses distinct file, shell, Git, work, 
 repository, skill, web, MCP, trace, integration, pack, and generic summaries; verbose
 mode adds bounded arguments/results and run metadata. Terminal errors always state
 whether recovery continues, and activity lines include the current phase/action and
-elapsed time.
+elapsed time. Interactive terminals refresh active elapsed time in place; redirected
+streams remain stable and escape-free. The embedded and worker REPLs also share a cached
+status prompt showing session, resolved primary model/profile, context/messages, work,
+approval mode, display preferences, and last run status.
 
 Inspect sandbox readiness or run an explicitly configured exact executable:
 

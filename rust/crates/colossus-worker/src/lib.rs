@@ -134,6 +134,11 @@ pub enum WorkerOperation {
     },
     /// Show role-to-profile routing.
     ProviderRoutes,
+    /// Resolve one role to bounded provider metadata without network access.
+    ProviderRoute {
+        /// Logical provider role.
+        role: String,
+    },
     /// List active model-visible tool schemas.
     ToolsList,
     /// Execute the normal audited model application path.
@@ -1220,6 +1225,7 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ProviderDoctor { .. } => "provider_doctor",
         WorkerOperation::ProviderModels { .. } => "provider_models",
         WorkerOperation::ProviderRoutes => "provider_routes",
+        WorkerOperation::ProviderRoute { .. } => "provider_route",
         WorkerOperation::ToolsList => "tools_list",
         WorkerOperation::RunModel { .. } => "run_model",
         WorkerOperation::Echo { .. } => "echo",
@@ -1446,6 +1452,9 @@ async fn dispatch(
             runtime.provider_models(profile.as_deref()).await?,
         )?),
         WorkerOperation::ProviderRoutes => Ok(runtime.provider_routes()),
+        WorkerOperation::ProviderRoute { role } => {
+            Ok(serde_json::to_value(runtime.provider_route(&role)?)?)
+        }
         WorkerOperation::ToolsList => Ok(serde_json::to_value(runtime.tool_specs())?),
         WorkerOperation::Echo { message } => {
             let result = runtime.echo(&message).await?;

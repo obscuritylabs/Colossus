@@ -439,9 +439,14 @@ recoverability remain visible. `/events off` hides successful result blocks but 
 bounded activity lines and all errors. `/events verbose` adds correlated run/session
 identity, turns, call ids, bounded arguments, and larger released result previews.
 `/transcript compact` minimizes detail spacing; `comfortable` retains readable semantic
-blocks. A prompt-safe in-place spinner/status bar remains cutover UX work; the current
-Rust alpha emits stable lines so redirected and authenticated-worker output is not
-corrupted.
+blocks. On an interactive terminal, the Rust alpha refreshes active phase/tool elapsed
+time in place and clears that transient line before model text or a terminal event. It
+continues to emit stable, escape-free lines when output is redirected. Embedded and
+authenticated-worker REPL prompts share a cached status line with the active session,
+resolved primary model/profile, context and message budget, open/total work, approval
+mode, display preferences, and last run status. Persistent Reedline history, full theme
+palettes, and cursor/draft counters remain cutover UX work; Reedline's prompt contract
+does not currently expose editor-buffer counters.
 
 ## Agent telemetry
 

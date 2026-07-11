@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
-    ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
-    MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
-    ResearchSourceKind, RunEvent, RunEventEnvelope, SubagentStatus, TaskStatus, UserPromptRequest,
-    UserPromptResponse,
+    ApprovalProof, ContextStatus, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus,
+    IntegrationAuth, MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision,
+    ProviderEvent, ProviderRoute, ResearchDepth, ResearchSourceKind, RunEvent, RunEventEnvelope,
+    SubagentStatus, TaskStatus, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{
@@ -21,11 +21,12 @@ use colossus_presentation::{
 use colossus_runtime::{Runtime, RuntimeConfig};
 use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
 use reedline::{
-    DefaultPrompt, EditCommand, Emacs, KeyCode, KeyModifiers, Reedline, ReedlineEvent, Signal,
-    default_emacs_keybindings,
+    EditCommand, Emacs, KeyCode, KeyModifiers, Prompt, PromptEditMode, PromptHistorySearch,
+    PromptHistorySearchStatus, Reedline, ReedlineEvent, Signal, default_emacs_keybindings,
 };
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     error::Error,
     fs,
@@ -61,6 +62,17 @@ enum ApprovalMode {
     RiskAuto,
     /// Grant approval obligations automatically without expanding policy permissions.
     FullAccess,
+}
+
+impl ApprovalMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+            Self::RiskAuto => "risk_auto",
+            Self::FullAccess => "full_access",
+        }
+    }
 }
 
 struct TerminalApproval {
@@ -181,6 +193,8 @@ struct TerminalStreamObserver {
     target: StreamTarget,
     wrote_text: bool,
     preferences: ReplPreferences,
+    activity: Option<tokio::task::JoinHandle<()>>,
+    output_lock: Arc<Mutex<()>>,
 }
 
 impl TerminalStreamObserver {
@@ -189,6 +203,8 @@ impl TerminalStreamObserver {
             target,
             wrote_text: false,
             preferences: ReplPreferences::default(),
+            activity: None,
+            output_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -197,11 +213,18 @@ impl TerminalStreamObserver {
             target,
             wrote_text: false,
             preferences,
+            activity: None,
+            output_lock: Arc::new(Mutex::new(())),
         }
     }
 
     fn write_line(&mut self, line: &str) -> io::Result<()> {
+        self.stop_activity()?;
         self.finish_line()?;
+        let _guard = self
+            .output_lock
+            .lock()
+            .map_err(|error| io::Error::other(error.to_string()))?;
         match self.target {
             StreamTarget::Stdout => {
                 println!("{line}");
@@ -215,7 +238,12 @@ impl TerminalStreamObserver {
     }
 
     fn finish_line(&mut self) -> io::Result<()> {
+        self.stop_activity()?;
         if self.wrote_text {
+            let _guard = self
+                .output_lock
+                .lock()
+                .map_err(|error| io::Error::other(error.to_string()))?;
             match self.target {
                 StreamTarget::Stdout => {
                     println!();
@@ -230,6 +258,117 @@ impl TerminalStreamObserver {
         }
         Ok(())
     }
+
+    fn is_terminal(&self) -> bool {
+        match self.target {
+            StreamTarget::Stdout => io::stdout().is_terminal(),
+            StreamTarget::Stderr => io::stderr().is_terminal(),
+        }
+    }
+
+    fn start_activity(&mut self, line: &str, elapsed_seconds: f64) -> io::Result<()> {
+        if !self.is_terminal() {
+            return self.write_line(line);
+        }
+        self.stop_activity()?;
+        let target = self.target;
+        let output_lock = Arc::clone(&self.output_lock);
+        let template = line.to_owned();
+        write_transient_line(target, &output_lock, &template, elapsed_seconds)?;
+        let started = std::time::Instant::now();
+        self.activity = Some(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let elapsed = elapsed_seconds + started.elapsed().as_secs_f64();
+                if write_transient_line(target, &output_lock, &template, elapsed).is_err() {
+                    break;
+                }
+            }
+        }));
+        Ok(())
+    }
+
+    fn stop_activity(&mut self) -> io::Result<()> {
+        let Some(activity) = self.activity.take() else {
+            return Ok(());
+        };
+        activity.abort();
+        let _guard = self
+            .output_lock
+            .lock()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        match self.target {
+            StreamTarget::Stdout => {
+                print!("\r\x1b[2K");
+                io::stdout().flush()
+            }
+            StreamTarget::Stderr => {
+                eprint!("\r\x1b[2K");
+                io::stderr().flush()
+            }
+        }
+    }
+}
+
+impl Drop for TerminalStreamObserver {
+    fn drop(&mut self) {
+        let _ = self.stop_activity();
+    }
+}
+
+fn activity_elapsed(event: &RunEvent) -> Option<f64> {
+    match event {
+        RunEvent::Phase {
+            phase:
+                colossus_contracts::RunPhase::Preparing
+                | colossus_contracts::RunPhase::WaitingForModel
+                | colossus_contracts::RunPhase::Responding,
+            elapsed_seconds,
+            ..
+        }
+        | RunEvent::ToolStarted {
+            elapsed_seconds, ..
+        } => Some(*elapsed_seconds),
+        _ => None,
+    }
+}
+
+fn activity_line_at(template: &str, elapsed_seconds: f64) -> String {
+    let Some(start) = template.rfind("elapsed=") else {
+        return format!("{template} elapsed={elapsed_seconds:.2}s");
+    };
+    let value_start = start + "elapsed=".len();
+    let Some(value_end) = template[value_start..].find('s') else {
+        return format!("{template} elapsed={elapsed_seconds:.2}s");
+    };
+    let suffix_start = value_start + value_end + 1;
+    format!(
+        "{}elapsed={elapsed_seconds:.2}s{}",
+        &template[..start],
+        &template[suffix_start..]
+    )
+}
+
+fn write_transient_line(
+    target: StreamTarget,
+    output_lock: &Mutex<()>,
+    template: &str,
+    elapsed_seconds: f64,
+) -> io::Result<()> {
+    let rendered = activity_line_at(template, elapsed_seconds);
+    let _guard = output_lock
+        .lock()
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    match target {
+        StreamTarget::Stdout => {
+            print!("\r\x1b[2K{rendered}");
+            io::stdout().flush()
+        }
+        StreamTarget::Stderr => {
+            eprint!("\r\x1b[2K{rendered}");
+            io::stderr().flush()
+        }
+    }
 }
 
 #[async_trait]
@@ -239,9 +378,15 @@ impl RunEventObserver for TerminalStreamObserver {
             event: ProviderEvent::ModelDelta { text },
         } = &envelope.event
         {
+            self.stop_activity()
+                .map_err(|error| ModelProviderError::Failed(error.to_string()))?;
             if self.preferences.stream_mode == StreamDisplayMode::Off {
                 return Ok(());
             }
+            let _guard = self
+                .output_lock
+                .lock()
+                .map_err(|error| ModelProviderError::Failed(error.to_string()))?;
             let result = match self.target {
                 StreamTarget::Stdout => {
                     print!("{text}");
@@ -260,8 +405,12 @@ impl RunEventObserver for TerminalStreamObserver {
             .run_event_envelope(&envelope)
             .map_err(|error| ModelProviderError::Failed(error.to_string()))?
         {
-            self.write_line(&line)
-                .map_err(|error| ModelProviderError::Failed(error.to_string()))?;
+            if let Some(elapsed_seconds) = activity_elapsed(&envelope.event) {
+                self.start_activity(&line, elapsed_seconds)
+            } else {
+                self.write_line(&line)
+            }
+            .map_err(|error| ModelProviderError::Failed(error.to_string()))?;
         }
         Ok(())
     }
@@ -635,6 +784,11 @@ struct ModelsCommand {
 enum ModelsAction {
     /// Show role-to-profile mappings.
     Routes,
+    /// Resolve one role to bounded profile/model metadata.
+    Route {
+        #[arg(default_value = "primary")]
+        role: String,
+    },
 }
 
 #[derive(Args)]
@@ -1773,10 +1927,167 @@ async fn workflow_command(
     Ok(())
 }
 
+#[derive(Default)]
+struct ReplPromptState {
+    context: Option<ContextStatus>,
+    work: Option<WorkStateSnapshot>,
+    route: Option<ProviderRoute>,
+    last_status: String,
+}
+
+impl ReplPromptState {
+    fn new() -> Self {
+        Self {
+            last_status: "ready".into(),
+            ..Self::default()
+        }
+    }
+
+    async fn refresh_embedded(&mut self, runtime: &Runtime, session_id: &str) {
+        self.context = runtime.context_status(session_id).await.ok();
+        self.work = runtime.work_state(session_id).ok();
+        self.route = runtime.provider_route("primary").ok();
+    }
+
+    async fn refresh_worker(&mut self, client: &WorkerClient, session_id: &str) {
+        self.context = match client
+            .call(WorkerOperation::ContextStatus {
+                session_id: session_id.into(),
+            })
+            .await
+        {
+            Ok(value) => serde_json::from_value(value).ok(),
+            Err(_) => None,
+        };
+        self.work = match client
+            .call(WorkerOperation::WorkState {
+                session_id: session_id.into(),
+            })
+            .await
+        {
+            Ok(value) => serde_json::from_value(value).ok(),
+            Err(_) => None,
+        };
+        self.route = match client
+            .call(WorkerOperation::ProviderRoute {
+                role: "primary".into(),
+            })
+            .await
+        {
+            Ok(value) => serde_json::from_value(value).ok(),
+            Err(_) => None,
+        };
+    }
+}
+
+struct ColossusPrompt {
+    left: String,
+    right: String,
+    multiline: bool,
+}
+
+impl ColossusPrompt {
+    fn new(
+        session_id: &str,
+        state: &ReplPromptState,
+        preferences: &ReplPreferences,
+        approval: &str,
+    ) -> Self {
+        let short_session = session_id.chars().take(8).collect::<String>();
+        let route = state.route.as_ref().map_or_else(
+            || "primary:unknown".into(),
+            |route| format!("{}:{}@{}", route.role, route.model, route.profile),
+        );
+        let context = state.context.as_ref().map_or_else(
+            || "ctx=? msgs=?".into(),
+            |context| {
+                format!(
+                    "ctx={}/{} msgs={}",
+                    context.token_estimate, context.context_window_tokens, context.message_count
+                )
+            },
+        );
+        let work = state.work.as_ref().map_or_else(
+            || "work=?".into(),
+            |work| format!("work={}/{}", work.open_task_count, work.tasks.len()),
+        );
+        let reasoning = if preferences.show_reasoning {
+            "on"
+        } else {
+            "off"
+        };
+        Self {
+            left: format!("Colossus {short_session}"),
+            right: format!(
+                "{route} {context} {work} approval={approval} theme={} stream={} events={} reasoning={reasoning} status={}",
+                preferences.theme.as_str(),
+                preferences.stream_mode.as_str(),
+                preferences.events_mode.as_str(),
+                state.last_status,
+            ),
+            multiline: preferences.multiline,
+        }
+    }
+}
+
+impl Prompt for ColossusPrompt {
+    fn render_prompt_left(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.left)
+    }
+
+    fn render_prompt_right(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.right)
+    }
+
+    fn render_prompt_indicator(&self, _prompt_mode: PromptEditMode) -> Cow<'_, str> {
+        Cow::Borrowed(if self.multiline { " · " } else { " › " })
+    }
+
+    fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
+        Cow::Borrowed(" … ")
+    }
+
+    fn render_prompt_history_search_indicator(
+        &self,
+        history_search: PromptHistorySearch,
+    ) -> Cow<'_, str> {
+        let prefix = match history_search.status {
+            PromptHistorySearchStatus::Passing => "",
+            PromptHistorySearchStatus::Failing => "failing ",
+        };
+        Cow::Owned(format!(
+            "({prefix}reverse-search: {}) ",
+            history_search.term
+        ))
+    }
+}
+
+fn repl_line_changes_status(line: &str) -> bool {
+    !line.starts_with('/')
+        || [
+            "/session",
+            "/resume",
+            "/context",
+            "/work",
+            "/tasks",
+            "/decisions",
+            "/plans",
+            "/goals",
+            "/goal ",
+            "/agents",
+            "/memories",
+            "/memory ",
+            "/research",
+            "/workflow",
+        ]
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+}
+
 fn choose_session(
     runtime: &Runtime,
     editor: &mut Reedline,
-    prompt: &DefaultPrompt,
+    prompt: &dyn Prompt,
     scripted_input: &mut Option<io::StdinLock<'_>>,
     limit: usize,
 ) -> Result<Option<String>, Box<dyn Error>> {
@@ -1823,7 +2134,7 @@ fn choose_session(
 
 fn read_repl_signal(
     editor: &mut Reedline,
-    prompt: &DefaultPrompt,
+    prompt: &dyn Prompt,
     scripted_input: &mut Option<io::StdinLock<'_>>,
 ) -> Result<Signal, Box<dyn Error>> {
     let Some(input) = scripted_input.as_mut() else {
@@ -1841,10 +2152,10 @@ async fn repl(
     runtime: &Runtime,
     initial_session: Option<String>,
     resume_latest: bool,
+    approval_mode: ApprovalMode,
 ) -> Result<(), Box<dyn Error>> {
     let mut preferences = runtime.presentation_preferences()?;
     let mut editor = repl_editor(preferences.multiline);
-    let prompt = DefaultPrompt::default();
     let stdin = io::stdin();
     let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
     let mut active_session_id = if resume_latest {
@@ -1858,10 +2169,24 @@ async fn repl(
         runtime.create_session(None)?.id
     };
     let mut sticky_skills = Vec::<String>::new();
+    let mut prompt_state = ReplPromptState::new();
+    let mut prompt_dirty = true;
     println!(
         "Colossus Rust alpha. session={active_session_id}; /help for commands; Ctrl-D to exit."
     );
     loop {
+        if prompt_dirty {
+            prompt_state
+                .refresh_embedded(runtime, &active_session_id)
+                .await;
+            prompt_dirty = false;
+        }
+        let prompt = ColossusPrompt::new(
+            &active_session_id,
+            &prompt_state,
+            &preferences,
+            approval_mode.as_str(),
+        );
         match read_repl_signal(&mut editor, &prompt, &mut scripted_input)? {
             Signal::Success(line) => {
                 let line = line.trim();
@@ -1871,6 +2196,7 @@ async fn repl(
                 if matches!(line, "/quit" | "/exit") {
                     break;
                 }
+                prompt_dirty = repl_line_changes_status(line);
                 let prior_multiline = preferences.multiline;
                 match handle_presentation_command(line, &mut preferences)? {
                     PresentationCommandResult::NotHandled => {}
@@ -2161,10 +2487,18 @@ async fn repl(
                         )
                         .await;
                     observer.finish_line()?;
-                    let result = result?;
+                    let result = match result {
+                        Ok(result) => result,
+                        Err(error) => {
+                            prompt_state.last_status = "error".into();
+                            eprintln!("run failed; REPL remains available: {error}");
+                            continue;
+                        }
+                    };
                     if preferences.stream_mode == StreamDisplayMode::Off {
                         println!("{}", result.output);
                     }
+                    prompt_state.last_status = "ok".into();
                 }
             }
             Signal::CtrlD | Signal::CtrlC => break,
@@ -2278,6 +2612,13 @@ async fn dispatch_to_worker_if_active(
             match &command.command {
                 ModelsAction::Routes => {
                     print_json(&client.call(WorkerOperation::ProviderRoutes).await?)?;
+                }
+                ModelsAction::Route { role } => {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ProviderRoute { role: role.clone() })
+                            .await?,
+                    )?;
                 }
             }
             Ok(true)
@@ -3097,12 +3438,20 @@ async fn worker_repl(
         client.call(WorkerOperation::PresentationGet).await?,
     )?;
     let mut editor = repl_editor(preferences.multiline);
-    let prompt = DefaultPrompt::default();
     let stdin = io::stdin();
     let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
     let mut sticky_skills = Vec::<String>::new();
+    let mut prompt_state = ReplPromptState::new();
+    let mut prompt_dirty = true;
     println!("Colossus Rust REPL via authenticated worker. Type /help for commands.");
     loop {
+        if prompt_dirty {
+            prompt_state
+                .refresh_worker(client, &active_session_id)
+                .await;
+            prompt_dirty = false;
+        }
+        let prompt = ColossusPrompt::new(&active_session_id, &prompt_state, &preferences, "worker");
         match read_repl_signal(&mut editor, &prompt, &mut scripted_input)? {
             Signal::Success(line) => {
                 let line = line.trim();
@@ -3112,6 +3461,7 @@ async fn worker_repl(
                 if matches!(line, "/quit" | "/exit") {
                     break;
                 }
+                prompt_dirty = repl_line_changes_status(line);
                 let prior_multiline = preferences.multiline;
                 match handle_presentation_command(line, &mut preferences)? {
                     PresentationCommandResult::NotHandled => {}
@@ -3657,10 +4007,18 @@ async fn worker_repl(
                         )
                         .await;
                     observer.finish_line()?;
-                    let result = result?;
+                    let result = match result {
+                        Ok(result) => result,
+                        Err(error) => {
+                            prompt_state.last_status = "error".into();
+                            eprintln!("run failed; REPL remains available: {error}");
+                            continue;
+                        }
+                    };
                     if preferences.stream_mode == StreamDisplayMode::Off {
                         println!("{}", result.output);
                     }
+                    prompt_state.last_status = "ok".into();
                     client.call(WorkerOperation::Drain).await?;
                 }
             }
@@ -3674,7 +4032,7 @@ async fn worker_repl(
 async fn choose_worker_session(
     client: &WorkerClient,
     editor: &mut Reedline,
-    prompt: &DefaultPrompt,
+    prompt: &dyn Prompt,
     scripted_input: &mut Option<io::StdinLock<'_>>,
     limit: usize,
 ) -> Result<Option<String>, Box<dyn Error>> {
@@ -3852,6 +4210,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
         Command::Models(command) => match command.command {
             ModelsAction::Routes => print_json(&runtime.provider_routes())?,
+            ModelsAction::Route { role } => print_json(&runtime.provider_route(&role)?)?,
         },
         Command::Tools(command) => match command.command {
             ToolsAction::List => print_json(&runtime.tool_specs())?,
@@ -4505,7 +4864,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let result = runtime.echo(&message).await?;
             println!("{}", String::from_utf8_lossy(&result.bytes));
         }
-        Command::Repl { session, resume } => repl(&runtime, session, resume).await?,
+        Command::Repl { session, resume } => {
+            repl(
+                &runtime,
+                session,
+                resume,
+                cli.approval_mode.unwrap_or(ApprovalMode::Ask),
+            )
+            .await?
+        }
         Command::Worker {
             once,
             shutdown: false,
@@ -4533,4 +4900,94 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     runtime.checkpoint()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_activity_refresh_preserves_semantic_suffix() {
+        assert_eq!(
+            activity_line_at("[activity] waiting elapsed=1.00s", 2.5),
+            "[activity] waiting elapsed=2.50s"
+        );
+        assert_eq!(
+            activity_line_at(
+                "[activity] tool=filesystem.read elapsed=0.25s arguments={}",
+                3.75,
+            ),
+            "[activity] tool=filesystem.read elapsed=3.75s arguments={}"
+        );
+        assert_eq!(
+            activity_line_at("[activity] waiting", 1.0),
+            "[activity] waiting elapsed=1.00s"
+        );
+    }
+
+    #[test]
+    fn repl_prompt_renders_cached_runtime_and_presentation_status() {
+        let state = ReplPromptState {
+            context: Some(ContextStatus {
+                session_id: "019f4ddd-113e-73b3-a7f4-97fb9af1cab4".into(),
+                message_count: 12,
+                raw_token_estimate: 1_400,
+                token_estimate: 1_024,
+                context_window_tokens: 131_072,
+                threshold_tokens: 100_000,
+                target_tokens: 75_000,
+                active_snapshot_id: None,
+                compacted: false,
+                auto_compaction: true,
+            }),
+            work: Some(WorkStateSnapshot {
+                session_id: "019f4ddd-113e-73b3-a7f4-97fb9af1cab4".into(),
+                tasks: Vec::new(),
+                open_task_count: 0,
+                active_decisions: Vec::new(),
+                actionable_plans: Vec::new(),
+                current_goals: Vec::new(),
+                current_subagents: Vec::new(),
+            }),
+            route: Some(ProviderRoute {
+                role: "primary".into(),
+                profile: "openrouter".into(),
+                provider: "open_ai_compatible".into(),
+                model: "openrouter/free".into(),
+            }),
+            last_status: "ok".into(),
+        };
+        let preferences = ReplPreferences {
+            multiline: true,
+            show_reasoning: true,
+            ..ReplPreferences::default()
+        };
+        let prompt = ColossusPrompt::new(
+            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
+            &state,
+            &preferences,
+            "ask",
+        );
+
+        assert_eq!(prompt.render_prompt_left(), "Colossus 019f4ddd");
+        let right = prompt.render_prompt_right();
+        assert!(right.contains("primary:openrouter/free@openrouter"));
+        assert!(right.contains("ctx=1024/131072 msgs=12"));
+        assert!(right.contains("work=0/0"));
+        assert!(right.contains("approval=ask"));
+        assert!(right.contains("stream=on events=compact reasoning=on status=ok"));
+        assert_eq!(prompt.render_prompt_indicator(PromptEditMode::Emacs), " · ");
+        assert_eq!(prompt.render_prompt_multiline_indicator(), " … ");
+    }
+
+    #[test]
+    fn prompt_cache_is_invalidated_only_by_status_affecting_lines() {
+        assert!(repl_line_changes_status("hello"));
+        assert!(repl_line_changes_status("/session new"));
+        assert!(repl_line_changes_status("/context compact"));
+        assert!(repl_line_changes_status("/workflow list"));
+        assert!(!repl_line_changes_status("/help"));
+        assert!(!repl_line_changes_status("/theme plain"));
+        assert!(!repl_line_changes_status("/tools"));
+    }
 }

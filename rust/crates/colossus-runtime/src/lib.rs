@@ -3937,6 +3937,17 @@ impl Runtime {
         json!(self.providers.routes())
     }
 
+    /// Resolve one role to bounded provider metadata without making a network request.
+    pub fn provider_route(&self, role: &str) -> Result<ProviderRoute, RuntimeError> {
+        let provider = self.providers.resolve(role)?;
+        Ok(ProviderRoute {
+            role: role.into(),
+            profile: provider.profile().name.clone(),
+            provider: provider.profile().kind.as_str().into(),
+            model: provider.profile().model.clone(),
+        })
+    }
+
     /// Stable active model-visible tool catalog.
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
         self.tools.list_specs()
