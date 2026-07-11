@@ -682,6 +682,7 @@ dependencies = [
  "colossus-ports",
  "colossus-runtime",
  "colossus-sandbox",
+ "colossus-worker",
  "colossus-workflow",
  "ed25519-dalek",
  "hex",
@@ -1064,6 +1065,29 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "uuid",
+]
+
+[[package]]
+name = "colossus-worker"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "base64",
+ "colossus-contracts",
+ "colossus-ports",
+ "colossus-runtime",
+ "colossus-workflow",
+ "getrandom 0.4.3",
+ "hex",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
  "uuid",
 ]
 

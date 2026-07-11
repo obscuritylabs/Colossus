@@ -24,6 +24,7 @@ members = [
     "crates/colossus-packs",
     "crates/colossus-workflow",
     "crates/colossus-runtime",
+    "crates/colossus-worker",
     "crates/colossus-cli",
     "crates/colossus-testkit",
 ]
@@ -96,6 +97,7 @@ colossus-ports = { path = "crates/colossus-ports" }
 colossus-projection = { path = "crates/colossus-projection" }
 colossus-sandbox = { path = "crates/colossus-sandbox" }
 colossus-runtime = { path = "crates/colossus-runtime" }
+colossus-worker = { path = "crates/colossus-worker" }
 colossus-workflow = { path = "crates/colossus-workflow" }
 
 [workspace.lints.rust]

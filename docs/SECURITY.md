@@ -99,6 +99,26 @@ isolation mechanism so operators can reject an unsuitable deployment before effe
 The opt-in live security suites exercise Docker, Podman, and a real OPA process,
 including mTLS; normal workspace tests remain credential-free and network-free.
 
+### Local worker IPC
+
+The optional long-running worker is the sole redb writer while active. Its local protocol
+uses length-bounded, versioned JSON frames with HMAC-SHA256 authentication derived from
+domain-separated checkpoint key material. Before any prompt or operation content is
+sent, a challenge-response handshake proves that the server possesses the key. Each
+request is then bound to a fresh server connection nonce, UUIDv7 request id, random
+request nonce, and a short timestamp window. The worker rejects tampering, cross-
+connection replay, repeated nonces, stale requests, reordered response frames, oversized
+frames, and stalled handshakes.
+
+Unix endpoints must be real sockets, owner-only mode, and owned consistently with their
+parent directory; symlink endpoints are rejected. Windows uses the first named-pipe
+instance plus the same pre-disclosure authentication. The worker checkpoints before
+authenticated shutdown and removes its Unix endpoint. IPC never bypasses the runtime:
+model, workflow, session, policy, permit, journal, and projection work executes through
+the same application services used by embedded mode. Clients fall back to embedded mode
+only when the endpoint is unavailable; an authentication or protocol failure is surfaced
+and never converted into a fallback request.
+
 The sections below describe the frozen Python 0.5 implementation. They remain relevant
 to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.
 

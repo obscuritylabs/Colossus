@@ -1,6 +1,7 @@
 //! Thin terminal interface for the Rust runtime.
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
@@ -10,6 +11,7 @@ use colossus_contracts::{
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{ApprovalProvider, ModelProviderError, PolicyError, ProviderEventObserver};
 use colossus_runtime::{Runtime, RuntimeConfig};
+use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
 use reedline::{DefaultPrompt, Reedline, Signal};
 use serde_json::{Value, json};
 use std::{
@@ -159,6 +161,15 @@ impl ProviderEventObserver for TerminalStreamObserver {
     }
 }
 
+struct SilentStreamObserver;
+
+#[async_trait]
+impl ProviderEventObserver for SilentStreamObserver {
+    async fn observe(&mut self, _event: ProviderEvent) -> Result<(), ModelProviderError> {
+        Ok(())
+    }
+}
+
 fn bounded_preview(value: &str, max_chars: usize) -> &str {
     value
         .char_indices()
@@ -285,9 +296,15 @@ enum Command {
     },
     /// Recover abandoned runs and drain queued resumable work.
     Worker {
-        /// Recover state and return without repeatedly polling.
-        #[arg(long, default_value_t = true)]
+        /// Recover and drain once instead of serving local IPC.
+        #[arg(long, conflicts_with_all = ["shutdown", "status"])]
         once: bool,
+        /// Ask the authenticated local worker to checkpoint and stop.
+        #[arg(long, conflicts_with_all = ["once", "status"])]
+        shutdown: bool,
+        /// Authenticate the configured worker and show readiness.
+        #[arg(long, conflicts_with_all = ["once", "shutdown"])]
+        status: bool,
     },
     /// Internal authenticated one-shot sandbox helper.
     #[command(name = "__sandbox-helper", hide = true)]
@@ -1814,6 +1831,423 @@ async fn repl(
     Ok(())
 }
 
+async fn dispatch_to_worker_if_active(
+    config: &RuntimeConfig,
+    command: &Command,
+    approval_mode: Option<ApprovalMode>,
+) -> Result<bool, Box<dyn Error>> {
+    let Some(client) = WorkerClient::discover(config)? else {
+        return Ok(false);
+    };
+    match client.ping().await {
+        Ok(_) => {}
+        Err(colossus_worker::WorkerError::Unavailable(_)) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    }
+    match command {
+        Command::Audit(command) => {
+            match &command.command {
+                AuditAction::Verify | AuditAction::AnchorStatus => {
+                    print_json(&client.call(WorkerOperation::AuditVerify).await?)?;
+                }
+                AuditAction::Show { from, limit } => {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::AuditRead {
+                                from: *from,
+                                limit: *limit,
+                            })
+                            .await?,
+                    )?;
+                }
+                AuditAction::Export { from, limit } => {
+                    let events = client
+                        .call(WorkerOperation::AuditRead {
+                            from: *from,
+                            limit: *limit,
+                        })
+                        .await?;
+                    for event in events
+                        .as_array()
+                        .ok_or_else(|| cli_error("worker audit export is not an array"))?
+                    {
+                        println!("{}", serde_json::to_string(event)?);
+                    }
+                }
+            }
+            Ok(true)
+        }
+        Command::Policy(command) => {
+            match &command.command {
+                PolicyAction::Doctor => {
+                    print_json(&client.call(WorkerOperation::PolicyDoctor).await?)?;
+                }
+            }
+            Ok(true)
+        }
+        Command::Projection(command) => {
+            let operation = match &command.command {
+                ProjectionAction::Status => WorkerOperation::ProjectionStatus,
+                ProjectionAction::Drain => WorkerOperation::ProjectionDrain,
+                ProjectionAction::Rebuild { name } => {
+                    WorkerOperation::ProjectionRebuild { name: name.clone() }
+                }
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::State(command) => {
+            match &command.command {
+                StateAction::Doctor => {
+                    print_json(&client.call(WorkerOperation::StateDoctor).await?)?;
+                }
+            }
+            Ok(true)
+        }
+        Command::Sandbox(command) => {
+            match &command.command {
+                SandboxAction::Doctor => {
+                    print_json(&client.call(WorkerOperation::SandboxDoctor).await?)?;
+                }
+            }
+            Ok(true)
+        }
+        Command::Provider(command) => {
+            let operation = match &command.command {
+                ProviderAction::Profiles => WorkerOperation::ProviderProfiles,
+                ProviderAction::Doctor { profile } => WorkerOperation::ProviderDoctor {
+                    profile: profile.clone(),
+                },
+                ProviderAction::Models { profile } => WorkerOperation::ProviderModels {
+                    profile: profile.clone(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::Models(command) => {
+            match &command.command {
+                ModelsAction::Routes => {
+                    print_json(&client.call(WorkerOperation::ProviderRoutes).await?)?;
+                }
+            }
+            Ok(true)
+        }
+        Command::Tools(command) => {
+            match &command.command {
+                ToolsAction::List => {
+                    print_json(&client.call(WorkerOperation::ToolsList).await?)?;
+                }
+            }
+            Ok(true)
+        }
+        Command::Run {
+            prompt,
+            role,
+            instructions,
+            max_turns,
+            session,
+            resume,
+            skills,
+            stream,
+        } => {
+            if approval_mode.is_some() {
+                return Err(
+                    "an active worker owns approval handling; restart it with the desired --approval-mode"
+                        .into(),
+                );
+            }
+            let session_id = if *resume {
+                Some(
+                    serde_json::from_value::<colossus_contracts::SessionSummary>(
+                        client.call(WorkerOperation::SessionLatest).await?,
+                    )?
+                    .id,
+                )
+            } else {
+                session.clone()
+            };
+            let operation = WorkerOperation::RunModel {
+                role: role.clone(),
+                instructions: instructions.clone(),
+                prompt: prompt.clone(),
+                max_turns: *max_turns,
+                session_id,
+                explicit_skills: skills.clone(),
+                sticky_skills: Vec::new(),
+            };
+            let result = if *stream {
+                let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
+                let result = client.run_model(operation, &mut observer).await;
+                observer.finish_line()?;
+                result?
+            } else {
+                let mut observer = SilentStreamObserver;
+                client.run_model(operation, &mut observer).await?
+            };
+            client.call(WorkerOperation::Drain).await?;
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Echo { message } => {
+            let result = client
+                .call(WorkerOperation::Echo {
+                    message: message.clone(),
+                })
+                .await?;
+            let encoded = result
+                .get("bytes_base64")
+                .and_then(Value::as_str)
+                .ok_or_else(|| cli_error("worker echo response has no bytes_base64"))?;
+            let bytes = BASE64.decode(encoded)?;
+            println!("{}", String::from_utf8_lossy(&bytes));
+            Ok(true)
+        }
+        Command::Workflow(command) => {
+            let operation = match &command.command {
+                WorkflowAction::Validate { path } => WorkerOperation::WorkflowValidate {
+                    path: path.to_string_lossy().into_owned(),
+                },
+                WorkflowAction::Register { path } => WorkerOperation::WorkflowRegister {
+                    path: path.to_string_lossy().into_owned(),
+                },
+                WorkflowAction::List => WorkerOperation::WorkflowList,
+                WorkflowAction::Show { name, version } => WorkerOperation::WorkflowShow {
+                    name: name.clone(),
+                    version: version.clone(),
+                },
+                WorkflowAction::Run {
+                    name,
+                    version,
+                    inputs,
+                } => WorkerOperation::WorkflowStart {
+                    name: name.clone(),
+                    version: version.clone(),
+                    inputs_source: inputs.clone(),
+                },
+                WorkflowAction::Status { run_id } => WorkerOperation::WorkflowStatus {
+                    run_id: run_id.clone(),
+                },
+                WorkflowAction::Resume { run_id } => WorkerOperation::WorkflowResume {
+                    run_id: run_id.clone(),
+                },
+                WorkflowAction::Input { run_id, input } => WorkerOperation::WorkflowInput {
+                    run_id: run_id.clone(),
+                    input_source: input.clone(),
+                },
+                WorkflowAction::Cancel { run_id } => WorkerOperation::WorkflowCancel {
+                    run_id: run_id.clone(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::Sessions(command) => {
+            let operation = match &command.command {
+                SessionsAction::List { limit } => WorkerOperation::SessionList { limit: *limit },
+                SessionsAction::Show { session_id } => WorkerOperation::SessionGet {
+                    session_id: session_id.clone(),
+                },
+                SessionsAction::Messages { session_id } => WorkerOperation::SessionMessages {
+                    session_id: session_id.clone(),
+                },
+                SessionsAction::New { title } => WorkerOperation::SessionCreate {
+                    title: title.clone(),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, SessionsAction::Show { .. }) && result.is_null() {
+                return Err("session not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Context(command) => {
+            let operation = match &command.command {
+                ContextAction::Status { session_id } => WorkerOperation::ContextStatus {
+                    session_id: session_id.clone(),
+                },
+                ContextAction::List { session_id } => WorkerOperation::ContextList {
+                    session_id: session_id.clone(),
+                },
+                ContextAction::Compact { session_id } => WorkerOperation::ContextCompact {
+                    session_id: session_id.clone(),
+                },
+                ContextAction::Restore {
+                    session_id,
+                    snapshot_id,
+                } => WorkerOperation::ContextRestore {
+                    session_id: session_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::Telemetry(command) => {
+            let operation = match &command.command {
+                TelemetryAction::Runs { session, limit } => WorkerOperation::TelemetryRuns {
+                    session_id: session.clone(),
+                    limit: *limit,
+                },
+                TelemetryAction::Show { run_id, limit } => WorkerOperation::TelemetryShow {
+                    id_or_prefix: run_id.clone(),
+                    limit: *limit,
+                },
+                TelemetryAction::Metrics { session, limit } => WorkerOperation::TelemetryMetrics {
+                    session_id: session.clone(),
+                    limit: *limit,
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::Repl { session, resume } => {
+            if approval_mode.is_some() {
+                return Err(
+                    "an active worker owns approval handling; restart it with the desired --approval-mode"
+                        .into(),
+                );
+            }
+            worker_repl(&client, session.clone(), *resume).await?;
+            Ok(true)
+        }
+        Command::Worker { .. } | Command::Config(_) | Command::SandboxHelper => Ok(false),
+        _ => Err(format!(
+            "authenticated worker is active at {}; this command is not routed over IPC yet",
+            client.endpoint()
+        )
+        .into()),
+    }
+}
+
+async fn worker_repl(
+    client: &WorkerClient,
+    requested_session: Option<String>,
+    resume: bool,
+) -> Result<(), Box<dyn Error>> {
+    let mut active_session_id = if let Some(session_id) = requested_session {
+        let session = client
+            .call(WorkerOperation::SessionGet {
+                session_id: session_id.clone(),
+            })
+            .await?;
+        if session.is_null() {
+            return Err(format!("session not found: {session_id}").into());
+        }
+        session_id
+    } else if resume {
+        serde_json::from_value::<colossus_contracts::SessionSummary>(
+            client.call(WorkerOperation::SessionLatest).await?,
+        )?
+        .id
+    } else {
+        serde_json::from_value::<colossus_contracts::SessionSummary>(
+            client
+                .call(WorkerOperation::SessionCreate { title: None })
+                .await?,
+        )?
+        .id
+    };
+    let mut editor = Reedline::create();
+    let prompt = DefaultPrompt::default();
+    let mut sticky_skills = Vec::<String>::new();
+    println!("Colossus Rust REPL via authenticated worker. Type /help for commands.");
+    loop {
+        match editor.read_line(&prompt)? {
+            Signal::Success(line) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if matches!(line, "/quit" | "/exit") {
+                    break;
+                }
+                if line == "/help" {
+                    println!(
+                        "/session show | /session new | /session resume ID | /resume | \
+                         /skill use NAME | /skill active | /skill clear | /quit"
+                    );
+                } else if line == "/session" || line == "/session show" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::SessionGet {
+                                session_id: active_session_id.clone(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/session new" {
+                    active_session_id =
+                        serde_json::from_value::<colossus_contracts::SessionSummary>(
+                            client
+                                .call(WorkerOperation::SessionCreate { title: None })
+                                .await?,
+                        )?
+                        .id;
+                    println!("session={active_session_id}");
+                } else if let Some(session_id) = line.strip_prefix("/session resume ") {
+                    let session_id = session_id.trim();
+                    let session = client
+                        .call(WorkerOperation::SessionGet {
+                            session_id: session_id.into(),
+                        })
+                        .await?;
+                    if session.is_null() {
+                        return Err(format!("session not found: {session_id}").into());
+                    }
+                    active_session_id = session_id.into();
+                    println!("session={active_session_id}");
+                } else if line == "/resume" {
+                    active_session_id =
+                        serde_json::from_value::<colossus_contracts::SessionSummary>(
+                            client.call(WorkerOperation::SessionLatest).await?,
+                        )?
+                        .id;
+                    println!("session={active_session_id}");
+                } else if let Some(name) = line.strip_prefix("/skill use ") {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        return Err("skill name is required".into());
+                    }
+                    if !sticky_skills.iter().any(|active| active == name) {
+                        sticky_skills.push(name.into());
+                    }
+                    println!("active skills: {}", sticky_skills.join(", "));
+                } else if line == "/skill active" {
+                    println!("active skills: {}", sticky_skills.join(", "));
+                } else if line == "/skill clear" {
+                    sticky_skills.clear();
+                    println!("active skills cleared");
+                } else if line.starts_with('/') {
+                    println!("command is not yet available through worker IPC: {line}");
+                } else {
+                    let mut observer = TerminalStreamObserver::new(StreamTarget::Stdout);
+                    let result = client
+                        .run_model(
+                            WorkerOperation::RunModel {
+                                role: "primary".into(),
+                                instructions: "You are Colossus.".into(),
+                                prompt: line.into(),
+                                max_turns: None,
+                                session_id: Some(active_session_id.clone()),
+                                explicit_skills: Vec::new(),
+                                sticky_skills: sticky_skills.clone(),
+                            },
+                            &mut observer,
+                        )
+                        .await;
+                    observer.finish_line()?;
+                    result?;
+                    client.call(WorkerOperation::Drain).await?;
+                }
+            }
+            Signal::CtrlD | Signal::CtrlC => break,
+            _ => continue,
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
@@ -1835,6 +2269,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })
     ) {
         print!("{}", config.to_yaml()?);
+        return Ok(());
+    }
+    match &cli.command {
+        Command::Worker {
+            once: false,
+            shutdown: false,
+            status: false,
+        } => {
+            let approvals = approval_provider(&cli.command, cli.approval_mode);
+            let server = WorkerServer::open(&config, approvals)?;
+            eprintln!("worker listening on {}", server.endpoint());
+            server.serve().await?;
+            return Ok(());
+        }
+        Command::Worker { shutdown: true, .. } => {
+            let client = WorkerClient::from_config(&config)?;
+            print_json(&client.call(WorkerOperation::Shutdown).await?)?;
+            return Ok(());
+        }
+        Command::Worker { status: true, .. } => {
+            let client = WorkerClient::from_config(&config)?;
+            print_json(&client.ping().await?)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+    if dispatch_to_worker_if_active(&config, &cli.command, cli.approval_mode).await? {
         return Ok(());
     }
     let approvals = approval_provider(&cli.command, cli.approval_mode);
@@ -2548,7 +3009,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("{}", String::from_utf8_lossy(&result.bytes));
         }
         Command::Repl { session, resume } => repl(&runtime, session, resume).await?,
-        Command::Worker { once } => {
+        Command::Worker {
+            once,
+            shutdown: false,
+            status: false,
+        } => {
             let recovered = runtime.workflows().recover_interrupted()?;
             let drained = runtime.workflows().drain().await?;
             let projections = runtime.drain_projections()?;
@@ -2560,6 +3025,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 "drained": drained,
                 "subagents": subagents,
             }))?;
+        }
+        Command::Worker { shutdown: true, .. } => {
+            unreachable!("handled before runtime construction")
+        }
+        Command::Worker { status: true, .. } => {
+            unreachable!("handled before runtime construction")
         }
         Command::SandboxHelper => unreachable!("handled before runtime construction"),
     }

@@ -572,6 +572,14 @@ definition validation/registration plus start, get, list, input, resume, cancel,
 drain. CLI, REPL, an embedded API, and an optional single-writer worker all invoke that
 same application layer.
 
+When the worker is active it owns the canonical writer lease. Local clients MUST
+authenticate the server before disclosing operation content, authenticate every request
+and ordered response frame, bind requests to a single connection, reject replay and
+stale timestamps, and bound framing before allocation. Unix sockets are owner-only;
+Windows named pipes implement the same logical contract. Supported CLI/REPL operations
+auto-discover the worker and fall back to the embedded runtime only when no authenticated
+worker is active.
+
 ## 13. Goal Mode
 
 Goal Mode is a bounded autonomous continuation loop built on the normal agent

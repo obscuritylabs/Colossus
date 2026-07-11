@@ -80,6 +80,7 @@ use colossus_workflow::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -803,6 +804,46 @@ impl RuntimeConfig {
     /// Render fresh YAML without resolving or exposing secrets.
     pub fn to_yaml(&self) -> Result<String, RuntimeError> {
         serde_saphyr::to_string(self).map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Platform-specific local worker endpoint derived from the canonical state identity.
+    pub fn worker_ipc_endpoint(&self) -> Result<String, RuntimeError> {
+        let state_path = absolute_path(&self.storage.path)?;
+        #[cfg(unix)]
+        {
+            let mut endpoint = state_path.as_os_str().to_os_string();
+            endpoint.push(".worker.sock");
+            return Ok(PathBuf::from(endpoint).to_string_lossy().into_owned());
+        }
+        #[cfg(windows)]
+        {
+            let digest = Sha256::digest(state_path.to_string_lossy().as_bytes());
+            return Ok(format!(r"\\.\pipe\colossus-{}", hex::encode(&digest[..16])));
+        }
+        #[allow(unreachable_code)]
+        Err(RuntimeError::Config(
+            "local worker IPC is unsupported on this platform".into(),
+        ))
+    }
+
+    /// Derive a domain-separated worker authentication key from checkpoint key material.
+    pub fn worker_ipc_auth_key(&self) -> Result<[u8; 32], RuntimeError> {
+        let secret = match &self.storage.keys {
+            KeyConfig::Platform {
+                service,
+                signing_key_id,
+                ..
+            } => platform_secret(service, &format!("signing-key:{signing_key_id}"))?,
+            KeyConfig::Environment {
+                signing_variable, ..
+            } => explicit_secret(signing_variable)?,
+        };
+        let endpoint = self.worker_ipc_endpoint()?;
+        let mut digest = Sha256::new();
+        digest.update(b"colossus-worker-ipc-v1\0");
+        digest.update(secret);
+        digest.update(endpoint.as_bytes());
+        Ok(digest.finalize().into())
     }
 }
 
@@ -4357,6 +4398,42 @@ impl Runtime {
         }
         self.drain_projections()?;
         self.journal.checkpoint()?;
+        Ok(())
+    }
+
+    /// Append metadata-only evidence for an accepted or rejected local worker request.
+    pub fn record_worker_ipc_audit(
+        &self,
+        accepted: bool,
+        request_id: Option<&str>,
+        operation: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<(), RuntimeError> {
+        let audit_id = Uuid::now_v7().to_string();
+        let correlation_id = request_id.unwrap_or(&audit_id).to_owned();
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id: format!("worker-ipc:{audit_id}"),
+            expected_stream_version: 0,
+            classification: EventClassification::System,
+            event_type: if accepted {
+                "worker.ipc.accepted.v1"
+            } else {
+                "worker.ipc.rejected.v1"
+            }
+            .into(),
+            actor: system_actor("local-worker-ipc"),
+            context: ExecutionContext {
+                correlation_id,
+                ..ExecutionContext::default()
+            },
+            payload: json!({
+                "request_id": request_id,
+                "operation": operation,
+                "reason": reason.map(|value| value.chars().take(1024).collect::<String>()),
+                "content_recorded": false,
+            }),
+        })?;
         Ok(())
     }
 }

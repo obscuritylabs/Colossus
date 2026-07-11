@@ -138,7 +138,13 @@ record mutations with an optimistic position. Work repositories and session disc
 serve those disposable views; canonical session messages are reconstructed directly
 from journal streams. Reset/rebuild always replays the canonical journal. A cross-process
 writer lease prevents embedded surfaces and the headless worker from opening concurrent
-redb writers.
+redb writers. The long-running worker owns that lease and serves a versioned local
+application protocol over a mode-0600 Unix socket or a Windows named pipe. CLI one-shot
+runs, the worker-aware REPL, session operations, and workflow lifecycle operations
+auto-discover the worker and otherwise use the same runtime in-process. The transport
+does not contain provider, policy, workflow, or repository logic. Independent clients
+run concurrently, while projection rebuild/drain and queued maintenance share one worker
+coordination lock so optimistic projection positions cannot race.
 Workflow definitions are exact-content hash pinned and workflow runs are normal journal
 streams. The composition root opens fresh YAML config and fresh state; it never silently
 imports the Python SQLite store.
