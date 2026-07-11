@@ -15,6 +15,7 @@ time.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+colossus-projection.workspace = true
 colossus-session.workspace = true
 colossus-testkit = { path = "../colossus-testkit" }
 tempfile.workspace = true

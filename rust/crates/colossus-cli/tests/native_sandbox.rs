@@ -286,11 +286,13 @@ sandbox:
             "30",
         ],
     );
+    let direct_timeout_error = String::from_utf8_lossy(&direct_timeout.stderr);
     assert!(
         !direct_timeout.status.success()
-            && String::from_utf8_lossy(&direct_timeout.stderr).contains("timeout"),
+            && (direct_timeout_error.contains("timeout")
+                || direct_timeout_error.contains("timed out")),
         "direct timeout was not enforced: {}",
-        String::from_utf8_lossy(&direct_timeout.stderr)
+        direct_timeout_error
     );
 
     if Path::new("/usr/bin/curl").exists() {

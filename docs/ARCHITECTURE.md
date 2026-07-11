@@ -97,11 +97,13 @@ definitions remove `agent.delegate`; the executor also rejects delegation whenev
 `colossus-memory` separates canonical lifecycle state from disposable retrieval. Memory
 create/update/archive/supersede events remain authoritative in the encrypted journal.
 Updates append a complete validated next-state record while preserving identity, scope,
-source, and creation time. Tantivy
-stores candidate ids, bounded searchable text, metadata, event-id markers, and a durable
-global replay position; failed index work remains in the journal and is retried without
-blocking canonical reads. Search always reloads candidate ids from the repository and
-reapplies active status, expiry, and global/repository/session scope. Every lifecycle,
+source, and creation time. The journal atomically enqueues every event into a durable
+external-work outbox. Tantivy and optional Chroma consumers hold independent optimistic
+checkpoints in redb, persist their adapter position before acknowledging a contiguous batch,
+and replay safely by event id after a crash. A failed consumer retains its own work
+without blocking canonical reads or another index. Search merges available candidate ids
+from every healthy index, reloads them from the repository, and reapplies active status,
+expiry, and global/repository/session scope. Every lifecycle,
 read, search, and index operation crosses the gateway. Context composition receives only
 post-effect-authorized canonical records and places them after decisions and before
 snapshots as non-instructional background. Model tools name only `global`, `repository`,
@@ -110,8 +112,9 @@ workspace path and the session identity from the execution context. Targeted acc
 checked against the canonical record after authorization, and list limits are applied
 after scope filtering.
 
-When configured, `colossus-memory-chroma` replaces only the disposable candidate
-projection. It uses Chroma's v2 collection API with caller-generated embeddings and
+When configured, `colossus-memory-chroma` adds an optional semantic candidate projection
+alongside the offline Tantivy lexical default. It uses Chroma's v2 collection API with
+caller-generated embeddings and
 persists its replay position locally. The collection contains memory ids, bounded text,
 bounded metadata, embeddings, and source event ids—not lifecycle authority. Both Chroma
 transport and OpenAI-compatible embedding transport are permit-bound, exact-origin,

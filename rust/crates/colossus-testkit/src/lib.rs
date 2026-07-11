@@ -9,8 +9,8 @@ use colossus_contracts::{
     ThemeName, ToolSpec, TranscriptDensity,
 };
 use colossus_ports::{
-    EventJournal, ExtensionRepository, PresentationRepository, ProjectionStore, ResearchRepository,
-    StoreError, VerificationReport,
+    EventJournal, ExtensionRepository, ExternalWorkQueue, PresentationRepository, ProjectionStore,
+    ResearchRepository, StoreError, VerificationReport,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -367,6 +367,48 @@ pub fn assert_projection_store_conformance(store: &dyn ProjectionStore) {
             .get("test", "record-1")
             .expect("reset record")
             .is_none()
+    );
+}
+
+/// Run durable isolation, optimistic acknowledgment, and replay checks shared by
+/// every external-work queue adapter.
+pub fn assert_external_work_queue_conformance(
+    journal: &dyn EventJournal,
+    queue: &dyn ExternalWorkQueue,
+    first: NewEvent,
+    second: NewEvent,
+) {
+    let first = journal.append(first).expect("first external work append");
+    let second = journal.append(second).expect("second external work append");
+    let left = queue.pending("conformance.left-v1", 8).expect("left work");
+    let right = queue
+        .pending("conformance.right-v1", 8)
+        .expect("right work");
+    assert_eq!(left, right);
+    assert_eq!(left.len(), 2);
+    assert_eq!(left[0].event_id, first.event_id);
+    assert_eq!(left[1].event_id, second.event_id);
+
+    queue
+        .acknowledge("conformance.left-v1", 0, &left[0])
+        .expect("left acknowledge");
+    assert_eq!(queue.position("conformance.left-v1").expect("left"), 1);
+    assert_eq!(queue.position("conformance.right-v1").expect("right"), 0);
+    assert!(matches!(
+        queue.acknowledge("conformance.left-v1", 0, &left[0]),
+        Err(StoreError::Conflict { actual: 1, .. })
+    ));
+
+    queue.reset("conformance.left-v1").expect("left reset");
+    assert_eq!(
+        queue.pending("conformance.left-v1", 8).expect("replay"),
+        left
+    );
+    assert_eq!(
+        queue
+            .acknowledge_batch("conformance.left-v1", 0, &left)
+            .expect("batch acknowledge"),
+        2
     );
 }
 

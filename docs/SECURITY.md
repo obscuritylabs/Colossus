@@ -273,6 +273,12 @@ requests use separate effect requests, one-use permits, exact-origin obligations
 bounded request/response bodies, late credential resolution, and quarantine. A denied
 semantic effect cannot open a network connection. Corrupt local replay-position metadata
 degrades the index instead of silently resetting canonical state.
+Tantivy and Chroma acknowledge the atomic journal outbox through separate durable redb
+consumer positions. Adapter state is persisted before acknowledgment, so interruption
+can cause only an idempotent replay, not silent work loss. An adapter position behind its
+acknowledged consumer position is treated as a verification failure requiring rebuild.
+Unknown Chroma mutation outcomes remain unacknowledged and cannot be retried until an
+authorized rebuild clears the adapter's durable unknown-outcome marker.
 Memory injected on a later turn is explicitly labeled as background context rather than
 instructions.
 

@@ -286,6 +286,40 @@ pub trait ProjectionStore: Send + Sync {
     fn reset(&self, projection: &str) -> Result<(), StoreError>;
 }
 
+/// Durable multi-consumer queue over journal projection work.
+///
+/// Each consumer owns an independent optimistic checkpoint. Acknowledgment is
+/// intentionally separate from reading so an external adapter failure leaves
+/// the work visible after a retry or restart.
+pub trait ExternalWorkQueue: Send + Sync {
+    /// Last durably acknowledged global sequence for one consumer.
+    fn position(&self, consumer: &str) -> Result<u64, StoreError>;
+
+    /// Read bounded pending work after the consumer's durable position.
+    fn pending(&self, consumer: &str, limit: usize) -> Result<Vec<ProjectionWorkItem>, StoreError>;
+
+    /// Acknowledge exactly the next item using optimistic concurrency.
+    fn acknowledge(
+        &self,
+        consumer: &str,
+        expected_position: u64,
+        item: &ProjectionWorkItem,
+    ) -> Result<u64, StoreError> {
+        self.acknowledge_batch(consumer, expected_position, std::slice::from_ref(item))
+    }
+
+    /// Atomically acknowledge one non-empty contiguous batch.
+    fn acknowledge_batch(
+        &self,
+        consumer: &str,
+        expected_position: u64,
+        items: &[ProjectionWorkItem],
+    ) -> Result<u64, StoreError>;
+
+    /// Reset one consumer checkpoint so all journal work is replayed.
+    fn reset(&self, consumer: &str) -> Result<(), StoreError>;
+}
+
 /// Shared behavior for aggregate repositories reconstructed from events.
 pub trait AggregateRepository: Send + Sync {
     /// Load the aggregate's current JSON projection.

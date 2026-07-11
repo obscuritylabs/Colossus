@@ -1192,9 +1192,12 @@ mod tests {
         RedbWriterLease, STREAM_VERSIONS, StaticKeyProvider, adapter_error,
     };
     use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
-    use colossus_ports::{EventJournal, ProjectionStore, StoreError};
-    use colossus_projection::{ProjectionWorker, default_handlers};
-    use colossus_testkit::{assert_journal_conformance, assert_projection_store_conformance};
+    use colossus_ports::{EventJournal, ExternalWorkQueue, ProjectionStore, StoreError};
+    use colossus_projection::{JournalExternalWorkQueue, ProjectionWorker, default_handlers};
+    use colossus_testkit::{
+        assert_external_work_queue_conformance, assert_journal_conformance,
+        assert_projection_store_conformance,
+    };
     use redb::{Database, ReadableDatabase};
     use serde_json::json;
     use std::{sync::Arc, thread};
@@ -1270,6 +1273,61 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let journal = journal(&directory.path().join("state.redb"));
         assert_projection_store_conformance(&journal);
+    }
+
+    #[test]
+    fn shared_external_work_queue_conformance_suite_passes() {
+        let directory = tempdir().expect("tempdir");
+        let journal = Arc::new(journal(&directory.path().join("state.redb")));
+        let journal_port: Arc<dyn EventJournal> = journal.clone();
+        let store_port: Arc<dyn ProjectionStore> = journal;
+        let queue = JournalExternalWorkQueue::new(journal_port.clone(), store_port);
+        assert_external_work_queue_conformance(
+            journal_port.as_ref(),
+            &queue,
+            event("external-one", 0, 1),
+            event("external-two", 0, 2),
+        );
+    }
+
+    #[test]
+    fn external_work_checkpoint_survives_restart_without_blocking_other_consumers() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("state.redb");
+        let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+        let first_event_id;
+        {
+            let journal = Arc::new(journal_with_keys(&path, Arc::clone(&keys)));
+            journal
+                .append(event("restart-one", 0, 1))
+                .expect("first append");
+            journal
+                .append(event("restart-two", 0, 2))
+                .expect("second append");
+            let journal_port: Arc<dyn EventJournal> = journal.clone();
+            let store_port: Arc<dyn ProjectionStore> = journal;
+            let queue = JournalExternalWorkQueue::new(journal_port, store_port);
+            let pending = queue.pending("memory.tantivy-v1", 8).expect("pending");
+            first_event_id = pending[0].event_id.clone();
+            queue
+                .acknowledge("memory.tantivy-v1", 0, &pending[0])
+                .expect("acknowledge");
+            assert_eq!(queue.position("memory.chroma-v1").expect("chroma"), 0);
+        }
+
+        let journal = Arc::new(journal_with_keys(&path, keys));
+        let journal_port: Arc<dyn EventJournal> = journal.clone();
+        let store_port: Arc<dyn ProjectionStore> = journal;
+        let queue = JournalExternalWorkQueue::new(journal_port, store_port);
+        assert_eq!(queue.position("memory.tantivy-v1").expect("position"), 1);
+        assert_eq!(
+            queue.pending("memory.tantivy-v1", 8).expect("remaining")[0].global_sequence,
+            2
+        );
+        assert_eq!(
+            queue.pending("memory.chroma-v1", 8).expect("chroma")[0].event_id,
+            first_event_id
+        );
     }
 
     #[test]

@@ -5,15 +5,14 @@ use colossus_contracts::{
     Actor, ActorType, EventClassification, ExecutionContext, MemoryRecord, MemoryScope,
     MemoryStatus, NewEvent,
 };
-use colossus_ports::{EventJournal, MemoryIndex, MemoryRepository, SessionRepository, StoreError};
+use colossus_ports::{
+    EventJournal, ExternalWorkQueue, MemoryIndex, MemoryRepository, SessionRepository, StoreError,
+};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 use tantivy::{
     Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term,
@@ -629,10 +628,42 @@ impl MemoryIndex for TantivyMemoryIndex {
 pub struct MemoryService {
     journal: Arc<dyn EventJournal>,
     repository: Arc<dyn MemoryRepository>,
-    index: Arc<dyn MemoryIndex>,
+    queue: Arc<dyn ExternalWorkQueue>,
+    indexes: Vec<MemoryIndexRegistration>,
     sessions: Arc<dyn SessionRepository>,
-    index_position: AtomicU64,
-    last_index_error: Mutex<Option<String>>,
+}
+
+/// One independently checkpointed disposable memory-index consumer.
+pub struct MemoryIndexRegistration {
+    consumer: String,
+    index: Arc<dyn MemoryIndex>,
+    last_error: Mutex<Option<String>>,
+}
+
+impl MemoryIndexRegistration {
+    /// Register an adapter under a stable versioned external-work consumer name.
+    pub fn new(
+        consumer: impl Into<String>,
+        index: Arc<dyn MemoryIndex>,
+    ) -> Result<Self, StoreError> {
+        let consumer = consumer.into();
+        if consumer.is_empty()
+            || consumer.len() > 128
+            || !consumer
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(StoreError::Adapter(
+                "memory index consumer must be 1-128 ASCII letters, digits, '.', '_', or '-'"
+                    .into(),
+            ));
+        }
+        Ok(Self {
+            consumer,
+            index,
+            last_error: Mutex::new(None),
+        })
+    }
 }
 
 impl MemoryService {
@@ -640,18 +671,44 @@ impl MemoryService {
     pub fn new(
         journal: Arc<dyn EventJournal>,
         repository: Arc<dyn MemoryRepository>,
+        queue: Arc<dyn ExternalWorkQueue>,
         index: Arc<dyn MemoryIndex>,
         sessions: Arc<dyn SessionRepository>,
-    ) -> Self {
-        let index_position = index.position().unwrap_or(0);
-        Self {
+    ) -> Result<Self, StoreError> {
+        Self::with_indexes(
             journal,
             repository,
-            index,
+            queue,
+            vec![MemoryIndexRegistration::new("memory.primary-v1", index)?],
             sessions,
-            index_position: AtomicU64::new(index_position),
-            last_index_error: Mutex::new(None),
+        )
+    }
+
+    /// Compose memory behavior with multiple independently durable indexes.
+    pub fn with_indexes(
+        journal: Arc<dyn EventJournal>,
+        repository: Arc<dyn MemoryRepository>,
+        queue: Arc<dyn ExternalWorkQueue>,
+        indexes: Vec<MemoryIndexRegistration>,
+        sessions: Arc<dyn SessionRepository>,
+    ) -> Result<Self, StoreError> {
+        let mut consumers = indexes
+            .iter()
+            .map(|registration| registration.consumer.as_str())
+            .collect::<Vec<_>>();
+        consumers.sort_unstable();
+        if consumers.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(StoreError::Adapter(
+                "memory index consumer names must be unique".into(),
+            ));
         }
+        Ok(Self {
+            journal,
+            repository,
+            queue,
+            indexes,
+            sessions,
+        })
     }
 
     /// Create a canonical active memory and enqueue its event for indexing.
@@ -795,17 +852,40 @@ impl MemoryService {
         limit: usize,
     ) -> Result<Vec<MemoryRecord>, StoreError> {
         let limit = limit.clamp(1, 100);
-        let sync_ok = self.sync_index().await.is_ok();
-        if query.trim().is_empty() || !sync_ok {
+        if query.trim().is_empty() {
             return self.fallback(query, session_id, repository_id, limit);
         }
-        let candidates = match self.index.search(query, limit.saturating_mul(4)).await {
-            Ok(candidates) => candidates,
-            Err(error) => {
-                self.record_index_error(&error);
-                return self.fallback(query, session_id, repository_id, limit);
+        let mut candidates = BTreeMap::<String, f32>::new();
+        for registration in &self.indexes {
+            if let Err(error) = self.sync_one(registration).await {
+                self.record_index_error(registration, &error);
+                continue;
             }
-        };
+            match registration
+                .index
+                .search(query, limit.saturating_mul(4))
+                .await
+            {
+                Ok(found) => {
+                    for (id, score) in found {
+                        candidates
+                            .entry(id)
+                            .and_modify(|current| *current = current.max(score))
+                            .or_insert(score);
+                    }
+                }
+                Err(error) => self.record_index_error(registration, &error),
+            }
+        }
+        if candidates.is_empty() {
+            return self.fallback(query, session_id, repository_id, limit);
+        }
+        let mut candidates = candidates.into_iter().collect::<Vec<_>>();
+        candidates.sort_by(|(left_id, left_score), (right_id, right_score)| {
+            right_score
+                .total_cmp(left_score)
+                .then_with(|| left_id.cmp(right_id))
+        });
         let now = OffsetDateTime::now_utc();
         let mut records = Vec::new();
         for (id, _score) in candidates {
@@ -824,27 +904,56 @@ impl MemoryService {
 
     /// Apply queued canonical memory events to the disposable index in global order.
     pub async fn sync_index(&self) -> Result<u64, StoreError> {
-        match self.sync_index_inner().await {
-            Ok(position) => Ok(position),
-            Err(error) => {
-                self.record_index_error(&error);
-                Err(error)
+        let (head, _) = self.journal.head()?;
+        let mut first_error = None;
+        for registration in &self.indexes {
+            if let Err(error) = self.sync_one(registration).await {
+                self.record_index_error(registration, &error);
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
             }
         }
+        first_error.map_or(Ok(head), Err)
     }
 
-    async fn sync_index_inner(&self) -> Result<u64, StoreError> {
-        let mut position = self.index_position.load(Ordering::Acquire);
+    async fn sync_one(&self, registration: &MemoryIndexRegistration) -> Result<u64, StoreError> {
+        let mut position = self.queue.position(&registration.consumer)?;
+        let adapter_position = registration.index.position()?;
+        if adapter_position < position {
+            return Err(StoreError::Verification(format!(
+                "memory index {} position {adapter_position} is behind acknowledged queue position {position}; rebuild required",
+                registration.consumer
+            )));
+        }
         loop {
-            let events = self.journal.read_global(position.saturating_add(1), 256)?;
-            if events.is_empty() {
+            let work = self.queue.pending(&registration.consumer, 256)?;
+            if work.is_empty() {
                 break;
             }
-            for event in &events {
+            for item in &work {
+                let event = self
+                    .journal
+                    .read_global(item.global_sequence, 1)?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        StoreError::Verification(format!(
+                            "memory index queue sequence {} has no journal event",
+                            item.global_sequence
+                        ))
+                    })?;
+                if event.global_sequence != item.global_sequence || event.event_id != item.event_id
+                {
+                    return Err(StoreError::Verification(format!(
+                        "memory index queue sequence {} does not match its journal event",
+                        item.global_sequence
+                    )));
+                }
                 if let Some(id) = event.stream_id.strip_prefix("memory:") {
                     match event.event_type.as_str() {
                         "memory.created.v1" | "memory.updated.v1" => {
-                            let payload = self.journal.decrypt_payload(event)?;
+                            let payload = self.journal.decrypt_payload(&event)?;
                             let record: MemoryRecord = serde_json::from_value(
                                 payload.get("record").cloned().ok_or_else(|| {
                                     StoreError::Verification(
@@ -853,7 +962,8 @@ impl MemoryService {
                                 })?,
                             )
                             .map_err(adapter)?;
-                            self.index
+                            registration
+                                .index
                                 .upsert(
                                     &event.event_id,
                                     id,
@@ -864,20 +974,28 @@ impl MemoryService {
                                 .await?;
                         }
                         "memory.archived.v1" | "memory.superseded.v1" => {
-                            self.index.remove(&event.event_id, id).await?;
+                            registration.index.remove(&event.event_id, id).await?;
                         }
                         _ => {}
                     }
                 }
-                position = event.global_sequence;
             }
-            self.index.set_position(position).await?;
-            self.index_position.store(position, Ordering::Release);
-            if events.len() < 256 {
+            let through_sequence = work
+                .last()
+                .map(|item| item.global_sequence)
+                .ok_or_else(|| StoreError::Adapter("memory index work batch is empty".into()))?;
+            // The adapter checkpoint is written before the queue acknowledgment.
+            // A crash between them causes a safe idempotent batch replay; the inverse
+            // ordering could lose external work permanently.
+            registration.index.set_position(through_sequence).await?;
+            position = self
+                .queue
+                .acknowledge_batch(&registration.consumer, position, &work)?;
+            if work.len() < 256 {
                 break;
             }
         }
-        *self.last_index_error.lock().map_err(adapter)? = None;
+        *registration.last_error.lock().map_err(adapter)? = None;
         Ok(position)
     }
 
@@ -894,36 +1012,92 @@ impl MemoryService {
                 )
             })
             .collect::<Vec<_>>();
-        // A destructive adapter rebuild may fail after clearing external state. Reset the
-        // replay cursor first so the next sync replays every canonical lifecycle event
-        // instead of leaving a partially rebuilt projection at the old journal position.
-        self.index.set_position(0).await?;
-        self.index_position.store(0, Ordering::Release);
-        self.index.rebuild(&values).await?;
-        let (head, _) = self.journal.head()?;
-        self.index.set_position(head).await?;
-        self.index_position.store(head, Ordering::Release);
-        *self.last_index_error.lock().map_err(adapter)? = None;
+        let mut first_error = None;
+        for registration in &self.indexes {
+            // Reset acknowledgment first. If a destructive external rebuild fails,
+            // the entire journal remains pending for explicit recovery.
+            if let Err(error) = self.queue.reset(&registration.consumer) {
+                self.record_index_error(registration, &error);
+                first_error.get_or_insert(error);
+                continue;
+            }
+            if let Err(error) = registration.index.set_position(0).await {
+                self.record_index_error(registration, &error);
+                first_error.get_or_insert(error);
+                continue;
+            }
+            if let Err(error) = registration.index.rebuild(&values).await {
+                self.record_index_error(registration, &error);
+                first_error.get_or_insert(error);
+                continue;
+            }
+            if let Err(error) = self.sync_one(registration).await {
+                self.record_index_error(registration, &error);
+                first_error.get_or_insert(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
         self.index_status().await
     }
 
     /// Return bounded index readiness, lag, and adapter details.
     pub async fn index_status(&self) -> Result<Value, StoreError> {
         let (head, _) = self.journal.head()?;
-        let position = self.index_position.load(Ordering::Acquire);
-        let adapter_status = self.index.status().await?;
-        let adapter_ready = adapter_status
-            .get("ready")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let error = self.last_index_error.lock().map_err(adapter)?.clone();
+        let mut consumers = Vec::with_capacity(self.indexes.len());
+        let mut minimum_position = head;
+        let mut maximum_lag = 0_u64;
+        let mut all_ready = !self.indexes.is_empty();
+        let mut first_error = None;
+        let mut first_adapter = None;
+        for registration in &self.indexes {
+            let position = self.queue.position(&registration.consumer)?;
+            let adapter_status = match registration.index.status().await {
+                Ok(status) => status,
+                Err(error) => {
+                    self.record_index_error(registration, &error);
+                    json!({
+                        "ready": false,
+                        "kind": "unavailable",
+                        "status_error": error.to_string(),
+                    })
+                }
+            };
+            let adapter_ready = adapter_status
+                .get("ready")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let error = registration.last_error.lock().map_err(adapter)?.clone();
+            let lag = head.saturating_sub(position);
+            let ready = adapter_ready && error.is_none() && position == head;
+            minimum_position = minimum_position.min(position);
+            maximum_lag = maximum_lag.max(lag);
+            all_ready &= ready;
+            if first_error.is_none() {
+                first_error.clone_from(&error);
+            }
+            if first_adapter.is_none() {
+                first_adapter = Some(adapter_status.clone());
+            }
+            consumers.push(json!({
+                "consumer": registration.consumer,
+                "ready": ready,
+                "position": position,
+                "journal_head": head,
+                "lag": lag,
+                "last_error": error,
+                "adapter": adapter_status,
+            }));
+        }
         Ok(json!({
-            "ready": adapter_ready && error.is_none() && position == head,
-            "position": position,
+            "ready": all_ready,
+            "position": minimum_position,
             "journal_head": head,
-            "lag": head.saturating_sub(position),
-            "last_error": error,
-            "adapter": adapter_status,
+            "lag": maximum_lag,
+            "last_error": first_error,
+            "adapter": first_adapter,
+            "consumers": consumers,
         }))
     }
 
@@ -937,13 +1111,11 @@ impl MemoryService {
     }
 
     async fn sync_best_effort(&self) {
-        if let Err(error) = self.sync_index().await {
-            self.record_index_error(&error);
-        }
+        let _ = self.sync_index().await;
     }
 
-    fn record_index_error(&self, error: &StoreError) {
-        if let Ok(mut last_error) = self.last_index_error.lock() {
+    fn record_index_error(&self, registration: &MemoryIndexRegistration, error: &StoreError) {
+        if let Ok(mut last_error) = registration.last_error.lock() {
             *last_error = Some(error.to_string());
         }
     }
@@ -1033,18 +1205,28 @@ fn scope_rank(scope: &MemoryScope) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        EventSourcedMemoryRepository, MemoryService, TantivyMemoryIndex, UnavailableMemoryIndex,
+        EventSourcedMemoryRepository, MemoryIndexRegistration, MemoryService, TantivyMemoryIndex,
+        UnavailableMemoryIndex,
     };
     use colossus_contracts::{Actor, ActorType, MemoryRecord, MemoryScope, MemoryStatus};
-    use colossus_ports::{EventJournal, MemoryIndex, MemoryRepository, SessionRepository};
+    use colossus_ports::{
+        EventJournal, ExternalWorkQueue, MemoryIndex, MemoryRepository, ProjectionStore,
+        SessionRepository,
+    };
+    use colossus_projection::JournalExternalWorkQueue;
     use colossus_session::EventSourcedSessionRepository;
-    use colossus_testkit::InMemoryEventJournal;
+    use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
     use serde_json::json;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     };
     use tempfile::tempdir;
+
+    fn work_queue(journal: Arc<dyn EventJournal>) -> Arc<dyn ExternalWorkQueue> {
+        let store: Arc<dyn ProjectionStore> = Arc::new(InMemoryProjectionStore::default());
+        Arc::new(JournalExternalWorkQueue::new(journal, store))
+    }
 
     fn actor() -> Actor {
         Actor {
@@ -1156,12 +1338,15 @@ mod tests {
             Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
         let index: Arc<dyn MemoryIndex> =
             Arc::new(TantivyMemoryIndex::open(directory.path()).expect("index"));
+        let queue = work_queue(Arc::clone(&journal));
         let service = MemoryService::new(
             Arc::clone(&journal),
             Arc::clone(&repository),
+            Arc::clone(&queue),
             Arc::clone(&index),
             Arc::clone(&sessions),
-        );
+        )
+        .expect("service");
         let created = service
             .create(
                 MemoryScope::Session("session-1".into()),
@@ -1219,7 +1404,8 @@ mod tests {
             .await
             .expect("archive");
 
-        let reopened = MemoryService::new(journal, repository, index, sessions);
+        let reopened = MemoryService::new(journal, repository, queue, index, sessions)
+            .expect("reopened service");
         let persisted_status = reopened.index_status().await.expect("persisted status");
         assert_eq!(persisted_status["ready"], true);
         assert_eq!(persisted_status["lag"], 0);
@@ -1253,7 +1439,9 @@ mod tests {
             Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
         let index: Arc<dyn MemoryIndex> =
             Arc::new(UnavailableMemoryIndex::new("index unavailable"));
-        let service = MemoryService::new(journal, repository, index, sessions);
+        let queue = work_queue(Arc::clone(&journal));
+        let service =
+            MemoryService::new(journal, repository, queue, index, sessions).expect("service");
         assert_eq!(
             service.index_status().await.expect("empty status")["ready"],
             false
@@ -1281,6 +1469,69 @@ mod tests {
         assert_eq!(status["ready"], false);
         assert!(status["lag"].as_u64().is_some_and(|lag| lag > 0));
         assert!(status["last_error"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn failed_semantic_consumer_does_not_block_lexical_index_progress() {
+        let directory = tempdir().expect("tempdir");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn SessionRepository> =
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+        let repository: Arc<dyn MemoryRepository> =
+            Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
+        let queue = work_queue(Arc::clone(&journal));
+        let lexical: Arc<dyn MemoryIndex> =
+            Arc::new(TantivyMemoryIndex::open(directory.path()).expect("index"));
+        let semantic: Arc<dyn MemoryIndex> =
+            Arc::new(UnavailableMemoryIndex::new("semantic adapter offline"));
+        let service = MemoryService::with_indexes(
+            Arc::clone(&journal),
+            repository,
+            queue,
+            vec![
+                MemoryIndexRegistration::new("memory.tantivy-v1", lexical)
+                    .expect("lexical registration"),
+                MemoryIndexRegistration::new("memory.chroma-v1", semantic)
+                    .expect("semantic registration"),
+            ],
+            sessions,
+        )
+        .expect("service");
+
+        let record = service
+            .create(
+                MemoryScope::Global,
+                "fact",
+                0.9,
+                "Independent lexical progress",
+                "consumer isolation test",
+                None,
+                actor(),
+            )
+            .await
+            .expect("create");
+        assert_eq!(
+            service
+                .search("lexical progress", None, None, 8)
+                .await
+                .expect("search"),
+            vec![record]
+        );
+        let status = service.index_status().await.expect("status");
+        assert_eq!(status["ready"], false);
+        let consumers = status["consumers"].as_array().expect("consumers");
+        let lexical = consumers
+            .iter()
+            .find(|item| item["consumer"] == "memory.tantivy-v1")
+            .expect("lexical status");
+        let semantic = consumers
+            .iter()
+            .find(|item| item["consumer"] == "memory.chroma-v1")
+            .expect("semantic status");
+        assert_eq!(lexical["ready"], true);
+        assert_eq!(lexical["lag"], 0);
+        assert_eq!(semantic["ready"], false);
+        assert!(semantic["lag"].as_u64().is_some_and(|lag| lag > 0));
     }
 
     struct FailingRebuildIndex {
@@ -1356,7 +1607,9 @@ mod tests {
             fail_rebuild: AtomicBool::new(true),
         });
         let index: Arc<dyn MemoryIndex> = fixture.clone();
-        let service = MemoryService::new(journal, repository, index, sessions);
+        let queue = work_queue(Arc::clone(&journal));
+        let service =
+            MemoryService::new(journal, repository, queue, index, sessions).expect("service");
         service
             .create(
                 MemoryScope::Global,

@@ -91,13 +91,15 @@ obsolete Go launcher.
   bounded application operations. Raw provider frames and hidden reasoning never enter
   this presentation path.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
-  a disposable Tantivy lexical index with event-id idempotency, durable replay position,
-  retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry
+  an atomic journal external-work outbox with independent durable consumer checkpoints;
+  a disposable Tantivy lexical index with event-id idempotency, retryable lag,
+  candidate-id search, status, and rebuild; canonical scope/status/expiry
   re-filtering; degraded index fallback; and post-effect-authorized context injection
   after decisions and before snapshots. Strict model tools derive repository/session
   scope from trusted runtime context, reject cross-scope targets, attribute writes to the
   model actor, and make a memory created on one turn available as non-instructional
-  context on a later turn. A selectable Chroma v2 projection stores only candidate ids,
+  context on a later turn. An optional Chroma v2 projection advances independently beside
+  Tantivy and stores only candidate ids,
   caller-generated embeddings, bounded text, and bounded metadata. Chroma and
   OpenAI-compatible embedding HTTP calls each cross the effect gateway; a deterministic
   local feature-hashing embedding profile remains available offline. Unknown Chroma
@@ -266,11 +268,10 @@ obligations to be present in the YAML configuration.
 This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
 cutover. The following planned work remains:
 
-- A durable external-work queue that can advance Tantivy and Chroma independently,
-  live Chroma version compatibility, and richer retry/backoff telemetry. Selectable
-  Chroma semantic candidates plus local/OpenAI-compatible embedding profiles are
-  implemented; Tantivy remains the offline default and canonical re-filtering remains
-  mandatory.
+- Live Chroma version compatibility and richer external-work retry/backoff telemetry.
+  The durable multi-consumer queue, independent Tantivy/Chroma progress, semantic
+  candidates, local/OpenAI-compatible embedding profiles, and canonical re-filtering are
+  implemented.
 - Podman revalidation of the new proxy-only network path and Windows filesystem/network
   runtime acceptance. Native macOS/Linux isolation, live Docker execution/recovery, OCI
   command and allowlist-proxy hardening, the native allowlist proxy, authenticated

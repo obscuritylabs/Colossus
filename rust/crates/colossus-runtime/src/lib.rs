@@ -34,7 +34,8 @@ use colossus_mcp::{
     validate_config as validate_mcp_config, validate_tool_arguments,
 };
 use colossus_memory::{
-    EventSourcedMemoryRepository, MemoryService, TantivyMemoryIndex, UnavailableMemoryIndex,
+    EventSourcedMemoryRepository, MemoryIndexRegistration, MemoryService, TantivyMemoryIndex,
+    UnavailableMemoryIndex,
 };
 use colossus_memory_chroma::{
     ChromaExecutor, ChromaMemoryIndex, ChromaProfile, GatewayOpenAiEmbeddingProvider,
@@ -49,14 +50,16 @@ use colossus_policy::{
 };
 use colossus_ports::{
     ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EmbeddingProvider,
-    EventJournal, ExtensionRepository, KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever,
-    ModelProvider, ModelProviderError, PolicyDecisionPoint, PresentationRepository,
-    ProjectionStore, ProviderEventObserver, ResearchRepository, RunEventObserver,
-    SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
-    UserPromptProvider, WorkRepository, WorkflowRepository,
+    EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider, MemoryIndex,
+    MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError, PolicyDecisionPoint,
+    PresentationRepository, ProjectionStore, ProviderEventObserver, ResearchRepository,
+    RunEventObserver, SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor,
+    ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
 };
 use colossus_presentation::EventSourcedPresentationRepository;
-use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
+use colossus_projection::{
+    JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
+};
 use colossus_provider::{
     ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind, ProviderProfile,
     ProviderRegistry,
@@ -1024,15 +1027,32 @@ fn provider_registry(config: &ProvidersConfig) -> Result<ProviderRegistry, Runti
     ProviderRegistry::new(profiles, config.roles.clone()).map_err(Into::into)
 }
 
-fn compose_memory_index(
+fn compose_memory_indexes(
     config: &RuntimeConfig,
     gateway: Arc<EffectGateway>,
-) -> Result<Arc<dyn MemoryIndex>, RuntimeError> {
+) -> Result<Vec<MemoryIndexRegistration>, RuntimeError> {
     if !config.memory.index_enabled {
-        return Ok(Arc::new(UnavailableMemoryIndex::new(
+        let index: Arc<dyn MemoryIndex> = Arc::new(UnavailableMemoryIndex::new(
             "memory index disabled by configuration",
-        )));
+        ));
+        return Ok(vec![MemoryIndexRegistration::new(
+            "memory.disabled-v1",
+            index,
+        )?]);
     }
+    let path = config
+        .memory
+        .index_path
+        .clone()
+        .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
+    let lexical: Arc<dyn MemoryIndex> = match TantivyMemoryIndex::open(&path) {
+        Ok(index) => Arc::new(index),
+        Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
+            "Tantivy index {} could not open: {error}",
+            path.display()
+        ))),
+    };
+    let mut indexes = vec![MemoryIndexRegistration::new("memory.tantivy-v1", lexical)?];
     let SemanticMemoryConfig::Chroma {
         base_url,
         tenant,
@@ -1044,18 +1064,7 @@ fn compose_memory_index(
         embedding,
     } = &config.memory.semantic
     else {
-        let path = config
-            .memory
-            .index_path
-            .clone()
-            .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
-        return Ok(match TantivyMemoryIndex::open(&path) {
-            Ok(index) => Arc::new(index),
-            Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
-                "Tantivy index {} could not open: {error}",
-                path.display()
-            ))),
-        });
+        return Ok(indexes);
     };
     let embedding: Arc<dyn EmbeddingProvider> = match embedding.as_ref() {
         MemoryEmbeddingConfig::Local { dimensions } => {
@@ -1097,15 +1106,16 @@ fn compose_memory_index(
     let position_path = position_path
         .clone()
         .unwrap_or_else(|| config.storage.path.with_extension("chroma-position.json"));
-    Ok(
+    let semantic: Arc<dyn MemoryIndex> =
         match ChromaMemoryIndex::open(gateway, executor, embedding, profile, &position_path) {
             Ok(index) => Arc::new(index),
             Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
                 "Chroma projection metadata {} could not open: {error}",
                 position_path.display()
             ))),
-        },
-    )
+        };
+    indexes.push(MemoryIndexRegistration::new("memory.chroma-v1", semantic)?);
+    Ok(indexes)
 }
 
 fn validate_provider_config(config: &RuntimeConfig) -> Result<(), RuntimeError> {
@@ -2323,13 +2333,18 @@ impl Runtime {
             SafetyKernel::new(known_capabilities),
             permit_key,
         ));
-        let memory_index = compose_memory_index(config, Arc::clone(&gateway))?;
-        let memory_service = Arc::new(MemoryService::new(
+        let memory_indexes = compose_memory_indexes(config, Arc::clone(&gateway))?;
+        let external_work: Arc<dyn ExternalWorkQueue> = Arc::new(JournalExternalWorkQueue::new(
+            Arc::clone(&journal),
+            Arc::clone(&projection_store),
+        ));
+        let memory_service = Arc::new(MemoryService::with_indexes(
             Arc::clone(&journal),
             memory_repository,
-            memory_index,
+            external_work,
+            memory_indexes,
             Arc::clone(&sessions),
-        ));
+        )?);
         let work_executor = Arc::new(WorkEffectExecutor {
             service: Arc::clone(&work_service),
             repository: Arc::clone(&work),
@@ -9268,8 +9283,8 @@ mod tests {
     use super::{
         ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
         GatewayMemoryRetriever, GatewayToolExecutor, GatewayWorkflowEffects,
-        InteractiveToolExecutor, MemoryEffectExecutor, MemoryEmbeddingConfig,
-        PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
+        InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor,
+        MemoryEmbeddingConfig, PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
         PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
         ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig, SkillEffectExecutor,
         SkillOperation, SkillScaffoldResult, TraceToolExecutor, WorkEffectExecutor,
@@ -9288,15 +9303,15 @@ mod tests {
         BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request,
     };
     use colossus_ports::{
-        EventJournal, ModelProvider, ModelProviderError, PresentationRepository, SkillRepository,
-        ToolExecutor,
+        EventJournal, ExternalWorkQueue, ModelProvider, ModelProviderError, PresentationRepository,
+        ProjectionStore, SkillRepository, ToolExecutor,
     };
     use colossus_presentation::EventSourcedPresentationRepository;
     use colossus_provider::ProviderKind;
     use colossus_skills::{
         FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
     };
-    use colossus_testkit::InMemoryEventJournal;
+    use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
     use colossus_workflow::{WorkflowEffect, WorkflowEffectRunner};
     use serde_json::{Value, json};
     use std::{
@@ -9305,6 +9320,11 @@ mod tests {
         sync::{Arc, Mutex},
     };
     use tempfile::tempdir;
+
+    fn external_work_queue(journal: Arc<dyn EventJournal>) -> Arc<dyn ExternalWorkQueue> {
+        let store: Arc<dyn ProjectionStore> = Arc::new(InMemoryProjectionStore::default());
+        Arc::new(JournalExternalWorkQueue::new(journal, store))
+    }
 
     struct SecretEchoProcess;
 
@@ -10759,14 +10779,19 @@ surprise: true
         let repository: Arc<dyn colossus_ports::MemoryRepository> = Arc::new(
             colossus_memory::EventSourcedMemoryRepository::new(Arc::clone(&journal)),
         );
-        let service = Arc::new(colossus_memory::MemoryService::new(
-            Arc::clone(&journal),
-            Arc::clone(&repository),
-            Arc::new(colossus_memory::UnavailableMemoryIndex::new(
-                "test fallback index",
-            )),
-            sessions,
-        ));
+        let queue = external_work_queue(Arc::clone(&journal));
+        let service = Arc::new(
+            colossus_memory::MemoryService::new(
+                Arc::clone(&journal),
+                Arc::clone(&repository),
+                queue,
+                Arc::new(colossus_memory::UnavailableMemoryIndex::new(
+                    "test fallback index",
+                )),
+                sessions,
+            )
+            .expect("memory service"),
+        );
         let memory = Arc::new(MemoryEffectExecutor {
             service,
             repository_id: "repo-test".into(),
@@ -11389,14 +11414,19 @@ surprise: true
         let repository: Arc<dyn colossus_ports::MemoryRepository> = Arc::new(
             colossus_memory::EventSourcedMemoryRepository::new(Arc::clone(&journal)),
         );
-        let memory_service = Arc::new(colossus_memory::MemoryService::new(
-            Arc::clone(&journal),
-            Arc::clone(&repository),
-            Arc::new(colossus_memory::UnavailableMemoryIndex::new(
-                "test fallback index",
-            )),
-            Arc::clone(&sessions),
-        ));
+        let queue = external_work_queue(Arc::clone(&journal));
+        let memory_service = Arc::new(
+            colossus_memory::MemoryService::new(
+                Arc::clone(&journal),
+                Arc::clone(&repository),
+                queue,
+                Arc::new(colossus_memory::UnavailableMemoryIndex::new(
+                    "test fallback index",
+                )),
+                Arc::clone(&sessions),
+            )
+            .expect("memory service"),
+        );
         let memory = Arc::new(MemoryEffectExecutor {
             service: memory_service,
             repository_id: "repo-test".into(),

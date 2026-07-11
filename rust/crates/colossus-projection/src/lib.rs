@@ -2,11 +2,137 @@
 
 #![allow(clippy::missing_errors_doc)]
 
-use colossus_contracts::{EventEnvelope, ProjectionBatch, ProjectionMutation, ProjectionStatus};
-use colossus_ports::{AggregateRepository, EventJournal, ProjectionStore, StoreError};
+use colossus_contracts::{
+    EventEnvelope, ProjectionBatch, ProjectionMutation, ProjectionStatus, ProjectionWorkItem,
+};
+use colossus_ports::{
+    AggregateRepository, EventJournal, ExternalWorkQueue, ProjectionStore, StoreError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
+
+const EXTERNAL_WORK_PREFIX: &str = "external-work:";
+const MAX_EXTERNAL_WORK_BATCH: usize = 4_096;
+
+fn external_work_projection(consumer: &str) -> Result<String, StoreError> {
+    if consumer.is_empty()
+        || consumer.len() > 128
+        || !consumer
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(StoreError::Adapter(
+            "external-work consumer must be 1-128 ASCII letters, digits, '.', '_', or '-'".into(),
+        ));
+    }
+    Ok(format!("{EXTERNAL_WORK_PREFIX}{consumer}"))
+}
+
+/// Durable per-consumer checkpoints over the journal's atomic projection outbox.
+pub struct JournalExternalWorkQueue {
+    journal: Arc<dyn EventJournal>,
+    store: Arc<dyn ProjectionStore>,
+}
+
+impl JournalExternalWorkQueue {
+    /// Compose the queue from the authoritative journal and a durable checkpoint store.
+    #[must_use]
+    pub fn new(journal: Arc<dyn EventJournal>, store: Arc<dyn ProjectionStore>) -> Self {
+        Self { journal, store }
+    }
+
+    fn verify_item(&self, item: &ProjectionWorkItem) -> Result<(), StoreError> {
+        let durable = self
+            .journal
+            .read_projection_work(item.global_sequence, 1)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                StoreError::Verification(format!(
+                    "external-work outbox sequence {} is missing",
+                    item.global_sequence
+                ))
+            })?;
+        if durable != *item {
+            return Err(StoreError::Verification(format!(
+                "external-work outbox sequence {} does not match its durable item",
+                item.global_sequence
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl ExternalWorkQueue for JournalExternalWorkQueue {
+    fn position(&self, consumer: &str) -> Result<u64, StoreError> {
+        self.store.position(&external_work_projection(consumer)?)
+    }
+
+    fn pending(&self, consumer: &str, limit: usize) -> Result<Vec<ProjectionWorkItem>, StoreError> {
+        if limit == 0 || limit > MAX_EXTERNAL_WORK_BATCH {
+            return Err(StoreError::Adapter(format!(
+                "external-work batch limit must be between 1 and {MAX_EXTERNAL_WORK_BATCH}"
+            )));
+        }
+        let position = self.position(consumer)?;
+        let work = self
+            .journal
+            .read_projection_work(position.saturating_add(1), limit)?;
+        let mut expected = position.saturating_add(1);
+        for item in &work {
+            if item.global_sequence != expected {
+                return Err(StoreError::Verification(format!(
+                    "external-work consumer {consumer} expected sequence {expected}, got {}",
+                    item.global_sequence
+                )));
+            }
+            self.verify_item(item)?;
+            expected = expected.saturating_add(1);
+        }
+        Ok(work)
+    }
+
+    fn acknowledge_batch(
+        &self,
+        consumer: &str,
+        expected_position: u64,
+        items: &[ProjectionWorkItem],
+    ) -> Result<u64, StoreError> {
+        if items.is_empty() || items.len() > MAX_EXTERNAL_WORK_BATCH {
+            return Err(StoreError::Adapter(format!(
+                "external-work acknowledgment batch must contain 1-{MAX_EXTERNAL_WORK_BATCH} items"
+            )));
+        }
+        let projection = external_work_projection(consumer)?;
+        let mut next = expected_position.saturating_add(1);
+        for item in items {
+            if item.global_sequence != next {
+                return Err(StoreError::Adapter(format!(
+                    "external-work acknowledgment expected sequence {next}, got {}",
+                    item.global_sequence
+                )));
+            }
+            self.verify_item(item)?;
+            next = next.saturating_add(1);
+        }
+        let through_sequence = items
+            .last()
+            .map(|item| item.global_sequence)
+            .ok_or_else(|| StoreError::Adapter("external-work batch is empty".into()))?;
+        self.store.apply(ProjectionBatch {
+            projection,
+            expected_position,
+            through_sequence,
+            mutations: Vec::new(),
+        })?;
+        Ok(through_sequence)
+    }
+
+    fn reset(&self, consumer: &str) -> Result<(), StoreError> {
+        self.store.reset(&external_work_projection(consumer)?)
+    }
+}
 
 /// Pure event-to-projection reducer.
 pub trait ProjectionHandler: Send + Sync {
@@ -539,12 +665,15 @@ impl ProjectedMemoryReader {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProjectedSessionRepository, ProjectionHandler, ProjectionWorker, default_handlers,
+        JournalExternalWorkQueue, ProjectedSessionRepository, ProjectionHandler, ProjectionWorker,
+        default_handlers,
     };
     use colossus_contracts::{
         Actor, ActorType, EventClassification, ExecutionContext, NewEvent, ProjectionMutation,
     };
-    use colossus_ports::{AggregateRepository, EventJournal, ProjectionStore, StoreError};
+    use colossus_ports::{
+        AggregateRepository, EventJournal, ExternalWorkQueue, ProjectionStore, StoreError,
+    };
     use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
     use serde_json::{Value, json};
     use std::sync::Arc;
@@ -575,6 +704,45 @@ mod tests {
         let journal_port: Arc<dyn EventJournal> = journal;
         let store_port: Arc<dyn ProjectionStore> = store;
         ProjectionWorker::new(journal_port, store_port, default_handlers()).expect("worker")
+    }
+
+    #[test]
+    fn external_work_consumers_advance_independently_and_replay_after_reset() {
+        let journal = Arc::new(InMemoryEventJournal::default());
+        let store = Arc::new(InMemoryProjectionStore::default());
+        journal
+            .append(event("memory:one", 0, "memory.created.v1", json!({})))
+            .expect("first append");
+        journal
+            .append(event("memory:two", 0, "memory.created.v1", json!({})))
+            .expect("second append");
+        let journal_port: Arc<dyn EventJournal> = journal;
+        let store_port: Arc<dyn ProjectionStore> = store;
+        let queue = JournalExternalWorkQueue::new(journal_port, store_port);
+
+        let lexical = queue.pending("memory.tantivy-v1", 8).expect("lexical work");
+        let semantic = queue.pending("memory.chroma-v1", 8).expect("semantic work");
+        assert_eq!(lexical, semantic);
+        assert_eq!(lexical.len(), 2);
+
+        assert_eq!(
+            queue
+                .acknowledge("memory.tantivy-v1", 0, &lexical[0])
+                .expect("lexical acknowledge"),
+            1
+        );
+        assert_eq!(queue.position("memory.tantivy-v1").expect("lexical"), 1);
+        assert_eq!(queue.position("memory.chroma-v1").expect("semantic"), 0);
+        assert!(matches!(
+            queue.acknowledge("memory.tantivy-v1", 0, &lexical[1]),
+            Err(StoreError::Adapter(_))
+        ));
+
+        queue.reset("memory.tantivy-v1").expect("reset");
+        assert_eq!(
+            queue.pending("memory.tantivy-v1", 8).expect("replay"),
+            lexical
+        );
     }
 
     #[test]

@@ -797,6 +797,7 @@ dependencies = [
  "async-trait",
  "colossus-contracts",
  "colossus-ports",
+ "colossus-projection",
  "colossus-session",
  "colossus-testkit",
  "serde_json",
