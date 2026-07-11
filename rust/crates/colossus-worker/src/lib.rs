@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     AgentRunResult, DecisionPriority, DecisionStatus, GoalStatus, IntegrationAuth, MemoryScope,
-    MemoryStatus, PlanStatus, PlanStep, ProviderEvent, ResearchDepth, ResearchSourceKind,
-    SubagentStatus, TaskStatus,
+    MemoryStatus, PlanStatus, PlanStep, ProviderEvent, ReplPreferences, ResearchDepth,
+    ResearchSourceKind, SubagentStatus, TaskStatus,
 };
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeError};
 use hmac::{Hmac, Mac as _};
@@ -184,6 +184,13 @@ pub enum WorkerOperation {
     WorkState {
         /// Exact session identifier.
         session_id: String,
+    },
+    /// Reconstruct the canonical presentation profile.
+    PresentationGet,
+    /// Persist a complete presentation profile through the runtime gateway.
+    PresentationSave {
+        /// Strict complete replacement profile.
+        preferences: ReplPreferences,
     },
     /// Show context budget status.
     ContextStatus {
@@ -1222,6 +1229,8 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::SessionMessages { .. } => "session_messages",
         WorkerOperation::SessionLatest => "session_latest",
         WorkerOperation::WorkState { .. } => "work_state",
+        WorkerOperation::PresentationGet => "presentation_get",
+        WorkerOperation::PresentationSave { .. } => "presentation_save",
         WorkerOperation::ContextStatus { .. } => "context_status",
         WorkerOperation::ContextList { .. } => "context_list",
         WorkerOperation::ContextCompact { .. } => "context_compact",
@@ -1461,6 +1470,12 @@ async fn dispatch(
         WorkerOperation::WorkState { session_id } => {
             Ok(serde_json::to_value(runtime.work_state(&session_id)?)?)
         }
+        WorkerOperation::PresentationGet => {
+            Ok(serde_json::to_value(runtime.presentation_preferences()?)?)
+        }
+        WorkerOperation::PresentationSave { preferences } => Ok(serde_json::to_value(
+            runtime.save_presentation_preferences(preferences).await?,
+        )?),
         WorkerOperation::ContextStatus { session_id } => Ok(serde_json::to_value(
             runtime.context_status(&session_id).await?,
         )?),

@@ -23,6 +23,7 @@ members = [
     "crates/colossus-mcp",
     "crates/colossus-packs",
     "crates/colossus-workflow",
+    "crates/colossus-presentation",
     "crates/colossus-runtime",
     "crates/colossus-worker",
     "crates/colossus-cli",
@@ -99,6 +100,7 @@ colossus-sandbox = { path = "crates/colossus-sandbox" }
 colossus-runtime = { path = "crates/colossus-runtime" }
 colossus-worker = { path = "crates/colossus-worker" }
 colossus-workflow = { path = "crates/colossus-workflow" }
+colossus-presentation = { path = "crates/colossus-presentation" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

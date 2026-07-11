@@ -680,6 +680,7 @@ dependencies = [
  "colossus-packs",
  "colossus-policy",
  "colossus-ports",
+ "colossus-presentation",
  "colossus-runtime",
  "colossus-sandbox",
  "colossus-worker",
@@ -882,6 +883,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-presentation"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "colossus-contracts",
+ "colossus-ports",
+ "colossus-testkit",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "colossus-projection"
 version = "0.6.0-alpha.1"
 dependencies = [
@@ -943,6 +955,7 @@ dependencies = [
  "colossus-packs",
  "colossus-policy",
  "colossus-ports",
+ "colossus-presentation",
  "colossus-projection",
  "colossus-provider",
  "colossus-research",

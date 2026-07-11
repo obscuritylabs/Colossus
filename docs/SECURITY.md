@@ -502,12 +502,13 @@ risk assessments is rendered as harness activity, not as hidden model reasoning.
 
 ## REPL Themes And Preferences
 
-REPL preferences are stored as typed JSON in SQLite state. They control display behavior
-only and do not change provider, policy, tool, or approval decisions. User theme files
-are data-only JSON/TOML loaded from the config themes directory. Prompt, trace, and
-transcript style keys are validated against allowlists, executable plugins are not loaded
-through the theme path, and invalid theme files fail fast rather than being partially
-applied.
+Rust REPL preferences are strict typed records in the encrypted event journal. Updates
+cross the same policy, permit, and audit boundary as other durable mutations and route
+through authenticated worker IPC when the worker owns the writer lease. They control
+display behavior only and do not change provider, policy, tool, approval, capability, or
+prompt decisions. Built-in themes are data-only identities; executable plugins are not
+loaded through the presentation path, and unknown preference schemas fail closed. The
+frozen Python implementation retains its legacy SQLite preference records separately.
 
 ## Audit Logs
 

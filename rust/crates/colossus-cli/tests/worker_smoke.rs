@@ -462,7 +462,7 @@ sandbox:
         binary,
         &config,
         &["repl", "--session", session_id],
-        "/sessions\n/work\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
+        "/theme high_contrast\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/repl prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
     );
     assert!(
         repl.status.success(),
@@ -473,9 +473,24 @@ sandbox:
     assert!(repl_stdout.contains("Colossus Rust REPL via authenticated worker"));
     assert!(repl_stdout.contains(session_id));
     assert!(repl_stdout.contains("worker IPC replacement"));
+    assert!(repl_stdout.contains("WORK: session="));
+    assert!(repl_stdout.contains("CONTEXT: session="));
+    assert!(repl_stdout.contains("tasks-through-worker"));
+    assert!(repl_stdout.contains(r#""stream_mode": "off""#));
+    assert!(repl_stdout.contains("recoverable: invalid presentation command"));
     assert!(repl_stdout.contains("global_sequence"));
     assert!(!repl_stdout.contains("not yet available through worker IPC"));
     assert!(!repl_stdout.contains("unknown REPL command"));
+
+    let preferences = run(binary, &config, &["preferences", "show"]);
+    assert!(preferences.status.success());
+    let preferences: Value = serde_json::from_slice(&preferences.stdout).expect("preferences JSON");
+    assert_eq!(preferences["theme"], "high_contrast");
+    assert_eq!(preferences["multiline"], true);
+    assert_eq!(preferences["stream_mode"], "off");
+    assert_eq!(preferences["events_mode"], "off");
+    assert_eq!(preferences["show_reasoning"], false);
+    assert_eq!(preferences["transcript_density"], "compact");
 
     let workflow = directory.path().join("smoke.yaml");
     fs::write(
@@ -592,6 +607,12 @@ steps:
             .iter()
             .any(|event| event["event_type"] == "worker.ipc.rejected.v1")
     }));
+    assert!(audit.as_array().is_some_and(|events| {
+        events.iter().any(|event| {
+            event["event_type"] == "presentation.preferences.updated.v1"
+                && event["stream_id"] == "presentation:repl"
+        })
+    }));
 
     let embedded = run(binary, &config, &["run", "embedded-fallback"]);
     assert!(embedded.status.success());
@@ -602,12 +623,21 @@ steps:
         binary,
         &config,
         &["repl", "--session", session_id],
-        "/session show\n/work\n/exit\n",
+        "/repl reset\n/session show\n/work\n/exit\n",
     );
     assert!(
         embedded_repl.status.success(),
         "{}",
         String::from_utf8_lossy(&embedded_repl.stderr)
     );
-    assert!(String::from_utf8_lossy(&embedded_repl.stdout).contains(session_id));
+    let embedded_stdout = String::from_utf8_lossy(&embedded_repl.stdout);
+    assert!(embedded_stdout.contains(session_id));
+    assert!(embedded_stdout.contains("[work] session="));
+
+    let reset_preferences = run(binary, &config, &["preferences", "show"]);
+    let reset_preferences: Value =
+        serde_json::from_slice(&reset_preferences.stdout).expect("reset preferences JSON");
+    assert_eq!(reset_preferences["theme"], "default");
+    assert_eq!(reset_preferences["multiline"], false);
+    assert_eq!(reset_preferences["stream_mode"], "on");
 }

@@ -13,9 +13,16 @@ use colossus_ports::{
     ApprovalProvider, ModelProviderError, PolicyError, ProviderEventObserver, ToolError,
     UserPromptProvider,
 };
+use colossus_presentation::{
+    EventDisplayMode, ReplPreferences, SemanticRenderer, StreamDisplayMode, ThemeName,
+    TranscriptDensity,
+};
 use colossus_runtime::{Runtime, RuntimeConfig};
 use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
-use reedline::{DefaultPrompt, Reedline, Signal};
+use reedline::{
+    DefaultPrompt, EditCommand, Emacs, KeyCode, KeyModifiers, Reedline, ReedlineEvent, Signal,
+    default_emacs_keybindings,
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -172,6 +179,7 @@ enum StreamTarget {
 struct TerminalStreamObserver {
     target: StreamTarget,
     wrote_text: bool,
+    preferences: ReplPreferences,
 }
 
 impl TerminalStreamObserver {
@@ -179,6 +187,29 @@ impl TerminalStreamObserver {
         Self {
             target,
             wrote_text: false,
+            preferences: ReplPreferences::default(),
+        }
+    }
+
+    fn with_preferences(target: StreamTarget, preferences: ReplPreferences) -> Self {
+        Self {
+            target,
+            wrote_text: false,
+            preferences,
+        }
+    }
+
+    fn write_line(&mut self, line: &str) -> io::Result<()> {
+        self.finish_line()?;
+        match self.target {
+            StreamTarget::Stdout => {
+                println!("{line}");
+                io::stdout().flush()
+            }
+            StreamTarget::Stderr => {
+                eprintln!("{line}");
+                io::stderr().flush()
+            }
         }
     }
 
@@ -203,21 +234,31 @@ impl TerminalStreamObserver {
 #[async_trait]
 impl ProviderEventObserver for TerminalStreamObserver {
     async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError> {
-        let ProviderEvent::ModelDelta { text } = event else {
+        if let ProviderEvent::ModelDelta { text } = &event {
+            if self.preferences.stream_mode == StreamDisplayMode::Off {
+                return Ok(());
+            }
+            let result = match self.target {
+                StreamTarget::Stdout => {
+                    print!("{text}");
+                    io::stdout().flush()
+                }
+                StreamTarget::Stderr => {
+                    eprint!("{text}");
+                    io::stderr().flush()
+                }
+            };
+            result.map_err(|error| ModelProviderError::Failed(error.to_string()))?;
+            self.wrote_text = true;
             return Ok(());
-        };
-        let result = match self.target {
-            StreamTarget::Stdout => {
-                print!("{text}");
-                io::stdout().flush()
-            }
-            StreamTarget::Stderr => {
-                eprint!("{text}");
-                io::stderr().flush()
-            }
-        };
-        result.map_err(|error| ModelProviderError::Failed(error.to_string()))?;
-        self.wrote_text = true;
+        }
+        if let Some(line) = SemanticRenderer::new(self.preferences.clone())
+            .provider_event(&event)
+            .map_err(|error| ModelProviderError::Failed(error.to_string()))?
+        {
+            self.write_line(&line)
+                .map_err(|error| ModelProviderError::Failed(error.to_string()))?;
+        }
         Ok(())
     }
 }
@@ -293,6 +334,8 @@ enum Command {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Inspect or reset local presentation preferences.
+    Preferences(PreferencesCommand),
     /// Inspect, compact, and restore durable long-session context.
     Context(ContextCommand),
     /// Create and inspect durable session tasks.
@@ -382,6 +425,20 @@ enum Command {
 struct ConfigCommand {
     #[command(subcommand)]
     command: ConfigAction,
+}
+
+#[derive(Args)]
+struct PreferencesCommand {
+    #[command(subcommand)]
+    command: PreferencesAction,
+}
+
+#[derive(Subcommand)]
+enum PreferencesAction {
+    /// Show the strict effective local profile.
+    Show,
+    /// Restore and persist default presentation preferences.
+    Reset,
 }
 
 #[derive(Subcommand)]
@@ -1429,6 +1486,160 @@ fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn parse_toggle(value: &str) -> Option<bool> {
+    match value {
+        "on" | "true" => Some(true),
+        "off" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PresentationCommandResult {
+    NotHandled,
+    Handled,
+    Save,
+}
+
+fn repl_editor(multiline: bool) -> Reedline {
+    if !multiline {
+        return Reedline::create();
+    }
+    let mut keybindings = default_emacs_keybindings();
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::Enter,
+        ReedlineEvent::Edit(vec![EditCommand::InsertNewline]),
+    );
+    keybindings.add_binding(KeyModifiers::ALT, KeyCode::Enter, ReedlineEvent::Submit);
+    Reedline::create().with_edit_mode(Box::new(Emacs::new(keybindings)))
+}
+
+fn handle_presentation_command(
+    line: &str,
+    preferences: &mut ReplPreferences,
+) -> Result<PresentationCommandResult, Box<dyn Error>> {
+    let mut changed = false;
+    match line {
+        "/repl" | "/repl prefs" => print_json(preferences)?,
+        "/repl save" => changed = true,
+        "/repl reset" => {
+            *preferences = ReplPreferences::default();
+            changed = true;
+        }
+        "/theme" => println!(
+            "theme={}; available=default,high_contrast,plain",
+            preferences.theme.as_str()
+        ),
+        "/theme default" => {
+            preferences.theme = ThemeName::Default;
+            changed = true;
+        }
+        "/theme high_contrast" => {
+            preferences.theme = ThemeName::HighContrast;
+            changed = true;
+        }
+        "/theme plain" => {
+            preferences.theme = ThemeName::Plain;
+            changed = true;
+        }
+        "/theme reset" => {
+            preferences.theme = ThemeName::Default;
+            changed = true;
+        }
+        "/events" => println!("events={}", preferences.events_mode.as_str()),
+        "/events compact" => {
+            preferences.events_mode = EventDisplayMode::Compact;
+            changed = true;
+        }
+        "/events verbose" => {
+            preferences.events_mode = EventDisplayMode::Verbose;
+            changed = true;
+        }
+        "/events off" => {
+            preferences.events_mode = EventDisplayMode::Off;
+            changed = true;
+        }
+        "/transcript" => println!("transcript={}", preferences.transcript_density.as_str()),
+        "/transcript comfortable" => {
+            preferences.transcript_density = TranscriptDensity::Comfortable;
+            changed = true;
+        }
+        "/transcript compact" => {
+            preferences.transcript_density = TranscriptDensity::Compact;
+            changed = true;
+        }
+        "/stream" => println!("stream={}", preferences.stream_mode.as_str()),
+        "/stream on" => {
+            preferences.stream_mode = StreamDisplayMode::On;
+            changed = true;
+        }
+        "/stream raw" => {
+            preferences.stream_mode = StreamDisplayMode::Raw;
+            changed = true;
+        }
+        "/stream off" => {
+            preferences.stream_mode = StreamDisplayMode::Off;
+            changed = true;
+        }
+        "/reasoning" => println!(
+            "reasoning={}",
+            if preferences.show_reasoning {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        command if command.starts_with("/reasoning ") => {
+            if let Some(value) = parse_toggle(command.trim_start_matches("/reasoning ")) {
+                preferences.show_reasoning = value;
+                changed = true;
+            } else {
+                println!("recoverable: /reasoning expects on or off");
+            }
+        }
+        "/multiline" => println!(
+            "multiline={}",
+            if preferences.multiline { "on" } else { "off" }
+        ),
+        command if command.starts_with("/multiline ") => {
+            let value = command.trim_start_matches("/multiline ");
+            if value == "toggle" {
+                preferences.multiline = !preferences.multiline;
+                changed = true;
+            } else if let Some(value) = parse_toggle(value) {
+                preferences.multiline = value;
+                changed = true;
+            } else {
+                println!("recoverable: /multiline expects on, off, or toggle");
+            }
+        }
+        "/trace" => {
+            preferences.events_mode = if preferences.events_mode == EventDisplayMode::Off {
+                EventDisplayMode::Compact
+            } else {
+                EventDisplayMode::Off
+            };
+            changed = true;
+        }
+        command
+            if command.starts_with("/repl ")
+                || command.starts_with("/theme ")
+                || command.starts_with("/events ")
+                || command.starts_with("/transcript ")
+                || command.starts_with("/stream ") =>
+        {
+            println!("recoverable: invalid presentation command; use /help");
+        }
+        _ => return Ok(PresentationCommandResult::NotHandled),
+    }
+    if changed {
+        Ok(PresentationCommandResult::Save)
+    } else {
+        Ok(PresentationCommandResult::Handled)
+    }
+}
+
 fn cli_error(message: impl Into<String>) -> std::io::Error {
     std::io::Error::other(message.into())
 }
@@ -1627,7 +1838,8 @@ async fn repl(
     initial_session: Option<String>,
     resume_latest: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let mut editor = Reedline::create();
+    let mut preferences = runtime.presentation_preferences()?;
+    let mut editor = repl_editor(preferences.multiline);
     let prompt = DefaultPrompt::default();
     let stdin = io::stdin();
     let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
@@ -1655,9 +1867,24 @@ async fn repl(
                 if matches!(line, "/quit" | "/exit") {
                     break;
                 }
+                let prior_multiline = preferences.multiline;
+                match handle_presentation_command(line, &mut preferences)? {
+                    PresentationCommandResult::NotHandled => {}
+                    PresentationCommandResult::Handled => continue,
+                    PresentationCommandResult::Save => {
+                        preferences = runtime
+                            .save_presentation_preferences(preferences.clone())
+                            .await?;
+                        print_json(&preferences)?;
+                        if prior_multiline != preferences.multiline {
+                            editor = repl_editor(preferences.multiline);
+                        }
+                        continue;
+                    }
+                }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/repl [prefs|reset] | /theme [default|high_contrast|plain] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1679,7 +1906,11 @@ async fn repl(
                 } else if line == "/sessions" {
                     print_json(&runtime.list_sessions(20)?)?;
                 } else if line == "/work" {
-                    print_json(&runtime.work_state(&active_session_id)?)?;
+                    println!(
+                        "{}",
+                        SemanticRenderer::new(preferences.clone())
+                            .work_state(&runtime.work_state(&active_session_id)?)
+                    );
                 } else if line == "/tasks" {
                     print_json(&runtime.list_tasks(Some(&active_session_id), None, 100)?)?;
                 } else if line == "/decisions" {
@@ -1862,7 +2093,11 @@ async fn repl(
                             .await?,
                     )?;
                 } else if line == "/context" || line == "/context status" {
-                    print_json(&runtime.context_status(&active_session_id).await?)?;
+                    println!(
+                        "{}",
+                        SemanticRenderer::new(preferences.clone())
+                            .context_status(&runtime.context_status(&active_session_id).await?)
+                    );
                 } else if line == "/context list" {
                     print_json(&runtime.context_snapshots(&active_session_id).await?)?;
                 } else if line == "/context compact" {
@@ -1905,7 +2140,10 @@ async fn repl(
                         println!("session={active_session_id}");
                     }
                 } else {
-                    let mut observer = TerminalStreamObserver::new(StreamTarget::Stdout);
+                    let mut observer = TerminalStreamObserver::with_preferences(
+                        StreamTarget::Stdout,
+                        preferences.clone(),
+                    );
                     let result = runtime
                         .run_model_with_skills_stream(
                             "primary",
@@ -1919,7 +2157,10 @@ async fn repl(
                         )
                         .await;
                     observer.finish_line()?;
-                    result?;
+                    let result = result?;
+                    if preferences.stream_mode == StreamDisplayMode::Off {
+                        println!("{}", result.output);
+                    }
                 }
             }
             Signal::CtrlD | Signal::CtrlC => break,
@@ -2806,6 +3047,16 @@ async fn dispatch_to_worker_if_active(
             worker_repl(&client, session.clone(), *resume).await?;
             Ok(true)
         }
+        Command::Preferences(command) => {
+            let operation = match command.command {
+                PreferencesAction::Show => WorkerOperation::PresentationGet,
+                PreferencesAction::Reset => WorkerOperation::PresentationSave {
+                    preferences: ReplPreferences::default(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
         Command::Worker { .. } | Command::Config(_) | Command::SandboxHelper => Ok(false),
     }
 }
@@ -2838,7 +3089,10 @@ async fn worker_repl(
         )?
         .id
     };
-    let mut editor = Reedline::create();
+    let mut preferences = serde_json::from_value::<ReplPreferences>(
+        client.call(WorkerOperation::PresentationGet).await?,
+    )?;
+    let mut editor = repl_editor(preferences.multiline);
     let prompt = DefaultPrompt::default();
     let stdin = io::stdin();
     let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
@@ -2854,9 +3108,28 @@ async fn worker_repl(
                 if matches!(line, "/quit" | "/exit") {
                     break;
                 }
+                let prior_multiline = preferences.multiline;
+                match handle_presentation_command(line, &mut preferences)? {
+                    PresentationCommandResult::NotHandled => {}
+                    PresentationCommandResult::Handled => continue,
+                    PresentationCommandResult::Save => {
+                        preferences = serde_json::from_value(
+                            client
+                                .call(WorkerOperation::PresentationSave {
+                                    preferences: preferences.clone(),
+                                })
+                                .await?,
+                        )?;
+                        print_json(&preferences)?;
+                        if prior_multiline != preferences.multiline {
+                            editor = repl_editor(preferences.multiline);
+                        }
+                        continue;
+                    }
+                }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/repl [prefs|reset] | /theme [default|high_contrast|plain] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -2882,13 +3155,17 @@ async fn worker_repl(
                             .await?,
                     )?;
                 } else if line == "/work" {
-                    print_json(
-                        &client
+                    let state = serde_json::from_value::<colossus_contracts::WorkStateSnapshot>(
+                        client
                             .call(WorkerOperation::WorkState {
                                 session_id: active_session_id.clone(),
                             })
                             .await?,
                     )?;
+                    println!(
+                        "{}",
+                        SemanticRenderer::new(preferences.clone()).work_state(&state)
+                    );
                 } else if line == "/tasks" {
                     print_json(
                         &client
@@ -3268,13 +3545,17 @@ async fn worker_repl(
                             .await?,
                     )?;
                 } else if line == "/context" || line == "/context status" {
-                    print_json(
-                        &client
+                    let status = serde_json::from_value::<colossus_contracts::ContextStatus>(
+                        client
                             .call(WorkerOperation::ContextStatus {
                                 session_id: active_session_id.clone(),
                             })
                             .await?,
                     )?;
+                    println!(
+                        "{}",
+                        SemanticRenderer::new(preferences.clone()).context_status(&status)
+                    );
                 } else if line == "/context list" {
                     print_json(
                         &client
@@ -3353,7 +3634,10 @@ async fn worker_repl(
                 } else if line.starts_with('/') {
                     println!("unknown REPL command: {line}; use /help");
                 } else {
-                    let mut observer = TerminalStreamObserver::new(StreamTarget::Stdout);
+                    let mut observer = TerminalStreamObserver::with_preferences(
+                        StreamTarget::Stdout,
+                        preferences.clone(),
+                    );
                     let result = client
                         .run_model(
                             WorkerOperation::RunModel {
@@ -3369,7 +3653,10 @@ async fn worker_repl(
                         )
                         .await;
                     observer.finish_line()?;
-                    result?;
+                    let result = result?;
+                    if preferences.stream_mode == StreamDisplayMode::Off {
+                        println!("{}", result.output);
+                    }
                     client.call(WorkerOperation::Drain).await?;
                 }
             }
@@ -3494,6 +3781,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let runtime = Runtime::open_with_interfaces(&config, approvals, user_prompts)?;
     match cli.command {
         Command::Config(_) => unreachable!("handled before runtime construction"),
+        Command::Preferences(command) => match command.command {
+            PreferencesAction::Show => print_json(&runtime.presentation_preferences()?)?,
+            PreferencesAction::Reset => print_json(
+                &runtime
+                    .save_presentation_preferences(ReplPreferences::default())
+                    .await?,
+            )?,
+        },
         Command::Audit(command) => match command.command {
             AuditAction::Verify | AuditAction::AnchorStatus => {
                 print_json(&runtime.journal().verify()?)?;

@@ -8,10 +8,10 @@ use colossus_contracts::{
     ExecutionContext, GoalRecord, GoalStatus, IntegrationConnection, KeyDecision, MemoryRecord,
     ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PackInstallation, PackStatus,
     PlanRecord, PlanStatus, PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem,
-    ProviderEvent, ProviderRoute, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun,
-    ResearchSource, SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord,
-    SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
-    UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun,
+    ProviderEvent, ProviderRoute, ProviderTurn, PublisherTrust, ReplPreferences, ResearchClaim,
+    ResearchRun, ResearchSource, SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate,
+    SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult,
+    ToolSpec, UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -338,6 +338,19 @@ pub trait ContextRepository: Send + Sync {
         snapshot_id: &str,
         actor: Actor,
     ) -> Result<ContextSnapshot, StoreError>;
+}
+
+/// Canonical event-sourced presentation preference repository.
+pub trait PresentationRepository: Send + Sync {
+    /// Reconstruct the current preference profile or defaults before its first mutation.
+    fn load(&self) -> Result<ReplPreferences, StoreError>;
+
+    /// Append one complete replacement profile through optimistic concurrency.
+    fn save(
+        &self,
+        preferences: ReplPreferences,
+        actor: Actor,
+    ) -> Result<ReplPreferences, StoreError>;
 }
 
 /// Shared context preparation boundary used by every agent provider turn.

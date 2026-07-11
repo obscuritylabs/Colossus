@@ -463,11 +463,14 @@ research progress, and subagent status. `telemetry metrics` aggregates recent ru
 run count, average/max elapsed time, event counts, tool failures, approvals, research
 activity, subagent activity, context compactions, and error totals.
 
-REPL preferences are stored in the local SQLite state database under the Colossus data
-directory. Saved preferences currently include theme, multiline mode, model output
-streaming, event detail, transcript style, and reasoning-summary visibility. `--theme`
-overrides the saved theme for that REPL launch only; use `/theme save` or `/repl save` to
-persist a choice.
+In the Rust runtime, REPL preferences are stored as encrypted canonical events in the
+selected redb state. Saved preferences include theme, multiline mode, model-output
+streaming, event detail, transcript density, and safe reasoning-summary visibility.
+Every update is policy authorized, audited, and automatically routed through an active
+worker; `/repl save` is therefore explicit but normally unnecessary because each setting
+command persists its replacement profile. Use `colossus-rs preferences show|reset` for
+non-interactive inspection or reset. The frozen Python implementation keeps its legacy
+SQLite preferences separately and Rust does not import them.
 
 You can choose a one-launch startup theme with:
 

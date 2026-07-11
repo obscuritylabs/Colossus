@@ -1,10 +1,13 @@
 //! Shared adapter conformance fixtures.
 
 use colossus_contracts::{
-    EncryptedPayload, EventEnvelope, NewEvent, ProjectionBatch, ProjectionMutation,
-    ProjectionWorkItem, SignedCheckpoint,
+    Actor, ActorType, EncryptedPayload, EventDisplayMode, EventEnvelope, NewEvent, ProjectionBatch,
+    ProjectionMutation, ProjectionWorkItem, ReplPreferences, SignedCheckpoint, StreamDisplayMode,
+    ThemeName, TranscriptDensity,
 };
-use colossus_ports::{EventJournal, ProjectionStore, StoreError, VerificationReport};
+use colossus_ports::{
+    EventJournal, PresentationRepository, ProjectionStore, StoreError, VerificationReport,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::Mutex};
@@ -360,5 +363,49 @@ pub fn assert_projection_store_conformance(store: &dyn ProjectionStore) {
             .get("test", "record-1")
             .expect("reset record")
             .is_none()
+    );
+}
+
+/// Shared reconstruction and validation checks for presentation repository adapters.
+pub fn assert_presentation_repository_conformance(repository: &dyn PresentationRepository) {
+    assert_eq!(
+        repository.load().expect("default presentation profile"),
+        ReplPreferences::default()
+    );
+    let expected = ReplPreferences {
+        theme: ThemeName::HighContrast,
+        multiline: true,
+        stream_mode: StreamDisplayMode::Off,
+        events_mode: EventDisplayMode::Verbose,
+        show_reasoning: false,
+        transcript_density: TranscriptDensity::Compact,
+        ..ReplPreferences::default()
+    };
+    let saved = repository
+        .save(
+            expected.clone(),
+            Actor {
+                actor_type: ActorType::User,
+                id: "conformance-user".into(),
+            },
+        )
+        .expect("save presentation profile");
+    assert_eq!(saved, expected);
+    assert_eq!(repository.load().expect("reconstructed profile"), expected);
+    let invalid = ReplPreferences {
+        schema_version: u16::MAX,
+        ..ReplPreferences::default()
+    };
+    assert!(
+        repository
+            .save(
+                invalid,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "conformance-user".into(),
+                },
+            )
+            .is_err(),
+        "unknown presentation schema must fail closed"
     );
 }

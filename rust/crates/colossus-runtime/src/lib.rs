@@ -13,13 +13,13 @@ use colossus_contracts::{
     ModelRequest, ModelToolDefinition, NewEvent, PackInstallation, PackVerification, PlanRecord,
     PlanStatus, PlanStep, PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo,
     ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn,
-    PublisherTrust, QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun,
-    ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
-    SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection,
-    SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult,
-    SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus,
-    TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
-    WorkStateSnapshot,
+    PublisherTrust, QuarantinedEffectResult, ReplPreferences, ResearchClaim, ResearchDepth,
+    ResearchRun, ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary,
+    SessionMessage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
+    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
+    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
+    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
+    UserPromptRequest, WorkStateSnapshot,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -50,10 +50,12 @@ use colossus_policy::{
 use colossus_ports::{
     ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EmbeddingProvider,
     EventJournal, ExtensionRepository, KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever,
-    ModelProvider, ModelProviderError, PolicyDecisionPoint, ProjectionStore, ProviderEventObserver,
-    ResearchRepository, SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor,
-    ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
+    ModelProvider, ModelProviderError, PolicyDecisionPoint, PresentationRepository,
+    ProjectionStore, ProviderEventObserver, ResearchRepository, SessionRepository, SkillRepository,
+    StoreError, ToolError, ToolExecutor, ToolRegistry, UserPromptProvider, WorkRepository,
+    WorkflowRepository,
 };
+use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
     ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind, ProviderProfile,
@@ -1201,6 +1203,18 @@ fn read_optional(path: Option<&PathBuf>) -> Result<Option<Vec<u8>>, RuntimeError
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum PresentationOperation {
+    Save { preferences: ReplPreferences },
+}
+
+impl PresentationOperation {
+    const fn action(&self) -> &'static str {
+        "presentation.preferences.update"
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum WorkOperation {
     TaskCreate {
         session_id: String,
@@ -1819,6 +1833,8 @@ pub struct Runtime {
     integration_executor: Arc<IntegrationExecutor>,
     sessions: Arc<dyn SessionRepository>,
     context_executor: Arc<ContextEffectExecutor>,
+    presentation: Arc<dyn PresentationRepository>,
+    presentation_executor: Arc<PresentationEffectExecutor>,
     work: Arc<dyn WorkRepository>,
     work_executor: Arc<WorkEffectExecutor>,
     memory_executor: Arc<MemoryEffectExecutor>,
@@ -1975,6 +1991,9 @@ impl Runtime {
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
             Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
+        let presentation: Arc<dyn PresentationRepository> = Arc::new(
+            EventSourcedPresentationRepository::new(Arc::clone(&journal)),
+        );
         let work_service = Arc::new(WorkService::new(Arc::clone(&work), Arc::clone(&sessions)));
         if !journal.is_recovery_mode() {
             recover_interrupted_subagents(work.as_ref(), work_service.as_ref())?;
@@ -2024,6 +2043,7 @@ impl Runtime {
                     "context.show",
                     "context.snapshots",
                     "patch.preview",
+                    "presentation.preferences.update",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
@@ -2218,6 +2238,7 @@ impl Runtime {
             "patch.apply".to_owned(),
             "patch.reverse".to_owned(),
             "trace.export".to_owned(),
+            "presentation.preferences.update".to_owned(),
             "network.http".to_owned(),
             "task.create".to_owned(),
             "task.update".to_owned(),
@@ -2299,6 +2320,9 @@ impl Runtime {
         let work_executor = Arc::new(WorkEffectExecutor {
             service: Arc::clone(&work_service),
             repository: Arc::clone(&work),
+        });
+        let presentation_executor = Arc::new(PresentationEffectExecutor {
+            repository: Arc::clone(&presentation),
         });
         let memory_executor = Arc::new(MemoryEffectExecutor {
             service: Arc::clone(&memory_service),
@@ -2482,6 +2506,8 @@ impl Runtime {
             integration_executor,
             sessions,
             context_executor,
+            presentation,
+            presentation_executor,
             work,
             work_executor,
             memory_executor,
@@ -3139,6 +3165,34 @@ impl Runtime {
         let result = self
             .gateway
             .execute(request, self.research_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Reconstruct the current canonical REPL presentation profile.
+    pub fn presentation_preferences(&self) -> Result<ReplPreferences, RuntimeError> {
+        self.presentation.load().map_err(Into::into)
+    }
+
+    /// Persist a complete presentation profile through policy, permit, and audit boundaries.
+    pub async fn save_presentation_preferences(
+        &self,
+        preferences: ReplPreferences,
+    ) -> Result<ReplPreferences, RuntimeError> {
+        let operation = PresentationOperation::Save { preferences };
+        let action = operation.action();
+        let mut request = effect_request(
+            terminal_actor(),
+            action,
+            "presentation:repl",
+            serde_json::to_value(&operation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![action.into()];
+        let result = self
+            .gateway
+            .execute(request, self.presentation_executor.as_ref())
             .await?;
         serde_json::from_slice(&result.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
@@ -8651,6 +8705,38 @@ impl EffectExecutor for ResearchEffectExecutor {
     }
 }
 
+struct PresentationEffectExecutor {
+    repository: Arc<dyn PresentationRepository>,
+}
+
+#[async_trait]
+impl EffectExecutor for PresentationEffectExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let operation: PresentationOperation = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if request.action != operation.action() || request.resource != "presentation:repl" {
+            return Err(ExecutionError::Failed(
+                "presentation request does not match its authorized content".into(),
+            ));
+        }
+        let PresentationOperation::Save { preferences } = operation;
+        let preferences = self
+            .repository
+            .save(preferences, request.actor.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&preferences)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
+    }
+}
+
 struct WorkEffectExecutor {
     service: Arc<WorkService>,
     repository: Arc<dyn WorkRepository>,
@@ -9122,21 +9208,29 @@ mod tests {
         ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
         GatewayMemoryRetriever, GatewayToolExecutor, GatewayWorkflowEffects,
         InteractiveToolExecutor, MemoryEffectExecutor, MemoryEmbeddingConfig,
-        PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput, ProviderProfileConfig,
+        PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
+        PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
         ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig, SkillEffectExecutor,
         SkillOperation, SkillScaffoldResult, TraceToolExecutor, WorkEffectExecutor,
         goal_objective_from_plan, recover_interrupted_subagents, recover_unknown_effects,
+        terminal_actor,
     };
     use colossus_contracts::{
         Actor, ActorType, CredentialReference, DecisionOutcome, EffectRequest, EventClassification,
         ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus, ModelMessage,
         ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep, ProviderEvent,
-        ProviderRoute, ProviderTurn, QuarantinedEffectResult, SubagentStatus, TaskStatus, ToolCall,
+        ProviderRoute, ProviderTurn, QuarantinedEffectResult, ReplPreferences, SubagentStatus,
+        TaskStatus, ToolCall,
     };
     use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
-    use colossus_ports::{
-        EventJournal, ModelProvider, ModelProviderError, SkillRepository, ToolExecutor,
+    use colossus_policy::{
+        BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request,
     };
+    use colossus_ports::{
+        EventJournal, ModelProvider, ModelProviderError, PresentationRepository, SkillRepository,
+        ToolExecutor,
+    };
+    use colossus_presentation::EventSourcedPresentationRepository;
     use colossus_provider::ProviderKind;
     use colossus_skills::{
         FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
@@ -9216,6 +9310,70 @@ mod tests {
                 "workflow-step:launch-child",
                 "workflow-compensation-step:rollback-child"
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn presentation_mutation_is_denied_before_repository_and_allowed_with_permit() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn PresentationRepository> = Arc::new(
+            EventSourcedPresentationRepository::new(Arc::clone(&journal)),
+        );
+        let executor = PresentationEffectExecutor {
+            repository: Arc::clone(&repository),
+        };
+        let preferences = ReplPreferences {
+            theme: colossus_contracts::ThemeName::HighContrast,
+            ..ReplPreferences::default()
+        };
+        let operation = PresentationOperation::Save {
+            preferences: preferences.clone(),
+        };
+        let request = || {
+            let mut request = effect_request(
+                terminal_actor(),
+                operation.action(),
+                "presentation:repl",
+                serde_json::to_value(&operation).expect("operation"),
+            );
+            request.capabilities = vec![operation.action().into()];
+            request
+        };
+
+        let denied_gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(BuiltInPolicy::offline_default()),
+            Arc::new(DenyApproval),
+            SafetyKernel::new([operation.action().into()]),
+            [61_u8; 32],
+        );
+        assert!(denied_gateway.execute(request(), &executor).await.is_err());
+        assert_eq!(
+            repository.load().expect("unchanged"),
+            ReplPreferences::default()
+        );
+
+        let allowed_gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                BuiltInPolicy::offline_default()
+                    .with_action(operation.action(), DecisionOutcome::Allow),
+            ),
+            Arc::new(DenyApproval),
+            SafetyKernel::new([operation.action().into()]),
+            [62_u8; 32],
+        );
+        allowed_gateway
+            .execute(request(), &executor)
+            .await
+            .expect("authorized update");
+        assert_eq!(repository.load().expect("updated"), preferences);
+        assert_eq!(
+            journal
+                .read_stream("presentation:repl")
+                .expect("preference stream")
+                .len(),
+            1
         );
     }
 

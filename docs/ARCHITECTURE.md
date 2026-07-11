@@ -362,7 +362,11 @@ error totals without exposing raw prompts, hidden reasoning, or raw tool outputs
 default. CLI and future TUI surfaces should call the service for run lists, timelines,
 and aggregate metrics rather than querying SQLite or parsing transcript text directly.
 
-Saved REPL preferences are modeled as typed domain data, exposed through the state port,
-and coordinated by an application service. The interface may load and save those
-preferences, but SQLite remains an adapter detail and preference persistence must not
-leak into prompt rendering or orchestration code.
+Saved REPL preferences are typed contracts exposed through `PresentationRepository`.
+The Rust runtime uses an encrypted event-sourced adapter and sends every preference
+mutation through the effect gateway before appending a replacement-profile event. The
+CLI and authenticated worker only coordinate the application operation; they do not
+write presentation files or canonical storage directly. Pure semantic rendering remains
+in `colossus-presentation` and preference values never enter provider routing, policy,
+tool, approval, or prompt-composition decisions. The frozen Python implementation's
+SQLite preference records are legacy state and are not imported into Rust.

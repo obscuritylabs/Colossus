@@ -23,6 +23,8 @@ cargo run -p colossus-cli --bin colossus-rs -- models routes
 cargo run -p colossus-cli --bin colossus-rs -- tools list
 cargo run -p colossus-cli --bin colossus-rs -- sessions list
 cargo run -p colossus-cli --bin colossus-rs -- run --resume 'Continue the latest session'
+cargo run -p colossus-cli --bin colossus-rs -- repl
+cargo run -p colossus-cli --bin colossus-rs -- preferences show
 cargo run -p colossus-cli --bin colossus-rs -- research run \
   'Summarize the audit architecture' --depth quick --source repo
 cargo run -p colossus-cli --bin colossus-rs -- research list
@@ -201,6 +203,16 @@ session, and `sessions list|show|messages|new` for discovery. The REPL keeps an 
 offers `/resume` as a numbered picker while retaining `/session resume ID` as the exact
 escape hatch. Message bodies stay in the encrypted journal; projections contain bounded
 session summaries only.
+
+The REPL persists strict presentation preferences in the encrypted event journal. Each
+change crosses the effect gateway and uses authenticated worker IPC when a worker owns
+the state lease. Use `/theme default|high_contrast|plain`, `/stream on|raw|off`,
+`/events compact|verbose|off`, `/reasoning on|off`,
+`/transcript comfortable|compact`, `/multiline on|off|toggle`, `/trace`, and
+`/repl prefs|save|reset`. These settings affect terminal rendering only. Work and context
+status use semantic summaries, safe provider reasoning summaries remain independently
+toggleable, and `raw` means normalized visible text without semantic event blocks—not
+unredacted provider frames or hidden reasoning.
 
 Inspect sandbox readiness or run an explicitly configured exact executable:
 

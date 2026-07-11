@@ -71,6 +71,12 @@ obsolete Go launcher.
 - A bounded session work-state snapshot composes tasks, active decisions, actionable
   plans, current goals, and nonterminal subagents for `work`, embedded `/work`, and the
   authenticated worker REPL without duplicating repository logic in interfaces.
+- Strict versioned presentation contracts, a `PresentationRepository` port, and an
+  encrypted event-sourced adapter for theme, multiline composition, streaming, event
+  detail, reasoning-summary visibility, and transcript density. Mutations cross the
+  effect gateway and authenticated worker IPC; embedded and worker REPLs share the same
+  commands and semantic work/context/provider-event renderer. Raw provider frames and
+  hidden reasoning never enter this presentation path.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   a disposable Tantivy lexical index with event-id idempotency, durable replay position,
   retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry
@@ -231,6 +237,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- w
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}' --queued
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- work --session SESSION_ID
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- preferences show
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- repl
 ```
 
@@ -265,6 +272,9 @@ cutover. The following planned work remains:
   strict catalog validation, and the complete P0 offline/network tool surface are
   implemented through the normal permission, quarantine, and audit boundaries.
 - Live Windows named-pipe acceptance.
+- Remaining semantic renderers for every tool-result family, richer recoverability
+  labels, and elapsed phase/activity presentation. Persistent preferences and semantic
+  work/context/provider-event rendering are implemented.
 - Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,

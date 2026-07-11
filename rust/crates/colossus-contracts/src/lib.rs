@@ -704,6 +704,133 @@ pub struct WorkStateSnapshot {
     pub current_subagents: Vec<SubagentJob>,
 }
 
+/// Built-in terminal theme identity.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeName {
+    /// Balanced terminal labels.
+    #[default]
+    Default,
+    /// Strong uppercase labels without relying on color perception.
+    HighContrast,
+    /// Minimal unadorned labels.
+    Plain,
+}
+
+impl ThemeName {
+    /// Stable configuration and command spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::HighContrast => "high_contrast",
+            Self::Plain => "plain",
+        }
+    }
+}
+
+/// Provider/activity event detail rendered by the REPL.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventDisplayMode {
+    /// One bounded semantic line per meaningful activity.
+    #[default]
+    Compact,
+    /// Full released structured event content.
+    Verbose,
+    /// Suppress activity events while preserving final output and errors.
+    Off,
+}
+
+impl EventDisplayMode {
+    /// Stable configuration and command spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Verbose => "verbose",
+            Self::Off => "off",
+        }
+    }
+}
+
+/// Model-output streaming behavior.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamDisplayMode {
+    /// Stream visible text alongside configured semantic events.
+    #[default]
+    On,
+    /// Stream only normalized visible text, suppressing semantic event blocks.
+    Raw,
+    /// Buffer visible model output until the run finishes.
+    Off,
+}
+
+impl StreamDisplayMode {
+    /// Stable configuration and command spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Raw => "raw",
+            Self::Off => "off",
+        }
+    }
+}
+
+/// Transcript vertical-density preference.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptDensity {
+    /// Readable blocks with labels and spacing.
+    #[default]
+    Comfortable,
+    /// Minimal vertical space.
+    Compact,
+}
+
+impl TranscriptDensity {
+    /// Stable configuration and command spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Comfortable => "comfortable",
+            Self::Compact => "compact",
+        }
+    }
+}
+
+/// Strict versioned REPL presentation preferences.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplPreferences {
+    /// Preference schema version.
+    pub schema_version: u16,
+    /// Active built-in theme.
+    pub theme: ThemeName,
+    /// Whether the editor composes multiple lines before submission.
+    pub multiline: bool,
+    /// How released model output streams.
+    pub stream_mode: StreamDisplayMode,
+    /// Activity event detail.
+    pub events_mode: EventDisplayMode,
+    /// Whether safe reasoning summaries are visible.
+    pub show_reasoning: bool,
+    /// Transcript vertical density.
+    pub transcript_density: TranscriptDensity,
+}
+
+impl Default for ReplPreferences {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            theme: ThemeName::Default,
+            multiline: false,
+            stream_mode: StreamDisplayMode::On,
+            events_mode: EventDisplayMode::Compact,
+            show_reasoning: true,
+            transcript_density: TranscriptDensity::Comfortable,
+        }
+    }
+}
+
 /// Configured research depth controlling bounded query and worker budgets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
