@@ -135,7 +135,15 @@ position and bounded retry state; unknown outcomes require an explicit operator 
 Because authorizing an export appends ordinary effect lifecycle events, those events use
 the reserved `system/audit-exporter` actor and are acknowledged without re-export to
 prevent recursion. The canonical journal still retains them. Additional exporters reuse
-the same evidence, queue, policy, and conformance boundary.
+the same evidence, queue, policy, and conformance boundary. Process-level fault tests
+terminate the journal immediately before and after redb commit and terminate export after
+delivery but before queue acknowledgment; recovery proves atomic rollback or durable
+visibility and idempotent evidence replay, respectively. Verified startup repairs a
+periodic checkpoint interrupted after its event commit, and checkpoint scheduling uses
+distance from the last signed sequence so a multi-event batch cannot cross the interval
+unnoticed. The secure anchor is persisted before checkpoint metadata; if termination
+lands between them, startup verifies the anchored head and recreates the missing signed
+checkpoint.
 
 Repository adapters are verified through shared port-level conformance factories rather
 than implementation-specific happy paths. The research suite reopens the adapter and

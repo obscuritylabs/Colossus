@@ -986,8 +986,8 @@ A reconstruction is complete only when all applicable checks pass:
 - [ ] Credentials remain references until adapter execution and never appear in model or
   user-visible diagnostic payloads.
 - [x] Skills cannot gain executable privilege; packs cannot activate before verification.
-- [ ] Audit-chain verification detects tampering.
-- [ ] Journal concurrency, encryption/key rotation, tail truncation, signed checkpoints,
+- [x] Audit-chain verification detects tampering.
+- [x] Journal concurrency, encryption/key rotation, tail truncation, signed checkpoints,
   unknown effects, and read-only recovery behavior pass fault-injection tests.
 - [ ] Every effect category is rejected before adapter execution without an unexpired,
   unused permit matching the request, decision, actor, and obligations.

@@ -20,6 +20,13 @@ pub const AUDIT_EXPORT_ACTOR: &str = "audit-exporter";
 const MAX_BATCH: usize = 256;
 const MAX_EVIDENCE_BYTES: usize = 256 * 1024;
 
+#[cfg(test)]
+fn crash_at_test_fault(point: &str) {
+    if std::env::var("COLOSSUS_AUDIT_TEST_CRASH_POINT").as_deref() == Ok(point) {
+        std::process::abort();
+    }
+}
+
 fn adapter(error: impl std::fmt::Display) -> StoreError {
     StoreError::Adapter(error.to_string())
 }
@@ -288,6 +295,8 @@ impl AuditExportService {
                 )?;
                 return Err(error);
             }
+            #[cfg(test)]
+            crash_at_test_fault("after_export_before_ack");
             exported = exported.saturating_add(1);
         }
         if !work.is_empty() {
@@ -374,6 +383,7 @@ mod tests {
         Actor, ActorType, AuditEvidence, DecisionOutcome, EventClassification, ExecutionContext,
         NewEvent,
     };
+    use colossus_journal_redb::{Ed25519CheckpointSigner, RedbEventJournal, StaticKeyProvider};
     use colossus_policy::{BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel};
     use colossus_ports::{
         AuditExporter, EventJournal, ExternalWorkQueue, ProjectionStore, StoreError,
@@ -384,9 +394,12 @@ mod tests {
         InMemoryEventJournal, InMemoryProjectionStore, assert_audit_exporter_conformance,
     };
     use serde_json::json;
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+    use std::{
+        process::Command,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
     };
 
     fn event(actor: Actor, stream: &str) -> NewEvent {
@@ -408,6 +421,135 @@ mod tests {
     fn queue(journal: Arc<dyn EventJournal>) -> Arc<dyn ExternalWorkQueue> {
         let store: Arc<dyn ProjectionStore> = Arc::new(InMemoryProjectionStore::default());
         Arc::new(JournalExternalWorkQueue::new(journal, store))
+    }
+
+    fn persistent_journal(path: &std::path::Path) -> Arc<RedbEventJournal> {
+        Arc::new(
+            RedbEventJournal::open(
+                path,
+                Arc::new(StaticKeyProvider::new("audit-crash-key", [71_u8; 32])),
+                Arc::new(Ed25519CheckpointSigner::new(
+                    "audit-crash-signing",
+                    [72_u8; 32],
+                )),
+            )
+            .expect("open persistent journal"),
+        )
+    }
+
+    fn persistent_service(
+        state: &std::path::Path,
+        exports: &std::path::Path,
+    ) -> (Arc<RedbEventJournal>, AuditExportService) {
+        let journal = persistent_journal(state);
+        let journal_port: Arc<dyn EventJournal> = journal.clone();
+        let projection_store: Arc<dyn ProjectionStore> = journal.clone();
+        let queue: Arc<dyn ExternalWorkQueue> = Arc::new(JournalExternalWorkQueue::new(
+            Arc::clone(&journal_port),
+            projection_store,
+        ));
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("audit.export.write", DecisionOutcome::Allow)
+            .with_filesystem_root(exports.display().to_string(), "write");
+        let gateway = Arc::new(EffectGateway::new(
+            Arc::clone(&journal_port),
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["audit.export.write".into()]),
+            [73_u8; 32],
+        ));
+        let exporter: Arc<dyn AuditExporter> = Arc::new(
+            GatewayDirectoryAuditExporter::new(
+                exports,
+                gateway,
+                Arc::new(FilesystemExecutor::new()),
+            )
+            .expect("directory exporter"),
+        );
+        (
+            journal,
+            AuditExportService::new(journal_port, queue, Some(exporter)),
+        )
+    }
+
+    #[tokio::test]
+    async fn crash_after_export_child() {
+        let (Ok(state), Ok(exports)) = (
+            std::env::var("COLOSSUS_AUDIT_TEST_CRASH_STATE"),
+            std::env::var("COLOSSUS_AUDIT_TEST_CRASH_EXPORTS"),
+        ) else {
+            return;
+        };
+        let (_, service) =
+            persistent_service(std::path::Path::new(&state), std::path::Path::new(&exports));
+        service
+            .run_once(8)
+            .await
+            .expect("fault point must terminate before export returns");
+        panic!("configured audit crash point did not terminate the child process");
+    }
+
+    #[tokio::test]
+    async fn crash_after_delivery_replays_idempotently_before_acknowledging_queue() {
+        let directory = tempfile::tempdir().expect("directory");
+        let state = directory.path().join("state.redb");
+        let exports = directory.path().join("exports");
+        std::fs::create_dir(&exports).expect("export directory");
+        {
+            let journal = persistent_journal(&state);
+            journal
+                .append(event(
+                    Actor {
+                        actor_type: ActorType::User,
+                        id: "operator".into(),
+                    },
+                    "fixture:crash-delivery",
+                ))
+                .expect("source event");
+        }
+
+        let child = Command::new(std::env::current_exe().expect("current test executable"))
+            .args(["--exact", "tests::crash_after_export_child", "--nocapture"])
+            .env("COLOSSUS_AUDIT_TEST_CRASH_STATE", &state)
+            .env("COLOSSUS_AUDIT_TEST_CRASH_EXPORTS", &exports)
+            .env("COLOSSUS_AUDIT_TEST_CRASH_POINT", "after_export_before_ack")
+            .status()
+            .expect("spawn audit crash child");
+        assert!(!child.success(), "audit crash child unexpectedly succeeded");
+
+        let delivered = std::fs::read_dir(&exports)
+            .expect("export directory")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("exported evidence");
+        assert_eq!(delivered.len(), 1);
+        let (journal, service) = persistent_service(&state, &exports);
+        assert_eq!(service.status().expect("status").position, 0);
+        let before_replay = journal
+            .read_global(1, 32)
+            .expect("journal after delivery crash");
+        assert!(before_replay.len() > 1);
+        assert_ne!(before_replay[0].actor.id, AUDIT_EXPORT_ACTOR);
+        assert!(before_replay[1..].iter().all(|event| {
+            event.actor.actor_type == ActorType::System && event.actor.id == AUDIT_EXPORT_ACTOR
+        }));
+
+        let report = service.drain(8, 8).await.expect("replay and drain");
+        assert_eq!(report.exported, 1);
+        assert_eq!(
+            report.skipped,
+            u64::try_from(before_replay.len().saturating_sub(1))
+                .expect("lifecycle count")
+                .saturating_mul(2)
+        );
+        assert!(report.status.ready);
+        assert_eq!(report.status.position, report.status.journal_head);
+        assert_eq!(
+            std::fs::read_dir(&exports)
+                .expect("export directory")
+                .count(),
+            1
+        );
+        journal.verify().expect("post-replay journal verification");
     }
 
     #[derive(Default)]

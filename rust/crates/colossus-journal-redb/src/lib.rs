@@ -467,6 +467,13 @@ fn checkpoint_message(sequence: u64, hash: &str) -> Vec<u8> {
     format!("colossus-checkpoint-v1\n{sequence}\n{hash}\n").into_bytes()
 }
 
+#[cfg(test)]
+fn crash_at_test_fault(point: &str) {
+    if std::env::var("COLOSSUS_REDB_TEST_CRASH_POINT").as_deref() == Ok(point) {
+        std::process::abort();
+    }
+}
+
 /// Canonical redb journal adapter.
 pub struct RedbEventJournal {
     database: Database,
@@ -507,7 +514,17 @@ impl RedbEventJournal {
             recovery_mode: AtomicBool::new(false),
             recovery_reason: Mutex::new(None),
         };
-        if let Err(error) = journal.verify_inner() {
+        let startup = journal.verify_inner().and_then(|report| {
+            let checkpoint_sequence = report
+                .checkpoint
+                .as_ref()
+                .map_or(0, |checkpoint| checkpoint.global_sequence);
+            if report.last_sequence.saturating_sub(checkpoint_sequence) >= CHECKPOINT_INTERVAL {
+                journal.checkpoint()?;
+            }
+            Ok(())
+        });
+        if let Err(error) = startup {
             journal.recovery_mode.store(true, Ordering::Release);
             *journal.recovery_reason.lock().map_err(adapter_error)? = Some(error.to_string());
         }
@@ -649,7 +666,11 @@ impl RedbEventJournal {
                 .insert("last_hash", hash_bytes.as_slice())
                 .map_err(adapter_error)?;
         }
+        #[cfg(test)]
+        crash_at_test_fault("before_commit");
         write.commit().map_err(adapter_error)?;
+        #[cfg(test)]
+        crash_at_test_fault("after_commit");
         Ok(persisted)
     }
 
@@ -681,6 +702,21 @@ impl RedbEventJournal {
                     event.event_id
                 ))
             })
+    }
+
+    fn checkpoint_sequence(&self) -> Result<u64, StoreError> {
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+        metadata
+            .get("latest_checkpoint")
+            .map_err(adapter_error)?
+            .map(|value| {
+                serde_json::from_slice::<SignedCheckpoint>(value.value())
+                    .map(|checkpoint| checkpoint.global_sequence)
+                    .map_err(adapter_error)
+            })
+            .transpose()
+            .map(|sequence| sequence.unwrap_or(0))
     }
 
     fn verify_checkpoint(
@@ -880,9 +916,14 @@ impl EventJournal for RedbEventJournal {
             let _guard = self.writer.lock().map_err(adapter_error)?;
             self.append_locked(events)?
         };
-        let count_due = persisted
-            .last()
-            .is_some_and(|event| event.global_sequence % CHECKPOINT_INTERVAL == 0);
+        let checkpoint_sequence = if persisted.is_empty() {
+            0
+        } else {
+            self.checkpoint_sequence()?
+        };
+        let count_due = persisted.last().is_some_and(|event| {
+            event.global_sequence.saturating_sub(checkpoint_sequence) >= CHECKPOINT_INTERVAL
+        });
         let age_due = self
             .last_checkpoint
             .lock()
@@ -1029,6 +1070,9 @@ impl EventJournal for RedbEventJournal {
             signature: hex::encode(signature),
             created_at: utc_now()?,
         };
+        self.keys.store_anchor(sequence, &hash)?;
+        #[cfg(test)]
+        crash_at_test_fault("after_anchor_before_checkpoint_commit");
         let bytes = serde_json::to_vec(&checkpoint).map_err(adapter_error)?;
         let write = self.database.begin_write().map_err(adapter_error)?;
         {
@@ -1038,7 +1082,6 @@ impl EventJournal for RedbEventJournal {
                 .map_err(adapter_error)?;
         }
         write.commit().map_err(adapter_error)?;
-        self.keys.store_anchor(sequence, &hash)?;
         *self.last_checkpoint.lock().map_err(adapter_error)? = Instant::now();
         Ok(Some(checkpoint))
     }
@@ -1192,7 +1235,9 @@ mod tests {
         RedbWriterLease, STREAM_VERSIONS, StaticKeyProvider, adapter_error,
     };
     use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
-    use colossus_ports::{EventJournal, ExternalWorkQueue, ProjectionStore, StoreError};
+    use colossus_ports::{
+        EventJournal, ExternalWorkQueue, KeyProvider, ProjectionStore, StoreError,
+    };
     use colossus_projection::{JournalExternalWorkQueue, ProjectionWorker, default_handlers};
     use colossus_testkit::{
         assert_external_work_queue_conformance, assert_journal_conformance,
@@ -1200,7 +1245,7 @@ mod tests {
     };
     use redb::{Database, ReadableDatabase};
     use serde_json::json;
-    use std::{sync::Arc, thread};
+    use std::{process::Command, sync::Arc, thread};
     use tempfile::tempdir;
 
     fn event(stream: &str, version: u64, value: u64) -> NewEvent {
@@ -1236,6 +1281,233 @@ mod tests {
             Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
         )
         .expect("open journal")
+    }
+
+    struct FileAnchorKeyProvider {
+        path: std::path::PathBuf,
+    }
+
+    impl KeyProvider for FileAnchorKeyProvider {
+        fn active_key(&self) -> Result<(String, [u8; 32]), StoreError> {
+            Ok(("test-key".into(), [7_u8; 32]))
+        }
+
+        fn key_by_id(&self, key_id: &str) -> Result<[u8; 32], StoreError> {
+            if key_id == "test-key" {
+                Ok([7_u8; 32])
+            } else {
+                Err(StoreError::KeyUnavailable(key_id.into()))
+            }
+        }
+
+        fn store_anchor(&self, sequence: u64, hash: &str) -> Result<(), StoreError> {
+            std::fs::write(
+                &self.path,
+                serde_json::to_vec(&json!({"sequence": sequence, "hash": hash}))
+                    .map_err(adapter_error)?,
+            )
+            .map_err(adapter_error)
+        }
+
+        fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError> {
+            if !self.path.exists() {
+                return Ok(None);
+            }
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&self.path).map_err(adapter_error)?)
+                    .map_err(adapter_error)?;
+            let sequence = value
+                .get("sequence")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| StoreError::Verification("test anchor sequence is absent".into()))?;
+            let hash = value
+                .get("hash")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| StoreError::Verification("test anchor hash is absent".into()))?;
+            Ok(Some((sequence, hash.into())))
+        }
+    }
+
+    fn journal_with_file_anchor(
+        path: &std::path::Path,
+        anchor_path: &std::path::Path,
+    ) -> RedbEventJournal {
+        RedbEventJournal::open(
+            path,
+            Arc::new(FileAnchorKeyProvider {
+                path: anchor_path.into(),
+            }),
+            Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
+        )
+        .expect("open journal with file anchor")
+    }
+
+    #[test]
+    fn crash_append_child() {
+        let Ok(path) = std::env::var("COLOSSUS_REDB_TEST_CRASH_PATH") else {
+            return;
+        };
+        let expected_version = std::env::var("COLOSSUS_REDB_TEST_EXPECTED_VERSION")
+            .unwrap_or_else(|_| "1".into())
+            .parse::<u64>()
+            .expect("expected stream version");
+        let journal = if let Ok(anchor_path) = std::env::var("COLOSSUS_REDB_TEST_ANCHOR_PATH") {
+            journal_with_file_anchor(
+                std::path::Path::new(&path),
+                std::path::Path::new(&anchor_path),
+            )
+        } else {
+            journal(std::path::Path::new(&path))
+        };
+        journal
+            .append(event(
+                "crash-stream",
+                expected_version,
+                expected_version.saturating_add(1),
+            ))
+            .expect("fault point must terminate before append returns");
+        panic!("configured journal crash point did not terminate the child process");
+    }
+
+    #[test]
+    fn process_crash_preserves_atomic_journal_head_stream_and_outbox() {
+        for (point, expected_after_crash) in [("before_commit", 1_u64), ("after_commit", 2_u64)] {
+            let directory = tempdir().expect("tempdir");
+            let path = directory.path().join(format!("{point}.redb"));
+            {
+                let journal = journal(&path);
+                journal
+                    .append(event("crash-stream", 0, 1))
+                    .expect("baseline append");
+            }
+
+            let child = Command::new(std::env::current_exe().expect("current test executable"))
+                .args(["--exact", "tests::crash_append_child", "--nocapture"])
+                .env("COLOSSUS_REDB_TEST_CRASH_PATH", &path)
+                .env("COLOSSUS_REDB_TEST_CRASH_POINT", point)
+                .status()
+                .expect("spawn crash child");
+            assert!(!child.success(), "crash child unexpectedly succeeded");
+
+            let journal = journal(&path);
+            let report = journal.verify().expect("verify recovered journal");
+            assert_eq!(report.event_count, expected_after_crash);
+            assert_eq!(report.last_sequence, expected_after_crash);
+            assert_eq!(
+                journal
+                    .read_stream("crash-stream")
+                    .expect("recovered stream")
+                    .len(),
+                usize::try_from(expected_after_crash).expect("event count")
+            );
+            assert_eq!(
+                journal
+                    .read_projection_work(1, 8)
+                    .expect("recovered outbox")
+                    .len(),
+                usize::try_from(expected_after_crash).expect("outbox count")
+            );
+            journal
+                .append(event(
+                    "crash-stream",
+                    expected_after_crash,
+                    expected_after_crash.saturating_add(1),
+                ))
+                .expect("append after crash recovery");
+            assert_eq!(
+                journal.verify().expect("post-recovery verify").event_count,
+                expected_after_crash.saturating_add(1)
+            );
+        }
+    }
+
+    #[test]
+    fn startup_repairs_checkpoint_interrupted_after_interval_commit() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("checkpoint-crash.redb");
+        {
+            let journal = journal(&path);
+            journal
+                .append_batch(
+                    (0_u64..99)
+                        .map(|version| event("crash-stream", version, version.saturating_add(1)))
+                        .collect(),
+                )
+                .expect("baseline batch");
+            assert!(
+                journal
+                    .verify()
+                    .expect("verify baseline")
+                    .checkpoint
+                    .is_none()
+            );
+        }
+
+        let child = Command::new(std::env::current_exe().expect("current test executable"))
+            .args(["--exact", "tests::crash_append_child", "--nocapture"])
+            .env("COLOSSUS_REDB_TEST_CRASH_PATH", &path)
+            .env("COLOSSUS_REDB_TEST_EXPECTED_VERSION", "99")
+            .env("COLOSSUS_REDB_TEST_CRASH_POINT", "after_commit")
+            .status()
+            .expect("spawn checkpoint crash child");
+        assert!(
+            !child.success(),
+            "checkpoint crash child unexpectedly succeeded"
+        );
+
+        let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+        let journal = journal_with_keys(&path, Arc::clone(&keys));
+        let report = journal.verify().expect("verify repaired checkpoint");
+        let checkpoint = report.checkpoint.expect("startup checkpoint repair");
+        assert_eq!(checkpoint.global_sequence, 100);
+        assert_eq!(
+            keys.load_anchor().expect("secure anchor"),
+            Some((100, checkpoint.record_hash))
+        );
+    }
+
+    #[test]
+    fn startup_repairs_checkpoint_after_crash_between_anchor_and_metadata() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("checkpoint-anchor-crash.redb");
+        let anchor_path = directory.path().join("anchor.json");
+        {
+            let journal = journal_with_file_anchor(&path, &anchor_path);
+            journal
+                .append_batch(
+                    (0_u64..99)
+                        .map(|version| event("crash-stream", version, version.saturating_add(1)))
+                        .collect(),
+                )
+                .expect("baseline batch");
+        }
+
+        let child = Command::new(std::env::current_exe().expect("current test executable"))
+            .args(["--exact", "tests::crash_append_child", "--nocapture"])
+            .env("COLOSSUS_REDB_TEST_CRASH_PATH", &path)
+            .env("COLOSSUS_REDB_TEST_ANCHOR_PATH", &anchor_path)
+            .env("COLOSSUS_REDB_TEST_EXPECTED_VERSION", "99")
+            .env(
+                "COLOSSUS_REDB_TEST_CRASH_POINT",
+                "after_anchor_before_checkpoint_commit",
+            )
+            .status()
+            .expect("spawn secure-anchor crash child");
+        assert!(
+            !child.success(),
+            "secure-anchor crash child unexpectedly succeeded"
+        );
+
+        let journal = journal_with_file_anchor(&path, &anchor_path);
+        let report = journal.verify().expect("verify repaired checkpoint");
+        let checkpoint = report.checkpoint.expect("startup checkpoint repair");
+        assert_eq!(checkpoint.global_sequence, 100);
+        assert_eq!(
+            FileAnchorKeyProvider { path: anchor_path }
+                .load_anchor()
+                .expect("secure anchor"),
+            Some((100, checkpoint.record_hash))
+        );
     }
 
     #[test]

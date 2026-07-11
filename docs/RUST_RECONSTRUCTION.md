@@ -40,6 +40,14 @@ obsolete Go launcher.
   position, bounded exponential retry state, explicit unknown-outcome recovery, and
   recursion suppression. The initial directory adapter writes strict ciphertext-free
   evidence through `audit.export.write`; CLI and worker expose status, drain, and reset.
+- Deterministic process-termination fault injection immediately before and after journal
+  commit proves uncommitted rollback and atomic durable journal/head/stream/outbox state.
+  A separate post-export/pre-ack crash proves deterministic evidence replay without
+  duplicate files before the consumer advances. Verified startup repairs a periodic
+  checkpoint interrupted after its event commit, and batches cannot skip the 100-event
+  signing interval. Secure anchors are persisted before checkpoint metadata, with a
+  process-kill test proving a missing signed checkpoint is recreated from the verified
+  anchored head.
 - Startup conversion of abandoned `effect.started` records to
   `effect.outcome_unknown`, with no automatic retry.
 - One effect gateway with a hard safety kernel, built-in deny-by-default policy, strict

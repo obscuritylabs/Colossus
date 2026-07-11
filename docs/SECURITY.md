@@ -24,6 +24,12 @@ consistent tail truncation. Startup verification failure enables read-only recov
 blocks effects. A missing terminal event after `effect.started` is recorded as
 `effect.outcome_unknown` and never automatically retried.
 
+Checkpoint creation persists the independently protected head anchor before redb
+checkpoint metadata. If the process terminates between those writes, verified startup
+recreates the signed checkpoint from the anchored journal head. It also repairs a due
+100-event checkpoint when termination occurs immediately after the event transaction;
+an invalid or mismatched anchor still enters read-only recovery.
+
 Configured external audit export is itself an effect; it never receives a trusted-service
 bypass. The exporter discloses only ciphertext-free `AuditEvidence` envelope metadata and
 hashes. Every directory write requires `audit.export.write`, a matching sandbox write

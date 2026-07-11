@@ -675,6 +675,7 @@ version = "0.6.0-alpha.1"
 dependencies = [
  "async-trait",
  "colossus-contracts",
+ "colossus-journal-redb",
  "colossus-policy",
  "colossus-ports",
  "colossus-projection",
