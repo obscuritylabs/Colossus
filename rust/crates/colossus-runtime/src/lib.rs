@@ -6,10 +6,11 @@ use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
 use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
     Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, DecisionOutcome,
-    EffectRequest, EventClassification, ExecutionContext, FilesystemGrant, NewEvent,
-    PreparedContext, ProjectionStatus, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, SessionMessage,
-    SessionSummary, ToolCall, ToolResult, ToolSpec,
+    DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
+    ExecutionContext, FilesystemGrant, KeyDecision, NewEvent, PreparedContext, ProjectionStatus,
+    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
+    QuarantinedEffectResult, SessionMessage, SessionSummary, TaskRecord, TaskStatus, ToolCall,
+    ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -25,9 +26,7 @@ use colossus_ports::{
     ModelProviderError, PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError,
     ToolError, ToolExecutor, ToolRegistry, WorkRepository, WorkflowRepository,
 };
-use colossus_projection::{
-    ProjectedWorkRepository, ProjectionRunReport, ProjectionWorker, default_handlers,
-};
+use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
     ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind, ProviderProfile,
     ProviderRegistry,
@@ -38,6 +37,7 @@ use colossus_sandbox::{
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_tools::{StaticToolRegistry, ToolCatalogError};
+use colossus_work::{EventSourcedWorkRepository, WorkService};
 use colossus_workflow::{
     EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,
     WorkflowError, WorkflowService, validate_definition,
@@ -632,6 +632,83 @@ fn read_optional(path: Option<&PathBuf>) -> Result<Option<Vec<u8>>, RuntimeError
     path.map(fs::read).transpose().map_err(Into::into)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkMutation {
+    TaskCreate {
+        session_id: String,
+        title: String,
+        description: String,
+        status: TaskStatus,
+    },
+    TaskUpdate {
+        id: String,
+        title: Option<String>,
+        description: Option<String>,
+        status: Option<TaskStatus>,
+    },
+    DecisionCreate {
+        session_id: String,
+        title: String,
+        decision: String,
+        source: DecisionSource,
+        priority: DecisionPriority,
+        intent: String,
+        applies_when: String,
+        rationale: String,
+        source_excerpt: String,
+    },
+    DecisionUpdate {
+        id: String,
+        title: Option<String>,
+        decision: Option<String>,
+        priority: Option<DecisionPriority>,
+        intent: Option<String>,
+        applies_when: Option<String>,
+        rationale: Option<String>,
+        source_excerpt: Option<String>,
+    },
+    DecisionArchive {
+        id: String,
+    },
+    DecisionSupersede {
+        id: String,
+        title: String,
+        decision: String,
+        source: DecisionSource,
+        priority: DecisionPriority,
+        intent: String,
+        applies_when: String,
+        rationale: String,
+        source_excerpt: String,
+    },
+}
+
+impl WorkMutation {
+    fn action(&self) -> &'static str {
+        match self {
+            Self::TaskCreate { .. } => "task.create",
+            Self::TaskUpdate { .. } => "task.update",
+            Self::DecisionCreate { .. } => "decision.create",
+            Self::DecisionUpdate { .. } => "decision.update",
+            Self::DecisionArchive { .. } => "decision.archive",
+            Self::DecisionSupersede { .. } => "decision.supersede",
+        }
+    }
+
+    fn resource(&self) -> &str {
+        match self {
+            Self::TaskCreate { session_id, .. } | Self::DecisionCreate { session_id, .. } => {
+                session_id
+            }
+            Self::TaskUpdate { id, .. }
+            | Self::DecisionUpdate { id, .. }
+            | Self::DecisionArchive { id }
+            | Self::DecisionSupersede { id, .. } => id,
+        }
+    }
+}
+
 /// Fully composed auditable runtime.
 pub struct Runtime {
     writer_lease: RedbWriterLease,
@@ -641,6 +718,7 @@ pub struct Runtime {
     sessions: Arc<dyn SessionRepository>,
     context: Arc<ContextService>,
     work: Arc<dyn WorkRepository>,
+    work_executor: Arc<WorkMutationExecutor>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
@@ -702,7 +780,8 @@ impl Runtime {
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
-            Arc::new(ProjectedWorkRepository::new(Arc::clone(&projection_store)));
+            Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
+        let work_service = Arc::new(WorkService::new(Arc::clone(&work), Arc::clone(&sessions)));
         if !journal.is_recovery_mode() {
             recover_unknown_effects(journal.as_ref())?;
         }
@@ -835,9 +914,18 @@ impl Runtime {
                 "filesystem.write".to_owned(),
                 "process.spawn".to_owned(),
                 "network.http".to_owned(),
+                "task.create".to_owned(),
+                "task.update".to_owned(),
+                "decision.create".to_owned(),
+                "decision.update".to_owned(),
+                "decision.archive".to_owned(),
+                "decision.supersede".to_owned(),
             ]),
             permit_key,
         ));
+        let work_executor = Arc::new(WorkMutationExecutor {
+            service: Arc::clone(&work_service),
+        });
         let tool_registry: Arc<dyn ToolRegistry> =
             Arc::new(StaticToolRegistry::builtins(&config.agent.tools)?);
         let model_provider: Arc<dyn ModelProvider> = Arc::new(GatewayModelProvider {
@@ -851,12 +939,15 @@ impl Runtime {
         });
         let context_repository: Arc<dyn ContextRepository> =
             Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
-        let context = Arc::new(ContextService::new(
-            config.context.clone(),
-            Arc::clone(&sessions),
-            context_repository,
-            Arc::clone(&model_provider),
-        )?);
+        let context = Arc::new(
+            ContextService::new(
+                config.context.clone(),
+                Arc::clone(&sessions),
+                context_repository,
+                Arc::clone(&model_provider),
+            )?
+            .with_work_repository(Arc::clone(&work)),
+        );
         let agent = Arc::new(
             AgentService::new(
                 Arc::clone(&journal),
@@ -889,6 +980,7 @@ impl Runtime {
             sessions,
             context,
             work,
+            work_executor,
             policy,
             gateway,
             providers,
@@ -1002,6 +1094,216 @@ impl Runtime {
         Arc::clone(&self.work)
     }
 
+    async fn execute_work_mutation(&self, mutation: WorkMutation) -> Result<Value, RuntimeError> {
+        let action = mutation.action();
+        let resource = mutation.resource().to_owned();
+        let session_id = match &mutation {
+            WorkMutation::TaskCreate { session_id, .. }
+            | WorkMutation::DecisionCreate { session_id, .. } => session_id.clone(),
+            WorkMutation::TaskUpdate { id, .. } => {
+                self.work
+                    .get_task(id)?
+                    .ok_or_else(|| StoreError::NotFound(format!("task {id}")))?
+                    .session_id
+            }
+            WorkMutation::DecisionUpdate { id, .. }
+            | WorkMutation::DecisionArchive { id }
+            | WorkMutation::DecisionSupersede { id, .. } => {
+                self.work
+                    .get_decision(id)?
+                    .ok_or_else(|| StoreError::NotFound(format!("decision {id}")))?
+                    .session_id
+            }
+        };
+        let mut request = effect_request(
+            terminal_actor(),
+            action,
+            resource,
+            serde_json::to_value(&mutation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![action.into()];
+        request.context.session_id = Some(session_id);
+        let result = self
+            .gateway
+            .execute(request, self.work_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Create a canonical session-scoped task.
+    pub async fn create_task(
+        &self,
+        session_id: &str,
+        title: &str,
+        description: &str,
+        status: TaskStatus,
+    ) -> Result<TaskRecord, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_mutation(WorkMutation::TaskCreate {
+                session_id: session_id.into(),
+                title: title.into(),
+                description: description.into(),
+                status,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Update mutable task fields through a new canonical event.
+    pub async fn update_task(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        status: Option<TaskStatus>,
+    ) -> Result<TaskRecord, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_mutation(WorkMutation::TaskUpdate {
+                id: id.into(),
+                title: title.map(str::to_owned),
+                description: description.map(str::to_owned),
+                status,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Reconstruct one canonical task.
+    pub fn get_task(&self, id: &str) -> Result<Option<TaskRecord>, RuntimeError> {
+        self.work.get_task(id).map_err(Into::into)
+    }
+
+    /// List bounded canonical tasks.
+    pub fn list_tasks(
+        &self,
+        session_id: Option<&str>,
+        status: Option<TaskStatus>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, RuntimeError> {
+        self.work
+            .list_tasks(session_id, status, limit)
+            .map_err(Into::into)
+    }
+
+    /// Create a canonical active key decision.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_decision(
+        &self,
+        session_id: &str,
+        title: &str,
+        decision: &str,
+        priority: DecisionPriority,
+        intent: &str,
+        applies_when: &str,
+        rationale: &str,
+        source_excerpt: &str,
+    ) -> Result<KeyDecision, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_mutation(WorkMutation::DecisionCreate {
+                session_id: session_id.into(),
+                title: title.into(),
+                decision: decision.into(),
+                source: DecisionSource::User,
+                priority,
+                intent: intent.into(),
+                applies_when: applies_when.into(),
+                rationale: rationale.into(),
+                source_excerpt: source_excerpt.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Update mutable key-decision content through a new canonical event.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_decision(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        decision: Option<&str>,
+        priority: Option<DecisionPriority>,
+        intent: Option<&str>,
+        applies_when: Option<&str>,
+        rationale: Option<&str>,
+        source_excerpt: Option<&str>,
+    ) -> Result<KeyDecision, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_mutation(WorkMutation::DecisionUpdate {
+                id: id.into(),
+                title: title.map(str::to_owned),
+                decision: decision.map(str::to_owned),
+                priority,
+                intent: intent.map(str::to_owned),
+                applies_when: applies_when.map(str::to_owned),
+                rationale: rationale.map(str::to_owned),
+                source_excerpt: source_excerpt.map(str::to_owned),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Reconstruct one canonical key decision.
+    pub fn get_decision(&self, id: &str) -> Result<Option<KeyDecision>, RuntimeError> {
+        self.work.get_decision(id).map_err(Into::into)
+    }
+
+    /// List bounded canonical key decisions.
+    pub fn list_decisions(
+        &self,
+        session_id: Option<&str>,
+        status: Option<DecisionStatus>,
+        limit: usize,
+    ) -> Result<Vec<KeyDecision>, RuntimeError> {
+        self.work
+            .list_decisions(session_id, status, limit)
+            .map_err(Into::into)
+    }
+
+    /// Archive one active decision while retaining its complete history.
+    pub async fn archive_decision(&self, id: &str) -> Result<KeyDecision, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_mutation(WorkMutation::DecisionArchive { id: id.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Atomically replace one active decision and preserve lineage.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn supersede_decision(
+        &self,
+        id: &str,
+        title: &str,
+        decision: &str,
+        priority: DecisionPriority,
+        intent: &str,
+        applies_when: &str,
+        rationale: &str,
+        source_excerpt: &str,
+    ) -> Result<(KeyDecision, KeyDecision), RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_mutation(WorkMutation::DecisionSupersede {
+                id: id.into(),
+                title: title.into(),
+                decision: decision.into(),
+                source: DecisionSource::User,
+                priority,
+                intent: intent.into(),
+                applies_when: applies_when.into(),
+                rationale: rationale.into(),
+                source_excerpt: source_excerpt.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
     /// Projection position, lag, and readiness for every built-in reducer.
     pub fn projection_status(&self) -> Result<Vec<ProjectionStatus>, RuntimeError> {
         self.projections.status().map_err(Into::into)
@@ -1042,7 +1344,8 @@ impl Runtime {
             },
             "repository_adapters": {
                 "sessions": "event-journal:sessions-v1+messages-v1",
-                "work": "redb-projection:work-v1",
+                "work": "event-journal:tasks-v1+decisions-v1",
+                "work_projection": "redb-projection:work-v1",
                 "memory": "event-journal+redb-projection:memory-v1",
                 "workflows": "event-journal+redb-projection:workflows-v1",
             }
@@ -1581,6 +1884,13 @@ fn model_actor(call: &ToolCall) -> Actor {
     }
 }
 
+fn terminal_actor() -> Actor {
+    Actor {
+        actor_type: ActorType::User,
+        id: "terminal-user".into(),
+    }
+}
+
 fn tool_gateway_error(error: GatewayError) -> ToolError {
     match error {
         GatewayError::Denied(message) | GatewayError::Approval(message) => {
@@ -1589,6 +1899,155 @@ fn tool_gateway_error(error: GatewayError) -> ToolError {
         GatewayError::OutcomeUnknown(message) => ToolError::OutcomeUnknown(message),
         error => ToolError::Failed(error.to_string()),
     }
+}
+
+struct WorkMutationExecutor {
+    service: Arc<WorkService>,
+}
+
+#[async_trait]
+impl EffectExecutor for WorkMutationExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let mutation: WorkMutation = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if request.action != mutation.action() {
+            return Err(ExecutionError::Failed(
+                "work mutation action does not match its validated content".into(),
+            ));
+        }
+        let actor = request.actor.clone();
+        let value = match mutation {
+            WorkMutation::TaskCreate {
+                session_id,
+                title,
+                description,
+                status,
+            } => work_result(self.service.create_task(
+                &session_id,
+                &title,
+                &description,
+                status,
+                actor,
+            )),
+            WorkMutation::TaskUpdate {
+                id,
+                title,
+                description,
+                status,
+            } => work_result(self.service.update_task(
+                &id,
+                title.as_deref(),
+                description.as_deref(),
+                status,
+                actor,
+            )),
+            WorkMutation::DecisionCreate {
+                session_id,
+                title,
+                decision,
+                source,
+                priority,
+                intent,
+                applies_when,
+                rationale,
+                source_excerpt,
+            } => {
+                validate_decision_source(&actor, source)?;
+                work_result(self.service.create_decision(
+                    &session_id,
+                    &title,
+                    &decision,
+                    source,
+                    priority,
+                    &intent,
+                    &applies_when,
+                    &rationale,
+                    &source_excerpt,
+                    None,
+                    None,
+                    None,
+                    actor,
+                ))
+            }
+            WorkMutation::DecisionUpdate {
+                id,
+                title,
+                decision,
+                priority,
+                intent,
+                applies_when,
+                rationale,
+                source_excerpt,
+            } => work_result(self.service.update_decision(
+                &id,
+                title.as_deref(),
+                decision.as_deref(),
+                priority,
+                intent.as_deref(),
+                applies_when.as_deref(),
+                rationale.as_deref(),
+                source_excerpt.as_deref(),
+                actor,
+            )),
+            WorkMutation::DecisionArchive { id } => {
+                work_result(self.service.archive_decision(&id, actor))
+            }
+            WorkMutation::DecisionSupersede {
+                id,
+                title,
+                decision,
+                source,
+                priority,
+                intent,
+                applies_when,
+                rationale,
+                source_excerpt,
+            } => {
+                validate_decision_source(&actor, source)?;
+                work_result(self.service.supersede_decision(
+                    &id,
+                    &title,
+                    &decision,
+                    source,
+                    priority,
+                    &intent,
+                    &applies_when,
+                    &rationale,
+                    &source_excerpt,
+                    actor,
+                ))
+            }
+        }?;
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&value)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
+    }
+}
+
+fn work_result<T: Serialize>(result: Result<T, StoreError>) -> Result<Value, ExecutionError> {
+    serde_json::to_value(result.map_err(|error| ExecutionError::Failed(error.to_string()))?)
+        .map_err(|error| ExecutionError::Failed(error.to_string()))
+}
+
+fn validate_decision_source(actor: &Actor, source: DecisionSource) -> Result<(), ExecutionError> {
+    let expected = if actor.actor_type == ActorType::User {
+        DecisionSource::User
+    } else {
+        DecisionSource::Agent
+    };
+    if source != expected {
+        return Err(ExecutionError::Failed(
+            "decision source does not match immutable actor provenance".into(),
+        ));
+    }
+    Ok(())
 }
 
 struct EchoExecutor;

@@ -41,9 +41,9 @@ storage:
     anchor_path: {anchor}
 policy:
   kind: built_in
-  allow_actions: []
+  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede]
   approval_actions: []
-  require_post_effect: false
+  require_post_effect: true
 workflows:
   repository: {workflows}
   user: {workflows}
@@ -189,7 +189,147 @@ sandbox:
         serde_json::from_slice(&messages_after.stdout).expect("messages after compact JSON");
     assert_eq!(messages_after.as_array().map(Vec::len), Some(6));
 
-    let audit = run(binary, &config, &["audit", "show", "--limit", "20"]);
+    let task = run(
+        binary,
+        &config,
+        &[
+            "tasks",
+            "create",
+            &session_id,
+            "Verify Rust parity",
+            "--description",
+            "Run the full workspace gates",
+        ],
+    );
+    assert!(
+        task.status.success(),
+        "{}",
+        String::from_utf8_lossy(&task.stderr)
+    );
+    let task: Value = serde_json::from_slice(&task.stdout).expect("task JSON");
+    let task_id = task["id"].as_str().expect("task id").to_owned();
+    let updated_task = run(
+        binary,
+        &config,
+        &["tasks", "update", &task_id, "--status", "completed"],
+    );
+    assert!(updated_task.status.success());
+    let updated_task: Value =
+        serde_json::from_slice(&updated_task.stdout).expect("updated task JSON");
+    assert_eq!(updated_task["status"], "completed");
+    let tasks = run(
+        binary,
+        &config,
+        &[
+            "tasks",
+            "list",
+            "--session",
+            &session_id,
+            "--status",
+            "completed",
+        ],
+    );
+    let tasks: Value = serde_json::from_slice(&tasks.stdout).expect("tasks JSON");
+    assert_eq!(tasks[0]["id"], task_id);
+
+    let denied_config = directory.path().join("denied-config.yaml");
+    fs::write(
+        &denied_config,
+        fs::read_to_string(&config)
+            .expect("read config")
+            .replace(
+                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede]",
+                "allow_actions: []",
+            ),
+    )
+    .expect("denied config");
+    let denied_task = run(
+        binary,
+        &denied_config,
+        &["tasks", "create", &session_id, "Must not persist"],
+    );
+    assert!(!denied_task.status.success());
+    let tasks_after_denial = run(
+        binary,
+        &config,
+        &["tasks", "list", "--session", &session_id],
+    );
+    let tasks_after_denial: Value =
+        serde_json::from_slice(&tasks_after_denial.stdout).expect("tasks after denial JSON");
+    assert_eq!(tasks_after_denial.as_array().map(Vec::len), Some(1));
+
+    let decision = run(
+        binary,
+        &config,
+        &[
+            "decisions",
+            "create",
+            &session_id,
+            "Audit boundary",
+            "Every durable mutation appends an immutable event.",
+            "--priority",
+            "critical",
+            "--intent",
+            "Preserve evidence",
+            "--applies-when",
+            "Changing canonical state",
+        ],
+    );
+    assert!(
+        decision.status.success(),
+        "{}",
+        String::from_utf8_lossy(&decision.stderr)
+    );
+    let decision: Value = serde_json::from_slice(&decision.stdout).expect("decision JSON");
+    let decision_id = decision["id"].as_str().expect("decision id").to_owned();
+    let with_decision = run(
+        binary,
+        &config,
+        &["run", "decision-aware turn", "--session", &session_id],
+    );
+    assert!(with_decision.status.success());
+    let with_decision: Value =
+        serde_json::from_slice(&with_decision.stdout).expect("decision run JSON");
+    assert_eq!(with_decision["output"], "decision-aware turn");
+
+    let superseded = run(
+        binary,
+        &config,
+        &[
+            "decisions",
+            "supersede",
+            &decision_id,
+            "Audit and policy boundary",
+            "Every durable mutation and external effect uses its canonical boundary.",
+            "--priority",
+            "critical",
+        ],
+    );
+    assert!(superseded.status.success());
+    let superseded: Value = serde_json::from_slice(&superseded.stdout).expect("superseded JSON");
+    assert_eq!(superseded[0]["status"], "superseded");
+    assert_eq!(superseded[1]["supersedes"], decision_id);
+    let replacement_id = superseded[1]["id"]
+        .as_str()
+        .expect("replacement id")
+        .to_owned();
+    let active = run(
+        binary,
+        &config,
+        &[
+            "decisions",
+            "list",
+            "--session",
+            &session_id,
+            "--status",
+            "active",
+        ],
+    );
+    let active: Value = serde_json::from_slice(&active.stdout).expect("active decisions JSON");
+    assert_eq!(active.as_array().map(Vec::len), Some(1));
+    assert_eq!(active[0]["id"], replacement_id);
+
+    let audit = run(binary, &config, &["audit", "show", "--limit", "200"]);
     assert!(audit.status.success());
     let events: Vec<Value> = serde_json::from_slice(&audit.stdout).expect("audit JSON");
     let event_types = events
@@ -200,4 +340,8 @@ sandbox:
     assert!(event_types.contains(&"context.prepared.v1"));
     assert!(event_types.contains(&"effect.requested.v1"));
     assert!(event_types.contains(&"final.output.v1"));
+    assert!(event_types.contains(&"task.created.v1"));
+    assert!(event_types.contains(&"task.updated.v1"));
+    assert!(event_types.contains(&"decision.created.v1"));
+    assert!(event_types.contains(&"decision.superseded.v1"));
 }

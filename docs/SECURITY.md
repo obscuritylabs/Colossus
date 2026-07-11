@@ -170,6 +170,16 @@ model effects. Provider failure produces a deterministic local summary; it never
 silent history deletion or unbounded request truncation. Restoring an older snapshot is
 auditable and changes only future provider-visible composition.
 
+Rust tasks and key decisions are encrypted canonical journal streams. Update operations
+cannot change their session, creation identity, or decision provenance. Archival never
+deletes a decision, and supersession appends both the terminal old state and linked new
+active record atomically. All mutations cross the effect gateway and the private work
+adapter requires a matching one-use permit; policy denial leaves canonical streams
+unchanged. Decision source is derived from immutable actor provenance rather than a
+caller-selectable label. Only active same-session decisions enter model context; their
+binding block is bounded, token-accounted, and placed ahead of summaries so compaction
+cannot silently erase durable commitments.
+
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
 are validated against the agent allowlist and active tool catalog before provider calls;
 `required_tools` never auto-approves a tool. Skill audit records include names, versions,

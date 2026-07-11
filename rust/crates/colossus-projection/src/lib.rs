@@ -3,9 +3,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use colossus_contracts::{EventEnvelope, ProjectionBatch, ProjectionMutation, ProjectionStatus};
-use colossus_ports::{
-    AggregateRepository, EventJournal, ProjectionStore, StoreError, WorkRepository,
-};
+use colossus_ports::{AggregateRepository, EventJournal, ProjectionStore, StoreError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
@@ -308,6 +306,16 @@ impl ProjectionHandler for WorkProjection {
         {
             return Ok(Vec::new());
         }
+        if let Some(record) = payload.get("record") {
+            let mut record = object(record.clone());
+            record.insert("stream_id".into(), Value::String(event.stream_id.clone()));
+            record.insert("stream_version".into(), json!(event.stream_version));
+            record.insert(
+                "last_event_type".into(),
+                Value::String(event.event_type.clone()),
+            );
+            return Ok(upsert(&event.stream_id, Value::Object(record)));
+        }
         Ok(upsert(
             &event.stream_id,
             merge_event(store, self.name(), &event.stream_id, event, payload)?,
@@ -501,8 +509,6 @@ impl AggregateRepository for ProjectedWorkRepository {
     }
 }
 
-impl WorkRepository for ProjectedWorkRepository {}
-
 /// Read-only projected view used after canonical memory authorization.
 pub struct ProjectedMemoryReader {
     store: Arc<dyn ProjectionStore>,
@@ -695,9 +701,33 @@ mod tests {
                 "task:one",
                 0,
                 "task.created.v1",
-                json!({"title": "Task"}),
+                json!({"record": {
+                    "id": "one",
+                    "session_id": "session-1",
+                    "title": "Task",
+                    "description": "",
+                    "status": "pending",
+                    "created_at": "2026-07-09T00:00:00Z",
+                    "updated_at": "2026-07-09T00:00:00Z"
+                }}),
             ))
             .expect("task");
+        journal
+            .append(event(
+                "task:one",
+                1,
+                "task.updated.v1",
+                json!({"record": {
+                    "id": "one",
+                    "session_id": "session-1",
+                    "title": "Task",
+                    "description": "done",
+                    "status": "completed",
+                    "created_at": "2026-07-09T00:00:00Z",
+                    "updated_at": "2026-07-10T00:00:00Z"
+                }}),
+            ))
+            .expect("task updated");
         journal
             .append(event(
                 "memory:one",
@@ -745,6 +775,13 @@ mod tests {
                 .expect("work")
                 .expect("task")["title"],
             json!("Task")
+        );
+        assert_eq!(
+            store
+                .get("work-v1", "task:one")
+                .expect("work")
+                .expect("task")["status"],
+            json!("completed")
         );
         assert_eq!(
             store

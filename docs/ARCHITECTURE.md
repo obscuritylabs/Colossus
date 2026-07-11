@@ -51,6 +51,16 @@ through the normal provider gateway when available; invalid, failed, or echo sum
 fall back to deterministic extraction. Every turn records `context.prepared.v1` on its
 run stream.
 
+`colossus-work` owns typed task and key-decision lifecycles. Each task and decision has
+its own optimistic journal stream; updates append complete validated next-state records,
+and decision supersession atomically closes the old stream state while creating its
+linked replacement. Mutation adapters are private to the runtime and receive one-use
+permits only after `task.*` or `decision.*` authorization. The `work-v1` projection is
+disposable discovery state, not the
+write model. Active decisions are loaded from the canonical repository and injected as
+bounded binding system context before snapshots on every provider turn; archived and
+superseded decisions remain auditable but are not injected.
+
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
 subprocess specifications are authenticated to a one-shot helper, which clears the
 environment and applies the selected native or OCI isolation profile before spawning.

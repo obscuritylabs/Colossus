@@ -82,6 +82,11 @@ obsolete Go launcher.
   and restoration events, optional policy-bound `context_summarizer` calls,
   deterministic fallback, and `context.prepared.v1` audit records. CLI and REPL expose
   status, list, compact, and restore operations without deleting canonical messages.
+- Typed event-sourced tasks and key decisions with canonical reconstruction, bounded
+  session/status queries, immutable identity/provenance, archival, atomic supersession,
+  restart-safe CLI operations, and disposable `work-v1` projections. Active decisions
+  are injected as binding context ahead of snapshots; archived and superseded records
+  remain auditable without steering future turns.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
 
@@ -101,6 +106,8 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- t
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sessions list
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- context status SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- context compact SESSION_ID
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tasks list --session SESSION_ID
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- decisions list --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
@@ -136,8 +143,8 @@ cutover. The following planned work remains:
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
 - Incremental provider transport streaming, remaining core filesystem/search/write/git/
-  process tools, usage accounting, and context injection from durable decisions and
-  memories. The durable context budget/snapshot boundary, durable
+  process tools, usage accounting, plans, and context injection from durable memories.
+  The durable task/decision and context budget/snapshot boundaries, durable
   multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
   permit-bound file reads, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The

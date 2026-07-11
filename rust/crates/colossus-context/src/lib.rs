@@ -4,13 +4,13 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ActorType, ContextSnapshot, ContextStatus, EventClassification, ExecutionContext,
-    ModelMessage, ModelMessageRole, ModelRequest, ModelToolDefinition, NewEvent, PreparedContext,
-    ProviderEvent,
+    Actor, ActorType, ContextSnapshot, ContextStatus, DecisionPriority, DecisionStatus,
+    EventClassification, ExecutionContext, KeyDecision, ModelMessage, ModelMessageRole,
+    ModelRequest, ModelToolDefinition, NewEvent, PreparedContext, ProviderEvent,
 };
 use colossus_ports::{
     ContextError, ContextPreparer, ContextRepository, EventJournal, ModelProvider,
-    SessionRepository, StoreError,
+    SessionRepository, StoreError, WorkRepository,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
@@ -20,6 +20,7 @@ const SNAPSHOT_CREATED: &str = "context.snapshot.created.v1";
 const SNAPSHOT_ACTIVATED: &str = "context.snapshot.activated.v1";
 const MAX_SUMMARY_BYTES: usize = 16 * 1024;
 const MAX_SUMMARY_PROMPT_BYTES: usize = 64 * 1024;
+const MAX_DECISION_CONTEXT_BYTES: usize = 32 * 1024;
 const SUMMARY_INSTRUCTIONS: &str = "Summarize this Colossus session history for future agent context. Preserve user requirements, decisions, files touched, notable tool results, open risks, and next actions. Be concise and do not invent facts.";
 
 /// Strict context-window and compaction settings.
@@ -244,6 +245,7 @@ pub struct ContextService {
     sessions: Arc<dyn SessionRepository>,
     snapshots: Arc<dyn ContextRepository>,
     provider: Arc<dyn ModelProvider>,
+    work: Option<Arc<dyn WorkRepository>>,
 }
 
 impl ContextService {
@@ -260,7 +262,14 @@ impl ContextService {
             sessions,
             snapshots,
             provider,
+            work: None,
         })
+    }
+
+    /// Attach durable key decisions as binding context ahead of snapshots.
+    pub fn with_work_repository(mut self, work: Arc<dyn WorkRepository>) -> Self {
+        self.work = Some(work);
+        self
     }
 
     /// Return budget status for the active canonical session history.
@@ -270,12 +279,15 @@ impl ContextService {
             .iter()
             .map(|record| record.message.clone())
             .collect::<Vec<_>>();
-        let raw = estimate_tokens("", &messages, &[]);
+        let binding = self.binding_message(session_id)?;
+        let original_messages = prepend_binding(binding.clone(), messages.clone());
+        let raw = estimate_tokens("", &original_messages, &[]);
         let active = self.snapshots.active(session_id)?;
         let prepared = active.as_ref().map_or_else(
             || messages.clone(),
             |snapshot| apply_snapshot(snapshot, &messages),
         );
+        let prepared = prepend_binding(binding, prepared);
         Ok(ContextStatus {
             session_id: session_id.into(),
             message_count: records.len().try_into().unwrap_or(u64::MAX),
@@ -364,6 +376,39 @@ impl ContextService {
             .map_err(Into::into)
     }
 
+    fn binding_message(&self, session_id: &str) -> Result<Option<ModelMessage>, ContextError> {
+        let Some(work) = &self.work else {
+            return Ok(None);
+        };
+        let mut decisions =
+            work.list_decisions(Some(session_id), Some(DecisionStatus::Active), 100)?;
+        decisions.sort_by_key(|decision| match decision.priority {
+            DecisionPriority::Critical => 0,
+            DecisionPriority::High => 1,
+            DecisionPriority::Normal => 2,
+        });
+        if decisions.is_empty() {
+            return Ok(None);
+        }
+        let mut content = String::from(
+            "[Binding active key decisions]\nApply these durable commitments unless the current user explicitly supersedes them. They are stronger than summaries and memories.\n",
+        );
+        for decision in decisions {
+            let item = decision_line(&decision);
+            if content.len().saturating_add(item.len()) > MAX_DECISION_CONTEXT_BYTES {
+                content.push_str("- Additional active decisions omitted from this bounded context block; inspect canonical decision state before changing established commitments.\n");
+                break;
+            }
+            content.push_str(&item);
+        }
+        Ok(Some(ModelMessage {
+            role: ModelMessageRole::System,
+            content,
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+    }
+
     async fn model_summary(
         &self,
         source: &[ModelMessage],
@@ -434,7 +479,9 @@ impl ContextPreparer for ContextService {
         context: ExecutionContext,
         force: bool,
     ) -> Result<PreparedContext, ContextError> {
-        let original = estimate_tokens(instructions, &messages, tools);
+        let binding = self.binding_message(session_id)?;
+        let original_messages = prepend_binding(binding.clone(), messages.clone());
+        let original = estimate_tokens(instructions, &original_messages, tools);
         let threshold = self.config.threshold_tokens();
         let target = self.config.target_tokens();
         let active = self.snapshots.active(session_id)?;
@@ -442,6 +489,7 @@ impl ContextPreparer for ContextService {
             || messages.clone(),
             |snapshot| apply_snapshot(snapshot, &messages),
         );
+        let active_messages = prepend_binding(binding.clone(), active_messages);
         let active_estimate = estimate_tokens(instructions, &active_messages, tools);
         let should_create = force
             || (self.config.auto_compaction
@@ -477,7 +525,7 @@ impl ContextPreparer for ContextService {
                 )));
             }
             return Ok(PreparedContext {
-                messages,
+                messages: original_messages,
                 token_estimate: original,
                 original_token_estimate: original,
                 context_window_tokens: self.config.context_window_tokens,
@@ -489,7 +537,8 @@ impl ContextPreparer for ContextService {
                 strategy: None,
             });
         }
-        let preserved_estimate = estimate_tokens(instructions, &messages[source_end..], tools);
+        let preserved = prepend_binding(binding.clone(), messages[source_end..].to_vec());
+        let preserved_estimate = estimate_tokens(instructions, &preserved, tools);
         if preserved_estimate.saturating_add(64) > self.config.context_window_tokens {
             return Err(ContextError::Configuration(format!(
                 "preserved recent messages require at least {preserved_estimate} estimated tokens plus snapshot metadata, exceeding the {} token context window",
@@ -500,6 +549,7 @@ impl ContextPreparer for ContextService {
             .create_snapshot(session_id, &messages, source_end, context)
             .await?;
         let mut prepared = apply_snapshot(&snapshot, &messages);
+        prepared = prepend_binding(binding, prepared);
         bound_summary_to_target(instructions, &mut prepared, tools, target);
         let estimate = estimate_tokens(instructions, &prepared, tools);
         if estimate > self.config.context_window_tokens {
@@ -641,6 +691,43 @@ fn apply_snapshot(snapshot: &ContextSnapshot, messages: &[ModelMessage]) -> Vec<
     prepared
 }
 
+fn prepend_binding(
+    binding: Option<ModelMessage>,
+    mut messages: Vec<ModelMessage>,
+) -> Vec<ModelMessage> {
+    if let Some(binding) = binding {
+        messages.insert(0, binding);
+    }
+    messages
+}
+
+fn decision_line(decision: &KeyDecision) -> String {
+    let priority = match decision.priority {
+        DecisionPriority::Critical => "CRITICAL",
+        DecisionPriority::High => "HIGH",
+        DecisionPriority::Normal => "NORMAL",
+    };
+    let mut line = format!(
+        "- {priority} {} ({}): {}\n",
+        decision.id,
+        truncate_chars(&decision.title, 200),
+        truncate_chars(&decision.decision, 1_000)
+    );
+    if !decision.applies_when.trim().is_empty() {
+        line.push_str(&format!(
+            "  applies_when: {}\n",
+            truncate_chars(&decision.applies_when, 500)
+        ));
+    }
+    if !decision.intent.trim().is_empty() {
+        line.push_str(&format!(
+            "  intent: {}\n",
+            truncate_chars(&decision.intent, 500)
+        ));
+    }
+    line
+}
+
 fn estimate_tokens(
     instructions: &str,
     messages: &[ModelMessage],
@@ -669,12 +756,25 @@ fn bound_summary_to_target(
     if estimate_tokens(instructions, prepared, tools) <= target || prepared.is_empty() {
         return;
     }
-    let without_summary = estimate_tokens(instructions, &prepared[1..], tools);
+    let Some(summary_index) = prepared
+        .iter()
+        .position(|message| message.content.starts_with("[Colossus context snapshot]"))
+    else {
+        return;
+    };
+    let without_summary_messages = prepared
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != summary_index)
+        .map(|(_, message)| message.clone())
+        .collect::<Vec<_>>();
+    let without_summary = estimate_tokens(instructions, &without_summary_messages, tools);
     let available_tokens = target.saturating_sub(without_summary).max(64);
     let available_bytes = usize::try_from(available_tokens.saturating_mul(4))
         .unwrap_or(usize::MAX)
         .min(MAX_SUMMARY_BYTES);
-    prepared[0].content = truncate_bytes(&prepared[0].content, available_bytes);
+    prepared[summary_index].content =
+        truncate_bytes(&prepared[summary_index].content, available_bytes);
 }
 
 fn contains_task_word(value: &str) -> bool {
@@ -780,6 +880,7 @@ mod tests {
     use colossus_ports::ModelProviderError;
     use colossus_session::EventSourcedSessionRepository;
     use colossus_testkit::InMemoryEventJournal;
+    use colossus_work::{EventSourcedWorkRepository, WorkService};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct SummaryProvider {
@@ -1029,5 +1130,91 @@ mod tests {
             first
         );
         assert_eq!(snapshots.list("session-1").expect("original list").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn active_decisions_are_binding_context_before_snapshots() {
+        let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+            output: None,
+            calls: AtomicUsize::new(0),
+        });
+        let (journal, sessions, _snapshots, service) = fixture(ContextConfig::default(), provider);
+        let work: Arc<dyn WorkRepository> = Arc::new(EventSourcedWorkRepository::new(journal));
+        let work_service = WorkService::new(Arc::clone(&work), Arc::clone(&sessions));
+        let decision = work_service
+            .create_decision(
+                "session-1",
+                "Audit boundary",
+                "Every durable mutation must append an immutable event.",
+                colossus_contracts::DecisionSource::User,
+                DecisionPriority::Critical,
+                "Preserve evidence",
+                "When changing canonical state",
+                "",
+                "",
+                None,
+                None,
+                None,
+                user_actor(),
+            )
+            .expect("decision");
+        let message = message(ModelMessageRole::User, "continue");
+        sessions
+            .append_message("session-1", "run-1", message.clone(), user_actor())
+            .expect("message");
+        let service = service.with_work_repository(Arc::clone(&work));
+
+        let compacted = service
+            .prepare(
+                "session-1",
+                "test",
+                vec![message],
+                &[],
+                execution_context(),
+                true,
+            )
+            .await
+            .expect("prepared");
+        assert!(
+            compacted.messages[0]
+                .content
+                .starts_with("[Binding active key decisions]")
+        );
+        assert!(compacted.messages[0].content.contains(&decision.id));
+        assert!(
+            compacted.messages[0]
+                .content
+                .contains("Every durable mutation must append an immutable event.")
+        );
+        assert!(
+            compacted.messages[1]
+                .content
+                .starts_with("[Colossus context snapshot]")
+        );
+
+        work_service
+            .archive_decision(&decision.id, user_actor())
+            .expect("archive");
+        let after_archive = service
+            .prepare(
+                "session-1",
+                "test",
+                sessions
+                    .list_messages("session-1")
+                    .expect("messages")
+                    .into_iter()
+                    .map(|record| record.message)
+                    .collect(),
+                &[],
+                execution_context(),
+                false,
+            )
+            .await
+            .expect("prepared after archive");
+        assert!(
+            after_archive.messages[0]
+                .content
+                .starts_with("[Colossus context snapshot]")
+        );
     }
 }

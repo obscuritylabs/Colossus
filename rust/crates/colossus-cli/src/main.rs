@@ -1,6 +1,7 @@
 //! Thin terminal interface for the Rust runtime.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use colossus_contracts::{DecisionPriority, DecisionStatus, TaskStatus};
 use colossus_runtime::{Runtime, RuntimeConfig};
 use reedline::{DefaultPrompt, Reedline, Signal};
 use serde_json::{Value, json};
@@ -55,6 +56,10 @@ enum Command {
     Sessions(SessionsCommand),
     /// Inspect, compact, and restore durable long-session context.
     Context(ContextCommand),
+    /// Create and inspect durable session tasks.
+    Tasks(TasksCommand),
+    /// Create and inspect binding key decisions.
+    Decisions(DecisionsCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -349,6 +354,174 @@ enum ContextAction {
     },
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum TaskStatusArg {
+    Pending,
+    InProgress,
+    Completed,
+    Blocked,
+    Cancelled,
+}
+
+impl From<TaskStatusArg> for TaskStatus {
+    fn from(value: TaskStatusArg) -> Self {
+        match value {
+            TaskStatusArg::Pending => Self::Pending,
+            TaskStatusArg::InProgress => Self::InProgress,
+            TaskStatusArg::Completed => Self::Completed,
+            TaskStatusArg::Blocked => Self::Blocked,
+            TaskStatusArg::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+#[derive(Args)]
+struct TasksCommand {
+    #[command(subcommand)]
+    command: TasksAction,
+}
+
+#[derive(Subcommand)]
+enum TasksAction {
+    /// List bounded canonical tasks.
+    List {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        status: Option<TaskStatusArg>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one exact task.
+    Show { task_id: String },
+    /// Create a session-scoped task.
+    Create {
+        session_id: String,
+        title: String,
+        #[arg(long, default_value = "")]
+        description: String,
+        #[arg(long, value_enum, default_value = "pending")]
+        status: TaskStatusArg,
+    },
+    /// Update supplied fields on one task.
+    Update {
+        task_id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        status: Option<TaskStatusArg>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DecisionPriorityArg {
+    Critical,
+    High,
+    Normal,
+}
+
+impl From<DecisionPriorityArg> for DecisionPriority {
+    fn from(value: DecisionPriorityArg) -> Self {
+        match value {
+            DecisionPriorityArg::Critical => Self::Critical,
+            DecisionPriorityArg::High => Self::High,
+            DecisionPriorityArg::Normal => Self::Normal,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DecisionStatusArg {
+    Active,
+    Archived,
+    Superseded,
+}
+
+impl From<DecisionStatusArg> for DecisionStatus {
+    fn from(value: DecisionStatusArg) -> Self {
+        match value {
+            DecisionStatusArg::Active => Self::Active,
+            DecisionStatusArg::Archived => Self::Archived,
+            DecisionStatusArg::Superseded => Self::Superseded,
+        }
+    }
+}
+
+#[derive(Args)]
+struct DecisionsCommand {
+    #[command(subcommand)]
+    command: DecisionsAction,
+}
+
+#[derive(Subcommand)]
+enum DecisionsAction {
+    /// List bounded canonical decisions.
+    List {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, value_enum, default_value = "active")]
+        status: DecisionStatusArg,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one exact decision.
+    Show { decision_id: String },
+    /// Create one active future-facing commitment.
+    Create {
+        session_id: String,
+        title: String,
+        decision: String,
+        #[arg(long, value_enum, default_value = "normal")]
+        priority: DecisionPriorityArg,
+        #[arg(long, default_value = "")]
+        intent: String,
+        #[arg(long, default_value = "")]
+        applies_when: String,
+        #[arg(long, default_value = "")]
+        rationale: String,
+        #[arg(long, default_value = "")]
+        source_excerpt: String,
+    },
+    /// Update mutable content on an active decision.
+    Update {
+        decision_id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        decision: Option<String>,
+        #[arg(long)]
+        priority: Option<DecisionPriorityArg>,
+        #[arg(long)]
+        intent: Option<String>,
+        #[arg(long)]
+        applies_when: Option<String>,
+        #[arg(long)]
+        rationale: Option<String>,
+        #[arg(long)]
+        source_excerpt: Option<String>,
+    },
+    /// Archive an active decision without deleting it.
+    Archive { decision_id: String },
+    /// Atomically replace an active decision and preserve lineage.
+    Supersede {
+        decision_id: String,
+        title: String,
+        decision: String,
+        #[arg(long, value_enum, default_value = "normal")]
+        priority: DecisionPriorityArg,
+        #[arg(long, default_value = "")]
+        intent: String,
+        #[arg(long, default_value = "")]
+        applies_when: String,
+        #[arg(long, default_value = "")]
+        rationale: String,
+        #[arg(long, default_value = "")]
+        source_excerpt: String,
+    },
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -565,7 +738,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -586,6 +759,14 @@ async fn repl(
                     print_json(&runtime.tool_specs())?;
                 } else if line == "/sessions" {
                     print_json(&runtime.list_sessions(20)?)?;
+                } else if line == "/tasks" {
+                    print_json(&runtime.list_tasks(Some(&active_session_id), None, 100)?)?;
+                } else if line == "/decisions" {
+                    print_json(&runtime.list_decisions(
+                        Some(&active_session_id),
+                        Some(DecisionStatus::Active),
+                        100,
+                    )?)?;
                 } else if line == "/context" || line == "/context status" {
                     print_json(&runtime.context_status(&active_session_id)?)?;
                 } else if line == "/context list" {
@@ -761,6 +942,135 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 session_id,
                 snapshot_id,
             } => print_json(&runtime.restore_context(&session_id, &snapshot_id)?)?,
+        },
+        Command::Tasks(command) => match command.command {
+            TasksAction::List {
+                session,
+                status,
+                limit,
+            } => print_json(&runtime.list_tasks(
+                session.as_deref(),
+                status.map(Into::into),
+                limit,
+            )?)?,
+            TasksAction::Show { task_id } => print_json(
+                &runtime
+                    .get_task(&task_id)?
+                    .ok_or_else(|| cli_error(format!("task not found: {task_id}")))?,
+            )?,
+            TasksAction::Create {
+                session_id,
+                title,
+                description,
+                status,
+            } => print_json(
+                &runtime
+                    .create_task(&session_id, &title, &description, status.into())
+                    .await?,
+            )?,
+            TasksAction::Update {
+                task_id,
+                title,
+                description,
+                status,
+            } => print_json(
+                &runtime
+                    .update_task(
+                        &task_id,
+                        title.as_deref(),
+                        description.as_deref(),
+                        status.map(Into::into),
+                    )
+                    .await?,
+            )?,
+        },
+        Command::Decisions(command) => match command.command {
+            DecisionsAction::List {
+                session,
+                status,
+                limit,
+            } => print_json(&runtime.list_decisions(
+                session.as_deref(),
+                Some(status.into()),
+                limit,
+            )?)?,
+            DecisionsAction::Show { decision_id } => print_json(
+                &runtime
+                    .get_decision(&decision_id)?
+                    .ok_or_else(|| cli_error(format!("decision not found: {decision_id}")))?,
+            )?,
+            DecisionsAction::Create {
+                session_id,
+                title,
+                decision,
+                priority,
+                intent,
+                applies_when,
+                rationale,
+                source_excerpt,
+            } => print_json(
+                &runtime
+                    .create_decision(
+                        &session_id,
+                        &title,
+                        &decision,
+                        priority.into(),
+                        &intent,
+                        &applies_when,
+                        &rationale,
+                        &source_excerpt,
+                    )
+                    .await?,
+            )?,
+            DecisionsAction::Update {
+                decision_id,
+                title,
+                decision,
+                priority,
+                intent,
+                applies_when,
+                rationale,
+                source_excerpt,
+            } => print_json(
+                &runtime
+                    .update_decision(
+                        &decision_id,
+                        title.as_deref(),
+                        decision.as_deref(),
+                        priority.map(Into::into),
+                        intent.as_deref(),
+                        applies_when.as_deref(),
+                        rationale.as_deref(),
+                        source_excerpt.as_deref(),
+                    )
+                    .await?,
+            )?,
+            DecisionsAction::Archive { decision_id } => {
+                print_json(&runtime.archive_decision(&decision_id).await?)?;
+            }
+            DecisionsAction::Supersede {
+                decision_id,
+                title,
+                decision,
+                priority,
+                intent,
+                applies_when,
+                rationale,
+                source_excerpt,
+            } => print_json(
+                &runtime
+                    .supersede_decision(
+                        &decision_id,
+                        &title,
+                        &decision,
+                        priority.into(),
+                        &intent,
+                        &applies_when,
+                        &rationale,
+                        &source_excerpt,
+                    )
+                    .await?,
+            )?,
         },
         Command::Run {
             prompt,

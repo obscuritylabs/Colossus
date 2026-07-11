@@ -13,6 +13,7 @@ members = [
     "crates/colossus-agent",
     "crates/colossus-session",
     "crates/colossus-context",
+    "crates/colossus-work",
     "crates/colossus-memory",
     "crates/colossus-workflow",
     "crates/colossus-runtime",
@@ -61,6 +62,7 @@ url = "2.5.8"
 
 colossus-contracts = { path = "crates/colossus-contracts" }
 colossus-context = { path = "crates/colossus-context" }
+colossus-work = { path = "crates/colossus-work" }
 colossus-domain = { path = "crates/colossus-domain" }
 colossus-journal-redb = { path = "crates/colossus-journal-redb" }
 colossus-memory = { path = "crates/colossus-memory" }

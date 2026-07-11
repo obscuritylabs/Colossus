@@ -4,11 +4,11 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ApprovalProof, ContextSnapshot, EffectRequest, EventEnvelope, ExecutionContext,
-    MemoryRecord, ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PolicyDecision,
-    PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute, ProviderTurn,
-    SessionMessage, SessionSummary, SignedCheckpoint, ToolCall, ToolResult, ToolSpec,
-    WorkflowDefinition, WorkflowRun,
+    Actor, ApprovalProof, ContextSnapshot, DecisionStatus, EffectRequest, EventEnvelope,
+    ExecutionContext, KeyDecision, MemoryRecord, ModelMessage, ModelRequest, ModelToolDefinition,
+    NewEvent, PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute,
+    ProviderTurn, SessionMessage, SessionSummary, SignedCheckpoint, TaskRecord, TaskStatus,
+    ToolCall, ToolResult, ToolSpec, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -322,8 +322,61 @@ pub trait ContextPreparer: Send + Sync {
         force: bool,
     ) -> Result<PreparedContext, ContextError>;
 }
-/// Task, decision, plan, and goal repository.
-pub trait WorkRepository: AggregateRepository {}
+/// Canonical task and key-decision lifecycle repository.
+pub trait WorkRepository: Send + Sync {
+    /// Create a new session-scoped task.
+    fn create_task(&self, task: TaskRecord, actor: Actor) -> Result<TaskRecord, StoreError>;
+
+    /// Append the complete next task state after validating immutable identity fields.
+    fn update_task(&self, task: TaskRecord, actor: Actor) -> Result<TaskRecord, StoreError>;
+
+    /// Reconstruct one task from canonical events.
+    fn get_task(&self, id: &str) -> Result<Option<TaskRecord>, StoreError>;
+
+    /// List bounded tasks with optional session and status filters.
+    fn list_tasks(
+        &self,
+        session_id: Option<&str>,
+        status: Option<TaskStatus>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, StoreError>;
+
+    /// Create a new active key decision.
+    fn create_decision(
+        &self,
+        decision: KeyDecision,
+        actor: Actor,
+    ) -> Result<KeyDecision, StoreError>;
+
+    /// Append the complete next active key-decision state.
+    fn update_decision(
+        &self,
+        decision: KeyDecision,
+        actor: Actor,
+    ) -> Result<KeyDecision, StoreError>;
+
+    /// Reconstruct one key decision from canonical events.
+    fn get_decision(&self, id: &str) -> Result<Option<KeyDecision>, StoreError>;
+
+    /// List bounded decisions with optional session and status filters.
+    fn list_decisions(
+        &self,
+        session_id: Option<&str>,
+        status: Option<DecisionStatus>,
+        limit: usize,
+    ) -> Result<Vec<KeyDecision>, StoreError>;
+
+    /// Archive one active decision through a new immutable event.
+    fn archive_decision(&self, id: &str, actor: Actor) -> Result<KeyDecision, StoreError>;
+
+    /// Atomically supersede one active decision and create its replacement.
+    fn supersede_decision(
+        &self,
+        id: &str,
+        replacement: KeyDecision,
+        actor: Actor,
+    ) -> Result<(KeyDecision, KeyDecision), StoreError>;
+}
 /// Canonical event-sourced memory lifecycle repository.
 pub trait MemoryRepository: Send + Sync {
     /// Create a new active canonical record.
