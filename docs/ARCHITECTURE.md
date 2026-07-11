@@ -168,8 +168,13 @@ the worker's bounded drain path. Restart reconstruction restores completed outpu
 consumed attempt budget. Abandoned attempts become unknown and are never automatically
 retried. Known failures may retry once only with an explicit idempotency strategy, and
 definition-level compensation effects are dispatched separately through the same policy
-gateway. The composition root opens fresh YAML config and fresh state; it never silently
-imports the Python SQLite store.
+gateway. A `workflow` step first authorizes `workflow.start`, then creates a separately
+hash-pinned child run carrying parent run, parent step, and call depth. Parents expose the
+blocking child ID while waiting, observe the same child on resume, propagate child
+terminal failure, and cascade cancellation. The parent intent event contains enough data
+to recreate the same child ID after a crash between link and queue, so recovery neither
+duplicates nor orphans the call. The composition root opens fresh YAML config and fresh
+state; it never silently imports the Python SQLite store.
 
 See [Rust Reconstruction Status](RUST_RECONSTRUCTION.md) for the current implementation
 line and remaining milestones.

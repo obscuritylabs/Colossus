@@ -2281,6 +2281,12 @@ pub struct WorkflowRun {
     pub workflow_version: String,
     /// Pinned canonical definition hash.
     pub workflow_hash: String,
+    /// Parent workflow run for a linked subworkflow.
+    pub parent_run_id: Option<String>,
+    /// Parent step that launched this run.
+    pub parent_step_id: Option<String>,
+    /// One-based workflow call depth.
+    pub call_depth: u16,
     /// Durable status.
     pub status: WorkflowStatus,
     /// Input snapshot.
@@ -2289,6 +2295,12 @@ pub struct WorkflowRun {
     pub outputs: Option<Value>,
     /// Last completed root step index.
     pub completed_steps: u32,
+    /// Exact step currently waiting, if any.
+    pub waiting_step_id: Option<String>,
+    /// Bounded waiting reason, if any.
+    pub waiting_reason: Option<String>,
+    /// Linked child run blocking the waiting step, if any.
+    pub waiting_child_run_id: Option<String>,
 }
 
 #[cfg(test)]

@@ -2035,6 +2035,7 @@ impl Runtime {
                     "patch.apply",
                     "patch.reverse",
                     "trace.export",
+                    "workflow.start",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
@@ -8991,6 +8992,29 @@ impl EffectExecutor for UnavailableExecutor {
     }
 }
 
+struct WorkflowControlExecutor;
+
+#[async_trait]
+impl EffectExecutor for WorkflowControlExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if request.action != "workflow.start" {
+            return Err(ExecutionError::Failed(
+                "workflow control executor received an unsupported action".into(),
+            ));
+        }
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&json!({"authorized": true}))
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
+    }
+}
+
 struct GatewayWorkflowEffects {
     gateway: Arc<EffectGateway>,
 }
@@ -9027,10 +9051,10 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
             attempt: Some(effect.attempt),
             ..ExecutionContext::default()
         };
-        let executor: &dyn EffectExecutor = if request.action == "provider.echo" {
-            &EchoExecutor
-        } else {
-            &UnavailableExecutor
+        let executor: &dyn EffectExecutor = match request.action.as_str() {
+            "provider.echo" => &EchoExecutor,
+            "workflow.start" => &WorkflowControlExecutor,
+            _ => &UnavailableExecutor,
         };
         match self.gateway.execute(request, executor).await {
             Ok(result) => Ok(json!({
@@ -9049,12 +9073,12 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 mod tests {
     use super::{
         ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
-        GatewayMemoryRetriever, GatewayToolExecutor, InteractiveToolExecutor, MemoryEffectExecutor,
-        MemoryEmbeddingConfig, PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
-        ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig,
-        SkillEffectExecutor, SkillOperation, SkillScaffoldResult, TraceToolExecutor,
-        WorkEffectExecutor, goal_objective_from_plan, recover_interrupted_subagents,
-        recover_unknown_effects,
+        GatewayMemoryRetriever, GatewayToolExecutor, GatewayWorkflowEffects,
+        InteractiveToolExecutor, MemoryEffectExecutor, MemoryEmbeddingConfig,
+        PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput, ProviderProfileConfig,
+        ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig, SkillEffectExecutor,
+        SkillOperation, SkillScaffoldResult, TraceToolExecutor, WorkEffectExecutor,
+        goal_objective_from_plan, recover_interrupted_subagents, recover_unknown_effects,
     };
     use colossus_contracts::{
         Actor, ActorType, CredentialReference, DecisionOutcome, EffectRequest, EventClassification,
@@ -9071,6 +9095,7 @@ mod tests {
         FilesystemSkillRepository, SkillAuthoringService, SkillResourceService, SkillRoot,
     };
     use colossus_testkit::InMemoryEventJournal;
+    use colossus_workflow::{WorkflowEffect, WorkflowEffectRunner};
     use serde_json::{Value, json};
     use std::{
         collections::{BTreeMap, VecDeque},
@@ -9084,6 +9109,63 @@ mod tests {
     struct UnusedToolExecutor;
 
     struct FixedUserPrompt;
+
+    #[tokio::test]
+    async fn subworkflow_start_and_compensation_are_independent_gateway_effects() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("workflow.start", DecisionOutcome::Allow),
+            ),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["workflow.execute".into()]),
+            [44_u8; 32],
+        );
+        let runner = GatewayWorkflowEffects {
+            gateway: Arc::new(gateway),
+        };
+        for compensation in [false, true] {
+            runner
+                .run(WorkflowEffect {
+                    kind: "workflow".into(),
+                    action: "workflow.start".into(),
+                    content: json!({"workflow": "child", "version": "1.0.0", "inputs": {}}),
+                    idempotency: Some(format!("call-{compensation}")),
+                    run_id: "parent-run".into(),
+                    step_id: if compensation {
+                        "rollback-child".into()
+                    } else {
+                        "launch-child".into()
+                    },
+                    workflow_hash: "parent-hash".into(),
+                    attempt: 1,
+                    compensation,
+                })
+                .await
+                .expect("authorized workflow control effect");
+        }
+        let resources = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .filter(|event| event.event_type == "effect.requested.v1")
+            .map(|event| {
+                journal.decrypt_payload(&event).expect("payload")["resource"]
+                    .as_str()
+                    .expect("resource")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            resources,
+            [
+                "workflow-step:launch-child",
+                "workflow-compensation-step:rollback-child"
+            ]
+        );
+    }
 
     #[async_trait::async_trait]
     impl colossus_ports::UserPromptProvider for FixedUserPrompt {

@@ -887,6 +887,19 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
         workflow_name: string_field(&start, "workflow_name")?,
         workflow_version: string_field(&start, "workflow_version")?,
         workflow_hash: string_field(&start, "workflow_hash")?,
+        parent_run_id: start
+            .get("parent_run_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        parent_step_id: start
+            .get("parent_step_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        call_depth: start
+            .get("call_depth")
+            .and_then(Value::as_u64)
+            .and_then(|depth| u16::try_from(depth).ok())
+            .unwrap_or(1),
         status: if first.event_type == "workflow.run.queued.v1" {
             WorkflowStatus::Queued
         } else {
@@ -895,12 +908,20 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
         inputs: start.get("inputs").cloned().unwrap_or(Value::Null),
         outputs: None,
         completed_steps: 0,
+        waiting_step_id: None,
+        waiting_reason: None,
+        waiting_child_run_id: None,
     };
     for event in events.iter().skip(1) {
         let payload = journal.decrypt_payload(event)?;
         match event.event_type.as_str() {
             "workflow.run.queued.v1" => run.status = WorkflowStatus::Queued,
-            "workflow.run.started.v1" => run.status = WorkflowStatus::Running,
+            "workflow.run.started.v1" => {
+                run.status = WorkflowStatus::Running;
+                run.waiting_step_id = None;
+                run.waiting_reason = None;
+                run.waiting_child_run_id = None;
+            }
             "workflow.step.completed.v1" => {
                 run.completed_steps = payload
                     .get("root_index")
@@ -908,15 +929,52 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
                     .and_then(|index| u32::try_from(index.saturating_add(1)).ok())
                     .unwrap_or(run.completed_steps);
             }
-            "workflow.run.waiting.v1" => run.status = WorkflowStatus::Waiting,
-            "workflow.run.resumed.v1" => run.status = WorkflowStatus::Running,
+            "workflow.run.waiting.v1" => {
+                run.status = WorkflowStatus::Waiting;
+                run.waiting_step_id = payload
+                    .get("step_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                run.waiting_reason = payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                run.waiting_child_run_id = payload
+                    .get("child_run_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+            "workflow.run.resumed.v1" => {
+                run.status = WorkflowStatus::Running;
+                run.waiting_step_id = None;
+                run.waiting_reason = None;
+                run.waiting_child_run_id = None;
+            }
             "workflow.run.completed.v1" => {
                 run.status = WorkflowStatus::Completed;
                 run.outputs = payload.get("outputs").cloned();
+                run.waiting_step_id = None;
+                run.waiting_reason = None;
+                run.waiting_child_run_id = None;
             }
-            "workflow.run.failed.v1" => run.status = WorkflowStatus::Failed,
-            "workflow.run.cancelled.v1" => run.status = WorkflowStatus::Cancelled,
-            "workflow.run.interrupted.v1" => run.status = WorkflowStatus::Interrupted,
+            "workflow.run.failed.v1" => {
+                run.status = WorkflowStatus::Failed;
+                run.waiting_step_id = None;
+                run.waiting_reason = None;
+                run.waiting_child_run_id = None;
+            }
+            "workflow.run.cancelled.v1" => {
+                run.status = WorkflowStatus::Cancelled;
+                run.waiting_step_id = None;
+                run.waiting_reason = None;
+                run.waiting_child_run_id = None;
+            }
+            "workflow.run.interrupted.v1" => {
+                run.status = WorkflowStatus::Interrupted;
+                run.waiting_step_id = None;
+                run.waiting_reason = None;
+                run.waiting_child_run_id = None;
+            }
             _ => {}
         }
     }
@@ -1004,24 +1062,53 @@ impl WorkflowService {
         version: &str,
         inputs: Value,
     ) -> Result<WorkflowRun, WorkflowError> {
+        self.queue_run_with_lineage(
+            &Uuid::now_v7().to_string(),
+            name,
+            version,
+            inputs,
+            None,
+            None,
+            1,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn queue_run_with_lineage(
+        &self,
+        run_id: &str,
+        name: &str,
+        version: &str,
+        inputs: Value,
+        parent_run_id: Option<&str>,
+        parent_step_id: Option<&str>,
+        call_depth: u16,
+    ) -> Result<WorkflowRun, WorkflowError> {
+        if usize::from(call_depth) > MAX_WORKFLOW_CALL_DEPTH {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "workflow call depth exceeds {MAX_WORKFLOW_CALL_DEPTH}"
+            )));
+        }
         let (definition, workflow_hash) = self
             .repository
             .definition(name, version)?
             .ok_or_else(|| WorkflowError::NotFound(format!("{name}:{version}")))?;
         validate_call_graph(self.repository.as_ref(), &definition, true)?;
         validate_instance(&definition.inputs, &inputs, "input")?;
-        let run_id = Uuid::now_v7().to_string();
         self.append_run_event(
-            &run_id,
+            run_id,
             "workflow.run.queued.v1",
             json!({
                 "workflow_name": name,
                 "workflow_version": version,
                 "workflow_hash": workflow_hash,
                 "inputs": inputs,
+                "parent_run_id": parent_run_id,
+                "parent_step_id": parent_step_id,
+                "call_depth": call_depth,
             }),
         )?;
-        self.get_run(&run_id)
+        self.get_run(run_id)
     }
 
     /// Start and drive a run until it waits or reaches a terminal state.
@@ -1221,6 +1308,15 @@ impl WorkflowService {
             return Err(WorkflowError::InvalidTransition(format!(
                 "run {run_id} is terminal"
             )));
+        }
+        if let Some(child_run_id) = run.waiting_child_run_id.as_deref()
+            && let Ok(child) = self.get_run(child_run_id)
+            && !matches!(
+                child.status,
+                WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Cancelled
+            )
+        {
+            self.cancel_run(child_run_id)?;
         }
         self.append_run_event(
             run_id,
@@ -1434,11 +1530,16 @@ impl WorkflowService {
                 Ok(StepState::Waiting {
                     step_id: waiting_step_id,
                     reason,
+                    child_run_id,
                 }) => {
                     self.append_run_event(
                         run_id,
                         "workflow.run.waiting.v1",
-                        json!({"step_id": waiting_step_id, "reason": reason}),
+                        json!({
+                            "step_id": waiting_step_id,
+                            "reason": reason,
+                            "child_run_id": child_run_id,
+                        }),
                     )?;
                     return Ok(());
                 }
@@ -1567,6 +1668,11 @@ impl WorkflowService {
         {
             return Ok(StepState::Completed(output));
         }
+        if let WorkflowStep::Workflow { id, .. } = step
+            && let Some(child) = self.linked_child(run_id, id)?
+        {
+            return self.observe_child_run(run_id, id, &child).await;
+        }
         let attempt = budget.fetch_add(1, Ordering::AcqRel).saturating_add(1);
         if attempt > step_budget {
             return Err(WorkflowError::InvalidTransition(
@@ -1583,10 +1689,12 @@ impl WorkflowService {
             WorkflowStep::WaitForInput { id, prompt, .. } => Ok(StepState::Waiting {
                 step_id: id.clone(),
                 reason: prompt.clone(),
+                child_run_id: None,
             }),
             WorkflowStep::Approval { id, prompt, .. } => Ok(StepState::Waiting {
                 step_id: id.clone(),
                 reason: prompt.clone(),
+                child_run_id: None,
             }),
             WorkflowStep::Agent {
                 id,
@@ -1648,8 +1756,8 @@ impl WorkflowService {
                 workflow,
                 version,
                 inputs,
-            } => self
-                .run_effect_with_retry(
+            } => {
+                self.run_effect_with_retry(
                     WorkflowEffect {
                         kind: "workflow".into(),
                         action: "workflow.start".into(),
@@ -1668,8 +1776,31 @@ impl WorkflowService {
                     Arc::clone(&budget),
                     step_budget,
                 )
-                .await
-                .map(StepState::Completed),
+                .await?;
+                let child_run_id = Uuid::now_v7().to_string();
+                let parent = self.get_run(run_id)?;
+                let call_depth = parent.call_depth.saturating_add(1);
+                self.append_run_event(
+                    run_id,
+                    "workflow.subworkflow.linked.v1",
+                    json!({
+                        "step_id": id,
+                        "child_run_id": child_run_id,
+                        "workflow_name": workflow,
+                        "workflow_version": version,
+                        "inputs": inputs,
+                        "call_depth": call_depth,
+                    }),
+                )?;
+                let child = LinkedWorkflowCall {
+                    run_id: child_run_id,
+                    workflow_name: workflow.clone(),
+                    workflow_version: version.clone(),
+                    inputs: inputs.clone(),
+                    call_depth,
+                };
+                self.observe_child_run(run_id, id, &child).await
+            }
             WorkflowStep::Condition {
                 expression,
                 then,
@@ -1749,12 +1880,112 @@ impl WorkflowService {
                             Arc::clone(&semaphore),
                         )
                         .await?;
-                    if let StepState::Waiting { step_id, reason } = state {
-                        return Ok(StepState::Waiting { step_id, reason });
+                    if let StepState::Waiting {
+                        step_id,
+                        reason,
+                        child_run_id,
+                    } = state
+                    {
+                        return Ok(StepState::Waiting {
+                            step_id,
+                            reason,
+                            child_run_id,
+                        });
                     }
                     outputs.push(iteration);
                 }
                 Ok(StepState::Completed(Value::Array(outputs)))
+            }
+        }
+    }
+
+    fn linked_child(
+        &self,
+        parent_run_id: &str,
+        step_id: &str,
+    ) -> Result<Option<LinkedWorkflowCall>, WorkflowError> {
+        for event in self
+            .journal
+            .read_stream(&format!("workflow-run:{parent_run_id}"))?
+            .iter()
+            .rev()
+            .filter(|event| event.event_type == "workflow.subworkflow.linked.v1")
+        {
+            let payload = self.journal.decrypt_payload(event)?;
+            if payload.get("step_id").and_then(Value::as_str) == Some(step_id) {
+                return Ok(Some(LinkedWorkflowCall {
+                    run_id: string_field(&payload, "child_run_id")?,
+                    workflow_name: string_field(&payload, "workflow_name")?,
+                    workflow_version: string_field(&payload, "workflow_version")?,
+                    inputs: payload.get("inputs").cloned().unwrap_or(Value::Null),
+                    call_depth: payload
+                        .get("call_depth")
+                        .and_then(Value::as_u64)
+                        .and_then(|depth| u16::try_from(depth).ok())
+                        .ok_or_else(|| {
+                            WorkflowError::InvalidTransition(
+                                "linked child call depth is absent or invalid".into(),
+                            )
+                        })?,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    #[async_recursion]
+    async fn observe_child_run(
+        &self,
+        parent_run_id: &str,
+        parent_step_id: &str,
+        linked: &LinkedWorkflowCall,
+    ) -> Result<StepState, WorkflowError> {
+        if self.repository.run(&linked.run_id)?.is_none() {
+            self.queue_run_with_lineage(
+                &linked.run_id,
+                &linked.workflow_name,
+                &linked.workflow_version,
+                linked.inputs.clone(),
+                Some(parent_run_id),
+                Some(parent_step_id),
+                linked.call_depth,
+            )?;
+        }
+        let mut child = self.get_run(&linked.run_id)?;
+        if child.status == WorkflowStatus::Queued {
+            child = self.run_queued(&linked.run_id).await?;
+        }
+        match child.status {
+            WorkflowStatus::Completed => {
+                let output = json!({
+                    "run_id": child.run_id,
+                    "workflow_hash": child.workflow_hash,
+                    "outputs": child.outputs,
+                });
+                self.append_run_event(
+                    parent_run_id,
+                    "workflow.subworkflow.completed.v1",
+                    json!({
+                        "step_id": parent_step_id,
+                        "child_run_id": linked.run_id,
+                        "output": output,
+                    }),
+                )?;
+                Ok(StepState::Completed(output))
+            }
+            WorkflowStatus::Queued | WorkflowStatus::Running | WorkflowStatus::Waiting => {
+                Ok(StepState::Waiting {
+                    step_id: parent_step_id.into(),
+                    reason: format!("waiting for child workflow run {}", linked.run_id),
+                    child_run_id: Some(linked.run_id.clone()),
+                })
+            }
+            WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::Interrupted => {
+                Err(WorkflowError::Effect(format!(
+                    "child workflow run {} reached {}",
+                    linked.run_id,
+                    workflow_status_name(child.status)
+                )))
             }
         }
     }
@@ -1922,11 +2153,21 @@ impl WorkflowService {
             .await?;
         let mut ordered = results;
         ordered.sort_by_key(|(index, _, _)| *index);
-        if let Some((step_id, reason)) = ordered.iter().find_map(|(_, state, _)| match state {
-            StepState::Waiting { step_id, reason } => Some((step_id.clone(), reason.clone())),
-            StepState::Completed(_) => None,
-        }) {
-            return Ok(StepState::Waiting { step_id, reason });
+        if let Some((step_id, reason, child_run_id)) =
+            ordered.iter().find_map(|(_, state, _)| match state {
+                StepState::Waiting {
+                    step_id,
+                    reason,
+                    child_run_id,
+                } => Some((step_id.clone(), reason.clone(), child_run_id.clone())),
+                StepState::Completed(_) => None,
+            })
+        {
+            return Ok(StepState::Waiting {
+                step_id,
+                reason,
+                child_run_id,
+            });
         }
         Ok(StepState::Completed(Value::Array(
             ordered
@@ -1980,7 +2221,31 @@ impl WorkflowService {
 
 enum StepState {
     Completed(Value),
-    Waiting { step_id: String, reason: String },
+    Waiting {
+        step_id: String,
+        reason: String,
+        child_run_id: Option<String>,
+    },
+}
+
+struct LinkedWorkflowCall {
+    run_id: String,
+    workflow_name: String,
+    workflow_version: String,
+    inputs: Value,
+    call_depth: u16,
+}
+
+fn workflow_status_name(status: WorkflowStatus) -> &'static str {
+    match status {
+        WorkflowStatus::Queued => "queued",
+        WorkflowStatus::Running => "running",
+        WorkflowStatus::Waiting => "waiting",
+        WorkflowStatus::Completed => "completed",
+        WorkflowStatus::Failed => "failed",
+        WorkflowStatus::Cancelled => "cancelled",
+        WorkflowStatus::Interrupted => "interrupted",
+    }
 }
 
 fn validate_instance(schema: &Value, instance: &Value, label: &str) -> Result<(), WorkflowError> {
@@ -2280,6 +2545,323 @@ steps:
             events
                 .iter()
                 .filter(|event| event.event_type == "workflow.input.provided.v1")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn subworkflow_runs_are_hash_pinned_linked_and_completed_once() {
+        const CHILD: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: child
+  version: 1.0.0
+  description: Child workflow
+inputs: { type: object }
+outputs: { type: object }
+capabilities: []
+maxConcurrency: 1
+stepBudget: 2
+steps:
+  - type: emit
+    id: child-result
+    value: { child: true }
+"#;
+        const PARENT: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: parent
+  version: 1.0.0
+  description: Parent workflow
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 3
+steps:
+  - type: workflow
+    id: launch-child
+    workflow: child
+    version: 1.0.0
+    inputs: {}
+"#;
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(journal, repository, effects.clone());
+        service.register_definition(CHILD, "test").expect("child");
+        service.register_definition(PARENT, "test").expect("parent");
+        let parent = service
+            .start_run("parent", "1.0.0", json!({}))
+            .await
+            .expect("parent run");
+        assert_eq!(parent.status, colossus_contracts::WorkflowStatus::Completed);
+        let runs = service.list_runs(10).expect("runs");
+        assert_eq!(runs.len(), 2);
+        let child = runs
+            .iter()
+            .find(|run| run.parent_run_id.as_deref() == Some(&parent.run_id))
+            .expect("linked child");
+        assert_eq!(child.parent_step_id.as_deref(), Some("launch-child"));
+        assert_eq!(child.call_depth, 2);
+        assert_eq!(child.status, colossus_contracts::WorkflowStatus::Completed);
+        assert_eq!(
+            effects
+                .calls()
+                .iter()
+                .filter(|call| call.action == "workflow.start")
+                .count(),
+            1
+        );
+        assert_eq!(
+            parent.outputs.expect("parent outputs")["launch-child"]["outputs"]["child-result"],
+            json!({"child": true})
+        );
+    }
+
+    #[tokio::test]
+    async fn waiting_child_resumes_parent_without_duplicate_launch() {
+        const CHILD: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: input-child
+  version: 1.0.0
+  description: Waiting child workflow
+inputs: { type: object }
+outputs: { type: object }
+capabilities: []
+maxConcurrency: 1
+stepBudget: 3
+steps:
+  - type: wait_for_input
+    id: child-input
+    prompt: Child input required
+    schema: { type: string }
+  - type: emit
+    id: child-done
+    value: { done: true }
+"#;
+        const PARENT: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: waiting-parent
+  version: 1.0.0
+  description: Parent waiting on child
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - type: workflow
+    id: child-call
+    workflow: input-child
+    version: 1.0.0
+    inputs: {}
+"#;
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(journal, repository, effects.clone());
+        service.register_definition(CHILD, "test").expect("child");
+        service.register_definition(PARENT, "test").expect("parent");
+        let waiting_parent = service
+            .start_run("waiting-parent", "1.0.0", json!({}))
+            .await
+            .expect("parent run");
+        assert_eq!(
+            waiting_parent.status,
+            colossus_contracts::WorkflowStatus::Waiting
+        );
+        let child_run_id = waiting_parent
+            .waiting_child_run_id
+            .clone()
+            .expect("visible child id");
+        let child = service.get_run(&child_run_id).expect("child run");
+        assert_eq!(child.status, colossus_contracts::WorkflowStatus::Waiting);
+        service
+            .provide_input(&child_run_id, json!("ready"))
+            .await
+            .expect("child input");
+        let completed_parent = service
+            .resume_run(&waiting_parent.run_id)
+            .await
+            .expect("parent resume");
+        assert_eq!(
+            completed_parent.status,
+            colossus_contracts::WorkflowStatus::Completed
+        );
+        assert_eq!(service.list_runs(10).expect("runs").len(), 2);
+        assert_eq!(
+            effects
+                .calls()
+                .iter()
+                .filter(|call| call.action == "workflow.start")
+                .count(),
+            1
+        );
+        let second_parent = service
+            .start_run("waiting-parent", "1.0.0", json!({}))
+            .await
+            .expect("second parent");
+        let second_child_id = second_parent
+            .waiting_child_run_id
+            .clone()
+            .expect("second child");
+        let cancelled_parent = service
+            .cancel_run(&second_parent.run_id)
+            .expect("cancel parent");
+        assert_eq!(
+            cancelled_parent.status,
+            colossus_contracts::WorkflowStatus::Cancelled
+        );
+        assert_eq!(
+            service
+                .get_run(&second_child_id)
+                .expect("cancelled child")
+                .status,
+            colossus_contracts::WorkflowStatus::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_recreates_linked_child_with_the_original_run_id() {
+        let child = SIMPLE
+            .replace("name: smoke", "name: orphan-child")
+            .replace("Offline smoke workflow", "Orphan child");
+        let parent = SIMPLE
+            .replace("name: smoke", "name: orphan-parent")
+            .replace("Offline smoke workflow", "Orphan parent")
+            .replace(
+                "- type: emit\n    id: result\n    value: { ok: true }",
+                "- type: workflow\n    id: child-call\n    workflow: orphan-child\n    version: 1.0.0\n    inputs: { message: child }",
+            );
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(journal, repository, effects);
+        service.register_definition(&child, "test").expect("child");
+        service
+            .register_definition(&parent, "test")
+            .expect("parent");
+        let queued = service
+            .queue_run("orphan-parent", "1.0.0", json!({"message":"parent"}))
+            .expect("queue");
+        service
+            .append_run_event(&queued.run_id, "workflow.run.started.v1", json!({}))
+            .expect("claim");
+        service
+            .append_run_event(
+                &queued.run_id,
+                "workflow.step.started.v1",
+                json!({"step_id":"child-call", "attempt":1}),
+            )
+            .expect("step start");
+        let original_child_id = uuid::Uuid::now_v7().to_string();
+        service
+            .append_run_event(
+                &queued.run_id,
+                "workflow.subworkflow.linked.v1",
+                json!({
+                    "step_id": "child-call",
+                    "child_run_id": original_child_id,
+                    "workflow_name": "orphan-child",
+                    "workflow_version": "1.0.0",
+                    "inputs": {"message":"child"},
+                    "call_depth": 2,
+                }),
+            )
+            .expect("durable intent");
+        service.recover_interrupted().expect("recover parent");
+        let completed = service
+            .resume_run(&queued.run_id)
+            .await
+            .expect("resume parent");
+        assert_eq!(
+            completed.status,
+            colossus_contracts::WorkflowStatus::Completed
+        );
+        let recreated = service.get_run(&original_child_id).expect("same child id");
+        assert_eq!(
+            recreated.parent_run_id.as_deref(),
+            Some(queued.run_id.as_str())
+        );
+        assert_eq!(service.list_runs(10).expect("runs").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn child_terminal_failure_fails_the_parent_without_relaunch() {
+        const CHILD: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: failing-child
+  version: 1.0.0
+  description: Failing child
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 2
+steps:
+  - type: tool
+    id: fail
+    tool: child.fail
+    arguments: {}
+    idempotency: null
+"#;
+        const PARENT: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: failure-parent
+  version: 1.0.0
+  description: Failure parent
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 3
+steps:
+  - type: workflow
+    id: child-call
+    workflow: failing-child
+    version: 1.0.0
+    inputs: {}
+"#;
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        effects.fail("child.fail", 1);
+        let service = WorkflowService::new(journal, repository, effects.clone());
+        service.register_definition(CHILD, "test").expect("child");
+        service.register_definition(PARENT, "test").expect("parent");
+        let parent = service
+            .start_run("failure-parent", "1.0.0", json!({}))
+            .await
+            .expect("parent run");
+        assert_eq!(parent.status, colossus_contracts::WorkflowStatus::Failed);
+        let child = service
+            .list_runs(10)
+            .expect("runs")
+            .into_iter()
+            .find(|run| run.parent_run_id.as_deref() == Some(parent.run_id.as_str()))
+            .expect("child");
+        assert_eq!(child.status, colossus_contracts::WorkflowStatus::Failed);
+        assert_eq!(
+            effects
+                .calls()
+                .iter()
+                .filter(|call| call.action == "workflow.start")
                 .count(),
             1
         );

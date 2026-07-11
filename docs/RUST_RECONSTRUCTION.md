@@ -62,7 +62,10 @@ obsolete Go launcher.
   attempt-budget reconstruction; root/nested wait input, resume, cancellation,
   interruption, `foreach`, and bounded parallel execution. Known failures retry only
   with explicit idempotency, compensation effects are separately gateway-dispatched,
-  and interrupted non-idempotent effects are never retried.
+  and interrupted non-idempotent effects are never retried. Subworkflow steps launch
+  separately pinned, policy-authorized child runs with projected lineage, visible waiting
+  identity, duplicate-free resume, crash repair, terminal propagation, and cancellation
+  cascade.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   a disposable Tantivy lexical index with event-id idempotency, durable replay position,
   retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry

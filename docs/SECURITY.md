@@ -125,6 +125,11 @@ record is labeled `outcome_unknown`; operator resume is refused when that step l
 explicit idempotency strategy. Compensation is definition-declared, uses separate step
 identity and audit events, and crosses the effect gateway independently for every action.
 Policy approval of a primary effect never authorizes its compensation.
+Subworkflow launch is a distinct `workflow.start` effect (approval-required by the
+built-in policy unless explicitly overridden). Child runs pin their own definition hash
+and immutable parent run, parent step, and call depth. A durable parent link is reused on
+resume; its journal-encrypted payload can repair a missing child queue record using the
+original child ID after interruption.
 
 The sections below describe the frozen Python 0.5 implementation. They remain relevant
 to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.
