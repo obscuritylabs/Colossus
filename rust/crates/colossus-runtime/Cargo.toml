@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
+colossus-audit.workspace = true
 colossus-agent.workspace = true
 colossus-contracts.workspace = true
 colossus-context.workspace = true

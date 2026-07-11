@@ -68,6 +68,38 @@ multiple provider/tool turns, strict schema validation, two bounded malformed-ar
 correction turns, and distinct max-turn exhaustion. Incremental transport streaming
 remains pending.
 
+To export redacted audit evidence to an existing local directory, configure the
+replaceable exporter and grant its write effect explicitly:
+
+```yaml
+audit:
+  exporter:
+    kind: directory
+    path: /absolute/path/to/audit-evidence
+policy:
+  kind: built_in
+  allow_actions: [audit.export.write]
+sandbox:
+  filesystem:
+    - root: /absolute/path/to/audit-evidence
+      mode: write
+```
+
+The directory must already exist. Each deterministic JSON file contains envelope and
+chain evidence but no payload ciphertext, nonce, or plaintext. Export work has its own
+durable queue position and retry status and is drained automatically by the worker or
+manually with:
+
+```sh
+cargo run -p colossus-cli --bin colossus-rs -- audit exporter-status
+cargo run -p colossus-cli --bin colossus-rs -- audit exporter-drain
+cargo run -p colossus-cli --bin colossus-rs -- audit exporter-reset
+```
+
+Reset replays deterministic files from the canonical journal and is the explicit
+operator recovery for an unknown delivery outcome. The directory adapter is not WORM;
+remote/WORM export remains a later adapter.
+
 Tantivy remains the offline memory-index default. To select the disposable Chroma v2
 adapter, add a semantic block while retaining canonical memory in the encrypted journal:
 

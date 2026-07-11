@@ -240,6 +240,16 @@ sandbox:
     assert_eq!(telemetry["run_count"], 1);
     let verified = run(binary, &config, &["audit", "verify"]);
     assert!(verified.status.success());
+    let export_status = run(binary, &config, &["audit", "exporter-status"]);
+    assert!(export_status.status.success());
+    let export_status: Value =
+        serde_json::from_slice(&export_status.stdout).expect("audit exporter status JSON");
+    assert_eq!(export_status["configured"], false);
+    assert_eq!(export_status["ready"], true);
+    let export_drain = run(binary, &config, &["audit", "exporter-drain"]);
+    assert!(export_drain.status.success());
+    let export_reset = run(binary, &config, &["audit", "exporter-reset"]);
+    assert!(export_reset.status.success());
 
     let session_id = result["session_id"].as_str().expect("session id");
     let task = run(

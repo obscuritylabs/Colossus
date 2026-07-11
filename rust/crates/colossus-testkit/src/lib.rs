@@ -1,16 +1,16 @@
 //! Shared adapter conformance fixtures.
 
 use colossus_contracts::{
-    Actor, ActorType, EncryptedPayload, EventDisplayMode, EventEnvelope, IntegrationAuth,
-    IntegrationConnection, IntegrationKind, IntegrationOperation, IntegrationStatus, NewEvent,
-    PackInstallation, PackManifest, PackStatus, ProjectionBatch, ProjectionMutation,
-    ProjectionWorkItem, PublisherTrust, ReplPreferences, ResearchClaim, ResearchDepth, ResearchRun,
-    ResearchSource, ResearchSourceKind, ResearchStatus, SignedCheckpoint, StreamDisplayMode,
-    ThemeName, ToolSpec, TranscriptDensity,
+    Actor, ActorType, AuditEvidence, EncryptedPayload, EventDisplayMode, EventEnvelope,
+    IntegrationAuth, IntegrationConnection, IntegrationKind, IntegrationOperation,
+    IntegrationStatus, NewEvent, PackInstallation, PackManifest, PackStatus, ProjectionBatch,
+    ProjectionMutation, ProjectionWorkItem, PublisherTrust, ReplPreferences, ResearchClaim,
+    ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus,
+    SignedCheckpoint, StreamDisplayMode, ThemeName, ToolSpec, TranscriptDensity,
 };
 use colossus_ports::{
-    EventJournal, ExtensionRepository, ExternalWorkQueue, PresentationRepository, ProjectionStore,
-    ResearchRepository, StoreError, VerificationReport,
+    AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, PresentationRepository,
+    ProjectionStore, ResearchRepository, StoreError, VerificationReport,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -459,6 +459,22 @@ pub fn assert_external_work_queue_conformance(
             .expect("batch acknowledge"),
         2
     );
+}
+
+/// Assert the common stable-kind and idempotent-delivery contract for an audit sink.
+pub async fn assert_audit_exporter_conformance(
+    exporter: &dyn AuditExporter,
+    evidence: &AuditEvidence,
+) {
+    assert!(!exporter.kind().trim().is_empty());
+    exporter
+        .export(evidence)
+        .await
+        .expect("first conformance export");
+    exporter
+        .export(evidence)
+        .await
+        .expect("idempotent conformance replay");
 }
 
 /// Shared reconstruction and validation checks for presentation repository adapters.

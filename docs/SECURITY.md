@@ -24,6 +24,16 @@ consistent tail truncation. Startup verification failure enables read-only recov
 blocks effects. A missing terminal event after `effect.started` is recorded as
 `effect.outcome_unknown` and never automatically retried.
 
+Configured external audit export is itself an effect; it never receives a trusted-service
+bypass. The exporter discloses only ciphertext-free `AuditEvidence` envelope metadata and
+hashes. Every directory write requires `audit.export.write`, a matching sandbox write
+root, and a one-use permit. The configured root must already exist. Export authorization
+events use the reserved `system/audit-exporter` actor and are retained canonically but
+not recursively exported. Retryable failures use durable bounded backoff; an unknown
+write outcome blocks implicit retry until an operator explicitly resets the consumer.
+The local directory sink is replay-safe operational evidence, not WORM storage; a future
+remote/WORM adapter must preserve the same policy and evidence contract.
+
 OPA receives full logical request content after raw credentials, authentication headers,
 private keys, key material, and hidden reasoning are replaced by bounded hashes and
 references. Input over 1 MiB, transport failure, invalid decisions, missing obligations,
@@ -529,10 +539,12 @@ retains its legacy SQLite preferences and plaintext history separately.
 
 ## Audit Logs
 
-Audit records are append-only JSONL and hash chained. They are intended to support
-debugging, release review, and incident response. Redaction is enabled by default for
-command inputs and environment values, but operators should still treat audit logs as
-sensitive operational records.
+The frozen Python audit records are append-only hash-chained JSONL. The Rust canonical
+journal is encrypted, hash chained, checkpoint-signed redb state and remains the source
+of truth. Its optional directory exporter emits one strict ciphertext-free JSON evidence
+record per non-exporter event through the permission boundary. Both forms are intended
+for debugging, release review, and incident response. Operators should still treat all
+audit material as sensitive operational evidence.
 
 ## Telemetry
 

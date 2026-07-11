@@ -36,6 +36,10 @@ obsolete Go launcher.
   default session, work, memory, and workflow reducers. Session and work repository
   ports have concrete projected adapters.
 - Checkpoints every 100 events or 60 seconds, plus explicit clean-shutdown checkpoints.
+- A replaceable async audit-export port and durable outbox consumer with independent
+  position, bounded exponential retry state, explicit unknown-outcome recovery, and
+  recursion suppression. The initial directory adapter writes strict ciphertext-free
+  evidence through `audit.export.write`; CLI and worker expose status, drain, and reset.
 - Startup conversion of abandoned `effect.started` records to
   `effect.outcome_unknown`, with no automatic retry.
 - One effect gateway with a hard safety kernel, built-in deny-by-default policy, strict

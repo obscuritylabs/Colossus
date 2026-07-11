@@ -3,6 +3,9 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
+use colossus_audit::{
+    AuditExportReport, AuditExportService, AuditExportStatus, GatewayDirectoryAuditExporter,
+};
 use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
     Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, CredentialReference,
@@ -49,12 +52,12 @@ use colossus_policy::{
     system_actor,
 };
 use colossus_ports::{
-    ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EmbeddingProvider,
-    EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider, MemoryIndex,
-    MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError, PolicyDecisionPoint,
-    PresentationRepository, ProjectionStore, ProviderEventObserver, ResearchRepository,
-    RunEventObserver, SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor,
-    ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
+    ApprovalProvider, AuditExporter, ContextError, ContextPreparer, ContextRepository,
+    EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider,
+    MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
+    PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
+    ResearchRepository, RunEventObserver, SessionRepository, SkillRepository, StoreError,
+    ToolError, ToolExecutor, ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
 };
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
@@ -108,6 +111,9 @@ pub struct RuntimeConfig {
     pub schema_version: u16,
     /// Canonical journal and key settings.
     pub storage: StorageConfig,
+    /// Optional durable external audit evidence export.
+    #[serde(default)]
+    pub audit: AuditConfig,
     /// Policy decision point settings.
     pub policy: PolicyConfig,
     /// Workflow definition libraries.
@@ -142,6 +148,34 @@ pub struct RuntimeConfig {
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
+}
+
+/// Durable audit evidence export configuration.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditConfig {
+    /// Optional external evidence sink.
+    #[serde(default)]
+    pub exporter: AuditExporterConfig,
+}
+
+/// Replaceable external audit evidence adapter.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum AuditExporterConfig {
+    /// Keep audit evidence only in the canonical journal.
+    #[default]
+    Disabled,
+    /// Write one ciphertext-free JSON record per event through the effect gateway.
+    Directory {
+        /// Existing directory receiving deterministic sequence/event-id files.
+        path: PathBuf,
+    },
 }
 
 /// Bounded agent-loop and active tool configuration.
@@ -786,6 +820,7 @@ impl RuntimeConfig {
                     signing_key_id: format!("checkpoint-{instance_id}"),
                 },
             },
+            audit: AuditConfig::default(),
             policy: PolicyConfig::BuiltIn {
                 allow_actions: Vec::new(),
                 approval_actions: Vec::new(),
@@ -1842,6 +1877,7 @@ pub struct Runtime {
     journal: Arc<dyn EventJournal>,
     recovery_reason: Option<String>,
     projections: Arc<ProjectionWorker>,
+    audit_exports: Arc<AuditExportService>,
     telemetry: Arc<TelemetryService>,
     skills_enabled: bool,
     skills: Arc<dyn SkillRepository>,
@@ -2243,6 +2279,7 @@ impl Runtime {
             "filesystem.metadata".to_owned(),
             "filesystem.search".to_owned(),
             "filesystem.write".to_owned(),
+            "audit.export.write".to_owned(),
             "process.spawn".to_owned(),
             "shell.run".to_owned(),
             "git.status".to_owned(),
@@ -2338,10 +2375,25 @@ impl Runtime {
             Arc::clone(&journal),
             Arc::clone(&projection_store),
         ));
+        let audit_exporter: Option<Arc<dyn AuditExporter>> = match &config.audit.exporter {
+            AuditExporterConfig::Disabled => None,
+            AuditExporterConfig::Directory { path } => {
+                Some(Arc::new(GatewayDirectoryAuditExporter::new(
+                    absolute_path(path)?,
+                    Arc::clone(&gateway),
+                    Arc::clone(&filesystem_executor) as Arc<dyn EffectExecutor>,
+                )?))
+            }
+        };
+        let audit_exports = Arc::new(AuditExportService::new(
+            Arc::clone(&journal),
+            Arc::clone(&external_work),
+            audit_exporter,
+        ));
         let memory_service = Arc::new(MemoryService::with_indexes(
             Arc::clone(&journal),
             memory_repository,
-            external_work,
+            Arc::clone(&external_work),
             memory_indexes,
             Arc::clone(&sessions),
         )?);
@@ -2522,6 +2574,7 @@ impl Runtime {
             journal,
             recovery_reason,
             projections,
+            audit_exports,
             telemetry,
             skills_enabled: config.skills.enabled,
             skills,
@@ -2562,6 +2615,24 @@ impl Runtime {
     /// Authoritative event journal for bounded audit views.
     pub fn journal(&self) -> Arc<dyn EventJournal> {
         Arc::clone(&self.journal)
+    }
+
+    /// Durable audit-export consumer readiness and retry state.
+    pub fn audit_export_status(&self) -> Result<AuditExportStatus, RuntimeError> {
+        self.audit_exports.status().map_err(Into::into)
+    }
+
+    /// Drain configured external audit evidence work.
+    pub async fn drain_audit_exports(&self) -> Result<AuditExportReport, RuntimeError> {
+        self.audit_exports
+            .drain(256, 16_384)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Operator-authorized replay of all configured audit evidence.
+    pub fn reset_audit_exports(&self) -> Result<AuditExportStatus, RuntimeError> {
+        self.audit_exports.reset().map_err(Into::into)
     }
 
     /// List recent metadata-only run telemetry.

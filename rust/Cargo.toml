@@ -6,6 +6,7 @@ members = [
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
     "crates/colossus-projection",
+    "crates/colossus-audit",
     "crates/colossus-sandbox",
     "crates/colossus-policy",
     "crates/colossus-provider",
@@ -78,6 +79,7 @@ uuid = { version = "1.23.4", features = ["serde", "v7"] }
 url = "2.5.8"
 
 colossus-contracts = { path = "crates/colossus-contracts" }
+colossus-audit = { path = "crates/colossus-audit" }
 colossus-context = { path = "crates/colossus-context" }
 colossus-work = { path = "crates/colossus-work" }
 colossus-domain = { path = "crates/colossus-domain" }

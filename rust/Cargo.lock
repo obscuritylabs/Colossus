@@ -670,6 +670,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-audit"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "colossus-policy",
+ "colossus-ports",
+ "colossus-projection",
+ "colossus-sandbox",
+ "colossus-testkit",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "colossus-cli"
 version = "0.6.0-alpha.1"
 dependencies = [
@@ -949,6 +967,7 @@ dependencies = [
  "async-trait",
  "base64",
  "colossus-agent",
+ "colossus-audit",
  "colossus-context",
  "colossus-contracts",
  "colossus-integrations",

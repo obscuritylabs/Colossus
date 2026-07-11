@@ -15,6 +15,7 @@ colossus-cli -> colossus-runtime -> colossus-agent -> colossus-ports
                     +-> colossus-workflow ---------------+
                     +-> colossus-provider -> colossus-policy
                     +-> colossus-mcp -> colossus-sandbox -> colossus-policy
+                    +-> colossus-audit -> colossus-policy
                     +-> colossus-sandbox  -> colossus-policy
 
 redb and future adapters -> colossus-ports -> colossus-contracts -> colossus-domain
@@ -123,6 +124,18 @@ bounded metadata, embeddings, and source event ids—not lifecycle authority. Bo
 transport and OpenAI-compatible embedding transport are permit-bound, exact-origin,
 bounded effects. The offline local embedding profile uses deterministic token/bigram
 feature hashing and does not claim model-quality semantic understanding.
+
+`colossus-audit` consumes the journal's atomic external-work outbox through its own
+durable optimistic checkpoint. It converts each canonical envelope into strict
+`AuditEvidence` containing lineage, payload algorithm/key identity, plaintext hash, and
+chain hashes, but never payload ciphertext, nonce, or plaintext. The initial directory
+adapter writes deterministic sequence/event-id JSON files only through
+`audit.export.write` and the filesystem effect executor. Delivery failures retain queue
+position and bounded retry state; unknown outcomes require an explicit operator reset.
+Because authorizing an export appends ordinary effect lifecycle events, those events use
+the reserved `system/audit-exporter` actor and are acknowledged without re-export to
+prevent recursion. The canonical journal still retains them. Additional exporters reuse
+the same evidence, queue, policy, and conformance boundary.
 
 Repository adapters are verified through shared port-level conformance factories rather
 than implementation-specific happy paths. The research suite reopens the adapter and

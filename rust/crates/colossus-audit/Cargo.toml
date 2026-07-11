@@ -1,0 +1,25 @@
+[package]
+name = "colossus-audit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+colossus-contracts.workspace = true
+colossus-policy.workspace = true
+colossus-ports.workspace = true
+colossus-sandbox.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+colossus-projection.workspace = true
+colossus-testkit.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -474,6 +474,16 @@ new effects. An `effect.started` with no terminal event becomes `outcome_unknown
 recovery and is never silently retried. Operators can verify, inspect, export, and check
 anchor status through bounded redacted audit commands.
 
+Configured audit sinks MUST consume the journal's atomic external-work outbox using an
+independent durable position. Export evidence MUST contain sufficient envelope, lineage,
+payload-hash, and chain-hash metadata for verification but MUST NOT contain payload
+ciphertext, nonce, plaintext, credentials, or hidden reasoning. External delivery crosses
+the effect gateway with `audit.export.write` (or an adapter-specific capability), and an
+unknown delivery outcome blocks automatic retry. Policy lifecycle events created by an
+export MUST remain in the canonical journal but MUST NOT create an unbounded recursive
+export loop. The initial directory adapter is deterministic and replay-safe; it does not
+claim WORM durability.
+
 ## 12. Sessions, Context, Decisions, And Memories
 
 ### 12.1 Sessions

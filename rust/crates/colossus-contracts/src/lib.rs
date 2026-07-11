@@ -203,6 +203,44 @@ pub struct EventEnvelope {
     pub record_hash: String,
 }
 
+/// Redacted immutable journal evidence suitable for external audit sinks.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuditEvidence {
+    /// Evidence schema version.
+    pub schema_version: u16,
+    /// Source event schema version.
+    pub event_version: u16,
+    /// Source event identifier.
+    pub event_id: String,
+    /// Source global sequence.
+    pub global_sequence: u64,
+    /// Aggregate stream identifier.
+    pub stream_id: String,
+    /// Aggregate stream version.
+    pub stream_version: u64,
+    /// Security and product classification.
+    pub classification: EventClassification,
+    /// Versioned event name.
+    pub event_type: String,
+    /// Actor responsible for the source event.
+    pub actor: Actor,
+    /// Correlation metadata for the source event.
+    pub context: ExecutionContext,
+    /// Source UTC RFC3339 timestamp.
+    pub occurred_at: String,
+    /// Encryption key identifier, never key material.
+    pub payload_key_id: String,
+    /// Authenticated payload encryption algorithm.
+    pub payload_algorithm: String,
+    /// Hash of canonical plaintext payload bytes.
+    pub payload_plaintext_hash: String,
+    /// Previous journal record hash.
+    pub previous_hash: String,
+    /// Source journal record hash.
+    pub record_hash: String,
+}
+
 /// An append-only signed chain checkpoint.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

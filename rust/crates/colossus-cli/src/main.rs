@@ -649,6 +649,12 @@ enum AuditAction {
     },
     /// Show the latest signed checkpoint and secure chain head.
     AnchorStatus,
+    /// Show configured durable audit-export position, lag, and retry state.
+    ExporterStatus,
+    /// Drain queued redacted evidence to the configured external sink.
+    ExporterDrain,
+    /// Reset the external sink consumer for operator-authorized replay.
+    ExporterReset,
 }
 
 #[derive(Args)]
@@ -2636,6 +2642,15 @@ async fn dispatch_to_worker_if_active(
                         println!("{}", serde_json::to_string(event)?);
                     }
                 }
+                AuditAction::ExporterStatus => {
+                    print_json(&client.call(WorkerOperation::AuditExportStatus).await?)?;
+                }
+                AuditAction::ExporterDrain => {
+                    print_json(&client.call(WorkerOperation::AuditExportDrain).await?)?;
+                }
+                AuditAction::ExporterReset => {
+                    print_json(&client.call(WorkerOperation::AuditExportReset).await?)?;
+                }
             }
             Ok(true)
         }
@@ -4269,6 +4284,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     println!("{}", serde_json::to_string(&event)?);
                 }
             }
+            AuditAction::ExporterStatus => print_json(&runtime.audit_export_status()?)?,
+            AuditAction::ExporterDrain => print_json(&runtime.drain_audit_exports().await?)?,
+            AuditAction::ExporterReset => print_json(&runtime.reset_audit_exports()?)?,
         },
         Command::Policy(command) => match command.command {
             PolicyAction::Doctor => print_json(&runtime.policy_doctor().await?)?,

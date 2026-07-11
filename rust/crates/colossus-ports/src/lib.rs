@@ -4,15 +4,15 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ApprovalProof, ContextSnapshot, DecisionStatus, EffectRequest, EventEnvelope,
-    ExecutionContext, ExternalWorkRetryState, GoalRecord, GoalStatus, IntegrationConnection,
-    KeyDecision, MemoryRecord, ModelMessage, ModelRequest, ModelToolDefinition, NewEvent,
-    PackInstallation, PackStatus, PlanRecord, PlanStatus, PolicyDecision, PreparedContext,
-    ProjectionBatch, ProjectionWorkItem, ProviderEvent, ProviderRoute, ProviderTurn,
-    PublisherTrust, ReplPreferences, ResearchClaim, ResearchRun, ResearchSource, RunEventEnvelope,
-    SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord, SubagentJob,
-    SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
-    UserPromptResponse, WorkflowDefinition, WorkflowRun,
+    Actor, ApprovalProof, AuditEvidence, ContextSnapshot, DecisionStatus, EffectRequest,
+    EventEnvelope, ExecutionContext, ExternalWorkRetryState, GoalRecord, GoalStatus,
+    IntegrationConnection, KeyDecision, MemoryRecord, ModelMessage, ModelRequest,
+    ModelToolDefinition, NewEvent, PackInstallation, PackStatus, PlanRecord, PlanStatus,
+    PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderEvent,
+    ProviderRoute, ProviderTurn, PublisherTrust, ReplPreferences, ResearchClaim, ResearchRun,
+    ResearchSource, RunEventEnvelope, SessionMessage, SessionSummary, SignedCheckpoint,
+    SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall,
+    ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -767,9 +767,13 @@ pub trait EmbeddingProvider: Send + Sync {
 }
 
 /// Bounded redacted audit export sink.
+#[async_trait]
 pub trait AuditExporter: Send + Sync {
-    /// Export one immutable envelope; payload disclosure is caller-controlled.
-    fn export(&self, event: &EventEnvelope) -> Result<(), StoreError>;
+    /// Stable adapter kind for readiness output.
+    fn kind(&self) -> &'static str;
+
+    /// Idempotently export one immutable redacted evidence record.
+    async fn export(&self, evidence: &AuditEvidence) -> Result<(), StoreError>;
 }
 
 /// Policy-decision failures always fail closed at the gateway.

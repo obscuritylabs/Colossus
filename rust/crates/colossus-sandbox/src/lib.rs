@@ -216,7 +216,9 @@ impl EffectExecutor for FilesystemExecutor {
                 bounded_json(json!({"entries": entries}), max_output)
             }
             "filesystem.search" => search_files(&target, &request.content, max_output),
-            "filesystem.write" => write_file(&target, &request.content, max_output),
+            "filesystem.write" | "audit.export.write" => {
+                write_file(&target, &request.content, max_output)
+            }
             "patch.preview" => preview_patch(&target, &request.content, max_output),
             "patch.apply" | "patch.reverse" | "trace.export" => {
                 write_file(&target, &request.content, max_output)
@@ -230,7 +232,8 @@ fn filesystem_mode(action: &str) -> Result<&'static str, ExecutionError> {
     match action {
         "filesystem.read" | "filesystem.list" | "filesystem.search" | "patch.preview" => Ok("read"),
         "filesystem.metadata" => Ok("metadata"),
-        "filesystem.write" | "patch.apply" | "patch.reverse" | "trace.export" => Ok("write"),
+        "filesystem.write" | "patch.apply" | "patch.reverse" | "trace.export"
+        | "audit.export.write" => Ok("write"),
         _ => Err(adapter_failure("unsupported filesystem action")),
     }
 }

@@ -105,6 +105,12 @@ pub enum WorkerOperation {
         /// Maximum records.
         limit: usize,
     },
+    /// Inspect configured durable audit-export readiness.
+    AuditExportStatus,
+    /// Drain queued external audit evidence.
+    AuditExportDrain,
+    /// Reset and replay the external audit-export consumer.
+    AuditExportReset,
     /// Check policy readiness.
     PolicyDoctor,
     /// List projection positions and lag.
@@ -1225,6 +1231,9 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::Ping => "ping",
         WorkerOperation::AuditVerify => "audit_verify",
         WorkerOperation::AuditRead { .. } => "audit_read",
+        WorkerOperation::AuditExportStatus => "audit_export_status",
+        WorkerOperation::AuditExportDrain => "audit_export_drain",
+        WorkerOperation::AuditExportReset => "audit_export_reset",
         WorkerOperation::PolicyDoctor => "policy_doctor",
         WorkerOperation::ProjectionStatus => "projection_status",
         WorkerOperation::ProjectionDrain => "projection_drain",
@@ -1440,6 +1449,17 @@ async fn dispatch(
                 .journal()
                 .read_global(from.max(1), limit.clamp(1, 10_000))?,
         )?),
+        WorkerOperation::AuditExportStatus => {
+            Ok(serde_json::to_value(runtime.audit_export_status()?)?)
+        }
+        WorkerOperation::AuditExportDrain => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(runtime.drain_audit_exports().await?)?)
+        }
+        WorkerOperation::AuditExportReset => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(runtime.reset_audit_exports()?)?)
+        }
         WorkerOperation::PolicyDoctor => Ok(runtime.policy_doctor().await?),
         WorkerOperation::ProjectionStatus => {
             Ok(serde_json::to_value(runtime.projection_status()?)?)
@@ -2118,10 +2138,12 @@ async fn drain_once(
     let workflows = runtime.workflows().drain().await?;
     let projections = runtime.drain_projections()?;
     let subagents = runtime.drain_subagents().await?;
+    let audit_exports = runtime.drain_audit_exports().await?;
     Ok(json!({
         "workflows": workflows,
         "projections": projections,
         "subagents": subagents,
+        "audit_exports": audit_exports,
     }))
 }
 
