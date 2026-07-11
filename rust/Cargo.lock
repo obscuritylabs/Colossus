@@ -713,6 +713,27 @@ name = "colossus-domain"
 version = "0.6.0-alpha.1"
 
 [[package]]
+name = "colossus-integrations"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "colossus-policy",
+ "colossus-ports",
+ "colossus-testkit",
+ "futures",
+ "jsonschema",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "time",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "colossus-journal-redb"
 version = "0.6.0-alpha.1"
 dependencies = [
@@ -840,6 +861,7 @@ dependencies = [
  "colossus-agent",
  "colossus-context",
  "colossus-contracts",
+ "colossus-integrations",
  "colossus-journal-redb",
  "colossus-memory",
  "colossus-policy",

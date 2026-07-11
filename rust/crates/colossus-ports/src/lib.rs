@@ -5,12 +5,12 @@
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ApprovalProof, ContextSnapshot, DecisionStatus, EffectRequest, EventEnvelope,
-    ExecutionContext, GoalRecord, GoalStatus, KeyDecision, MemoryRecord, ModelMessage,
-    ModelRequest, ModelToolDefinition, NewEvent, PlanRecord, PlanStatus, PolicyDecision,
-    PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute, ProviderTurn,
-    ResearchClaim, ResearchRun, ResearchSource, SessionMessage, SessionSummary, SignedCheckpoint,
-    SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall,
-    ToolResult, ToolSpec, WorkflowDefinition, WorkflowRun,
+    ExecutionContext, GoalRecord, GoalStatus, IntegrationConnection, KeyDecision, MemoryRecord,
+    ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PlanRecord, PlanStatus,
+    PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute,
+    ProviderTurn, ResearchClaim, ResearchRun, ResearchSource, SessionMessage, SessionSummary,
+    SignedCheckpoint, SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord,
+    TaskStatus, ToolCall, ToolResult, ToolSpec, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -504,8 +504,29 @@ pub trait ResearchRepository: Send + Sync {
     /// List claims in durable append order.
     fn list_claims(&self, run_id: &str) -> Result<Vec<ResearchClaim>, StoreError>;
 }
-/// Skills, resources, packs, and trust repository.
-pub trait ExtensionRepository: AggregateRepository {}
+/// Canonical integration, pack, resource, and publisher-trust repository.
+pub trait ExtensionRepository: AggregateRepository {
+    /// Reconstruct one integration connection.
+    fn get_integration(&self, name: &str) -> Result<Option<IntegrationConnection>, StoreError>;
+
+    /// List integration connections in deterministic name order.
+    fn list_integrations(&self, limit: usize) -> Result<Vec<IntegrationConnection>, StoreError>;
+
+    /// Append a validated next connection state using optimistic concurrency.
+    fn save_integration(
+        &self,
+        connection: IntegrationConnection,
+        actor: Actor,
+    ) -> Result<IntegrationConnection, StoreError>;
+
+    /// Append an explicit disconnection event without deleting history.
+    fn disconnect_integration(
+        &self,
+        name: &str,
+        actor: Actor,
+        updated_at: &str,
+    ) -> Result<IntegrationConnection, StoreError>;
+}
 
 /// Deterministic discovery for declarative data-only skills.
 pub trait SkillRepository: Send + Sync {

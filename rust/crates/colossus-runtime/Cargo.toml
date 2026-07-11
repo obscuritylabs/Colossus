@@ -21,6 +21,7 @@ colossus-projection.workspace = true
 colossus-sandbox.workspace = true
 colossus-session.workspace = true
 colossus-skills.workspace = true
+colossus-integrations.workspace = true
 colossus-telemetry.workspace = true
 colossus-tools.workspace = true
 colossus-workflow.workspace = true

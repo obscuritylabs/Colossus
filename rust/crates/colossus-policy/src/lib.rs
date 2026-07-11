@@ -1114,7 +1114,17 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             .actions
             .get(&request.action)
             .copied()
-            .unwrap_or(DecisionOutcome::Deny);
+            .unwrap_or_else(|| {
+                if request.action.starts_with("openapi.")
+                    || request.action.starts_with("github.")
+                    || request.action.starts_with("searxng.")
+                    || request.action.starts_with("opensearch.")
+                {
+                    DecisionOutcome::RequireApproval
+                } else {
+                    DecisionOutcome::Deny
+                }
+            });
         if outcome == DecisionOutcome::RequireApproval
             && (request.approval.is_some() || request.phase == EffectPhase::PostEffect)
         {
@@ -1131,6 +1141,11 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("memory.")
             || request.action.starts_with("skill.")
             || request.action.starts_with("research.")
+            || request.action.starts_with("integration.")
+            || request.action.starts_with("openapi.")
+            || request.action.starts_with("github.")
+            || request.action.starts_with("searxng.")
+            || request.action.starts_with("opensearch.")
             || request.action == "network.http"
         {
             obligations.require_post_effect = true;

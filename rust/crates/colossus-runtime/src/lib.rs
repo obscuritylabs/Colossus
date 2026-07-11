@@ -8,15 +8,19 @@ use colossus_contracts::{
     Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, DecisionOutcome,
     DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
     ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunResult, GoalStatus,
-    KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole,
-    ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep, PreparedContext, ProjectionStatus,
-    ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute,
-    ProviderTurn, QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun,
-    ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
-    SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection,
-    SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult,
-    SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus,
-    TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
+    IntegrationAuth, IntegrationConnection, IntegrationSummary, KeyDecision, MemoryRecord,
+    MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord,
+    PlanStatus, PlanStep, PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo,
+    ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
+    QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
+    ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage, SessionSummary,
+    SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult,
+    SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
+    SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
+    TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
+};
+use colossus_integrations::{
+    EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -31,10 +35,11 @@ use colossus_policy::{
     OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
-    ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EventJournal, KeyProvider,
-    MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
-    PolicyDecisionPoint, ProjectionStore, ResearchRepository, SessionRepository, SkillRepository,
-    StoreError, ToolError, ToolExecutor, ToolRegistry, WorkRepository, WorkflowRepository,
+    ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EventJournal,
+    ExtensionRepository, KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever,
+    ModelProvider, ModelProviderError, PolicyDecisionPoint, ProjectionStore, ResearchRepository,
+    SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
+    WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
@@ -1249,6 +1254,8 @@ pub struct Runtime {
     skills: Arc<dyn SkillRepository>,
     skill_composer: Arc<SkillComposer>,
     skill_executor: Arc<SkillEffectExecutor>,
+    extensions: Arc<dyn ExtensionRepository>,
+    integration_executor: Arc<IntegrationExecutor>,
     sessions: Arc<dyn SessionRepository>,
     context: Arc<ContextService>,
     work: Arc<dyn WorkRepository>,
@@ -1326,6 +1333,14 @@ impl Runtime {
             default_handlers(),
         )?);
         let telemetry = Arc::new(TelemetryService::new(Arc::clone(&journal)));
+        let extensions: Arc<dyn ExtensionRepository> =
+            Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
+        let integration_executor = Arc::new(IntegrationExecutor::new(Arc::clone(&extensions))?);
+        let integration_specs = integration_executor.tool_specs()?;
+        let integration_actions = integration_specs
+            .iter()
+            .map(|spec| spec.name.clone())
+            .collect::<Vec<_>>();
         let user_skill_root = absolute_path(&config.skills.user)?;
         let skills: Arc<dyn SkillRepository> = Arc::new(FilesystemSkillRepository::new(
             vec![
@@ -1425,6 +1440,12 @@ impl Runtime {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
                 for action in ["skill.scaffold", "skill.write", "skill.install"] {
+                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
+                }
+                for action in ["integration.openapi.import", "integration.disconnect"]
+                    .into_iter()
+                    .chain(integration_actions.iter().map(String::as_str))
+                {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
                 for root in [&config.workflows.repository, &config.workflows.user] {
@@ -1582,6 +1603,9 @@ impl Runtime {
                 "skill.install".to_owned(),
                 "skill.resource.list".to_owned(),
                 "skill.resource.read".to_owned(),
+                "integration.openapi.import".to_owned(),
+                "integration.disconnect".to_owned(),
+                "integration.invoke".to_owned(),
             ]),
             permit_key,
         ));
@@ -1609,8 +1633,9 @@ impl Runtime {
                 active_tools.push(goal_tool.into());
             }
         }
-        let tool_registry: Arc<dyn ToolRegistry> =
-            Arc::new(StaticToolRegistry::builtins(&active_tools)?);
+        let mut tool_specs = StaticToolRegistry::builtins(&active_tools)?.list_specs();
+        tool_specs.extend(integration_specs);
+        let tool_registry: Arc<dyn ToolRegistry> = Arc::new(StaticToolRegistry::new(tool_specs)?);
         let model_provider: Arc<dyn ModelProvider> = Arc::new(GatewayModelProvider {
             gateway: Arc::clone(&gateway),
             providers: Arc::clone(&providers),
@@ -1649,6 +1674,7 @@ impl Runtime {
             work: Some(Arc::clone(&work_executor)),
             memory: Some(Arc::clone(&memory_executor)),
             skills: Some(Arc::clone(&skill_executor)),
+            integrations: Some(Arc::clone(&integration_executor)),
             workspace,
             repository_id,
             executables: config
@@ -1710,6 +1736,8 @@ impl Runtime {
             skills,
             skill_composer,
             skill_executor,
+            extensions,
+            integration_executor,
             sessions,
             context,
             work,
@@ -1966,6 +1994,125 @@ impl Runtime {
             .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    async fn execute_integration_operation(
+        &self,
+        operation: IntegrationRequest,
+    ) -> Result<Value, RuntimeError> {
+        let mut request = effect_request(
+            terminal_actor(),
+            operation.action(),
+            operation.resource(),
+            serde_json::to_value(&operation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![operation.action().into()];
+        if let IntegrationRequest::ImportOpenApi {
+            credential_reference: Some(reference),
+            ..
+        } = &operation
+        {
+            request.credential_references = vec![colossus_contracts::CredentialReference {
+                reference: reference.clone(),
+                value_hash: None,
+            }];
+        }
+        let released = self
+            .gateway
+            .execute(request, self.integration_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&released.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// List safe persisted integration summaries.
+    pub fn list_integrations(&self, limit: usize) -> Result<Vec<IntegrationSummary>, RuntimeError> {
+        self.integration_executor
+            .summaries(limit)
+            .map_err(Into::into)
+    }
+
+    /// Reconstruct one persisted integration connection without resolving credentials.
+    pub fn get_integration(
+        &self,
+        name: &str,
+    ) -> Result<Option<IntegrationConnection>, RuntimeError> {
+        self.integration_executor
+            .get_connection(name)
+            .map_err(Into::into)
+    }
+
+    /// Canonical extension repository for embedded application surfaces.
+    pub fn extension_repository(&self) -> Arc<dyn ExtensionRepository> {
+        Arc::clone(&self.extensions)
+    }
+
+    /// Compile and persist a JSON OpenAPI connection through policy and approval.
+    pub async fn import_openapi_integration(
+        &self,
+        name: &str,
+        document: Value,
+        base_url: Option<&str>,
+        auth: IntegrationAuth,
+        credential_reference: Option<&str>,
+        scopes: &[String],
+    ) -> Result<IntegrationConnection, RuntimeError> {
+        serde_json::from_value(
+            self.execute_integration_operation(IntegrationRequest::ImportOpenApi {
+                name: name.into(),
+                document,
+                base_url: base_url.map(Into::into),
+                auth,
+                credential_reference: credential_reference.map(Into::into),
+                scopes: scopes.to_vec(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Disconnect a persisted integration through policy and approval.
+    pub async fn disconnect_integration(
+        &self,
+        name: &str,
+    ) -> Result<IntegrationConnection, RuntimeError> {
+        serde_json::from_value(
+            self.execute_integration_operation(IntegrationRequest::Disconnect {
+                name: name.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Invoke one connected dynamic integration tool from an application/terminal caller.
+    pub async fn call_integration_tool(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<Value, RuntimeError> {
+        let (operation, credentials) = self
+            .integration_executor
+            .invocation(tool_name, arguments)?
+            .ok_or_else(|| {
+                RuntimeError::Config(format!("integration tool not found: {tool_name}"))
+            })?;
+        let mut request = effect_request(
+            terminal_actor(),
+            operation.action(),
+            operation.resource(),
+            serde_json::to_value(&operation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec!["integration.invoke".into()];
+        request.credential_references = credentials;
+        let released = self
+            .gateway
+            .execute(request, self.integration_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&released.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Durable workflow application API.
@@ -3453,6 +3600,7 @@ struct GatewayToolExecutor {
     work: Option<Arc<WorkEffectExecutor>>,
     memory: Option<Arc<MemoryEffectExecutor>>,
     skills: Option<Arc<SkillEffectExecutor>>,
+    integrations: Option<Arc<IntegrationExecutor>>,
     workspace: PathBuf,
     repository_id: String,
     executables: Vec<PathBuf>,
@@ -3488,7 +3636,7 @@ impl GatewayToolExecutor {
             model_actor(call, &context),
             &action,
             resource,
-            serde_json::to_value(operation)
+            serde_json::to_value(&operation)
                 .map_err(|error| ToolError::Failed(error.to_string()))?,
         );
         request.capabilities = vec![action];
@@ -3575,6 +3723,43 @@ impl GatewayToolExecutor {
         serde_json::from_str::<Value>(&output)
             .map_err(|error| ToolError::Failed(format!("invalid skill result: {error}")))?;
         Ok(bounded_tool_text(&output, 256 * 1024))
+    }
+
+    async fn execute_integration_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+    ) -> Result<Option<String>, ToolError> {
+        let executor = self
+            .integrations
+            .as_deref()
+            .ok_or_else(|| ToolError::Failed("integration adapter is unavailable".into()))?;
+        let Some((operation, credentials)) = executor
+            .invocation(&call.name, call.arguments.clone())
+            .map_err(|error| ToolError::Failed(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let mut request = effect_request(
+            model_actor(call, &context),
+            operation.action(),
+            operation.resource(),
+            serde_json::to_value(&operation)
+                .map_err(|error| ToolError::Failed(error.to_string()))?,
+        );
+        request.capabilities = vec!["integration.invoke".into()];
+        request.credential_references = credentials;
+        request.context = context;
+        let result = self
+            .gateway
+            .execute(request, executor)
+            .await
+            .map_err(tool_gateway_error)?;
+        let output = String::from_utf8(result.bytes)
+            .map_err(|_| ToolError::Failed("integration result returned non-UTF-8".into()))?;
+        serde_json::from_str::<Value>(&output)
+            .map_err(|error| ToolError::Failed(format!("invalid integration result: {error}")))?;
+        Ok(Some(bounded_tool_text(&output, 1024 * 1024)))
     }
 
     async fn execute_filesystem_mutation(
@@ -4498,7 +4683,10 @@ impl ToolExecutor for GatewayToolExecutor {
                     1024 * 1024,
                 )
             }
-            name => return Err(ToolError::Unknown(name.into())),
+            name => self
+                .execute_integration_tool(&call, context)
+                .await?
+                .ok_or_else(|| ToolError::Unknown(name.into()))?,
         };
         Ok(ToolResult {
             call_id: call.call_id,
@@ -6440,6 +6628,7 @@ surprise: true
             work: None,
             memory: None,
             skills: Some(skill_executor),
+            integrations: None,
             workspace: directory.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6676,6 +6865,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            integrations: None,
             workspace: allowed.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6743,6 +6933,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            integrations: None,
             workspace: allowed.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6826,6 +7017,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            integrations: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6869,6 +7061,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            integrations: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6985,6 +7178,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            integrations: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7145,6 +7339,7 @@ surprise: true
             work: None,
             memory: Some(memory),
             skills: None,
+            integrations: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7356,6 +7551,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            integrations: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7484,6 +7680,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            integrations: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7617,6 +7814,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            integrations: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7755,6 +7953,7 @@ surprise: true
             work: None,
             memory: Some(Arc::clone(&memory)),
             skills: None,
+            integrations: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7917,6 +8116,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            integrations: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -8082,6 +8282,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            integrations: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: vec![executable],

@@ -38,6 +38,11 @@ cargo run -p colossus-cli --bin colossus-rs -- skills file-read my-skill SKILL.m
 cargo run -p colossus-cli --bin colossus-rs -- skills validate path/to/local-skill --local
 cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
   skills install path/to/local-skill
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask \
+  integrations import-openapi demo openapi.json --base-url https://api.example.test \
+  --credential-reference env:DEMO_API_TOKEN
+cargo run -p colossus-cli --bin colossus-rs -- integrations list
+cargo run -p colossus-cli --bin colossus-rs -- tools list
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
@@ -83,6 +88,17 @@ library: scaffold, write, and install require approval by default; existing file
 the SHA-256 returned by `skills file-read`; candidates are validated before replacement;
 and local install sources must be traversal-free, symlink-free workspace directories.
 Executable activation belongs exclusively to verified packs.
+
+OpenAPI 3 JSON imports are compiled into strict `openapi.NAME.OPERATION` tools and
+persisted as immutable integration lifecycle events. Path, query, and JSON-body fields
+become operation arguments; authentication never does. Missing environment credentials
+produce `pending_auth` connections whose tools remain hidden. Connected calls require
+approval by default, enforce the configured exact origin and output/timeout bounds,
+resolve credential handles only inside the permit-bearing adapter, quarantine every
+response for post-effect policy, and redact an exact credential value if an upstream
+echoes it. Re-import to change a connection; disconnecting appends history rather than
+deleting it. Native GitHub/OpenSearch connection compilation and configured MCP remain
+the next integration slices.
 
 Normal runs create a durable session automatically and return its id. Use
 `run --session ID` for an exact session, `run --resume` for the most recently updated

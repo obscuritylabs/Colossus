@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
-    ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, MemoryScope,
-    MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ResearchDepth, ResearchSourceKind,
-    SubagentStatus, TaskStatus,
+    ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
+    MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ResearchDepth,
+    ResearchSourceKind, SubagentStatus, TaskStatus,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{ApprovalProvider, PolicyError};
@@ -176,6 +176,8 @@ enum Command {
     Telemetry(TelemetryCommand),
     /// Discover, compose, and read declarative data-only skills.
     Skills(SkillsCommand),
+    /// Manage persisted integrations and imported OpenAPI tools.
+    Integrations(IntegrationsCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -1059,6 +1061,52 @@ enum SkillsAction {
     Resources { name: String },
     /// Read one bounded UTF-8 resource through the effect gateway.
     Read { name: String, path: String },
+}
+
+#[derive(Args)]
+struct IntegrationsCommand {
+    #[command(subcommand)]
+    command: IntegrationsAction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum IntegrationAuthMode {
+    None,
+    Bearer,
+    ApiKey,
+    ServiceAccount,
+}
+
+#[derive(Subcommand)]
+enum IntegrationsAction {
+    /// List safe persisted connection summaries.
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one canonical connection without resolving credentials.
+    Show { name: String },
+    /// Import a JSON OpenAPI 3 document (approval required).
+    ImportOpenapi {
+        name: String,
+        spec: String,
+        #[arg(long)]
+        base_url: Option<String>,
+        #[arg(long, value_enum, default_value_t = IntegrationAuthMode::Bearer)]
+        auth_type: IntegrationAuthMode,
+        #[arg(long)]
+        credential_reference: Option<String>,
+        #[arg(long, default_value = "Authorization")]
+        auth_header: String,
+        #[arg(long)]
+        auth_scheme: Option<String>,
+        #[arg(long = "scope")]
+        scopes: Vec<String>,
+    },
+    /// Disconnect one connection while preserving lifecycle history (approval required).
+    Disconnect { name: String },
+    /// Invoke one connected operation with a JSON argument object.
+    Call { tool: String, arguments: String },
 }
 
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
@@ -2032,6 +2080,66 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .read_skill_resource(&name, &path, std::slice::from_ref(&name))
                     .await?,
             )?,
+        },
+        Command::Integrations(command) => match command.command {
+            IntegrationsAction::List { limit } => {
+                print_json(&runtime.list_integrations(limit)?)?;
+            }
+            IntegrationsAction::Show { name } => print_json(
+                &runtime
+                    .get_integration(&name)?
+                    .ok_or_else(|| cli_error(format!("integration not found: {name}")))?,
+            )?,
+            IntegrationsAction::ImportOpenapi {
+                name,
+                spec,
+                base_url,
+                auth_type,
+                credential_reference,
+                auth_header,
+                auth_scheme,
+                scopes,
+            } => {
+                let source = if spec.starts_with('@') {
+                    spec
+                } else {
+                    format!("@{spec}")
+                };
+                let document = parse_json_argument(&runtime, &source).await?;
+                let auth = match auth_type {
+                    IntegrationAuthMode::None => IntegrationAuth::None,
+                    IntegrationAuthMode::Bearer => IntegrationAuth::Bearer {
+                        header: auth_header,
+                        scheme: auth_scheme.unwrap_or_else(|| "Bearer".into()),
+                    },
+                    IntegrationAuthMode::ApiKey => IntegrationAuth::ApiKey {
+                        header: auth_header,
+                        scheme: auth_scheme,
+                    },
+                    IntegrationAuthMode::ServiceAccount => IntegrationAuth::ServiceAccount {
+                        header: auth_header,
+                    },
+                };
+                print_json(
+                    &runtime
+                        .import_openapi_integration(
+                            &name,
+                            document,
+                            base_url.as_deref(),
+                            auth,
+                            credential_reference.as_deref(),
+                            &scopes,
+                        )
+                        .await?,
+                )?;
+            }
+            IntegrationsAction::Disconnect { name } => {
+                print_json(&runtime.disconnect_integration(&name).await?)?;
+            }
+            IntegrationsAction::Call { tool, arguments } => {
+                let arguments = parse_json_argument(&runtime, &arguments).await?;
+                print_json(&runtime.call_integration_tool(&tool, arguments).await?)?;
+            }
         },
         Command::Run {
             prompt,

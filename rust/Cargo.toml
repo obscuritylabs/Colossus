@@ -18,6 +18,7 @@ members = [
     "crates/colossus-research",
     "crates/colossus-telemetry",
     "crates/colossus-skills",
+    "crates/colossus-integrations",
     "crates/colossus-workflow",
     "crates/colossus-runtime",
     "crates/colossus-cli",
@@ -74,7 +75,9 @@ colossus-journal-redb = { path = "crates/colossus-journal-redb" }
 colossus-memory = { path = "crates/colossus-memory" }
 colossus-research = { path = "crates/colossus-research" }
 colossus-telemetry = { path = "crates/colossus-telemetry" }
+colossus-testkit = { path = "crates/colossus-testkit" }
 colossus-skills = { path = "crates/colossus-skills" }
+colossus-integrations = { path = "crates/colossus-integrations" }
 colossus-policy = { path = "crates/colossus-policy" }
 colossus-provider = { path = "crates/colossus-provider" }
 colossus-tools = { path = "crates/colossus-tools" }
