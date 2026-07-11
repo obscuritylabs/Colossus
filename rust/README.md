@@ -28,6 +28,9 @@ cargo run -p colossus-cli --bin colossus-rs -- research run \
 cargo run -p colossus-cli --bin colossus-rs -- research list
 cargo run -p colossus-cli --bin colossus-rs -- telemetry runs
 cargo run -p colossus-cli --bin colossus-rs -- telemetry metrics
+cargo run -p colossus-cli --bin colossus-rs -- skills list
+cargo run -p colossus-cli --bin colossus-rs -- skills show coding
+cargo run -p colossus-cli --bin colossus-rs -- run --skill coding 'Implement the scoped change'
 ```
 
 Network profiles use `open_ai_responses` or `open_ai_compatible`, an API-version
@@ -61,6 +64,15 @@ journal. The report is also appended to its session, and abandoned runs become
 duration and operational counters from persisted typed events. Timelines expose only
 envelope metadata, lineage ids, hashes, and encrypted sizes; raw prompts, model text,
 tool output, and decrypted research evidence are never returned.
+
+Declarative skills are discovered from ordered bundled, repository, and user libraries.
+Later roots cannot override earlier names unless `skills.allowUserOverrides` is enabled.
+`@skill:name`, `--skill NAME`, and REPL `/skill use NAME` activate bounded instructions;
+required tools must already exist in the configured catalog and activation never grants
+policy permission. `skill.resource.list/read` work only for skills active on the current
+run, cross the effect gateway and post-effect release gate, reject traversal and symlinks,
+and return scripts only as bounded UTF-8 text. Skill authoring/install remains the next
+extension slice; executable activation belongs exclusively to verified packs.
 
 Normal runs create a durable session automatically and return its id. Use
 `run --session ID` for an exact session, `run --resume` for the most recently updated

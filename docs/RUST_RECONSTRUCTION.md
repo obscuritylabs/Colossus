@@ -171,6 +171,8 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- r
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- research list
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- telemetry runs
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- telemetry metrics
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- skills list
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --skill coding 'Implement the scoped change'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
@@ -215,7 +217,7 @@ cutover. The following planned work remains:
   execution, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
-- Skills/resources, packs, integrations, offline bundles, Rust MCP collection,
+- Skill authoring/install, packs, integrations, offline bundles, Rust MCP collection,
   and the rest of P1/P2.
 - Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
   runtime matrix, and

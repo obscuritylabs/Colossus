@@ -123,6 +123,32 @@ impl AgentService {
             None,
             None,
             None,
+            &[],
+        )
+        .await
+    }
+
+    /// Execute a run with declarative active-skill lineage.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_in_session_with_skills(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+    ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            None,
+            None,
+            None,
+            active_skills,
         )
         .await
     }
@@ -148,6 +174,7 @@ impl AgentService {
             Some(goal_id),
             plan_id,
             None,
+            &[],
         )
         .await
     }
@@ -172,6 +199,7 @@ impl AgentService {
             None,
             None,
             Some(subagent_id),
+            &[],
         )
         .await
     }
@@ -187,6 +215,7 @@ impl AgentService {
         goal_id: Option<&str>,
         plan_id: Option<&str>,
         subagent_id: Option<&str>,
+        active_skills: &[String],
     ) -> Result<AgentRunResult, AgentError> {
         if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
@@ -224,6 +253,7 @@ impl AgentService {
             goal_id: goal_id.map(str::to_owned),
             plan_id: plan_id.map(str::to_owned),
             subagent_id: subagent_id.map(str::to_owned),
+            skill_ids: active_skills.to_vec(),
             ..ExecutionContext::default()
         };
         let mut messages = self
@@ -316,6 +346,7 @@ impl AgentService {
                     "message_count": request.messages.len(),
                     "tool_count": request.tools.len(),
                     "request_bytes": serde_json::to_vec(&request).map_or(0, |bytes| bytes.len()),
+                    "active_skills": active_skills,
                 }),
             )?;
             let provider_turn = match self.provider.turn(role, request, context.clone()).await {

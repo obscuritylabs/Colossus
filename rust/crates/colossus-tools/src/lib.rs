@@ -582,6 +582,31 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "skill.resource.list".into(),
+            description: "List bounded regular resources for a skill active on this turn.".into(),
+            input_schema: object_schema(
+                json!({"name": {"type": "string", "minLength": 1, "maxLength": 128}}),
+                &["name"],
+            ),
+            effect_action: Some("skill.resource.list".into()),
+            capability: Some("skill.resource.list".into()),
+            max_output_bytes: 256 * 1024,
+        },
+        ToolSpec {
+            name: "skill.resource.read".into(),
+            description: "Read one bounded UTF-8 resource for a skill active on this turn. Scripts are returned only as text.".into(),
+            input_schema: object_schema(
+                json!({
+                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096}
+                }),
+                &["name", "path"],
+            ),
+            effect_action: Some("skill.resource.read".into()),
+            capability: Some("skill.resource.read".into()),
+            max_output_bytes: 64 * 1024,
+        },
+        ToolSpec {
             name: "network.http".into(),
             description: "Fetch one exact policy-permitted HTTP(S) URL with GET.".into(),
             input_schema: object_schema(

@@ -174,6 +174,8 @@ enum Command {
     Research(ResearchCommand),
     /// Inspect metadata-only persisted run telemetry.
     Telemetry(TelemetryCommand),
+    /// Discover, compose, and read declarative data-only skills.
+    Skills(SkillsCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -193,6 +195,9 @@ enum Command {
         /// Resume the most recently updated session.
         #[arg(long, conflicts_with = "session")]
         resume: bool,
+        /// Explicitly activate one declarative skill. Repeat as needed.
+        #[arg(long = "skill")]
+        skills: Vec<String>,
     },
     /// Run the credential-free, network-free echo smoke provider.
     Echo {
@@ -1001,6 +1006,32 @@ enum TelemetryAction {
     },
 }
 
+#[derive(Args)]
+struct SkillsCommand {
+    #[command(subcommand)]
+    command: SkillsAction,
+}
+
+#[derive(Subcommand)]
+enum SkillsAction {
+    /// List selected skill metadata in deterministic name order.
+    List,
+    /// Show one selected manifest and its data-only instructions.
+    Show { name: String },
+    /// Report duplicate names and configured precedence winners.
+    Duplicates,
+    /// Preview context composition and required-tool validation.
+    Compose {
+        prompt: String,
+        #[arg(long = "skill")]
+        skills: Vec<String>,
+    },
+    /// List bounded regular resources for an explicitly active skill.
+    Resources { name: String },
+    /// Read one bounded UTF-8 resource through the effect gateway.
+    Read { name: String, path: String },
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -1223,6 +1254,7 @@ async fn repl(
     } else {
         runtime.create_session(None)?.id
     };
+    let mut sticky_skills = Vec::<String>::new();
     println!(
         "Colossus Rust alpha. session={active_session_id}; /help for commands; Ctrl-D to exit."
     );
@@ -1238,7 +1270,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1316,6 +1348,51 @@ async fn repl(
                     print_json(&runtime.telemetry_metrics(Some(&active_session_id), 100)?)?;
                 } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
                     print_json(&runtime.telemetry_run(run_id.trim(), 500)?)?;
+                } else if line == "/skills" {
+                    let skills = runtime
+                        .list_skills()?
+                        .into_iter()
+                        .map(|skill| {
+                            json!({
+                                "name": skill.manifest.name,
+                                "version": skill.manifest.version,
+                                "description": skill.manifest.description,
+                                "source": skill.source,
+                                "active": sticky_skills.contains(&skill.manifest.name),
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    print_json(&skills)?;
+                } else if line == "/skill clear" {
+                    sticky_skills.clear();
+                    println!("active skills cleared");
+                } else if let Some(name) = line.strip_prefix("/skill use ") {
+                    let name = name.trim();
+                    runtime
+                        .get_skill(name)?
+                        .ok_or_else(|| cli_error(format!("skill not found: {name}")))?;
+                    if !sticky_skills.iter().any(|active| active == name) {
+                        sticky_skills.push(name.into());
+                    }
+                    println!("active skill={name}");
+                } else if let Some(name) = line.strip_prefix("/skill show ") {
+                    print_json(
+                        &runtime
+                            .get_skill(name.trim())?
+                            .ok_or_else(|| cli_error(format!("skill not found: {name}")))?,
+                    )?;
+                } else if let Some(name) = line.strip_prefix("/skill resources ") {
+                    print_json(&runtime.skill_resources(name.trim(), &sticky_skills).await?)?;
+                } else if let Some(arguments) = line.strip_prefix("/skill read ") {
+                    let (name, path) = arguments
+                        .trim()
+                        .split_once(' ')
+                        .ok_or_else(|| cli_error("usage: /skill read NAME PATH"))?;
+                    print_json(
+                        &runtime
+                            .read_skill_resource(name, path.trim(), &sticky_skills)
+                            .await?,
+                    )?;
                 } else if line == "/context" || line == "/context status" {
                     print_json(&runtime.context_status(&active_session_id)?)?;
                 } else if line == "/context list" {
@@ -1356,12 +1433,14 @@ async fn repl(
                     }
                 } else {
                     let result = runtime
-                        .run_model_in_session(
+                        .run_model_with_skills(
                             "primary",
                             "You are Colossus.",
                             line,
                             None,
-                            &active_session_id,
+                            Some(&active_session_id),
+                            &[],
+                            &sticky_skills,
                         )
                         .await?;
                     println!("{}", result.output);
@@ -1844,6 +1923,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 print_json(&runtime.telemetry_metrics(session.as_deref(), limit)?)?;
             }
         },
+        Command::Skills(command) => match command.command {
+            SkillsAction::List => {
+                let skills = runtime
+                    .list_skills()?
+                    .into_iter()
+                    .map(|skill| {
+                        json!({
+                            "name": skill.manifest.name,
+                            "version": skill.manifest.version,
+                            "description": skill.manifest.description,
+                            "offline_compatible": skill.manifest.offline_compatible,
+                            "source": skill.source,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                print_json(&skills)?;
+            }
+            SkillsAction::Show { name } => print_json(
+                &runtime
+                    .get_skill(&name)?
+                    .ok_or_else(|| cli_error(format!("skill not found: {name}")))?,
+            )?,
+            SkillsAction::Duplicates => print_json(&runtime.skill_duplicates()?)?,
+            SkillsAction::Compose { prompt, skills } => {
+                print_json(&runtime.compose_skills("You are Colossus.", &prompt, &skills, &[])?)?
+            }
+            SkillsAction::Resources { name } => {
+                print_json(
+                    &runtime
+                        .skill_resources(&name, std::slice::from_ref(&name))
+                        .await?,
+                )?;
+            }
+            SkillsAction::Read { name, path } => print_json(
+                &runtime
+                    .read_skill_resource(&name, &path, std::slice::from_ref(&name))
+                    .await?,
+            )?,
+        },
         Command::Run {
             prompt,
             role,
@@ -1851,27 +1969,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
             max_turns,
             session,
             resume,
+            skills,
         } => {
             let session_id = if resume {
                 Some(runtime.latest_session()?.id)
             } else {
                 session
             };
-            let result = match session_id {
-                Some(session_id) => {
-                    runtime
-                        .run_model_in_session(&role, &instructions, &prompt, max_turns, &session_id)
-                        .await?
-                }
-                None => match max_turns {
-                    Some(max_turns) => {
-                        runtime
-                            .run_model_with_max_turns(&role, &instructions, &prompt, max_turns)
-                            .await?
-                    }
-                    None => runtime.run_model(&role, &instructions, &prompt).await?,
-                },
-            };
+            let result = runtime
+                .run_model_with_skills(
+                    &role,
+                    &instructions,
+                    &prompt,
+                    max_turns,
+                    session_id.as_deref(),
+                    &skills,
+                    &[],
+                )
+                .await?;
             runtime.drain_subagents().await?;
             print_json(&result)?;
         }

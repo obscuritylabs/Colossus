@@ -13,7 +13,8 @@ use colossus_contracts::{
     ProviderEvent, ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute,
     ProviderTurn, QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun,
     ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
-    SessionSummary, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
+    SessionSummary, SkillComposition, SkillDuplicate, SkillRecord, SkillResourceEntry,
+    SkillResourceRead, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
     TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
@@ -31,8 +32,8 @@ use colossus_policy::{
 use colossus_ports::{
     ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EventJournal, KeyProvider,
     MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
-    PolicyDecisionPoint, ProjectionStore, ResearchRepository, SessionRepository, StoreError,
-    ToolError, ToolExecutor, ToolRegistry, WorkRepository, WorkflowRepository,
+    PolicyDecisionPoint, ProjectionStore, ResearchRepository, SessionRepository, SkillRepository,
+    StoreError, ToolError, ToolExecutor, ToolRegistry, WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
@@ -48,6 +49,7 @@ use colossus_sandbox::{
     SandboxProcessExecutor, sandbox_doctor,
 };
 use colossus_session::EventSourcedSessionRepository;
+use colossus_skills::{FilesystemSkillRepository, SkillComposer, SkillResourceService, SkillRoot};
 use colossus_telemetry::TelemetryService;
 use colossus_tools::{StaticToolRegistry, ToolCatalogError};
 use colossus_work::{EventSourcedWorkRepository, WorkService};
@@ -99,6 +101,9 @@ pub struct RuntimeConfig {
     /// Durable research collection and worker bounds.
     #[serde(default)]
     pub research: ResearchConfig,
+    /// Declarative skill libraries and precedence policy.
+    #[serde(default)]
+    pub skills: SkillsConfig,
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
@@ -178,6 +183,37 @@ impl Default for ResearchConfig {
             max_sources: 20,
             max_workers: 4,
             search: ResearchSearchConfig::Disabled,
+        }
+    }
+}
+
+/// Declarative skill discovery and override configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillsConfig {
+    /// Whether prompt mentions and explicit activation are enabled.
+    pub enabled: bool,
+    /// Whether later repository/user roots may replace earlier skills with the same name.
+    pub allow_user_overrides: bool,
+    /// Bundled offline skill library.
+    pub bundled: PathBuf,
+    /// Repository-local skill library.
+    pub repository: PathBuf,
+    /// User skill library.
+    pub user: PathBuf,
+    /// Disabled directory names across every root.
+    pub disabled: Vec<String>,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allow_user_overrides: false,
+            bundled: PathBuf::from("rust/bundled-skills"),
+            repository: PathBuf::from(".colossus/skills"),
+            user: PathBuf::from("skills"),
+            disabled: Vec::new(),
         }
     }
 }
@@ -585,6 +621,19 @@ impl RuntimeConfig {
             ));
         }
         validate_research_search_config(&config.research.search, &config.sandbox)?;
+        if config.skills.disabled.iter().any(|name| {
+            name.trim().is_empty()
+                || name.len() > 128
+                || name.bytes().any(|byte| {
+                    !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+                })
+        }) || config.skills.disabled.iter().collect::<BTreeSet<_>>().len()
+            != config.skills.disabled.len()
+        {
+            return Err(RuntimeError::Config(
+                "skills.disabled contains an invalid or duplicate directory name".into(),
+            ));
+        }
         validate_provider_config(&config)?;
         Ok(config)
     }
@@ -622,6 +671,7 @@ impl RuntimeConfig {
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
             research: ResearchConfig::default(),
+            skills: SkillsConfig::default(),
             sandbox: SandboxConfig::default(),
         }
     }
@@ -1108,6 +1158,37 @@ impl ResearchOperation {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum SkillOperation {
+    ListResources {
+        skill_name: String,
+        active_skills: Vec<String>,
+    },
+    ReadResource {
+        skill_name: String,
+        path: String,
+        active_skills: Vec<String>,
+    },
+}
+
+impl SkillOperation {
+    fn action(&self) -> &'static str {
+        match self {
+            Self::ListResources { .. } => "skill.resource.list",
+            Self::ReadResource { .. } => "skill.resource.read",
+        }
+    }
+
+    fn skill_name(&self) -> &str {
+        match self {
+            Self::ListResources { skill_name, .. } | Self::ReadResource { skill_name, .. } => {
+                skill_name
+            }
+        }
+    }
+}
+
 /// Fully composed auditable runtime.
 pub struct Runtime {
     writer_lease: RedbWriterLease,
@@ -1115,6 +1196,10 @@ pub struct Runtime {
     recovery_reason: Option<String>,
     projections: Arc<ProjectionWorker>,
     telemetry: Arc<TelemetryService>,
+    skills_enabled: bool,
+    skills: Arc<dyn SkillRepository>,
+    skill_composer: Arc<SkillComposer>,
+    skill_executor: Arc<SkillEffectExecutor>,
     sessions: Arc<dyn SessionRepository>,
     context: Arc<ContextService>,
     work: Arc<dyn WorkRepository>,
@@ -1192,6 +1277,26 @@ impl Runtime {
             default_handlers(),
         )?);
         let telemetry = Arc::new(TelemetryService::new(Arc::clone(&journal)));
+        let skills: Arc<dyn SkillRepository> = Arc::new(FilesystemSkillRepository::new(
+            vec![
+                SkillRoot {
+                    path: absolute_path(&config.skills.bundled)?,
+                    label: "bundled".into(),
+                },
+                SkillRoot {
+                    path: absolute_path(&config.skills.repository)?,
+                    label: "repository".into(),
+                },
+                SkillRoot {
+                    path: absolute_path(&config.skills.user)?,
+                    label: "user".into(),
+                },
+            ],
+            config.skills.allow_user_overrides,
+            config.skills.disabled.clone(),
+        )?);
+        let skill_composer = Arc::new(SkillComposer::new(Arc::clone(&skills)));
+        let skill_resources = Arc::new(SkillResourceService::new(Arc::clone(&skills)));
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
@@ -1257,6 +1362,8 @@ impl Runtime {
                     "filesystem.list",
                     "filesystem.metadata",
                     "filesystem.search",
+                    "skill.resource.list",
+                    "skill.resource.read",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
@@ -1407,6 +1514,8 @@ impl Runtime {
                 "memory.index.sync".to_owned(),
                 "memory.index.rebuild".to_owned(),
                 "research.run".to_owned(),
+                "skill.resource.list".to_owned(),
+                "skill.resource.read".to_owned(),
             ]),
             permit_key,
         ));
@@ -1417,6 +1526,9 @@ impl Runtime {
         let memory_executor = Arc::new(MemoryEffectExecutor {
             service: Arc::clone(&memory_service),
             repository_id: repository_id.clone(),
+        });
+        let skill_executor = Arc::new(SkillEffectExecutor {
+            resources: Arc::clone(&skill_resources),
         });
         let memory_retriever: Arc<dyn MemoryRetriever> = Arc::new(GatewayMemoryRetriever {
             gateway: Arc::clone(&gateway),
@@ -1469,6 +1581,7 @@ impl Runtime {
             http: Arc::clone(&http_executor),
             work: Some(Arc::clone(&work_executor)),
             memory: Some(Arc::clone(&memory_executor)),
+            skills: Some(Arc::clone(&skill_executor)),
             workspace,
             repository_id,
             executables: config
@@ -1526,6 +1639,10 @@ impl Runtime {
             recovery_reason,
             projections,
             telemetry,
+            skills_enabled: config.skills.enabled,
+            skills,
+            skill_composer,
+            skill_executor,
             sessions,
             context,
             work,
@@ -1586,6 +1703,100 @@ impl Runtime {
         self.telemetry
             .metrics(session_id, limit)
             .map_err(Into::into)
+    }
+
+    /// List selected declarative skills in deterministic precedence order.
+    pub fn list_skills(&self) -> Result<Vec<SkillRecord>, RuntimeError> {
+        self.skills.list_skills().map_err(Into::into)
+    }
+
+    /// Load one selected declarative skill.
+    pub fn get_skill(&self, name: &str) -> Result<Option<SkillRecord>, RuntimeError> {
+        self.skills.get_skill(name).map_err(Into::into)
+    }
+
+    /// Report duplicate skills and the configured winner.
+    pub fn skill_duplicates(&self) -> Result<Vec<SkillDuplicate>, RuntimeError> {
+        self.skills.duplicate_names().map_err(Into::into)
+    }
+
+    /// Preview deterministic skill composition without executing a model turn.
+    pub fn compose_skills(
+        &self,
+        instructions: &str,
+        prompt: &str,
+        explicit: &[String],
+        sticky: &[String],
+    ) -> Result<SkillComposition, RuntimeError> {
+        self.skill_composer
+            .compose(
+                instructions,
+                prompt,
+                explicit,
+                sticky,
+                self.skills_enabled,
+                &self.tools.list_specs(),
+            )
+            .map_err(Into::into)
+    }
+
+    async fn execute_skill_operation(
+        &self,
+        operation: SkillOperation,
+    ) -> Result<Value, RuntimeError> {
+        let active_skills = match &operation {
+            SkillOperation::ListResources { active_skills, .. }
+            | SkillOperation::ReadResource { active_skills, .. } => active_skills.clone(),
+        };
+        let mut request = effect_request(
+            terminal_actor(),
+            operation.action(),
+            format!("skill:{}", operation.skill_name()),
+            serde_json::to_value(&operation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![operation.action().into()];
+        request.context.skill_ids = active_skills;
+        let released = self
+            .gateway
+            .execute(request, self.skill_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&released.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// List resources for an explicitly active skill through the permission boundary.
+    pub async fn skill_resources(
+        &self,
+        skill_name: &str,
+        active_skills: &[String],
+    ) -> Result<Vec<SkillResourceEntry>, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::ListResources {
+                skill_name: skill_name.into(),
+                active_skills: active_skills.to_vec(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Read one bounded text resource for an explicitly active skill through policy.
+    pub async fn read_skill_resource(
+        &self,
+        skill_name: &str,
+        path: &str,
+        active_skills: &[String],
+    ) -> Result<SkillResourceRead, RuntimeError> {
+        serde_json::from_value(
+            self.execute_skill_operation(SkillOperation::ReadResource {
+                skill_name: skill_name.into(),
+                path: path.into(),
+                active_skills: active_skills.to_vec(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Durable workflow application API.
@@ -2405,10 +2616,8 @@ impl Runtime {
         instructions: &str,
         prompt: &str,
     ) -> Result<AgentRunResult, RuntimeError> {
-        self.agent
-            .run(role, instructions, prompt, self.agent_max_turns)
+        self.run_model_with_skills(role, instructions, prompt, None, None, &[], &[])
             .await
-            .map_err(Into::into)
     }
 
     /// Execute the shared loop with a caller-selected bounded turn limit.
@@ -2419,10 +2628,8 @@ impl Runtime {
         prompt: &str,
         max_turns: u16,
     ) -> Result<AgentRunResult, RuntimeError> {
-        self.agent
-            .run(role, instructions, prompt, max_turns)
+        self.run_model_with_skills(role, instructions, prompt, Some(max_turns), None, &[], &[])
             .await
-            .map_err(Into::into)
     }
 
     /// Execute a run while restoring and appending one exact durable session.
@@ -2434,13 +2641,51 @@ impl Runtime {
         max_turns: Option<u16>,
         session_id: &str,
     ) -> Result<AgentRunResult, RuntimeError> {
+        self.run_model_with_skills(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            Some(session_id),
+            &[],
+            &[],
+        )
+        .await
+    }
+
+    /// Execute a normal run with explicit and sticky declarative skill activation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_model_with_skills(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+    ) -> Result<AgentRunResult, RuntimeError> {
+        let composition = self.skill_composer.compose(
+            instructions,
+            prompt,
+            explicit_skills,
+            sticky_skills,
+            self.skills_enabled,
+            &self.tools.list_specs(),
+        )?;
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<Vec<_>>();
         self.agent
-            .run_in_session(
+            .run_in_session_with_skills(
                 role,
-                instructions,
+                &composition.instructions,
                 prompt,
                 max_turns.unwrap_or(self.agent_max_turns),
-                Some(session_id),
+                session_id,
+                &active,
             )
             .await
             .map_err(Into::into)
@@ -3038,6 +3283,7 @@ struct GatewayToolExecutor {
     http: Arc<HttpExecutor>,
     work: Option<Arc<WorkEffectExecutor>>,
     memory: Option<Arc<MemoryEffectExecutor>>,
+    skills: Option<Arc<SkillEffectExecutor>>,
     workspace: PathBuf,
     repository_id: String,
     executables: Vec<PathBuf>,
@@ -3127,6 +3373,39 @@ impl GatewayToolExecutor {
         serde_json::from_str::<Value>(&output)
             .map_err(|error| ToolError::Failed(format!("invalid memory result: {error}")))?;
         Ok(bounded_tool_text(&output, 1024 * 1024))
+    }
+
+    async fn execute_skill_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+        operation: SkillOperation,
+    ) -> Result<String, ToolError> {
+        let action = operation.action().to_owned();
+        let mut request = effect_request(
+            model_actor(call, &context),
+            &action,
+            format!("skill:{}", operation.skill_name()),
+            serde_json::to_value(operation)
+                .map_err(|error| ToolError::Failed(error.to_string()))?,
+        );
+        request.capabilities = vec![action];
+        request.context = context;
+        let result = self
+            .gateway
+            .execute(
+                request,
+                self.skills
+                    .as_deref()
+                    .ok_or_else(|| ToolError::Failed("skill adapter is unavailable".into()))?,
+            )
+            .await
+            .map_err(tool_gateway_error)?;
+        let output = String::from_utf8(result.bytes)
+            .map_err(|_| ToolError::Failed("skill resource returned non-UTF-8".into()))?;
+        serde_json::from_str::<Value>(&output)
+            .map_err(|error| ToolError::Failed(format!("invalid skill result: {error}")))?;
+        Ok(bounded_tool_text(&output, 256 * 1024))
     }
 
     async fn execute_filesystem_mutation(
@@ -3931,6 +4210,31 @@ impl ToolExecutor for GatewayToolExecutor {
                         rationale: optional_tool_string(&call, "rationale")?
                             .unwrap_or_default()
                             .into(),
+                    },
+                )
+                .await?
+            }
+            "skill.resource.list" => {
+                let active_skills = context.skill_ids.clone();
+                self.execute_skill_tool(
+                    &call,
+                    context,
+                    SkillOperation::ListResources {
+                        skill_name: required_tool_string(&call, "name")?.into(),
+                        active_skills,
+                    },
+                )
+                .await?
+            }
+            "skill.resource.read" => {
+                let active_skills = context.skill_ids.clone();
+                self.execute_skill_tool(
+                    &call,
+                    context,
+                    SkillOperation::ReadResource {
+                        skill_name: required_tool_string(&call, "name")?.into(),
+                        path: required_tool_string(&call, "path")?.into(),
+                        active_skills,
                     },
                 )
                 .await?
@@ -4955,6 +5259,55 @@ struct ResearchEffectExecutor {
     service: Arc<ResearchService>,
 }
 
+struct SkillEffectExecutor {
+    resources: Arc<SkillResourceService>,
+}
+
+#[async_trait]
+impl EffectExecutor for SkillEffectExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let operation: SkillOperation = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if request.action != operation.action()
+            || request.resource != format!("skill:{}", operation.skill_name())
+        {
+            return Err(ExecutionError::Failed(
+                "skill resource request does not match authorized content".into(),
+            ));
+        }
+        let value = match operation {
+            SkillOperation::ListResources {
+                skill_name,
+                active_skills,
+            } => serde_json::to_value(
+                self.resources
+                    .list_resources(&skill_name, &active_skills)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+            SkillOperation::ReadResource {
+                skill_name,
+                path,
+                active_skills,
+            } => serde_json::to_value(
+                self.resources
+                    .read_resource(&skill_name, &path, &active_skills)
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            ),
+        }
+        .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&value)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
+    }
+}
+
 #[async_trait]
 impl EffectExecutor for ResearchEffectExecutor {
     async fn execute(
@@ -5439,16 +5792,19 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 mod tests {
     use super::{
         GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, ProviderProfileConfig,
-        ResearchSearchConfig, RuntimeConfig, WorkEffectExecutor, goal_objective_from_plan,
-        recover_interrupted_subagents, recover_unknown_effects,
+        ResearchSearchConfig, RuntimeConfig, SkillEffectExecutor, WorkEffectExecutor,
+        goal_objective_from_plan, recover_interrupted_subagents, recover_unknown_effects,
     };
     use colossus_contracts::{
         Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, GoalStatus,
         MemoryScope, MemoryStatus, ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep,
         ProviderEvent, ProviderRoute, ProviderTurn, SubagentStatus, TaskStatus, ToolCall,
     };
-    use colossus_ports::{EventJournal, ModelProvider, ModelProviderError, ToolExecutor};
+    use colossus_ports::{
+        EventJournal, ModelProvider, ModelProviderError, SkillRepository, ToolExecutor,
+    };
     use colossus_provider::ProviderKind;
+    use colossus_skills::{FilesystemSkillRepository, SkillResourceService, SkillRoot};
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
     use std::{
@@ -5747,6 +6103,93 @@ surprise: true
         );
     }
 
+    #[tokio::test]
+    async fn model_skill_resource_tool_is_active_scoped_and_post_gated() {
+        let directory = tempdir().expect("tempdir");
+        let skill = directory.path().join("skills/demo");
+        fs::create_dir_all(skill.join("references")).expect("skill directory");
+        fs::write(skill.join("SKILL.md"), "Use the resource.").expect("instructions");
+        fs::write(
+            skill.join("manifest.json"),
+            r#"{"name":"demo","version":"1.0.0","description":"Demo","triggers":[],"required_tools":[],"permissions":[],"offline_compatible":true}"#,
+        )
+        .expect("manifest");
+        fs::write(skill.join("references/guide.md"), "bounded resource").expect("resource");
+        let repository: Arc<dyn SkillRepository> = Arc::new(
+            FilesystemSkillRepository::new(
+                vec![SkillRoot {
+                    path: directory.path().join("skills"),
+                    label: "test".into(),
+                }],
+                false,
+                Vec::new(),
+            )
+            .expect("repository"),
+        );
+        let skill_executor = Arc::new(SkillEffectExecutor {
+            resources: Arc::new(SkillResourceService::new(repository)),
+        });
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = Arc::new(colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("skill.resource.read", DecisionOutcome::Allow),
+            ),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["skill.resource.read".into()]),
+            [25_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: None,
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
+            skills: Some(skill_executor),
+            workspace: directory.path().to_path_buf(),
+            repository_id: "repo-test".into(),
+            executables: Vec::new(),
+        };
+        let call = ToolCall {
+            call_id: "skill-call".into(),
+            name: "skill.resource.read".into(),
+            arguments: json!({"name": "demo", "path": "references/guide.md"}),
+        };
+        let context = ExecutionContext {
+            correlation_id: "run-1".into(),
+            session_id: Some("session-1".into()),
+            run_id: Some("run-1".into()),
+            skill_ids: vec!["demo".into()],
+            ..ExecutionContext::default()
+        };
+        let result = executor
+            .execute(call.clone(), context)
+            .await
+            .expect("active resource");
+        assert!(result.output.contains("bounded resource"));
+        let denied = executor
+            .execute(
+                call,
+                ExecutionContext {
+                    correlation_id: "run-2".into(),
+                    session_id: Some("session-1".into()),
+                    run_id: Some("run-2".into()),
+                    ..ExecutionContext::default()
+                },
+            )
+            .await;
+        assert!(denied.is_err());
+        let event_types = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"effect.release_requested.v1".into()));
+    }
+
     #[test]
     fn startup_marks_running_subagents_interrupted_without_retrying() {
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
@@ -5880,6 +6323,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: None,
             memory: None,
+            skills: None,
             workspace: allowed.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -5946,6 +6390,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: None,
             memory: None,
+            skills: None,
             workspace: allowed.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6028,6 +6473,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: None,
             memory: None,
+            skills: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6070,6 +6516,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: None,
             memory: None,
+            skills: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6185,6 +6632,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: Some(work),
             memory: None,
+            skills: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6344,6 +6792,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: None,
             memory: Some(memory),
+            skills: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6554,6 +7003,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: Some(work),
             memory: None,
+            skills: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6681,6 +7131,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: Some(work),
             memory: None,
+            skills: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6813,6 +7264,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: Some(work),
             memory: None,
+            skills: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -6950,6 +7402,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: None,
             memory: Some(Arc::clone(&memory)),
+            skills: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7111,6 +7564,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: Some(work),
             memory: None,
+            skills: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -7275,6 +7729,7 @@ surprise: true
             http: Arc::new(colossus_sandbox::HttpExecutor::new()),
             work: None,
             memory: None,
+            skills: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: vec![executable],

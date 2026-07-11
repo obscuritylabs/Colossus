@@ -9,8 +9,8 @@ use colossus_contracts::{
     ModelRequest, ModelToolDefinition, NewEvent, PlanRecord, PlanStatus, PolicyDecision,
     PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute, ProviderTurn,
     ResearchClaim, ResearchRun, ResearchSource, SessionMessage, SessionSummary, SignedCheckpoint,
-    SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
-    WorkflowDefinition, WorkflowRun,
+    SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall,
+    ToolResult, ToolSpec, WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -506,6 +506,18 @@ pub trait ResearchRepository: Send + Sync {
 }
 /// Skills, resources, packs, and trust repository.
 pub trait ExtensionRepository: AggregateRepository {}
+
+/// Deterministic discovery for declarative data-only skills.
+pub trait SkillRepository: Send + Sync {
+    /// List selected skills in deterministic name order.
+    fn list_skills(&self) -> Result<Vec<SkillRecord>, StoreError>;
+
+    /// Load one selected skill.
+    fn get_skill(&self, name: &str) -> Result<Option<SkillRecord>, StoreError>;
+
+    /// Report every duplicate and the configured winner.
+    fn duplicate_names(&self) -> Result<Vec<SkillDuplicate>, StoreError>;
+}
 
 /// Workflow definitions and run projections.
 pub trait WorkflowRepository: Send + Sync {

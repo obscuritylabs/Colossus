@@ -1129,6 +1129,8 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("goal.")
             || request.action.starts_with("subagent.")
             || request.action.starts_with("memory.")
+            || request.action.starts_with("skill.")
+            || request.action.starts_with("research.")
             || request.action == "network.http"
         {
             obligations.require_post_effect = true;

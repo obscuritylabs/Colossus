@@ -118,6 +118,9 @@ pub struct ExecutionContext {
     pub plan_id: Option<String>,
     /// Durable child-agent job lineage for this run.
     pub subagent_id: Option<String>,
+    /// Declarative active skill identities; these do not grant capabilities.
+    #[serde(default)]
+    pub skill_ids: Vec<String>,
     /// Pinned workflow identifier.
     pub workflow_id: Option<String>,
     /// Pinned workflow content hash.
@@ -1008,6 +1011,110 @@ pub struct TelemetryMetrics {
     pub final_outputs: usize,
     /// Aggregate stable event-type histogram.
     pub event_types: std::collections::BTreeMap<String, usize>,
+}
+
+/// Strict declarative skill manifest. Skills carry context, never executable privilege.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillManifest {
+    /// Stable skill identifier.
+    pub name: String,
+    /// Human-readable version.
+    pub version: String,
+    /// Bounded discovery summary.
+    pub description: String,
+    /// Prompt terms that may activate the skill.
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    /// Tool names that must already be active; skills never activate tools.
+    #[serde(default)]
+    pub required_tools: Vec<String>,
+    /// Declarative labels supplied to policy as context only.
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    /// Whether the instructions require no network or external integration.
+    #[serde(default = "default_true")]
+    pub offline_compatible: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Loaded data-only skill and its bounded filesystem provenance.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillRecord {
+    /// Validated manifest.
+    pub manifest: SkillManifest,
+    /// Prompt instructions with frontmatter removed.
+    pub instructions: String,
+    /// Stable provenance label such as `repository:name`.
+    pub source: String,
+    /// Canonical resource root used only by the trusted resource service.
+    pub resource_root: String,
+}
+
+/// One deterministic duplicate-resolution result.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillDuplicate {
+    /// Duplicated skill name.
+    pub name: String,
+    /// Source selected by configured precedence.
+    pub selected_source: String,
+    /// Every source in precedence order.
+    pub sources: Vec<String>,
+}
+
+/// Safe metadata for one available or active skill.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillMetadata {
+    /// Skill name.
+    pub name: String,
+    /// Skill version.
+    pub version: String,
+    /// Skill description.
+    pub description: String,
+    /// Provenance label.
+    pub source: String,
+}
+
+/// Result of deterministic prompt-context skill composition.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillComposition {
+    /// Original instructions plus bounded skill context.
+    pub instructions: String,
+    /// Metadata for every enabled skill.
+    pub available_skills: Vec<SkillMetadata>,
+    /// Metadata for skills activated on this turn.
+    pub active_skills: Vec<SkillMetadata>,
+}
+
+/// One bounded resource visible under an active data-only skill.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillResourceEntry {
+    /// POSIX path relative to the skill root.
+    pub path: String,
+    /// File size before reading.
+    pub size: u64,
+    /// Allowed top-level resource directory.
+    pub kind: String,
+}
+
+/// One bounded UTF-8 resource read.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillResourceRead {
+    /// POSIX path relative to the skill root.
+    pub path: String,
+    /// Exact UTF-8 byte length.
+    pub size: u64,
+    /// Released text content.
+    pub content: String,
 }
 
 /// Provenance for a durable key decision.
