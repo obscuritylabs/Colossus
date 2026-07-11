@@ -822,8 +822,14 @@ behavior.
 - Safe reasoning summaries can be toggled independently from tool/activity events.
 - Errors clearly identify whether they are recoverable.
 - Long-running activity shows current phase/action and elapsed time.
+- Interactive prompts show a 1-based cursor line/column and Unicode-aware draft
+  character/line counts without per-keystroke application, worker, policy, or journal
+  operations.
 - Five built-in data-only palettes MUST style interactive prompts, assistant text,
   semantic labels, and activity frames while redirected output remains ANSI-free.
+- Loopback-live Responses and OpenAI-compatible terminal acceptance MUST cover streamed
+  tool calls, continuation, final output, redirected ANSI safety, and credential
+  non-disclosure; compatible execution MUST cover CLI, REPL, and worker surfaces.
 
 ## 19. Configuration And Local Storage
 
@@ -993,6 +999,9 @@ A reconstruction is complete only when all applicable checks pass:
 - [x] Bounded JSON/TOML custom themes have strict parsing, immutable source-hash-bound
   preference snapshots, legacy data-only schema mapping, embedded/worker parity,
   restart reconstruction, and ANSI-free redirected output.
+- [x] Reedline prompt repaint reports Unicode-aware cursor/draft metrics without
+  per-keystroke state effects, and loopback-live Responses/compatible streamed tool loops
+  pass CLI, REPL, worker, ANSI-safety, continuation, and credential non-disclosure checks.
 - [x] Telemetry derives correct duration and counts from persisted event timestamps.
 - [ ] Credentials remain references until adapter execution and never appear in model or
   user-visible diagnostic payloads.

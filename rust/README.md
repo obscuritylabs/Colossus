@@ -261,6 +261,9 @@ elapsed time. Interactive terminals refresh active elapsed time in place; redire
 streams remain stable and escape-free. The embedded and worker REPLs also share a cached
 status prompt showing session, resolved primary model/profile, context/messages, work,
 approval mode, display preferences, and last run status.
+The prompt also derives 1-based cursor line/column and Unicode-aware draft
+character/line counts locally from Reedline's repaint pass. Draft text is not sent over
+worker IPC or persisted per keystroke.
 
 The five built-in data-only palettes style Reedline prompt segments, assistant text,
 semantic event labels, and animated activity frames only on an interactive terminal.

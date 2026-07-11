@@ -22,9 +22,9 @@ use colossus_runtime::{Runtime, RuntimeConfig};
 use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
 use crossterm::style::Color as CrosstermColor;
 use reedline::{
-    EditCommand, Emacs, FileBackedHistory, History, HistoryItem, KeyCode, KeyModifiers, Prompt,
-    PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline, ReedlineEvent,
-    Signal, default_emacs_keybindings,
+    EditCommand, Emacs, FileBackedHistory, Highlighter, History, HistoryItem, KeyCode,
+    KeyModifiers, Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline,
+    ReedlineEvent, Signal, StyledText, default_emacs_keybindings,
 };
 use serde_json::{Value, json};
 use std::{
@@ -1683,12 +1683,73 @@ enum PresentationCommandResult {
     Save,
 }
 
-fn repl_editor(multiline: bool, history_entries: &[String]) -> Result<Reedline, Box<dyn Error>> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ComposerMetrics {
+    cursor_line: usize,
+    cursor_column: usize,
+    chars: usize,
+    lines: usize,
+}
+
+impl Default for ComposerMetrics {
+    fn default() -> Self {
+        Self {
+            cursor_line: 1,
+            cursor_column: 1,
+            chars: 0,
+            lines: 1,
+        }
+    }
+}
+
+impl ComposerMetrics {
+    fn from_buffer(line: &str, cursor: usize) -> Self {
+        let before_cursor = line.get(..cursor).unwrap_or_default();
+        Self {
+            cursor_line: before_cursor.bytes().filter(|byte| *byte == b'\n').count() + 1,
+            cursor_column: before_cursor
+                .rsplit_once('\n')
+                .map_or(before_cursor, |(_, current)| current)
+                .chars()
+                .count()
+                + 1,
+            chars: line.chars().count(),
+            lines: line.bytes().filter(|byte| *byte == b'\n').count() + 1,
+        }
+    }
+}
+
+struct ComposerHighlighter {
+    metrics: Arc<Mutex<ComposerMetrics>>,
+}
+
+impl Highlighter for ComposerHighlighter {
+    fn highlight(&self, line: &str, cursor: usize) -> StyledText {
+        *self
+            .metrics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            ComposerMetrics::from_buffer(line, cursor);
+        let mut styled = StyledText::new();
+        styled.push((nu_ansi_term::Style::new(), line.into()));
+        styled
+    }
+}
+
+fn repl_editor(
+    multiline: bool,
+    history_entries: &[String],
+    composer_metrics: Arc<Mutex<ComposerMetrics>>,
+) -> Result<Reedline, Box<dyn Error>> {
     let mut history = FileBackedHistory::new(REPL_HISTORY_CAPACITY)?;
     for entry in history_entries {
         history.save(HistoryItem::from_command_line(entry))?;
     }
-    let editor = Reedline::create().with_history(Box::new(history));
+    let editor = Reedline::create()
+        .with_history(Box::new(history))
+        .with_highlighter(Box::new(ComposerHighlighter {
+            metrics: composer_metrics,
+        }));
     if !multiline {
         return Ok(editor);
     }
@@ -2032,6 +2093,7 @@ impl ReplPromptState {
 struct ColossusPrompt {
     left: String,
     right: String,
+    composer_metrics: Arc<Mutex<ComposerMetrics>>,
     multiline: bool,
     indicator: String,
     multiline_indicator: String,
@@ -2045,6 +2107,7 @@ impl ColossusPrompt {
         state: &ReplPromptState,
         preferences: &ReplPreferences,
         approval: &str,
+        composer_metrics: Arc<Mutex<ComposerMetrics>>,
     ) -> Self {
         let short_session = session_id.chars().take(8).collect::<String>();
         let route = state.route.as_ref().map_or_else(
@@ -2090,6 +2153,7 @@ impl ColossusPrompt {
                 preferences.events_mode.as_str(),
                 state.last_status,
             ),
+            composer_metrics,
             multiline: preferences.multiline,
             indicator,
             multiline_indicator,
@@ -2119,7 +2183,14 @@ impl Prompt for ColossusPrompt {
     }
 
     fn render_prompt_right(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.right)
+        let metrics = *self
+            .composer_metrics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Cow::Owned(format!(
+            "{} pos={}:{} chars={} lines={}",
+            self.right, metrics.cursor_line, metrics.cursor_column, metrics.chars, metrics.lines
+        ))
     }
 
     fn render_prompt_indicator(&self, _prompt_mode: PromptEditMode) -> Cow<'_, str> {
@@ -2260,7 +2331,12 @@ async fn repl(
 ) -> Result<(), Box<dyn Error>> {
     let mut preferences = runtime.presentation_preferences()?;
     let mut history_entries = runtime.repl_history(REPL_HISTORY_CAPACITY)?;
-    let mut editor = repl_editor(preferences.multiline, &history_entries)?;
+    let composer_metrics = Arc::new(Mutex::new(ComposerMetrics::default()));
+    let mut editor = repl_editor(
+        preferences.multiline,
+        &history_entries,
+        Arc::clone(&composer_metrics),
+    )?;
     let stdin = io::stdin();
     let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
     let mut active_session_id = if resume_latest {
@@ -2291,6 +2367,7 @@ async fn repl(
             &prompt_state,
             &preferences,
             approval_mode.as_str(),
+            Arc::clone(&composer_metrics),
         );
         match read_repl_signal(&mut editor, &prompt, &mut scripted_input)? {
             Signal::Success(line) => {
@@ -2316,7 +2393,11 @@ async fn repl(
                             .await?;
                         print_json(&preferences)?;
                         if prior_multiline != preferences.multiline {
-                            editor = repl_editor(preferences.multiline, &history_entries)?;
+                            editor = repl_editor(
+                                preferences.multiline,
+                                &history_entries,
+                                Arc::clone(&composer_metrics),
+                            )?;
                         }
                         continue;
                     }
@@ -3570,7 +3651,12 @@ async fn worker_repl(
             })
             .await?,
     )?;
-    let mut editor = repl_editor(preferences.multiline, &history_entries)?;
+    let composer_metrics = Arc::new(Mutex::new(ComposerMetrics::default()));
+    let mut editor = repl_editor(
+        preferences.multiline,
+        &history_entries,
+        Arc::clone(&composer_metrics),
+    )?;
     let stdin = io::stdin();
     let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
     let mut sticky_skills = Vec::<String>::new();
@@ -3584,7 +3670,13 @@ async fn worker_repl(
                 .await;
             prompt_dirty = false;
         }
-        let prompt = ColossusPrompt::new(&active_session_id, &prompt_state, &preferences, "worker");
+        let prompt = ColossusPrompt::new(
+            &active_session_id,
+            &prompt_state,
+            &preferences,
+            "worker",
+            Arc::clone(&composer_metrics),
+        );
         match read_repl_signal(&mut editor, &prompt, &mut scripted_input)? {
             Signal::Success(line) => {
                 let line = line.trim();
@@ -3619,7 +3711,11 @@ async fn worker_repl(
                         )?;
                         print_json(&preferences)?;
                         if prior_multiline != preferences.multiline {
-                            editor = repl_editor(preferences.multiline, &history_entries)?;
+                            editor = repl_editor(
+                                preferences.multiline,
+                                &history_entries,
+                                Arc::clone(&composer_metrics),
+                            )?;
                         }
                         continue;
                     }
@@ -5061,6 +5157,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
 
+    fn test_composer_metrics() -> Arc<Mutex<ComposerMetrics>> {
+        Arc::new(Mutex::new(ComposerMetrics::default()))
+    }
+
     #[test]
     fn transient_activity_refresh_preserves_semantic_suffix() {
         assert_eq!(
@@ -5122,6 +5222,7 @@ mod tests {
             &state,
             &preferences,
             "ask",
+            test_composer_metrics(),
         );
 
         assert_eq!(prompt.render_prompt_left(), "Colossus 019f4ddd");
@@ -5131,6 +5232,7 @@ mod tests {
         assert!(right.contains("work=0/0"));
         assert!(right.contains("approval=ask"));
         assert!(right.contains("stream=on events=compact reasoning=on status=ok"));
+        assert!(right.contains("pos=1:1 chars=0 lines=1"));
         assert_eq!(prompt.render_prompt_indicator(PromptEditMode::Emacs), " · ");
         assert_eq!(prompt.render_prompt_multiline_indicator(), " … ");
     }
@@ -5161,6 +5263,7 @@ mod tests {
             &ReplPromptState::new(),
             &preferences,
             "ask",
+            test_composer_metrics(),
         );
         assert_ne!(prompt.get_prompt_color(), CrosstermColor::Reset);
         assert_ne!(prompt.get_indicator_color(), CrosstermColor::Reset);
@@ -5176,6 +5279,7 @@ mod tests {
             &ReplPromptState::new(),
             &preferences,
             "ask",
+            test_composer_metrics(),
         );
         assert_eq!(mono.get_prompt_color(), CrosstermColor::Reset);
     }
@@ -5208,6 +5312,7 @@ mod tests {
             &ReplPromptState::new(),
             &preferences,
             "ask",
+            test_composer_metrics(),
         );
         assert_eq!(prompt.render_prompt_left(), "Ocean 019f4ddd");
         assert_eq!(
@@ -5223,5 +5328,35 @@ mod tests {
             prompt.get_indicator_color(),
             CrosstermColor::Rgb { r: 4, g: 5, b: 6 }
         );
+    }
+
+    #[test]
+    fn composer_highlighter_updates_unicode_cursor_and_draft_metrics_before_prompt_render() {
+        let metrics = test_composer_metrics();
+        let highlighter = ComposerHighlighter {
+            metrics: Arc::clone(&metrics),
+        };
+        let draft = "hé\nthere";
+        let cursor = "hé\nt".len();
+        assert_eq!(highlighter.highlight(draft, cursor).raw_string(), draft);
+        assert_eq!(
+            *metrics.lock().expect("metrics"),
+            ComposerMetrics {
+                cursor_line: 2,
+                cursor_column: 2,
+                chars: 8,
+                lines: 2,
+            }
+        );
+
+        let prompt = ColossusPrompt::new(
+            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
+            &ReplPromptState::new(),
+            &ReplPreferences::default(),
+            "ask",
+            metrics,
+        );
+        let right = prompt.render_prompt_right();
+        assert!(right.contains("pos=2:2 chars=8 lines=2"));
     }
 }

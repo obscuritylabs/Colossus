@@ -321,8 +321,10 @@ cutover. The following planned work remains:
   implemented through the normal permission, quarantine, and audit boundaries.
 - The first fully green remote Windows x64/arm64 named-pipe runtime matrix. The
   cross-platform suite and CI jobs are implemented.
-- Editor-buffer counters and broader live provider/tool-use terminal acceptance. Five
-  typed built-in palettes, bounded data-only custom theme libraries with immutable
+- A broader hosted and version-specific provider terminal matrix remains. Unicode-aware
+  editor cursor/draft counters, loopback-live Responses and compatible streamed tool
+  continuation, and compatible one-shot/REPL/authenticated-worker parity are implemented.
+  Five typed built-in palettes, bounded data-only custom theme libraries with immutable
   audited snapshots, encrypted REPL history with bounded
   hydration, prompt-safe in-place activity refresh, a cached embedded/worker status prompt,
   durable correlated run envelopes, semantic tool-family results, recoverability labels,

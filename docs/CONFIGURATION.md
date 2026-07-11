@@ -448,7 +448,10 @@ authenticated-worker REPL prompts share a cached status line with the active ses
 resolved primary model/profile, context and message budget, open/total work, approval
 mode, display preferences, and last run status. Reedline history is hydrated from the
 newest 1,000 encrypted journal entries and persists through the authenticated worker or
-embedded runtime. Rust ships typed `default`, `mono`, `high_contrast`, `carrot`, and
+embedded runtime. The same prompt shows 1-based cursor line/column plus Unicode-aware
+draft character and line counts. Reedline's repaint highlighter updates those metrics
+locally before prompt rendering, without repository calls, audit writes, or exposing
+draft text. Rust ships typed `default`, `mono`, `high_contrast`, `carrot`, and
 `hacker` palettes for Reedline prompts, assistant text, semantic labels, and activity
 frames; `plain` remains a migration alias for `mono`. Colors and animated frames are
 terminal-only, so redirected output stays ANSI-free. Rust loads bounded, data-only JSON
@@ -461,8 +464,10 @@ optional built-in `base`, prompt colors in `#RRGGBB`, semantic style overrides, 
 of the bounded spinner names. The legacy Python data-only theme schema is also mapped
 strictly during cutover. Unknown keys, invalid colors, duplicate/built-in names,
 oversized files, symlinked files/directories, or more than 64 custom themes fail closed.
-Only cursor/draft counters remain cutover UX work because Reedline's prompt contract does
-not currently expose editor-buffer counters.
+Loopback-live acceptance exercises streamed tool-call continuation for both Responses and
+OpenAI-compatible Chat Completions. The compatible path runs through one-shot CLI,
+embedded REPL, and authenticated worker surfaces; redirected output remains ANSI-free,
+and the Responses credential is absent from terminal and JSON output.
 
 ## Agent telemetry
 

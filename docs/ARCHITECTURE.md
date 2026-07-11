@@ -395,6 +395,12 @@ operations after status-affecting commands rather than querying repositories or 
 per-keystroke audit traffic. The interface must continue to call application services
 for orchestration and context data rather than owning those behaviors.
 
+A `ComposerHighlighter` observes Reedline's current buffer and byte insertion point during
+the normal repaint pass, derives only Unicode-aware character/line counts and a 1-based
+cursor line/column, and shares that small snapshot with `ColossusPrompt`. Draft content
+stays inside Reedline, and per-keystroke edits do not cross worker IPC, repositories, the
+effect gateway, or the journal.
+
 `TerminalPalette` is a pure data-only presentation mapping for the five built-in theme
 identities and resolved custom-theme snapshots. `ThemeLibrary` performs bounded,
 strict JSON/TOML configuration loading; selection persists an immutable palette plus

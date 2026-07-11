@@ -590,6 +590,11 @@ preference event, so restart does not reread mutable theme content to reconstruc
 active appearance. The supported data-only Python schema is mapped through the same
 bounds during cutover.
 
+Composer metrics are interface-local derived values. Reedline supplies the draft and
+insertion point to a data-only highlighter during repaint; Colossus retains only cursor
+line/column and draft character/line counts in memory. Draft text is not copied into
+prompt status, worker IPC, telemetry, policy input, or audit events.
+
 ## Audit Logs
 
 The frozen Python audit records are append-only hash-chained JSONL. The Rust canonical
