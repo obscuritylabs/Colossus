@@ -18,7 +18,7 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fs,
-    io::{self, Write as _},
+    io::{self, BufRead as _, IsTerminal as _, Write as _},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -1490,6 +1490,7 @@ fn choose_session(
     runtime: &Runtime,
     editor: &mut Reedline,
     prompt: &DefaultPrompt,
+    scripted_input: &mut Option<io::StdinLock<'_>>,
     limit: usize,
 ) -> Result<Option<String>, Box<dyn Error>> {
     let mut sessions = runtime
@@ -1513,7 +1514,7 @@ fn choose_session(
         );
     }
     println!("Enter a number or exact session id (blank cancels).");
-    let Signal::Success(choice) = editor.read_line(prompt)? else {
+    let Signal::Success(choice) = read_repl_signal(editor, prompt, scripted_input)? else {
         return Ok(None);
     };
     let choice = choice.trim();
@@ -1533,6 +1534,22 @@ fn choose_session(
         .map(Some)
 }
 
+fn read_repl_signal(
+    editor: &mut Reedline,
+    prompt: &DefaultPrompt,
+    scripted_input: &mut Option<io::StdinLock<'_>>,
+) -> Result<Signal, Box<dyn Error>> {
+    let Some(input) = scripted_input.as_mut() else {
+        return Ok(editor.read_line(prompt)?);
+    };
+    let mut line = String::new();
+    if input.read_line(&mut line)? == 0 {
+        Ok(Signal::CtrlD)
+    } else {
+        Ok(Signal::Success(line))
+    }
+}
+
 async fn repl(
     runtime: &Runtime,
     initial_session: Option<String>,
@@ -1540,6 +1557,8 @@ async fn repl(
 ) -> Result<(), Box<dyn Error>> {
     let mut editor = Reedline::create();
     let prompt = DefaultPrompt::default();
+    let stdin = io::stdin();
+    let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
     let mut active_session_id = if resume_latest {
         runtime.latest_session()?.id
     } else if let Some(session_id) = initial_session {
@@ -1555,7 +1574,7 @@ async fn repl(
         "Colossus Rust alpha. session={active_session_id}; /help for commands; Ctrl-D to exit."
     );
     loop {
-        match editor.read_line(&prompt)? {
+        match read_repl_signal(&mut editor, &prompt, &mut scripted_input)? {
             Signal::Success(line) => {
                 let line = line.trim();
                 if line.is_empty() {
@@ -1801,7 +1820,8 @@ async fn repl(
                         .transpose()?
                         .unwrap_or(10)
                         .clamp(1, 100);
-                    if let Some(session_id) = choose_session(runtime, &mut editor, &prompt, limit)?
+                    if let Some(session_id) =
+                        choose_session(runtime, &mut editor, &prompt, &mut scripted_input, limit)?
                     {
                         active_session_id = session_id;
                         println!("session={active_session_id}");
@@ -2721,10 +2741,12 @@ async fn worker_repl(
     };
     let mut editor = Reedline::create();
     let prompt = DefaultPrompt::default();
+    let stdin = io::stdin();
+    let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
     let mut sticky_skills = Vec::<String>::new();
     println!("Colossus Rust REPL via authenticated worker. Type /help for commands.");
     loop {
-        match editor.read_line(&prompt)? {
+        match read_repl_signal(&mut editor, &prompt, &mut scripted_input)? {
             Signal::Success(line) => {
                 let line = line.trim();
                 if line.is_empty() {
@@ -2735,9 +2757,442 @@ async fn worker_repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/session show | /session new | /session resume ID | /resume | \
-                         /skill use NAME | /skill active | /skill clear | /quit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
+                    println!("Any other line is sent through the configured primary model role.");
+                } else if line == "/workflow list" {
+                    print_json(&client.call(WorkerOperation::WorkflowList).await?)?;
+                } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::WorkflowStatus {
+                                run_id: run_id.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/audit verify" {
+                    print_json(&client.call(WorkerOperation::AuditVerify).await?)?;
+                } else if line == "/projection status" {
+                    print_json(&client.call(WorkerOperation::ProjectionStatus).await?)?;
+                } else if line == "/tools" {
+                    print_json(&client.call(WorkerOperation::ToolsList).await?)?;
+                } else if line == "/sessions" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::SessionList { limit: 20 })
+                            .await?,
+                    )?;
+                } else if line == "/tasks" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::TaskList {
+                                session_id: Some(active_session_id.clone()),
+                                status: None,
+                                limit: 100,
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/decisions" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::DecisionList {
+                                session_id: Some(active_session_id.clone()),
+                                status: Some(DecisionStatus::Active),
+                                limit: 100,
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/plans" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PlanList {
+                                session_id: Some(active_session_id.clone()),
+                                status: None,
+                                limit: 100,
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/goals" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::GoalList {
+                                session_id: Some(active_session_id.clone()),
+                                status: None,
+                                limit: 100,
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(objective) = line.strip_prefix("/goal ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::GoalRun {
+                                role: "primary".into(),
+                                objective: objective.trim().into(),
+                                session_id: active_session_id.clone(),
+                                max_iterations: 5,
+                                source_plan_id: None,
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/agents" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::AgentList {
+                                session_id: Some(active_session_id.clone()),
+                                status: None,
+                                limit: 100,
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/agents drain" {
+                    print_json(&client.call(WorkerOperation::AgentDrain).await?)?;
+                } else if line == "/memories" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::MemorySearch {
+                                query: String::new(),
+                                session_id: Some(active_session_id.clone()),
+                                repository_id: None,
+                                limit: 20,
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(query) = line.strip_prefix("/memory search ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::MemorySearch {
+                                query: query.trim().into(),
+                                session_id: Some(active_session_id.clone()),
+                                repository_id: None,
+                                limit: 8,
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/research list" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ResearchList {
+                                session_id: Some(active_session_id.clone()),
+                                limit: 20,
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(question) = line.strip_prefix("/research ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ResearchRun {
+                                question: question.trim().into(),
+                                session_id: Some(active_session_id.clone()),
+                                depth: ResearchDepth::Standard,
+                                source_kinds: vec![
+                                    ResearchSourceKind::Repo,
+                                    ResearchSourceKind::Web,
+                                    ResearchSourceKind::Mcp,
+                                ],
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/telemetry" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::TelemetryRuns {
+                                session_id: Some(active_session_id.clone()),
+                                limit: 20,
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/telemetry metrics" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::TelemetryMetrics {
+                                session_id: Some(active_session_id.clone()),
+                                limit: 100,
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::TelemetryShow {
+                                id_or_prefix: run_id.trim().into(),
+                                limit: 500,
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/packs" || line == "/packs list" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackList { limit: 100 })
+                            .await?,
+                    )?;
+                } else if let Some(name) = line.strip_prefix("/packs show ") {
+                    let name = name.trim();
+                    let pack = client
+                        .call(WorkerOperation::PackGet { name: name.into() })
+                        .await?;
+                    if pack.is_null() {
+                        return Err(cli_error(format!("pack not found: {name}")).into());
+                    }
+                    print_json(&pack)?;
+                } else if let Some(path) = line
+                    .strip_prefix("/packs verify ")
+                    .or_else(|| line.strip_prefix("/packs validate "))
+                {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackVerify {
+                                path: path.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(value) = line.strip_prefix("/packs install ") {
+                    let value = value.trim();
+                    let (path, allow_untrusted) = value
+                        .strip_suffix(" --allow-untrusted")
+                        .map_or((value, false), |path| (path.trim(), true));
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackInstall {
+                                path: path.into(),
+                                allow_untrusted,
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(name) = line.strip_prefix("/packs enable ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackEnable {
+                                name: name.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(name) = line.strip_prefix("/packs disable ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackDisable {
+                                name: name.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(name) = line.strip_prefix("/packs uninstall ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackUninstall {
+                                name: name.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(tool) = line.strip_prefix("/packs call ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackCall {
+                                tool: tool.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/packs trust" || line == "/packs trust list" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackTrustList { limit: 100 })
+                            .await?,
+                    )?;
+                } else if let Some(value) = line.strip_prefix("/packs trust add ") {
+                    let (publisher, public_key) =
+                        value.trim().split_once(' ').ok_or_else(|| {
+                            cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY")
+                        })?;
+                    print_json(
+                        &client
+                            .call(WorkerOperation::PackTrustAdd {
+                                publisher: publisher.into(),
+                                public_key: public_key.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(path) = line.strip_prefix("/bundle verify ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::BundleVerify {
+                                path: path.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/integrations" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::IntegrationList { limit: 100 })
+                            .await?,
+                    )?;
+                } else if let Some(name) = line.strip_prefix("/integration show ") {
+                    let name = name.trim();
+                    let integration = client
+                        .call(WorkerOperation::IntegrationGet { name: name.into() })
+                        .await?;
+                    if integration.is_null() {
+                        return Err(cli_error(format!("integration not found: {name}")).into());
+                    }
+                    print_json(&integration)?;
+                } else if let Some(name) = line.strip_prefix("/integration disconnect ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::IntegrationDisconnect {
+                                name: name.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(arguments) = line.strip_prefix("/integration call ") {
+                    let (tool, arguments) = arguments
+                        .trim()
+                        .split_once(' ')
+                        .ok_or_else(|| cli_error("usage: /integration call TOOL JSON"))?;
+                    print_json(
+                        &client
+                            .call(WorkerOperation::IntegrationCall {
+                                tool: tool.into(),
+                                arguments_source: arguments.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/mcp servers" {
+                    print_json(&client.call(WorkerOperation::McpServers).await?)?;
+                } else if line == "/mcp tools" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::McpTools { server: None })
+                            .await?,
+                    )?;
+                } else if let Some(server) = line.strip_prefix("/mcp tools ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::McpTools {
+                                server: Some(server.trim().into()),
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(arguments) = line.strip_prefix("/mcp call ") {
+                    let mut parts = arguments.trim().splitn(3, ' ');
+                    let server = parts
+                        .next()
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+                    let tool = parts
+                        .next()
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+                    let arguments_source = parts
+                        .next()
+                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+                    print_json(
+                        &client
+                            .call(WorkerOperation::McpCall {
+                                server: server.into(),
+                                tool: tool.into(),
+                                arguments_source: arguments_source.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/skills" {
+                    let mut skills = client.call(WorkerOperation::SkillList).await?;
+                    if let Some(skills) = skills.as_array_mut() {
+                        for skill in skills {
+                            let is_active = skill
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|name| sticky_skills.iter().any(|item| item == name));
+                            if let Some(skill) = skill.as_object_mut() {
+                                skill.insert("active".into(), Value::Bool(is_active));
+                            }
+                        }
+                    }
+                    print_json(&skills)?;
+                } else if line == "/skill clear" {
+                    sticky_skills.clear();
+                    println!("active skills cleared");
+                } else if line == "/skill active" {
+                    println!("active skills: {}", sticky_skills.join(", "));
+                } else if let Some(name) = line.strip_prefix("/skill use ") {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        return Err("skill name is required".into());
+                    }
+                    let skill = client
+                        .call(WorkerOperation::SkillGet { name: name.into() })
+                        .await?;
+                    if skill.is_null() {
+                        return Err(cli_error(format!("skill not found: {name}")).into());
+                    }
+                    if !sticky_skills.iter().any(|active| active == name) {
+                        sticky_skills.push(name.into());
+                    }
+                    println!("active skill={name}");
+                } else if let Some(name) = line.strip_prefix("/skill show ") {
+                    let name = name.trim();
+                    let skill = client
+                        .call(WorkerOperation::SkillGet { name: name.into() })
+                        .await?;
+                    if skill.is_null() {
+                        return Err(cli_error(format!("skill not found: {name}")).into());
+                    }
+                    print_json(&skill)?;
+                } else if let Some(name) = line.strip_prefix("/skill resources ") {
+                    let name = name.trim();
+                    if !sticky_skills.iter().any(|active| active == name) {
+                        return Err(cli_error(format!("skill is not active: {name}")).into());
+                    }
+                    print_json(
+                        &client
+                            .call(WorkerOperation::SkillResources { name: name.into() })
+                            .await?,
+                    )?;
+                } else if let Some(arguments) = line.strip_prefix("/skill read ") {
+                    let (name, path) = arguments
+                        .trim()
+                        .split_once(' ')
+                        .ok_or_else(|| cli_error("usage: /skill read NAME PATH"))?;
+                    if !sticky_skills.iter().any(|active| active == name) {
+                        return Err(cli_error(format!("skill is not active: {name}")).into());
+                    }
+                    print_json(
+                        &client
+                            .call(WorkerOperation::SkillResourceRead {
+                                name: name.into(),
+                                path: path.trim().into(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/context" || line == "/context status" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ContextStatus {
+                                session_id: active_session_id.clone(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/context list" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ContextList {
+                                session_id: active_session_id.clone(),
+                            })
+                            .await?,
+                    )?;
+                } else if line == "/context compact" {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ContextCompact {
+                                session_id: active_session_id.clone(),
+                            })
+                            .await?,
+                    )?;
+                } else if let Some(snapshot_id) = line.strip_prefix("/context restore ") {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ContextRestore {
+                                session_id: active_session_id.clone(),
+                                snapshot_id: snapshot_id.trim().into(),
+                            })
+                            .await?,
+                    )?;
                 } else if line == "/session" || line == "/session show" {
                     print_json(
                         &client
@@ -2767,29 +3222,29 @@ async fn worker_repl(
                     }
                     active_session_id = session_id.into();
                     println!("session={active_session_id}");
-                } else if line == "/resume" {
-                    active_session_id =
-                        serde_json::from_value::<colossus_contracts::SessionSummary>(
-                            client.call(WorkerOperation::SessionLatest).await?,
-                        )?
-                        .id;
-                    println!("session={active_session_id}");
-                } else if let Some(name) = line.strip_prefix("/skill use ") {
-                    let name = name.trim();
-                    if name.is_empty() {
-                        return Err("skill name is required".into());
+                } else if line == "/resume" || line.starts_with("/resume ") {
+                    let limit = line
+                        .strip_prefix("/resume ")
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::parse::<usize>)
+                        .transpose()?
+                        .unwrap_or(10)
+                        .clamp(1, 100);
+                    if let Some(session_id) = choose_worker_session(
+                        client,
+                        &mut editor,
+                        &prompt,
+                        &mut scripted_input,
+                        limit,
+                    )
+                    .await?
+                    {
+                        active_session_id = session_id;
+                        println!("session={active_session_id}");
                     }
-                    if !sticky_skills.iter().any(|active| active == name) {
-                        sticky_skills.push(name.into());
-                    }
-                    println!("active skills: {}", sticky_skills.join(", "));
-                } else if line == "/skill active" {
-                    println!("active skills: {}", sticky_skills.join(", "));
-                } else if line == "/skill clear" {
-                    sticky_skills.clear();
-                    println!("active skills cleared");
                 } else if line.starts_with('/') {
-                    println!("command is not yet available through worker IPC: {line}");
+                    println!("unknown REPL command: {line}; use /help");
                 } else {
                     let mut observer = TerminalStreamObserver::new(StreamTarget::Stdout);
                     let result = client
@@ -2816,6 +3271,60 @@ async fn worker_repl(
         }
     }
     Ok(())
+}
+
+async fn choose_worker_session(
+    client: &WorkerClient,
+    editor: &mut Reedline,
+    prompt: &DefaultPrompt,
+    scripted_input: &mut Option<io::StdinLock<'_>>,
+    limit: usize,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let mut sessions = serde_json::from_value::<Vec<colossus_contracts::SessionSummary>>(
+        client
+            .call(WorkerOperation::SessionList { limit: 100 })
+            .await?,
+    )?
+    .into_iter()
+    .filter(|session| session.message_count > 0)
+    .collect::<Vec<_>>();
+    sessions.truncate(limit);
+    if sessions.is_empty() {
+        println!("No sessions exist yet.");
+        return Ok(None);
+    }
+    println!("Choose a session to resume:");
+    for (index, session) in sessions.iter().enumerate() {
+        println!(
+            "  {}. {}  {}  messages={}",
+            index + 1,
+            session.id,
+            session.title.as_deref().unwrap_or("Untitled"),
+            session.message_count
+        );
+    }
+    println!("Enter a number or exact session id (blank cancels).");
+    let Signal::Success(choice) = read_repl_signal(editor, prompt, scripted_input)? else {
+        return Ok(None);
+    };
+    let choice = choice.trim();
+    if choice.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(index) = choice.parse::<usize>()
+        && let Some(session) = index.checked_sub(1).and_then(|index| sessions.get(index))
+    {
+        return Ok(Some(session.id.clone()));
+    }
+    let session = client
+        .call(WorkerOperation::SessionGet {
+            session_id: choice.into(),
+        })
+        .await?;
+    if session.is_null() {
+        return Err(cli_error(format!("session not found: {choice}")).into());
+    }
+    Ok(Some(choice.into()))
 }
 
 #[tokio::main]

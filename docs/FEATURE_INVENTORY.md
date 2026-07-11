@@ -587,6 +587,10 @@ process; a client-side approval override MUST fail rather than silently change a
 Research, skills, packs, bundles, integrations, MCP, process, and network commands use
 typed operations too; `@path` JSON and other file-backed inputs are read by the worker
 through the normal filesystem permission boundary rather than by the client.
+When a worker is active, the REPL routes its implemented session, context, work,
+workflow, research, telemetry, skill, pack, bundle, integration, MCP, audit, projection,
+and tool commands through those same typed operations. Embedded and worker REPLs also
+accept line-oriented stdin without requiring a terminal.
 
 ## 13. Goal Mode
 

@@ -29,7 +29,8 @@ obsolete Go launcher.
   protection, streamed model events, session/workflow application operations, periodic
   safe draining, durable task/decision/plan/goal/subagent/memory operations, readiness,
   research/skill/pack/integration/MCP/process/network routing, clean shutdown, and
-  automatic embedded fallback.
+  automatic embedded fallback. Worker and embedded REPLs share the implemented
+  slash-command surface and support interactive or scripted line-oriented input.
 - Restartable projection workers with optimistic per-projection positions, atomic redb
   record/position commits, deterministic rebuilds, lag/readiness diagnostics, and
   default session, work, memory, and workflow reducers. Session and work repository
@@ -248,7 +249,7 @@ cutover. The following planned work remains:
   strict catalog validation, pure echo,
   permit-bound file list/read/search/write/replace, Git inspection, structured shell
   execution, and permit-bound HTTP GET are implemented.
-- Full worker-backed REPL slash-command parity and live Windows named-pipe acceptance.
+- Live Windows named-pipe acceptance.
 - Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,

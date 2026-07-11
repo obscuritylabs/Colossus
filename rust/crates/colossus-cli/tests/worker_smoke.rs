@@ -5,6 +5,7 @@
 use serde_json::Value;
 use std::{
     fs,
+    io::Write as _,
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
@@ -42,6 +43,23 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
         .args(arguments)
         .output()
         .expect("run Colossus")
+}
+
+fn run_with_input(binary: &Path, config: &Path, arguments: &[&str], input: &str) -> Output {
+    let mut child = command(binary, config)
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start Colossus");
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(input.as_bytes())
+        .expect("write Colossus input");
+    child.wait_with_output().expect("wait for Colossus")
 }
 
 fn wait_for(path: &Path, timeout: Duration) {
@@ -433,6 +451,25 @@ sandbox:
         serde_json::from_slice(&integrations.stdout).expect("integrations JSON");
     assert_eq!(integrations.as_array().map(Vec::len), Some(0));
 
+    let repl = run_with_input(
+        binary,
+        &config,
+        &["repl", "--session", session_id],
+        "/sessions\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
+    );
+    assert!(
+        repl.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repl.stderr)
+    );
+    let repl_stdout = String::from_utf8_lossy(&repl.stdout);
+    assert!(repl_stdout.contains("Colossus Rust REPL via authenticated worker"));
+    assert!(repl_stdout.contains(session_id));
+    assert!(repl_stdout.contains("worker IPC replacement"));
+    assert!(repl_stdout.contains("global_sequence"));
+    assert!(!repl_stdout.contains("not yet available through worker IPC"));
+    assert!(!repl_stdout.contains("unknown REPL command"));
+
     let workflow = directory.path().join("smoke.yaml");
     fs::write(
         &workflow,
@@ -553,4 +590,17 @@ steps:
     assert!(embedded.status.success());
     let embedded: Value = serde_json::from_slice(&embedded.stdout).expect("fallback JSON");
     assert_eq!(embedded["output"], "embedded-fallback");
+
+    let embedded_repl = run_with_input(
+        binary,
+        &config,
+        &["repl", "--session", session_id],
+        "/session show\n/exit\n",
+    );
+    assert!(
+        embedded_repl.status.success(),
+        "{}",
+        String::from_utf8_lossy(&embedded_repl.stderr)
+    );
+    assert!(String::from_utf8_lossy(&embedded_repl.stdout).contains(session_id));
 }
