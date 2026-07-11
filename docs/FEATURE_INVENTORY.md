@@ -580,6 +580,11 @@ Windows named pipes implement the same logical contract. Supported CLI/REPL oper
 auto-discover the worker and fall back to the embedded runtime only when no authenticated
 worker is active.
 
+Worker routing covers model runs, core REPL turns, sessions, workflows, audit and runtime
+diagnostics, context and telemetry, plus canonical tasks, decisions, plans, goals,
+subagents, memories, and memory-index maintenance. Approval mode belongs to the worker
+process; a client-side approval override MUST fail rather than silently change authority.
+
 ## 13. Goal Mode
 
 Goal Mode is a bounded autonomous continuation loop built on the normal agent

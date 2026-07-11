@@ -4,7 +4,10 @@
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use colossus_contracts::{AgentRunResult, ProviderEvent};
+use colossus_contracts::{
+    AgentRunResult, DecisionPriority, DecisionStatus, GoalStatus, MemoryScope, MemoryStatus,
+    PlanStatus, PlanStep, ProviderEvent, SubagentStatus, TaskStatus,
+};
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeError};
 use hmac::{Hmac, Mac as _};
 use serde::{Deserialize, Serialize};
@@ -219,6 +222,273 @@ pub enum WorkerOperation {
         /// Maximum runs.
         limit: usize,
     },
+    /// List canonical tasks.
+    TaskList {
+        /// Optional session filter.
+        session_id: Option<String>,
+        /// Optional status filter.
+        status: Option<TaskStatus>,
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Reconstruct one task.
+    TaskGet {
+        /// Exact task identifier.
+        task_id: String,
+    },
+    /// Create a task through the effect gateway.
+    TaskCreate {
+        /// Owning session.
+        session_id: String,
+        /// Task title.
+        title: String,
+        /// Task detail.
+        description: String,
+        /// Initial lifecycle status.
+        status: TaskStatus,
+    },
+    /// Update supplied task fields.
+    TaskUpdate {
+        /// Exact task identifier.
+        task_id: String,
+        /// Optional replacement title.
+        title: Option<String>,
+        /// Optional replacement detail.
+        description: Option<String>,
+        /// Optional replacement status.
+        status: Option<TaskStatus>,
+    },
+    /// List canonical key decisions.
+    DecisionList {
+        /// Optional session filter.
+        session_id: Option<String>,
+        /// Optional status filter.
+        status: Option<DecisionStatus>,
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Reconstruct one key decision.
+    DecisionGet {
+        /// Exact decision identifier.
+        decision_id: String,
+    },
+    /// Create an active key decision.
+    DecisionCreate {
+        /// Owning session.
+        session_id: String,
+        /// Decision title.
+        title: String,
+        /// Binding decision content.
+        decision: String,
+        /// Decision priority.
+        priority: DecisionPriority,
+        /// Future intent.
+        intent: String,
+        /// Applicability condition.
+        applies_when: String,
+        /// Supporting rationale.
+        rationale: String,
+        /// Bounded source excerpt.
+        source_excerpt: String,
+    },
+    /// Update supplied decision fields.
+    DecisionUpdate {
+        /// Exact decision identifier.
+        decision_id: String,
+        /// Optional replacement title.
+        title: Option<String>,
+        /// Optional replacement decision.
+        decision: Option<String>,
+        /// Optional replacement priority.
+        priority: Option<DecisionPriority>,
+        /// Optional replacement intent.
+        intent: Option<String>,
+        /// Optional replacement applicability.
+        applies_when: Option<String>,
+        /// Optional replacement rationale.
+        rationale: Option<String>,
+        /// Optional replacement source excerpt.
+        source_excerpt: Option<String>,
+    },
+    /// Archive one active decision.
+    DecisionArchive {
+        /// Exact decision identifier.
+        decision_id: String,
+    },
+    /// Atomically supersede one active decision.
+    DecisionSupersede {
+        /// Exact decision identifier.
+        decision_id: String,
+        /// Replacement title.
+        title: String,
+        /// Replacement decision.
+        decision: String,
+        /// Replacement priority.
+        priority: DecisionPriority,
+        /// Replacement intent.
+        intent: String,
+        /// Replacement applicability.
+        applies_when: String,
+        /// Replacement rationale.
+        rationale: String,
+        /// Replacement source excerpt.
+        source_excerpt: String,
+    },
+    /// List canonical plans.
+    PlanList {
+        /// Optional session filter.
+        session_id: Option<String>,
+        /// Optional status filter.
+        status: Option<PlanStatus>,
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Reconstruct one plan.
+    PlanGet {
+        /// Exact plan identifier.
+        plan_id: String,
+    },
+    /// Create a draft plan.
+    PlanCreate {
+        /// Owning session.
+        session_id: String,
+        /// Source prompt.
+        prompt: String,
+        /// Plan content.
+        content: String,
+        /// Ordered steps.
+        steps: Vec<PlanStep>,
+    },
+    /// Approve one draft plan.
+    PlanApprove {
+        /// Exact plan identifier.
+        plan_id: String,
+    },
+    /// List canonical goals.
+    GoalList {
+        /// Optional session filter.
+        session_id: Option<String>,
+        /// Optional status filter.
+        status: Option<GoalStatus>,
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Reconstruct one goal.
+    GoalGet {
+        /// Exact goal identifier.
+        goal_id: String,
+    },
+    /// Execute bounded Goal Mode.
+    GoalRun {
+        /// Logical model role.
+        role: String,
+        /// Goal objective.
+        objective: String,
+        /// Existing session.
+        session_id: String,
+        /// Iteration ceiling.
+        max_iterations: u16,
+        /// Optional approved source plan.
+        source_plan_id: Option<String>,
+    },
+    /// Queue a durable child-agent job.
+    AgentQueue {
+        /// Owning session.
+        session_id: String,
+        /// Delegated task.
+        task: String,
+        /// Child model role.
+        role: String,
+    },
+    /// List durable child-agent jobs.
+    AgentList {
+        /// Optional session filter.
+        session_id: Option<String>,
+        /// Optional status filter.
+        status: Option<SubagentStatus>,
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Reconstruct one child-agent job.
+    AgentGet {
+        /// Exact job identifier.
+        job_id: String,
+    },
+    /// Show child-agent scheduler status.
+    AgentStatus {
+        /// Optional session filter.
+        session_id: Option<String>,
+    },
+    /// Drain queued child-agent jobs.
+    AgentDrain,
+    /// Cancel one child-agent job.
+    AgentCancel {
+        /// Exact job identifier.
+        job_id: String,
+    },
+    /// Requeue one stopped child-agent job.
+    AgentRequeue {
+        /// Exact job identifier.
+        job_id: String,
+    },
+    /// List canonical memories.
+    MemoryList {
+        /// Optional status filter.
+        status: Option<MemoryStatus>,
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Read one canonical memory.
+    MemoryGet {
+        /// Exact memory identifier.
+        memory_id: String,
+    },
+    /// Search canonical re-filtered memories.
+    MemorySearch {
+        /// Search query.
+        query: String,
+        /// Optional session scope.
+        session_id: Option<String>,
+        /// Optional repository scope.
+        repository_id: Option<String>,
+        /// Maximum records.
+        limit: usize,
+    },
+    /// Create one canonical memory.
+    MemoryCreate {
+        /// Canonical scope.
+        scope: MemoryScope,
+        /// Memory kind.
+        memory_kind: String,
+        /// Confidence in zero through one.
+        confidence: f32,
+        /// Canonical text.
+        text: String,
+        /// Supporting rationale.
+        rationale: String,
+        /// Optional UTC expiry.
+        expires_at: Option<String>,
+    },
+    /// Archive one active memory.
+    MemoryArchive {
+        /// Exact memory identifier.
+        memory_id: String,
+    },
+    /// Supersede one active memory.
+    MemorySupersede {
+        /// Exact memory identifier.
+        memory_id: String,
+        /// Replacement text.
+        text: String,
+        /// Replacement rationale.
+        rationale: String,
+    },
+    /// Show memory-index readiness.
+    MemoryIndexStatus,
+    /// Retry queued memory-index work.
+    MemoryIndexSync,
+    /// Rebuild the disposable memory index.
+    MemoryIndexRebuild,
     /// Validate a workflow file through the normal filesystem policy boundary.
     WorkflowValidate {
         /// Server-local workflow path.
@@ -700,6 +970,39 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::TelemetryRuns { .. } => "telemetry_runs",
         WorkerOperation::TelemetryShow { .. } => "telemetry_show",
         WorkerOperation::TelemetryMetrics { .. } => "telemetry_metrics",
+        WorkerOperation::TaskList { .. } => "task_list",
+        WorkerOperation::TaskGet { .. } => "task_get",
+        WorkerOperation::TaskCreate { .. } => "task_create",
+        WorkerOperation::TaskUpdate { .. } => "task_update",
+        WorkerOperation::DecisionList { .. } => "decision_list",
+        WorkerOperation::DecisionGet { .. } => "decision_get",
+        WorkerOperation::DecisionCreate { .. } => "decision_create",
+        WorkerOperation::DecisionUpdate { .. } => "decision_update",
+        WorkerOperation::DecisionArchive { .. } => "decision_archive",
+        WorkerOperation::DecisionSupersede { .. } => "decision_supersede",
+        WorkerOperation::PlanList { .. } => "plan_list",
+        WorkerOperation::PlanGet { .. } => "plan_get",
+        WorkerOperation::PlanCreate { .. } => "plan_create",
+        WorkerOperation::PlanApprove { .. } => "plan_approve",
+        WorkerOperation::GoalList { .. } => "goal_list",
+        WorkerOperation::GoalGet { .. } => "goal_get",
+        WorkerOperation::GoalRun { .. } => "goal_run",
+        WorkerOperation::AgentQueue { .. } => "agent_queue",
+        WorkerOperation::AgentList { .. } => "agent_list",
+        WorkerOperation::AgentGet { .. } => "agent_get",
+        WorkerOperation::AgentStatus { .. } => "agent_status",
+        WorkerOperation::AgentDrain => "agent_drain",
+        WorkerOperation::AgentCancel { .. } => "agent_cancel",
+        WorkerOperation::AgentRequeue { .. } => "agent_requeue",
+        WorkerOperation::MemoryList { .. } => "memory_list",
+        WorkerOperation::MemoryGet { .. } => "memory_get",
+        WorkerOperation::MemorySearch { .. } => "memory_search",
+        WorkerOperation::MemoryCreate { .. } => "memory_create",
+        WorkerOperation::MemoryArchive { .. } => "memory_archive",
+        WorkerOperation::MemorySupersede { .. } => "memory_supersede",
+        WorkerOperation::MemoryIndexStatus => "memory_index_status",
+        WorkerOperation::MemoryIndexSync => "memory_index_sync",
+        WorkerOperation::MemoryIndexRebuild => "memory_index_rebuild",
         WorkerOperation::WorkflowValidate { .. } => "workflow_validate",
         WorkerOperation::WorkflowRegister { .. } => "workflow_register",
         WorkerOperation::WorkflowList => "workflow_list",
@@ -884,6 +1187,269 @@ async fn dispatch(
         WorkerOperation::TelemetryMetrics { session_id, limit } => Ok(serde_json::to_value(
             runtime.telemetry_metrics(session_id.as_deref(), limit.clamp(1, 1_000))?,
         )?),
+        WorkerOperation::TaskList {
+            session_id,
+            status,
+            limit,
+        } => Ok(serde_json::to_value(runtime.list_tasks(
+            session_id.as_deref(),
+            status,
+            limit.clamp(1, 1_000),
+        )?)?),
+        WorkerOperation::TaskGet { task_id } => {
+            Ok(serde_json::to_value(runtime.get_task(&task_id)?)?)
+        }
+        WorkerOperation::TaskCreate {
+            session_id,
+            title,
+            description,
+            status,
+        } => Ok(serde_json::to_value(
+            runtime
+                .create_task(&session_id, &title, &description, status)
+                .await?,
+        )?),
+        WorkerOperation::TaskUpdate {
+            task_id,
+            title,
+            description,
+            status,
+        } => Ok(serde_json::to_value(
+            runtime
+                .update_task(&task_id, title.as_deref(), description.as_deref(), status)
+                .await?,
+        )?),
+        WorkerOperation::DecisionList {
+            session_id,
+            status,
+            limit,
+        } => Ok(serde_json::to_value(runtime.list_decisions(
+            session_id.as_deref(),
+            status,
+            limit.clamp(1, 1_000),
+        )?)?),
+        WorkerOperation::DecisionGet { decision_id } => {
+            Ok(serde_json::to_value(runtime.get_decision(&decision_id)?)?)
+        }
+        WorkerOperation::DecisionCreate {
+            session_id,
+            title,
+            decision,
+            priority,
+            intent,
+            applies_when,
+            rationale,
+            source_excerpt,
+        } => Ok(serde_json::to_value(
+            runtime
+                .create_decision(
+                    &session_id,
+                    &title,
+                    &decision,
+                    priority,
+                    &intent,
+                    &applies_when,
+                    &rationale,
+                    &source_excerpt,
+                )
+                .await?,
+        )?),
+        WorkerOperation::DecisionUpdate {
+            decision_id,
+            title,
+            decision,
+            priority,
+            intent,
+            applies_when,
+            rationale,
+            source_excerpt,
+        } => Ok(serde_json::to_value(
+            runtime
+                .update_decision(
+                    &decision_id,
+                    title.as_deref(),
+                    decision.as_deref(),
+                    priority,
+                    intent.as_deref(),
+                    applies_when.as_deref(),
+                    rationale.as_deref(),
+                    source_excerpt.as_deref(),
+                )
+                .await?,
+        )?),
+        WorkerOperation::DecisionArchive { decision_id } => Ok(serde_json::to_value(
+            runtime.archive_decision(&decision_id).await?,
+        )?),
+        WorkerOperation::DecisionSupersede {
+            decision_id,
+            title,
+            decision,
+            priority,
+            intent,
+            applies_when,
+            rationale,
+            source_excerpt,
+        } => Ok(serde_json::to_value(
+            runtime
+                .supersede_decision(
+                    &decision_id,
+                    &title,
+                    &decision,
+                    priority,
+                    &intent,
+                    &applies_when,
+                    &rationale,
+                    &source_excerpt,
+                )
+                .await?,
+        )?),
+        WorkerOperation::PlanList {
+            session_id,
+            status,
+            limit,
+        } => Ok(serde_json::to_value(runtime.list_plans(
+            session_id.as_deref(),
+            status,
+            limit.clamp(1, 1_000),
+        )?)?),
+        WorkerOperation::PlanGet { plan_id } => {
+            Ok(serde_json::to_value(runtime.get_plan(&plan_id)?)?)
+        }
+        WorkerOperation::PlanCreate {
+            session_id,
+            prompt,
+            content,
+            steps,
+        } => Ok(serde_json::to_value(
+            runtime
+                .create_plan(&session_id, &prompt, &content, steps)
+                .await?,
+        )?),
+        WorkerOperation::PlanApprove { plan_id } => {
+            Ok(serde_json::to_value(runtime.approve_plan(&plan_id).await?)?)
+        }
+        WorkerOperation::GoalList {
+            session_id,
+            status,
+            limit,
+        } => Ok(serde_json::to_value(runtime.list_goals(
+            session_id.as_deref(),
+            status,
+            limit.clamp(1, 1_000),
+        )?)?),
+        WorkerOperation::GoalGet { goal_id } => {
+            Ok(serde_json::to_value(runtime.get_goal(&goal_id)?)?)
+        }
+        WorkerOperation::GoalRun {
+            role,
+            objective,
+            session_id,
+            max_iterations,
+            source_plan_id,
+        } => Ok(serde_json::to_value(
+            runtime
+                .run_goal(
+                    &role,
+                    &objective,
+                    &session_id,
+                    max_iterations,
+                    source_plan_id.as_deref(),
+                )
+                .await?,
+        )?),
+        WorkerOperation::AgentQueue {
+            session_id,
+            task,
+            role,
+        } => Ok(serde_json::to_value(
+            runtime.queue_subagent(&session_id, &task, &role).await?,
+        )?),
+        WorkerOperation::AgentList {
+            session_id,
+            status,
+            limit,
+        } => Ok(serde_json::to_value(runtime.list_subagents(
+            session_id.as_deref(),
+            status,
+            limit.clamp(1, 1_000),
+        )?)?),
+        WorkerOperation::AgentGet { job_id } => {
+            Ok(serde_json::to_value(runtime.get_subagent(&job_id)?)?)
+        }
+        WorkerOperation::AgentStatus { session_id } => Ok(serde_json::to_value(
+            runtime.subagent_queue_status(session_id.as_deref())?,
+        )?),
+        WorkerOperation::AgentDrain => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(runtime.drain_subagents().await?)?)
+        }
+        WorkerOperation::AgentCancel { job_id } => Ok(serde_json::to_value(
+            runtime.cancel_subagent(&job_id).await?,
+        )?),
+        WorkerOperation::AgentRequeue { job_id } => Ok(serde_json::to_value(
+            runtime.requeue_subagent(&job_id).await?,
+        )?),
+        WorkerOperation::MemoryList { status, limit } => Ok(serde_json::to_value(
+            runtime.list_memories(status, limit.clamp(1, 1_000)).await?,
+        )?),
+        WorkerOperation::MemoryGet { memory_id } => {
+            Ok(serde_json::to_value(runtime.get_memory(&memory_id).await?)?)
+        }
+        WorkerOperation::MemorySearch {
+            query,
+            session_id,
+            repository_id,
+            limit,
+        } => Ok(serde_json::to_value(
+            runtime
+                .search_memories(
+                    &query,
+                    session_id.as_deref(),
+                    repository_id.as_deref(),
+                    limit.clamp(1, 100),
+                )
+                .await?,
+        )?),
+        WorkerOperation::MemoryCreate {
+            scope,
+            memory_kind,
+            confidence,
+            text,
+            rationale,
+            expires_at,
+        } => Ok(serde_json::to_value(
+            runtime
+                .create_memory(
+                    scope,
+                    &memory_kind,
+                    confidence,
+                    &text,
+                    &rationale,
+                    expires_at,
+                )
+                .await?,
+        )?),
+        WorkerOperation::MemoryArchive { memory_id } => Ok(serde_json::to_value(
+            runtime.archive_memory(&memory_id).await?,
+        )?),
+        WorkerOperation::MemorySupersede {
+            memory_id,
+            text,
+            rationale,
+        } => Ok(serde_json::to_value(
+            runtime
+                .supersede_memory(&memory_id, &text, &rationale)
+                .await?,
+        )?),
+        WorkerOperation::MemoryIndexStatus => Ok(runtime.memory_index_status().await?),
+        WorkerOperation::MemoryIndexSync => {
+            let _guard = maintenance.lock().await;
+            Ok(runtime.sync_memory_index().await?)
+        }
+        WorkerOperation::MemoryIndexRebuild => {
+            let _guard = maintenance.lock().await;
+            Ok(runtime.rebuild_memory_index().await?)
+        }
         WorkerOperation::WorkflowValidate { path } => {
             let validated = runtime.validate_workflow_path(path).await?;
             Ok(json!({

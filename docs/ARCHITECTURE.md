@@ -141,10 +141,12 @@ writer lease prevents embedded surfaces and the headless worker from opening con
 redb writers. The long-running worker owns that lease and serves a versioned local
 application protocol over a mode-0600 Unix socket or a Windows named pipe. CLI one-shot
 runs, the worker-aware REPL, session operations, and workflow lifecycle operations
-auto-discover the worker and otherwise use the same runtime in-process. The transport
-does not contain provider, policy, workflow, or repository logic. Independent clients
-run concurrently, while projection rebuild/drain and queued maintenance share one worker
-coordination lock so optimistic projection positions cannot race.
+auto-discover the worker and otherwise use the same runtime in-process. Durable task,
+decision, plan, goal, child-agent, and memory lifecycle commands use that application
+protocol as well. The transport does not contain provider, policy, workflow, or
+repository logic. Independent clients run concurrently, while projection rebuild/drain,
+memory-index maintenance, and queued child work share one worker coordination lock so
+optimistic positions cannot race.
 Workflow definitions are exact-content hash pinned and workflow runs are normal journal
 streams. The composition root opens fresh YAML config and fresh state; it never silently
 imports the Python SQLite store.

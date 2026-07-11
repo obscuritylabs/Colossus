@@ -1844,6 +1844,12 @@ async fn dispatch_to_worker_if_active(
         Err(colossus_worker::WorkerError::Unavailable(_)) => return Ok(false),
         Err(error) => return Err(error.into()),
     }
+    if approval_mode.is_some() {
+        return Err(
+            "an active worker owns approval handling; restart it with the desired --approval-mode"
+                .into(),
+        );
+    }
     match command {
         Command::Audit(command) => {
             match &command.command {
@@ -1951,12 +1957,6 @@ async fn dispatch_to_worker_if_active(
             skills,
             stream,
         } => {
-            if approval_mode.is_some() {
-                return Err(
-                    "an active worker owns approval handling; restart it with the desired --approval-mode"
-                        .into(),
-                );
-            }
             let session_id = if *resume {
                 Some(
                     serde_json::from_value::<colossus_contracts::SessionSummary>(
@@ -2102,13 +2102,315 @@ async fn dispatch_to_worker_if_active(
             print_json(&client.call(operation).await?)?;
             Ok(true)
         }
-        Command::Repl { session, resume } => {
-            if approval_mode.is_some() {
-                return Err(
-                    "an active worker owns approval handling; restart it with the desired --approval-mode"
-                        .into(),
-                );
+        Command::Tasks(command) => {
+            let operation = match &command.command {
+                TasksAction::List {
+                    session,
+                    status,
+                    limit,
+                } => WorkerOperation::TaskList {
+                    session_id: session.clone(),
+                    status: status.map(Into::into),
+                    limit: *limit,
+                },
+                TasksAction::Show { task_id } => WorkerOperation::TaskGet {
+                    task_id: task_id.clone(),
+                },
+                TasksAction::Create {
+                    session_id,
+                    title,
+                    description,
+                    status,
+                } => WorkerOperation::TaskCreate {
+                    session_id: session_id.clone(),
+                    title: title.clone(),
+                    description: description.clone(),
+                    status: (*status).into(),
+                },
+                TasksAction::Update {
+                    task_id,
+                    title,
+                    description,
+                    status,
+                } => WorkerOperation::TaskUpdate {
+                    task_id: task_id.clone(),
+                    title: title.clone(),
+                    description: description.clone(),
+                    status: status.map(Into::into),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, TasksAction::Show { .. }) && result.is_null() {
+                return Err("task not found".into());
             }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Decisions(command) => {
+            let operation = match &command.command {
+                DecisionsAction::List {
+                    session,
+                    status,
+                    limit,
+                } => WorkerOperation::DecisionList {
+                    session_id: session.clone(),
+                    status: Some((*status).into()),
+                    limit: *limit,
+                },
+                DecisionsAction::Show { decision_id } => WorkerOperation::DecisionGet {
+                    decision_id: decision_id.clone(),
+                },
+                DecisionsAction::Create {
+                    session_id,
+                    title,
+                    decision,
+                    priority,
+                    intent,
+                    applies_when,
+                    rationale,
+                    source_excerpt,
+                } => WorkerOperation::DecisionCreate {
+                    session_id: session_id.clone(),
+                    title: title.clone(),
+                    decision: decision.clone(),
+                    priority: (*priority).into(),
+                    intent: intent.clone(),
+                    applies_when: applies_when.clone(),
+                    rationale: rationale.clone(),
+                    source_excerpt: source_excerpt.clone(),
+                },
+                DecisionsAction::Update {
+                    decision_id,
+                    title,
+                    decision,
+                    priority,
+                    intent,
+                    applies_when,
+                    rationale,
+                    source_excerpt,
+                } => WorkerOperation::DecisionUpdate {
+                    decision_id: decision_id.clone(),
+                    title: title.clone(),
+                    decision: decision.clone(),
+                    priority: priority.map(Into::into),
+                    intent: intent.clone(),
+                    applies_when: applies_when.clone(),
+                    rationale: rationale.clone(),
+                    source_excerpt: source_excerpt.clone(),
+                },
+                DecisionsAction::Archive { decision_id } => WorkerOperation::DecisionArchive {
+                    decision_id: decision_id.clone(),
+                },
+                DecisionsAction::Supersede {
+                    decision_id,
+                    title,
+                    decision,
+                    priority,
+                    intent,
+                    applies_when,
+                    rationale,
+                    source_excerpt,
+                } => WorkerOperation::DecisionSupersede {
+                    decision_id: decision_id.clone(),
+                    title: title.clone(),
+                    decision: decision.clone(),
+                    priority: (*priority).into(),
+                    intent: intent.clone(),
+                    applies_when: applies_when.clone(),
+                    rationale: rationale.clone(),
+                    source_excerpt: source_excerpt.clone(),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, DecisionsAction::Show { .. }) && result.is_null() {
+                return Err("decision not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Plans(command) => {
+            let operation = match &command.command {
+                PlansAction::List {
+                    session,
+                    status,
+                    limit,
+                } => WorkerOperation::PlanList {
+                    session_id: session.clone(),
+                    status: status.map(Into::into),
+                    limit: *limit,
+                },
+                PlansAction::Show { plan_id } => WorkerOperation::PlanGet {
+                    plan_id: plan_id.clone(),
+                },
+                PlansAction::Create {
+                    session_id,
+                    prompt,
+                    content,
+                    steps,
+                } => WorkerOperation::PlanCreate {
+                    session_id: session_id.clone(),
+                    prompt: prompt.clone(),
+                    content: content.clone(),
+                    steps: steps
+                        .iter()
+                        .enumerate()
+                        .map(|(index, title)| PlanStep {
+                            index: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                            title: title.clone(),
+                            detail: String::new(),
+                            requires_mutation: false,
+                        })
+                        .collect(),
+                },
+                PlansAction::Approve { plan_id } => WorkerOperation::PlanApprove {
+                    plan_id: plan_id.clone(),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, PlansAction::Show { .. }) && result.is_null() {
+                return Err("plan not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Goals(command) => {
+            let operation = match &command.command {
+                GoalsAction::List {
+                    session,
+                    status,
+                    limit,
+                } => WorkerOperation::GoalList {
+                    session_id: session.clone(),
+                    status: status.map(Into::into),
+                    limit: *limit,
+                },
+                GoalsAction::Show { goal_id } => WorkerOperation::GoalGet {
+                    goal_id: goal_id.clone(),
+                },
+                GoalsAction::Run {
+                    objective,
+                    session,
+                    role,
+                    max_iterations,
+                    source_plan,
+                } => WorkerOperation::GoalRun {
+                    role: role.clone(),
+                    objective: objective.clone(),
+                    session_id: session.clone(),
+                    max_iterations: *max_iterations,
+                    source_plan_id: source_plan.clone(),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, GoalsAction::Show { .. }) && result.is_null() {
+                return Err("goal not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Agents(command) => {
+            let operation = match &command.command {
+                AgentsAction::Queue {
+                    session_id,
+                    task,
+                    role,
+                } => WorkerOperation::AgentQueue {
+                    session_id: session_id.clone(),
+                    task: task.clone(),
+                    role: role.clone(),
+                },
+                AgentsAction::List {
+                    session,
+                    status,
+                    limit,
+                } => WorkerOperation::AgentList {
+                    session_id: session.clone(),
+                    status: status.map(Into::into),
+                    limit: *limit,
+                },
+                AgentsAction::Show { job_id } => WorkerOperation::AgentGet {
+                    job_id: job_id.clone(),
+                },
+                AgentsAction::Status { session } => WorkerOperation::AgentStatus {
+                    session_id: session.clone(),
+                },
+                AgentsAction::Drain => WorkerOperation::AgentDrain,
+                AgentsAction::Cancel { job_id } => WorkerOperation::AgentCancel {
+                    job_id: job_id.clone(),
+                },
+                AgentsAction::Requeue { job_id } => WorkerOperation::AgentRequeue {
+                    job_id: job_id.clone(),
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, AgentsAction::Show { .. }) && result.is_null() {
+                return Err("subagent not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Memories(command) => {
+            let operation = match &command.command {
+                MemoriesAction::List { status, limit } => WorkerOperation::MemoryList {
+                    status: status.status(),
+                    limit: *limit,
+                },
+                MemoriesAction::Show { memory_id } => WorkerOperation::MemoryGet {
+                    memory_id: memory_id.clone(),
+                },
+                MemoriesAction::Search {
+                    query,
+                    session,
+                    repository,
+                    limit,
+                } => WorkerOperation::MemorySearch {
+                    query: query.clone(),
+                    session_id: session.clone(),
+                    repository_id: repository.clone(),
+                    limit: *limit,
+                },
+                MemoriesAction::Create {
+                    text,
+                    scope,
+                    scope_id,
+                    kind,
+                    confidence,
+                    rationale,
+                    expires_at,
+                } => WorkerOperation::MemoryCreate {
+                    scope: memory_scope(*scope, scope_id.clone())?,
+                    memory_kind: kind.clone(),
+                    confidence: *confidence,
+                    text: text.clone(),
+                    rationale: rationale.clone(),
+                    expires_at: expires_at.clone(),
+                },
+                MemoriesAction::Archive { memory_id } => WorkerOperation::MemoryArchive {
+                    memory_id: memory_id.clone(),
+                },
+                MemoriesAction::Supersede {
+                    memory_id,
+                    text,
+                    rationale,
+                } => WorkerOperation::MemorySupersede {
+                    memory_id: memory_id.clone(),
+                    text: text.clone(),
+                    rationale: rationale.clone(),
+                },
+                MemoriesAction::Index(command) => match &command.command {
+                    MemoryIndexAction::Status => WorkerOperation::MemoryIndexStatus,
+                    MemoryIndexAction::Sync => WorkerOperation::MemoryIndexSync,
+                    MemoryIndexAction::Rebuild => WorkerOperation::MemoryIndexRebuild,
+                },
+            };
+            let result = client.call(operation).await?;
+            if matches!(&command.command, MemoriesAction::Show { .. }) && result.is_null() {
+                return Err("memory not found".into());
+            }
+            print_json(&result)?;
+            Ok(true)
+        }
+        Command::Repl { session, resume } => {
             worker_repl(&client, session.clone(), *resume).await?;
             Ok(true)
         }
