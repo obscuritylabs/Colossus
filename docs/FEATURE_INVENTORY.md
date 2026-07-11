@@ -928,7 +928,7 @@ A reconstruction is complete only when all applicable checks pass:
 - [x] Goal Mode stops correctly on complete, blocked, error, or budget exhaustion.
 - [x] Subagents respect configured concurrency, cannot delegate recursively, and can be
   cancelled or resumed after interruption.
-- [ ] Research records planned queries, lane decisions, source labels, worker progress,
+- [x] Research records planned queries, lane decisions, source labels, worker progress,
   citations, synthesis choice, and limitations.
 - [ ] Compact and verbose renderers cover every event type and every tool family.
 - [ ] Telemetry derives correct duration and counts from persisted event timestamps.

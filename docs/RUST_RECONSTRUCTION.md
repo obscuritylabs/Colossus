@@ -167,6 +167,8 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- g
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- agents status
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories search 'query' --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories index status
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- research run 'Summarize the audit architecture' --depth quick --source repo
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- research list
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
@@ -192,7 +194,9 @@ obligations to be present in the YAML configuration.
 This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
 cutover. The following planned work remains:
 
-- Research and extension repositories plus their shared conformance suites.
+- Extension repositories plus their shared conformance suites. Canonical research runs,
+  sources, claims, citations, phase progress, deterministic/model fallbacks, restart
+  interruption, repository collection, and configured SearXNG collection are implemented.
 - Chroma semantic candidates and local/OpenAI-compatible embedding providers. Tantivy
   candidate retrieval, durable replay lag, and canonical re-filtering are implemented.
 - Podman revalidation of the new proxy-only network path and Windows filesystem/network
@@ -201,16 +205,16 @@ cutover. The following planned work remains:
   helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
-- Incremental provider transport streaming, usage accounting, Plan Mode execution, and
-  plan-to-goal handoff. Durable plan storage, strict tools, and approval are implemented.
-  The durable memory, task/decision, and context budget/snapshot boundaries, durable
+- Incremental provider transport streaming and usage accounting. Durable Plan Mode,
+  single-use approval, plan-to-goal handoff, bounded Goal Mode, and durable subagents are
+  implemented. The durable memory, task/decision, and context budget/snapshot boundaries, durable
   multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
   permit-bound file list/read/search/write/replace, Git inspection, structured shell
   execution, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The
   cross-process writer lease itself is implemented.
-- Research/citations, skills/resources, telemetry, packs,
-  integrations, offline bundles, and the rest of P1/P2.
+- Skills/resources, telemetry, packs, integrations, offline bundles, Rust MCP collection,
+  and the rest of P1/P2.
 - Fuzzing, dependency/license/vulnerability policy, the full Windows/Linux sandbox
   runtime matrix, and
   six-target release smoke tests.
