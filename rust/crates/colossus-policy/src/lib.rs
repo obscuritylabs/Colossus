@@ -1075,6 +1075,10 @@ impl PolicyDecisionPoint for BuiltInPolicy {
         let mut obligations = self.obligations.clone();
         if (request.action.starts_with("filesystem.") && request.action != "filesystem.write")
             || request.action == "network.http"
+            || matches!(
+                request.action.as_str(),
+                "memory.read" | "memory.list" | "memory.search"
+            )
         {
             obligations.require_post_effect = true;
         }
@@ -1334,7 +1338,7 @@ mod tests {
     };
     use async_trait::async_trait;
     use colossus_contracts::{DecisionOutcome, QuarantinedEffectResult};
-    use colossus_ports::EventJournal;
+    use colossus_ports::{EventJournal, PolicyDecisionPoint};
     use colossus_testkit::InMemoryEventJournal;
     use std::sync::{
         Arc, Mutex,
@@ -1403,6 +1407,24 @@ mod tests {
             .map(|event| event.event_type)
             .collect::<Vec<_>>();
         assert!(names.contains(&"effect.denied.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn memory_disclosures_always_require_post_effect_release() {
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("memory.search", DecisionOutcome::Allow)
+            .with_post_effect(false);
+        let decision = policy
+            .decide(&effect_request(
+                system_actor("memory-test"),
+                "memory.search",
+                "session:one",
+                serde_json::json!({"query": "rust"}),
+            ))
+            .await
+            .expect("decision");
+        assert_eq!(decision.outcome, DecisionOutcome::Allow);
+        assert!(decision.obligations.require_post_effect);
     }
 
     #[tokio::test]

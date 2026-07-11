@@ -95,7 +95,7 @@ sandbox:
     - /usr/bin/curl
   environment: [SAFE]
   networkDestinations: []
-  timeoutMs: 500
+  timeoutMs: 2000
   maxOutputBytes: 1048576
   maxProcesses: 1
   maxMemoryBytes: 268435456

@@ -53,9 +53,11 @@ obsolete Go launcher.
   typed step schemas; bounded step and concurrency budgets; direct-cycle rejection;
   durable run reconstruction; wait/input, resume, cancellation, interruption, `foreach`,
   and bounded parallel execution. Interrupted non-idempotent effects are not retried.
-- Canonical event-sourced memory create/archive/supersede reconstruction plus a
-  disposable Tantivy lexical index with event-id idempotency, candidate-id search,
-  removal, status, and rebuild behavior.
+- Policy-bound canonical memory create/archive/supersede/read/list/search operations;
+  a disposable Tantivy lexical index with event-id idempotency, durable replay position,
+  retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry
+  re-filtering; degraded index fallback; and post-effect-authorized context injection
+  after decisions and before snapshots.
 - A composition root and strict YAML config with role-routed echo, OpenAI Responses, and
   OpenAI-compatible provider profiles. Provider generation and model-catalog calls use
   permit-bound adapters, disclose credential references (never values) to policy, resolve
@@ -108,6 +110,8 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- c
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- context compact SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tasks list --session SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- decisions list --session SESSION_ID
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories search 'query' --session SESSION_ID
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories index status
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
@@ -134,8 +138,8 @@ This alpha is the audit/storage, authorization, and workflow foundation, not the
 cutover. The following planned work remains:
 
 - Research and extension repositories plus their shared conformance suites.
-- Chroma semantic candidates, embedding providers, queued index lag operations, and
-  application-layer policy re-filtering of canonical memory records.
+- Chroma semantic candidates and local/OpenAI-compatible embedding providers. Tantivy
+  candidate retrieval, durable replay lag, and canonical re-filtering are implemented.
 - Podman revalidation of the new proxy-only network path and Windows filesystem/network
   runtime acceptance. Native macOS/Linux isolation, live Docker execution/recovery, OCI
   command and allowlist-proxy hardening, the native allowlist proxy, authenticated
@@ -143,8 +147,8 @@ cutover. The following planned work remains:
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
 - Incremental provider transport streaming, remaining core filesystem/search/write/git/
-  process tools, usage accounting, plans, and context injection from durable memories.
-  The durable task/decision and context budget/snapshot boundaries, durable
+  process tools, usage accounting, and plans. The durable memory, task/decision, and
+  context budget/snapshot boundaries, durable
   multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
   permit-bound file reads, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The

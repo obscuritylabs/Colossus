@@ -180,6 +180,15 @@ caller-selectable label. Only active same-session decisions enter model context;
 binding block is bounded, token-accounted, and placed ahead of summaries so compaction
 cannot silently erase durable commitments.
 
+Rust memory lifecycle events are encrypted canonical state. Memory operations and index
+administration require one-use permits; reads, lists, and searches always require a
+post-effect content decision before records can reach a model or user. Tantivy results
+are treated only as candidate ids. Colossus reloads canonical records and reapplies
+status, expiry, and scope before release. Index failure leaves journal-backed memory
+usable through bounded canonical fallback, exposes lag/error status, and never causes a
+plaintext downgrade or silent loss. Memory source is derived from actor provenance, and
+hard validation rejects common credential/private-key forms before persistence.
+
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
 are validated against the agent allowlist and active tool catalog before provider calls;
 `required_tools` never auto-approves a tool. Skill audit records include names, versions,

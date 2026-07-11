@@ -7,14 +7,17 @@ use colossus_context::{ContextConfig, ContextService, EventSourcedContextReposit
 use colossus_contracts::{
     Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, DecisionOutcome,
     DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
-    ExecutionContext, FilesystemGrant, KeyDecision, NewEvent, PreparedContext, ProjectionStatus,
-    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
-    QuarantinedEffectResult, SessionMessage, SessionSummary, TaskRecord, TaskStatus, ToolCall,
-    ToolResult, ToolSpec,
+    ExecutionContext, FilesystemGrant, KeyDecision, MemoryRecord, MemoryScope, MemoryStatus,
+    NewEvent, PreparedContext, ProjectionStatus, ProviderModelInfo, ProviderReadiness,
+    ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, SessionMessage,
+    SessionSummary, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
     RedbWriterLease, platform_secret,
+};
+use colossus_memory::{
+    EventSourcedMemoryRepository, MemoryService, TantivyMemoryIndex, UnavailableMemoryIndex,
 };
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
@@ -22,9 +25,10 @@ use colossus_policy::{
     OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
-    ContextError, ContextPreparer, ContextRepository, EventJournal, KeyProvider, ModelProvider,
-    ModelProviderError, PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError,
-    ToolError, ToolExecutor, ToolRegistry, WorkRepository, WorkflowRepository,
+    ContextError, ContextPreparer, ContextRepository, EventJournal, KeyProvider, MemoryIndex,
+    MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError, PolicyDecisionPoint,
+    ProjectionStore, SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
+    WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
@@ -75,6 +79,9 @@ pub struct RuntimeConfig {
     /// Long-session budgeting and immutable snapshot settings.
     #[serde(default)]
     pub context: ContextConfig,
+    /// Canonical memory and disposable lexical-index settings.
+    #[serde(default)]
+    pub memory: MemoryConfig,
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
@@ -95,6 +102,28 @@ impl Default for AgentConfig {
         Self {
             max_turns: DEFAULT_MAX_TURNS,
             tools: vec!["echo".into()],
+        }
+    }
+}
+
+/// Runtime memory-index and retrieval configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemoryConfig {
+    /// Whether the disposable Tantivy index is enabled.
+    pub index_enabled: bool,
+    /// Optional explicit index directory; defaults beside the redb state file.
+    pub index_path: Option<PathBuf>,
+    /// Maximum memories composed into one model turn.
+    pub retrieval_limit: usize,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            index_enabled: true,
+            index_path: None,
+            retrieval_limit: 6,
         }
     }
 }
@@ -436,6 +465,11 @@ impl RuntimeConfig {
         }
         StaticToolRegistry::builtins(&config.agent.tools)?;
         config.context.validate()?;
+        if !(1..=100).contains(&config.memory.retrieval_limit) {
+            return Err(RuntimeError::Config(
+                "memory.retrievalLimit must be in 1..=100".into(),
+            ));
+        }
         validate_provider_config(&config)?;
         Ok(config)
     }
@@ -470,6 +504,7 @@ impl RuntimeConfig {
             providers: ProvidersConfig::default(),
             agent: AgentConfig::default(),
             context: ContextConfig::default(),
+            memory: MemoryConfig::default(),
             sandbox: SandboxConfig::default(),
         }
     }
@@ -709,6 +744,71 @@ impl WorkMutation {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum MemoryOperation {
+    Create {
+        scope: MemoryScope,
+        kind: String,
+        confidence: f32,
+        text: String,
+        rationale: String,
+        expires_at: Option<String>,
+    },
+    Archive {
+        id: String,
+    },
+    Supersede {
+        id: String,
+        text: String,
+        rationale: String,
+    },
+    Read {
+        id: String,
+    },
+    List {
+        status: Option<MemoryStatus>,
+        limit: usize,
+    },
+    Search {
+        query: String,
+        session_id: Option<String>,
+        repository_id: Option<String>,
+        limit: usize,
+    },
+    IndexStatus,
+    IndexSync,
+    IndexRebuild,
+}
+
+impl MemoryOperation {
+    fn action(&self) -> &'static str {
+        match self {
+            Self::Create { .. } => "memory.create",
+            Self::Archive { .. } => "memory.archive",
+            Self::Supersede { .. } => "memory.supersede",
+            Self::Read { .. } => "memory.read",
+            Self::List { .. } => "memory.list",
+            Self::Search { .. } => "memory.search",
+            Self::IndexStatus => "memory.index.status",
+            Self::IndexSync => "memory.index.sync",
+            Self::IndexRebuild => "memory.index.rebuild",
+        }
+    }
+
+    fn resource(&self) -> String {
+        match self {
+            Self::Create { scope, .. } => format!("memory-scope:{scope:?}"),
+            Self::Archive { id } | Self::Supersede { id, .. } | Self::Read { id } => id.clone(),
+            Self::List { .. } => "memory:*".into(),
+            Self::Search { session_id, .. } => session_id
+                .as_ref()
+                .map_or_else(|| "memory:search".into(), |id| format!("session:{id}")),
+            Self::IndexStatus | Self::IndexSync | Self::IndexRebuild => "memory-index".into(),
+        }
+    }
+}
+
 /// Fully composed auditable runtime.
 pub struct Runtime {
     writer_lease: RedbWriterLease,
@@ -719,6 +819,7 @@ pub struct Runtime {
     context: Arc<ContextService>,
     work: Arc<dyn WorkRepository>,
     work_executor: Arc<WorkMutationExecutor>,
+    memory_executor: Arc<MemoryEffectExecutor>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
@@ -782,6 +883,32 @@ impl Runtime {
         let work: Arc<dyn WorkRepository> =
             Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
         let work_service = Arc::new(WorkService::new(Arc::clone(&work), Arc::clone(&sessions)));
+        let memory_repository: Arc<dyn MemoryRepository> =
+            Arc::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)));
+        let memory_index: Arc<dyn MemoryIndex> = if config.memory.index_enabled {
+            let path = config
+                .memory
+                .index_path
+                .clone()
+                .unwrap_or_else(|| config.storage.path.with_extension("memory-index"));
+            match TantivyMemoryIndex::open(&path) {
+                Ok(index) => Arc::new(index),
+                Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
+                    "Tantivy index {} could not open: {error}",
+                    path.display()
+                ))),
+            }
+        } else {
+            Arc::new(UnavailableMemoryIndex::new(
+                "memory index disabled by configuration",
+            ))
+        };
+        let memory_service = Arc::new(MemoryService::new(
+            Arc::clone(&journal),
+            memory_repository,
+            memory_index,
+            Arc::clone(&sessions),
+        ));
         if !journal.is_recovery_mode() {
             recover_unknown_effects(journal.as_ref())?;
         }
@@ -920,11 +1047,28 @@ impl Runtime {
                 "decision.update".to_owned(),
                 "decision.archive".to_owned(),
                 "decision.supersede".to_owned(),
+                "memory.create".to_owned(),
+                "memory.archive".to_owned(),
+                "memory.supersede".to_owned(),
+                "memory.read".to_owned(),
+                "memory.list".to_owned(),
+                "memory.search".to_owned(),
+                "memory.index.status".to_owned(),
+                "memory.index.sync".to_owned(),
+                "memory.index.rebuild".to_owned(),
             ]),
             permit_key,
         ));
         let work_executor = Arc::new(WorkMutationExecutor {
             service: Arc::clone(&work_service),
+        });
+        let memory_executor = Arc::new(MemoryEffectExecutor {
+            service: Arc::clone(&memory_service),
+        });
+        let memory_retriever: Arc<dyn MemoryRetriever> = Arc::new(GatewayMemoryRetriever {
+            gateway: Arc::clone(&gateway),
+            executor: Arc::clone(&memory_executor),
+            limit: config.memory.retrieval_limit,
         });
         let tool_registry: Arc<dyn ToolRegistry> =
             Arc::new(StaticToolRegistry::builtins(&config.agent.tools)?);
@@ -946,7 +1090,8 @@ impl Runtime {
                 context_repository,
                 Arc::clone(&model_provider),
             )?
-            .with_work_repository(Arc::clone(&work)),
+            .with_work_repository(Arc::clone(&work))
+            .with_memory_retriever(memory_retriever),
         );
         let agent = Arc::new(
             AgentService::new(
@@ -981,6 +1126,7 @@ impl Runtime {
             context,
             work,
             work_executor,
+            memory_executor,
             policy,
             gateway,
             providers,
@@ -1304,6 +1450,160 @@ impl Runtime {
         .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
+    async fn execute_memory_operation(
+        &self,
+        operation: MemoryOperation,
+    ) -> Result<Value, RuntimeError> {
+        let action = operation.action();
+        let resource = operation.resource();
+        let session_id = match &operation {
+            MemoryOperation::Create {
+                scope: MemoryScope::Session(id),
+                ..
+            } => Some(id.clone()),
+            MemoryOperation::Archive { id }
+            | MemoryOperation::Supersede { id, .. }
+            | MemoryOperation::Read { id } => {
+                self.memory_executor
+                    .service
+                    .get(id)?
+                    .and_then(|record| match record.scope {
+                        MemoryScope::Session(id) => Some(id),
+                        _ => None,
+                    })
+            }
+            MemoryOperation::Search { session_id, .. } => session_id.clone(),
+            _ => None,
+        };
+        let mut request = effect_request(
+            terminal_actor(),
+            action,
+            resource,
+            serde_json::to_value(&operation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![action.into()];
+        request.context.session_id = session_id;
+        let result = self
+            .gateway
+            .execute(request, self.memory_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Create one canonical memory through the universal permission boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_memory(
+        &self,
+        scope: MemoryScope,
+        kind: &str,
+        confidence: f32,
+        text: &str,
+        rationale: &str,
+        expires_at: Option<String>,
+    ) -> Result<MemoryRecord, RuntimeError> {
+        serde_json::from_value(
+            self.execute_memory_operation(MemoryOperation::Create {
+                scope,
+                kind: kind.into(),
+                confidence,
+                text: text.into(),
+                rationale: rationale.into(),
+                expires_at,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Archive one canonical memory through the permission boundary.
+    pub async fn archive_memory(&self, id: &str) -> Result<MemoryRecord, RuntimeError> {
+        serde_json::from_value(
+            self.execute_memory_operation(MemoryOperation::Archive { id: id.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Atomically supersede a canonical memory through the permission boundary.
+    pub async fn supersede_memory(
+        &self,
+        id: &str,
+        text: &str,
+        rationale: &str,
+    ) -> Result<(MemoryRecord, MemoryRecord), RuntimeError> {
+        serde_json::from_value(
+            self.execute_memory_operation(MemoryOperation::Supersede {
+                id: id.into(),
+                text: text.into(),
+                rationale: rationale.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Read one canonical memory through two-phase policy release.
+    pub async fn get_memory(&self, id: &str) -> Result<Option<MemoryRecord>, RuntimeError> {
+        serde_json::from_value(
+            self.execute_memory_operation(MemoryOperation::Read { id: id.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// List bounded canonical memories through two-phase policy release.
+    pub async fn list_memories(
+        &self,
+        status: Option<MemoryStatus>,
+        limit: usize,
+    ) -> Result<Vec<MemoryRecord>, RuntimeError> {
+        serde_json::from_value(
+            self.execute_memory_operation(MemoryOperation::List { status, limit })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Search candidate ids and re-filter canonical scoped records before release.
+    pub async fn search_memories(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        repository_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<MemoryRecord>, RuntimeError> {
+        serde_json::from_value(
+            self.execute_memory_operation(MemoryOperation::Search {
+                query: query.into(),
+                session_id: session_id.map(str::to_owned),
+                repository_id: repository_id.map(str::to_owned),
+                limit,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Return policy-authorized index readiness and lag.
+    pub async fn memory_index_status(&self) -> Result<Value, RuntimeError> {
+        self.execute_memory_operation(MemoryOperation::IndexStatus)
+            .await
+    }
+
+    /// Retry queued index work through the permission boundary.
+    pub async fn sync_memory_index(&self) -> Result<Value, RuntimeError> {
+        self.execute_memory_operation(MemoryOperation::IndexSync)
+            .await
+    }
+
+    /// Rebuild the disposable memory index from canonical active records.
+    pub async fn rebuild_memory_index(&self) -> Result<Value, RuntimeError> {
+        self.execute_memory_operation(MemoryOperation::IndexRebuild)
+            .await
+    }
+
     /// Projection position, lag, and readiness for every built-in reducer.
     pub fn projection_status(&self) -> Result<Vec<ProjectionStatus>, RuntimeError> {
         self.projections.status().map_err(Into::into)
@@ -1346,7 +1646,9 @@ impl Runtime {
                 "sessions": "event-journal:sessions-v1+messages-v1",
                 "work": "event-journal:tasks-v1+decisions-v1",
                 "work_projection": "redb-projection:work-v1",
-                "memory": "event-journal+redb-projection:memory-v1",
+                "memory": "event-journal:memory-v1",
+                "memory_projection": "redb-projection:memory-v1",
+                "memory_index": "tantivy-or-degraded",
                 "workflows": "event-journal+redb-projection:workflows-v1",
             }
         }))
@@ -1901,6 +2203,133 @@ fn tool_gateway_error(error: GatewayError) -> ToolError {
     }
 }
 
+struct MemoryEffectExecutor {
+    service: Arc<MemoryService>,
+}
+
+#[async_trait]
+impl EffectExecutor for MemoryEffectExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let operation: MemoryOperation = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        if request.action != operation.action() {
+            return Err(ExecutionError::Failed(
+                "memory operation action does not match its validated content".into(),
+            ));
+        }
+        let actor = request.actor.clone();
+        let value = match operation {
+            MemoryOperation::Create {
+                scope,
+                kind,
+                confidence,
+                text,
+                rationale,
+                expires_at,
+            } => work_result(
+                self.service
+                    .create(
+                        scope, &kind, confidence, &text, &rationale, expires_at, actor,
+                    )
+                    .await,
+            ),
+            MemoryOperation::Archive { id } => work_result(self.service.archive(&id, actor).await),
+            MemoryOperation::Supersede {
+                id,
+                text,
+                rationale,
+            } => work_result(self.service.supersede(&id, &text, &rationale, actor).await),
+            MemoryOperation::Read { id } => work_result(self.service.get(&id)),
+            MemoryOperation::List { status, limit } => {
+                work_result(self.service.list(status, limit))
+            }
+            MemoryOperation::Search {
+                query,
+                session_id,
+                repository_id,
+                limit,
+            } => work_result(
+                self.service
+                    .search(
+                        &query,
+                        session_id.as_deref(),
+                        repository_id.as_deref(),
+                        limit,
+                    )
+                    .await,
+            ),
+            MemoryOperation::IndexStatus => {
+                let _ = self.service.sync_index().await;
+                work_result(self.service.index_status().await)
+            }
+            MemoryOperation::IndexSync => {
+                let result = match self.service.sync_index().await {
+                    Ok(_) => self.service.index_status().await,
+                    Err(error) => Err(error),
+                };
+                work_result(result)
+            }
+            MemoryOperation::IndexRebuild => work_result(self.service.rebuild_index().await),
+        }?;
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&value)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
+    }
+}
+
+struct GatewayMemoryRetriever {
+    gateway: Arc<EffectGateway>,
+    executor: Arc<MemoryEffectExecutor>,
+    limit: usize,
+}
+
+#[async_trait]
+impl MemoryRetriever for GatewayMemoryRetriever {
+    async fn relevant(
+        &self,
+        query: &str,
+        session_id: &str,
+        context: ExecutionContext,
+        limit: usize,
+    ) -> Result<Vec<MemoryRecord>, StoreError> {
+        let operation = MemoryOperation::Search {
+            query: query.into(),
+            session_id: Some(session_id.into()),
+            repository_id: None,
+            limit: limit.min(self.limit),
+        };
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::Model,
+                id: "context-memory-retriever".into(),
+            },
+            operation.action(),
+            format!("session:{session_id}"),
+            serde_json::to_value(&operation).map_err(|error| {
+                StoreError::Adapter(format!("memory request encoding failed: {error}"))
+            })?,
+        );
+        request.capabilities = vec![operation.action().into()];
+        request.context = context;
+        match self.gateway.execute(request, self.executor.as_ref()).await {
+            Ok(result) => serde_json::from_slice(&result.bytes).map_err(|error| {
+                StoreError::Verification(format!("released memory result is invalid: {error}"))
+            }),
+            Err(GatewayError::Denied(_) | GatewayError::Approval(_)) => Ok(Vec::new()),
+            Err(error) => Err(StoreError::Adapter(format!(
+                "memory retrieval failed: {error}"
+            ))),
+        }
+    }
+}
+
 struct WorkMutationExecutor {
     service: Arc<WorkService>,
 }
@@ -2192,6 +2621,13 @@ surprise: true
         assert!(
             RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
             "unbounded model turn count was accepted"
+        );
+
+        config.agent.max_turns = 24;
+        config.memory.retrieval_limit = 0;
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "zero memory retrieval limit was accepted"
         );
     }
 

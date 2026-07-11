@@ -388,6 +388,13 @@ pub trait MemoryRepository: Send + Sync {
     /// List bounded active canonical records before policy filtering.
     fn list_active(&self, limit: usize) -> Result<Vec<MemoryRecord>, StoreError>;
 
+    /// List bounded canonical records with an optional lifecycle filter.
+    fn list_memories(
+        &self,
+        status: Option<colossus_contracts::MemoryStatus>,
+        limit: usize,
+    ) -> Result<Vec<MemoryRecord>, StoreError>;
+
     /// Archive a canonical record using a new lifecycle event.
     fn archive(&self, id: &str, actor: Actor) -> Result<MemoryRecord, StoreError>;
 
@@ -431,6 +438,12 @@ pub trait WorkflowRepository: Send + Sync {
 /// Disposable search projection for canonical memory identifiers.
 #[async_trait]
 pub trait MemoryIndex: Send + Sync {
+    /// Last durably applied global journal sequence.
+    fn position(&self) -> Result<u64, StoreError>;
+
+    /// Persist the last fully applied global journal sequence.
+    async fn set_position(&self, position: u64) -> Result<(), StoreError>;
+
     /// Idempotently add/update an indexed record using the source event id.
     async fn upsert(
         &self,
@@ -452,6 +465,19 @@ pub trait MemoryIndex: Send + Sync {
 
     /// Rebuild from canonical records supplied by the caller.
     async fn rebuild(&self, records: &[(String, String, Value)]) -> Result<(), StoreError>;
+}
+
+/// Policy-aware relevant-memory retrieval used by context composition.
+#[async_trait]
+pub trait MemoryRetriever: Send + Sync {
+    /// Return canonical active records authorized for this session and query.
+    async fn relevant(
+        &self,
+        query: &str,
+        session_id: &str,
+        context: ExecutionContext,
+        limit: usize,
+    ) -> Result<Vec<MemoryRecord>, StoreError>;
 }
 
 /// Provider for caller-generated embedding vectors.

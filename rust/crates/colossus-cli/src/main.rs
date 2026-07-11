@@ -1,7 +1,7 @@
 //! Thin terminal interface for the Rust runtime.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use colossus_contracts::{DecisionPriority, DecisionStatus, TaskStatus};
+use colossus_contracts::{DecisionPriority, DecisionStatus, MemoryScope, MemoryStatus, TaskStatus};
 use colossus_runtime::{Runtime, RuntimeConfig};
 use reedline::{DefaultPrompt, Reedline, Signal};
 use serde_json::{Value, json};
@@ -60,6 +60,8 @@ enum Command {
     Tasks(TasksCommand),
     /// Create and inspect binding key decisions.
     Decisions(DecisionsCommand),
+    /// Create, search, archive, and supersede durable memories.
+    Memories(MemoriesCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -522,6 +524,105 @@ enum DecisionsAction {
     },
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum MemoryScopeArg {
+    Global,
+    Repository,
+    Session,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum MemoryStatusArg {
+    Active,
+    Archived,
+    Superseded,
+    All,
+}
+
+impl MemoryStatusArg {
+    fn status(self) -> Option<MemoryStatus> {
+        match self {
+            Self::Active => Some(MemoryStatus::Active),
+            Self::Archived => Some(MemoryStatus::Archived),
+            Self::Superseded => Some(MemoryStatus::Superseded),
+            Self::All => None,
+        }
+    }
+}
+
+#[derive(Args)]
+struct MemoriesCommand {
+    #[command(subcommand)]
+    command: MemoriesAction,
+}
+
+#[derive(Subcommand)]
+enum MemoriesAction {
+    /// List bounded canonical records.
+    List {
+        #[arg(long, value_enum, default_value = "active")]
+        status: MemoryStatusArg,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Read one exact canonical record.
+    Show { memory_id: String },
+    /// Search candidates and re-filter canonical scope/status/expiry.
+    Search {
+        query: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        repository: Option<String>,
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Create one active memory.
+    Create {
+        text: String,
+        #[arg(long, value_enum, default_value = "global")]
+        scope: MemoryScopeArg,
+        /// Required identifier for session or repository scope.
+        #[arg(long)]
+        scope_id: Option<String>,
+        #[arg(long, default_value = "preference")]
+        kind: String,
+        #[arg(long, default_value_t = 1.0)]
+        confidence: f32,
+        #[arg(long, default_value = "")]
+        rationale: String,
+        #[arg(long)]
+        expires_at: Option<String>,
+    },
+    /// Archive one active memory without deleting it.
+    Archive { memory_id: String },
+    /// Atomically replace one active memory and retain lineage.
+    Supersede {
+        memory_id: String,
+        text: String,
+        #[arg(long, default_value = "")]
+        rationale: String,
+    },
+    /// Inspect or rebuild the disposable lexical index.
+    Index(MemoryIndexCommand),
+}
+
+#[derive(Args)]
+struct MemoryIndexCommand {
+    #[command(subcommand)]
+    command: MemoryIndexAction,
+}
+
+#[derive(Subcommand)]
+enum MemoryIndexAction {
+    /// Show adapter readiness and journal lag.
+    Status,
+    /// Retry queued journal-to-index work.
+    Sync,
+    /// Rebuild from canonical active records.
+    Rebuild,
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -568,6 +669,27 @@ fn parse_environment(entries: Vec<String>) -> Result<BTreeMap<String, String>, B
         }
     }
     Ok(environment)
+}
+
+fn memory_scope(
+    scope: MemoryScopeArg,
+    scope_id: Option<String>,
+) -> Result<MemoryScope, Box<dyn Error>> {
+    match (scope, scope_id) {
+        (MemoryScopeArg::Global, None) => Ok(MemoryScope::Global),
+        (MemoryScopeArg::Global, Some(_)) => {
+            Err("global memory scope does not accept --scope-id".into())
+        }
+        (MemoryScopeArg::Repository, Some(id)) if !id.trim().is_empty() => {
+            Ok(MemoryScope::Repository(id))
+        }
+        (MemoryScopeArg::Session, Some(id)) if !id.trim().is_empty() => {
+            Ok(MemoryScope::Session(id))
+        }
+        (MemoryScopeArg::Repository | MemoryScopeArg::Session, _) => {
+            Err("session and repository memory scopes require --scope-id".into())
+        }
+    }
 }
 
 async fn workflow_command(
@@ -738,7 +860,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /memories | /memory search QUERY | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -767,6 +889,18 @@ async fn repl(
                         Some(DecisionStatus::Active),
                         100,
                     )?)?;
+                } else if line == "/memories" {
+                    print_json(
+                        &runtime
+                            .search_memories("", Some(&active_session_id), None, 20)
+                            .await?,
+                    )?;
+                } else if let Some(query) = line.strip_prefix("/memory search ") {
+                    print_json(
+                        &runtime
+                            .search_memories(query.trim(), Some(&active_session_id), None, 8)
+                            .await?,
+                    )?;
                 } else if line == "/context" || line == "/context status" {
                     print_json(&runtime.context_status(&active_session_id)?)?;
                 } else if line == "/context list" {
@@ -1071,6 +1205,70 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     )
                     .await?,
             )?,
+        },
+        Command::Memories(command) => match command.command {
+            MemoriesAction::List { status, limit } => {
+                print_json(&runtime.list_memories(status.status(), limit).await?)?;
+            }
+            MemoriesAction::Show { memory_id } => print_json(
+                &runtime
+                    .get_memory(&memory_id)
+                    .await?
+                    .ok_or_else(|| cli_error(format!("memory not found: {memory_id}")))?,
+            )?,
+            MemoriesAction::Search {
+                query,
+                session,
+                repository,
+                limit,
+            } => print_json(
+                &runtime
+                    .search_memories(&query, session.as_deref(), repository.as_deref(), limit)
+                    .await?,
+            )?,
+            MemoriesAction::Create {
+                text,
+                scope,
+                scope_id,
+                kind,
+                confidence,
+                rationale,
+                expires_at,
+            } => print_json(
+                &runtime
+                    .create_memory(
+                        memory_scope(scope, scope_id)?,
+                        &kind,
+                        confidence,
+                        &text,
+                        &rationale,
+                        expires_at,
+                    )
+                    .await?,
+            )?,
+            MemoriesAction::Archive { memory_id } => {
+                print_json(&runtime.archive_memory(&memory_id).await?)?;
+            }
+            MemoriesAction::Supersede {
+                memory_id,
+                text,
+                rationale,
+            } => print_json(
+                &runtime
+                    .supersede_memory(&memory_id, &text, &rationale)
+                    .await?,
+            )?,
+            MemoriesAction::Index(command) => match command.command {
+                MemoryIndexAction::Status => {
+                    print_json(&runtime.memory_index_status().await?)?;
+                }
+                MemoryIndexAction::Sync => {
+                    print_json(&runtime.sync_memory_index().await?)?;
+                }
+                MemoryIndexAction::Rebuild => {
+                    print_json(&runtime.rebuild_memory_index().await?)?;
+                }
+            },
         },
         Command::Run {
             prompt,

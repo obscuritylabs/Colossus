@@ -41,7 +41,7 @@ storage:
     anchor_path: {anchor}
 policy:
   kind: built_in
-  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede]
+  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
   approval_actions: []
   require_post_effect: true
 workflows:
@@ -238,7 +238,7 @@ sandbox:
         fs::read_to_string(&config)
             .expect("read config")
             .replace(
-                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede]",
+                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]",
                 "allow_actions: []",
             ),
     )
@@ -329,6 +329,92 @@ sandbox:
     assert_eq!(active.as_array().map(Vec::len), Some(1));
     assert_eq!(active[0]["id"], replacement_id);
 
+    let memory = run(
+        binary,
+        &config,
+        &[
+            "memories",
+            "create",
+            "Run cargo clippy before declaring Rust work complete.",
+            "--scope",
+            "session",
+            "--scope-id",
+            &session_id,
+            "--kind",
+            "preference",
+        ],
+    );
+    assert!(
+        memory.status.success(),
+        "{}",
+        String::from_utf8_lossy(&memory.stderr)
+    );
+    let memory: Value = serde_json::from_slice(&memory.stdout).expect("memory JSON");
+    let memory_id = memory["id"].as_str().expect("memory id").to_owned();
+    assert_eq!(memory["scope"]["kind"], "session");
+    assert_eq!(memory["scope"]["id"], session_id);
+
+    let searched = run(
+        binary,
+        &config,
+        &[
+            "memories",
+            "search",
+            "cargo clippy",
+            "--session",
+            &session_id,
+        ],
+    );
+    assert!(searched.status.success());
+    let searched: Value = serde_json::from_slice(&searched.stdout).expect("memory search JSON");
+    assert_eq!(searched.as_array().map(Vec::len), Some(1));
+    assert_eq!(searched[0]["id"], memory_id);
+
+    let memory_turn = run(
+        binary,
+        &config,
+        &["run", "cargo clippy reminder", "--session", &session_id],
+    );
+    assert!(memory_turn.status.success());
+    let memory_turn: Value = serde_json::from_slice(&memory_turn.stdout).expect("memory turn JSON");
+    assert_eq!(memory_turn["output"], "cargo clippy reminder");
+
+    let superseded_memory = run(
+        binary,
+        &config,
+        &[
+            "memories",
+            "supersede",
+            &memory_id,
+            "Run formatting, Clippy, and workspace tests before completion.",
+        ],
+    );
+    assert!(superseded_memory.status.success());
+    let superseded_memory: Value =
+        serde_json::from_slice(&superseded_memory.stdout).expect("superseded memory JSON");
+    assert_eq!(superseded_memory[0]["status"], "superseded");
+    assert_eq!(
+        superseded_memory[0]["superseded_by"],
+        superseded_memory[1]["id"]
+    );
+
+    let index_status = run(binary, &config, &["memories", "index", "status"]);
+    assert!(index_status.status.success());
+    let index_status: Value =
+        serde_json::from_slice(&index_status.stdout).expect("index status JSON");
+    assert_eq!(index_status["ready"], true);
+    assert_eq!(index_status["lag"], 0);
+
+    let denied_memory = run(
+        binary,
+        &denied_config,
+        &["memories", "create", "Must not persist"],
+    );
+    assert!(!denied_memory.status.success());
+    let memories = run(binary, &config, &["memories", "list", "--status", "all"]);
+    let memories: Value = serde_json::from_slice(&memories.stdout).expect("memories JSON");
+    assert_eq!(memories.as_array().map(Vec::len), Some(2));
+
     let audit = run(binary, &config, &["audit", "show", "--limit", "200"]);
     assert!(audit.status.success());
     let events: Vec<Value> = serde_json::from_slice(&audit.stdout).expect("audit JSON");
@@ -344,4 +430,6 @@ sandbox:
     assert!(event_types.contains(&"task.updated.v1"));
     assert!(event_types.contains(&"decision.created.v1"));
     assert!(event_types.contains(&"decision.superseded.v1"));
+    assert!(event_types.contains(&"memory.created.v1"));
+    assert!(event_types.contains(&"memory.superseded.v1"));
 }

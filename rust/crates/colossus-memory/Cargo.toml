@@ -12,8 +12,10 @@ colossus-ports.workspace = true
 serde_json.workspace = true
 tantivy.workspace = true
 time.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+colossus-session.workspace = true
 colossus-testkit = { path = "../colossus-testkit" }
 tempfile.workspace = true
 tokio.workspace = true

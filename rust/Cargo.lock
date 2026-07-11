@@ -740,12 +740,14 @@ dependencies = [
  "async-trait",
  "colossus-contracts",
  "colossus-ports",
+ "colossus-session",
  "colossus-testkit",
  "serde_json",
  "tantivy",
  "tempfile",
  "time",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -820,6 +822,7 @@ dependencies = [
  "colossus-context",
  "colossus-contracts",
  "colossus-journal-redb",
+ "colossus-memory",
  "colossus-policy",
  "colossus-ports",
  "colossus-projection",

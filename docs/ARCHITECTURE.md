@@ -56,10 +56,20 @@ its own optimistic journal stream; updates append complete validated next-state 
 and decision supersession atomically closes the old stream state while creating its
 linked replacement. Mutation adapters are private to the runtime and receive one-use
 permits only after `task.*` or `decision.*` authorization. The `work-v1` projection is
-disposable discovery state, not the
-write model. Active decisions are loaded from the canonical repository and injected as
+disposable discovery state, not the write model. Active decisions are loaded from the
+canonical repository and injected as
 bounded binding system context before snapshots on every provider turn; archived and
 superseded decisions remain auditable but are not injected.
+
+`colossus-memory` separates canonical lifecycle state from disposable retrieval. Memory
+create/archive/supersede events remain authoritative in the encrypted journal. Tantivy
+stores candidate ids, bounded searchable text, metadata, event-id markers, and a durable
+global replay position; failed index work remains in the journal and is retried without
+blocking canonical reads. Search always reloads candidate ids from the repository and
+reapplies active status, expiry, and global/repository/session scope. Every lifecycle,
+read, search, and index operation crosses the gateway. Context composition receives only
+post-effect-authorized canonical records and places them after decisions and before
+snapshots as non-instructional background.
 
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
 subprocess specifications are authenticated to a one-shot helper, which clears the
