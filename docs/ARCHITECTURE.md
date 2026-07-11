@@ -161,7 +161,14 @@ Independent clients run concurrently, while projection rebuild/drain, memory-ind
 maintenance, and queued child work share one worker coordination lock so optimistic
 positions cannot race.
 Workflow definitions are exact-content hash pinned and workflow runs are normal journal
-streams. The composition root opens fresh YAML config and fresh state; it never silently
+streams. Registration and start validate the complete available call graph, reject direct
+or indirect cycles, and enforce a 16-level call-depth ceiling. Manual starts are recorded
+as queued and atomically claimed before execution; `workflow run --queued` leaves work for
+the worker's bounded drain path. Restart reconstruction restores completed outputs and the
+consumed attempt budget. Abandoned attempts become unknown and are never automatically
+retried. Known failures may retry once only with an explicit idempotency strategy, and
+definition-level compensation effects are dispatched separately through the same policy
+gateway. The composition root opens fresh YAML config and fresh state; it never silently
 imports the Python SQLite store.
 
 See [Rust Reconstruction Status](RUST_RECONSTRUCTION.md) for the current implementation

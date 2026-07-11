@@ -119,6 +119,13 @@ the same application services used by embedded mode. Clients fall back to embedd
 only when the endpoint is unavailable; an authentication or protocol failure is surfaced
 and never converted into a fallback request.
 
+Workflow queueing is journal-native: a worker may claim only `queued` runs and recovery
+never drains `waiting` or `interrupted` runs. A started step without a durable terminal
+record is labeled `outcome_unknown`; operator resume is refused when that step lacks an
+explicit idempotency strategy. Compensation is definition-declared, uses separate step
+identity and audit events, and crosses the effect gateway independently for every action.
+Policy approval of a primary effect never authorizes its compensation.
+
 The sections below describe the frozen Python 0.5 implementation. They remain relevant
 to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.
 

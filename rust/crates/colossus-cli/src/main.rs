@@ -528,6 +528,9 @@ enum WorkflowAction {
         /// Inline JSON or @path to a JSON document.
         #[arg(long, default_value = "{}")]
         inputs: String,
+        /// Queue for a worker instead of executing immediately.
+        #[arg(long)]
+        queued: bool,
     },
     /// Show a reconstructed run.
     Status { run_id: String },
@@ -1515,15 +1518,17 @@ async fn workflow_command(
             name,
             version,
             inputs,
+            queued,
         } => {
-            let run = runtime
-                .workflows()
-                .start_run(
-                    &name,
-                    &version,
-                    parse_json_argument(runtime, &inputs).await?,
-                )
-                .await?;
+            let inputs = parse_json_argument(runtime, &inputs).await?;
+            let run = if queued {
+                runtime.workflows().queue_run(&name, &version, inputs)?
+            } else {
+                runtime
+                    .workflows()
+                    .start_run(&name, &version, inputs)
+                    .await?
+            };
             print_json(&run)?;
         }
         WorkflowAction::Status { run_id } => {
@@ -2134,10 +2139,12 @@ async fn dispatch_to_worker_if_active(
                     name,
                     version,
                     inputs,
+                    queued,
                 } => WorkerOperation::WorkflowStart {
                     name: name.clone(),
                     version: version.clone(),
                     inputs_source: inputs.clone(),
+                    queued: *queued,
                 },
                 WorkflowAction::Status { run_id } => WorkerOperation::WorkflowStatus {
                     run_id: run_id.clone(),

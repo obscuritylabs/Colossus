@@ -57,9 +57,12 @@ obsolete Go launcher.
   re-evaluation, post-effect denial, invalid decisions, outages, decision-log warnings,
   pinned CA trust, and mutual TLS client identity.
 - Strict, hash-pinned YAML workflow definitions; non-executable conditions; all planned
-  typed step schemas; bounded step and concurrency budgets; direct-cycle rejection;
-  durable run reconstruction; wait/input, resume, cancellation, interruption, `foreach`,
-  and bounded parallel execution. Interrupted non-idempotent effects are not retried.
+  typed step schemas; bounded step, concurrency, and 16-level call-depth budgets; direct
+  and indirect cycle rejection; journal-native queue/claim/drain; durable output and
+  attempt-budget reconstruction; root/nested wait input, resume, cancellation,
+  interruption, `foreach`, and bounded parallel execution. Known failures retry only
+  with explicit idempotency, compensation effects are separately gateway-dispatched,
+  and interrupted non-idempotent effects are never retried.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   a disposable Tantivy lexical index with event-id idempotency, durable replay position,
   retryable lag, candidate-id search, status, and rebuild; canonical scope/status/expiry
@@ -218,6 +221,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- p
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow validate .colossus/workflows/offline-echo.yaml
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow register .colossus/workflows/offline-echo.yaml
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}'
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}' --queued
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- repl
 ```
 

@@ -767,6 +767,8 @@ pub enum WorkerOperation {
         version: String,
         /// Inline JSON or a server-local `@path` reference.
         inputs_source: String,
+        /// Leave the run queued for worker drain instead of executing immediately.
+        queued: bool,
     },
     /// Reconstruct one workflow run.
     WorkflowStatus {
@@ -2018,14 +2020,18 @@ async fn dispatch(
             name,
             version,
             inputs_source,
+            queued,
         } => {
             let inputs = parse_json_source(runtime, &inputs_source).await?;
-            Ok(serde_json::to_value(
+            let run = if queued {
+                runtime.workflows().queue_run(&name, &version, inputs)?
+            } else {
                 runtime
                     .workflows()
                     .start_run(&name, &version, inputs)
-                    .await?,
-            )?)
+                    .await?
+            };
+            Ok(serde_json::to_value(run)?)
         }
         WorkerOperation::WorkflowStatus { run_id } => {
             Ok(serde_json::to_value(runtime.workflows().get_run(&run_id)?)?)

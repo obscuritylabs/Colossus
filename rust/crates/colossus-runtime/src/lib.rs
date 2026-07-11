@@ -9009,7 +9009,11 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
                 id: effect.run_id.clone(),
             },
             action,
-            format!("workflow-step:{}", effect.step_id),
+            if effect.compensation {
+                format!("workflow-compensation-step:{}", effect.step_id)
+            } else {
+                format!("workflow-step:{}", effect.step_id)
+            },
             effect.content,
         );
         request.capabilities = vec!["workflow.execute".into()];

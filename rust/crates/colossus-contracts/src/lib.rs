@@ -2170,6 +2170,12 @@ pub struct WorkflowDefinition {
     pub step_budget: u32,
     /// Ordered root steps.
     pub steps: Vec<WorkflowStep>,
+    /// Explicit compensation steps, executed in declared order after a known failure.
+    ///
+    /// Compensation is never implicit and every effectful compensation step is
+    /// independently authorized through the normal effect gateway.
+    #[serde(default)]
+    pub compensation: Vec<WorkflowStep>,
 }
 
 /// A typed, non-executable workflow step.
