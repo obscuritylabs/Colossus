@@ -5,9 +5,10 @@ runtime. The active alpha lives in [`rust/`](rust/README.md); the passing Python
 implementation is frozen at `python-v0.5.0` and on `python-legacy` until Rust completes
 the P0+P1 cutover.
 
-Colossus is a secure, layered Python CLI harness for agentic development. It is built
-for OpenAI-compatible online providers, local OpenAI-compatible offline endpoints,
-bundled skills, brokered tools, local-first state, and auditability.
+The Rust alpha is the active implementation: an auditable workflow/agent runtime with
+OpenAI Responses and compatible providers, durable workflows and sessions, policy-bound
+tools, encrypted event-sourced state, replaceable memory indexes, and authenticated local
+workers.
 
 The default provider is deterministic and credential-free, so new checkouts and
 airgapped environments can exercise the harness before any model endpoint is configured.
@@ -29,7 +30,7 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- s
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sandbox doctor
 ```
 
-The current Python 0.5 surface remains available during reconstruction:
+The frozen Python 0.5 surface remains available only for legacy users:
 
 ```bash
 uv sync --extra dev
@@ -38,18 +39,20 @@ uv run colossus repl
 uv run pytest
 ```
 
-Choose a workspace for repository-scoped work:
+With an installed Rust archive, choose a workspace by starting from that repository:
 
 ```bash
-uv run colossus run --workspace ../my-project "Inspect the failing tests"
-uv run colossus repl --workspace ../my-project
+cd ../my-project
+colossus --config /absolute/path/to/.colossus/config.yaml \
+  run "Inspect the failing tests"
+colossus --config /absolute/path/to/.colossus/config.yaml repl
 ```
 
 Resume prior local sessions:
 
 ```bash
-uv run colossus run --resume "continue where we left off"
-uv run colossus repl --resume
+colossus --config .colossus/config.yaml run --resume "continue where we left off"
+colossus --config .colossus/config.yaml repl --resume
 ```
 
 Run deep research:
@@ -63,21 +66,23 @@ Connect an integration without exposing raw secrets to the model:
 
 ```bash
 export GITHUB_TOKEN=...
-uv run colossus integrations connect github --credential-ref env:GITHUB_TOKEN
-uv run colossus integrations connect searxng --base-url http://localhost:8888
+colossus --config .colossus/config.yaml --approval-mode ask \
+  integrations connect github --credential-reference env:GITHUB_TOKEN
+colossus --config .colossus/config.yaml --approval-mode ask \
+  integrations connect searxng --base-url http://127.0.0.1:8888 --auth-type none
 docker compose -f docker-compose.opensearch.yml up -d
-uv run colossus integrations connect opensearch \
-  --base-url http://localhost:9200 \
+colossus --config .colossus/config.yaml --approval-mode ask \
+  integrations connect opensearch --base-url http://127.0.0.1:9200 \
   --auth-type none
-uv run colossus tools list
+colossus --config .colossus/config.yaml tools list
 ```
 
 Initialize a user config when you are ready to use a non-default provider:
 
 ```bash
-uv run colossus config init
-uv run colossus config show
-uv run colossus models list
+colossus --config .colossus/config.yaml config init
+colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml provider models
 ```
 
 ## Documentation

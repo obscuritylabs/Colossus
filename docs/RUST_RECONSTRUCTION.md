@@ -229,8 +229,11 @@ obsolete Go launcher.
 - A six-target native release-artifact matrix for macOS, static Linux, and Windows on
   arm64 and x64. Every job executes version/config parsing, a credential-free echo turn,
   and encrypted audit verification before packaging a user-facing `colossus` binary,
-  license, README, and SHA-256 sidecar. Artifacts are uploaded independently so one
-  platform cannot hide another platform's failure.
+  platform installer, license, README, and SHA-256 sidecar. Each completed archive is
+  extracted, installed into a clean prefix, and reruns the echo/audit smoke without
+  Cargo, Python, provider credentials, or network. Installers reject linked package
+  binaries and linked destination bin directories. Artifacts are uploaded independently
+  so one platform cannot hide another platform's failure.
 - Configured stdio MCP integration using the official Rust SDK protocol models, exact
   sandbox executable identities, environment-only credential references, deterministic
   paginated discovery, strict server/tool allowlists, live JSON Schema validation,
@@ -329,7 +332,9 @@ cutover. The following planned work remains:
   hydration, prompt-safe in-place activity refresh, a cached embedded/worker status prompt,
   durable correlated run envelopes, semantic tool-family results, recoverability labels,
   and phase/action elapsed lines are implemented.
-- Packs, offline bundles, additional MCP transports/conformance coverage, and the rest of P1/P2. Native GitHub,
+- Signed offline-bundle materialization, additional MCP transports/conformance coverage,
+  and the rest of P2 remain. Native release archives now include clean-prefix offline
+  installers; native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,
   permit/approval enforcement, bounded quarantine, and post-effect release are implemented.

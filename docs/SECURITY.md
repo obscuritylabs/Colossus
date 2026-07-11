@@ -57,6 +57,13 @@ musl linkage before packaging. Each archive has a SHA-256 sidecar for transport-
 checking. A checksum alone is not publisher authentication; signed release/offline-bundle
 verification remains the authority for trusted distribution.
 
+Native archives include data-only installation scripts. CI extracts the completed
+archive into an empty directory, installs into an empty prefix, and repeats version,
+echo-agent, and encrypted audit verification using only the installed executable. The
+installers reject linked source executables and linked destination `bin` directories;
+Unix replacement uses a same-directory temporary file and atomic rename. Installation
+does not resolve provider credentials or make network requests.
+
 Configured external audit export is itself an effect; it never receives a trusted-service
 bypass. The exporter discloses only ciphertext-free `AuditEvidence` envelope metadata and
 hashes. Every directory write requires `audit.export.write`, a matching sandbox write

@@ -350,10 +350,29 @@ The `rust-release-smoke` CI matrix produces these native artifacts:
 Every target is built and executed on a matching native runner. Before upload, CI runs
 `--version`, strict config parsing, a credential-free echo turn, and `audit verify` using
 [`release/smoke-config.yaml`](release/smoke-config.yaml). It then packages the executable
-as `colossus`/`colossus.exe` with the license and this README and writes a SHA-256 sidecar.
-The Linux jobs also reject artifacts that `file` does not identify as statically linked.
-Checksums detect transfer corruption; use signed bundle verification when authenticity is
-required.
+as `colossus`/`colossus.exe` with the platform installer, license, and this README,
+then writes a SHA-256 sidecar. After creating the archive, CI extracts it into an empty
+directory, installs into an empty prefix, and repeats the offline echo/audit smoke using
+only the installed executable. The Linux jobs also reject artifacts that `file` does not
+identify as statically linked.
+
+After verifying the archive checksum, install without Cargo or Python:
+
+```bash
+tar -xzf colossus-VERSION-TARGET.tar.gz
+./colossus-VERSION-TARGET/install.sh
+```
+
+```powershell
+Expand-Archive colossus-VERSION-TARGET.zip
+.\colossus-VERSION-TARGET\install.ps1
+```
+
+The Unix default prefix is `$HOME/.local`; Windows uses the same logical default.
+Add the prefix's `bin` directory to `PATH`. Installers reject linked package binaries and
+linked destination `bin` directories, copy through a destination-local temporary name,
+and make no network requests. Checksums detect transfer corruption; use signed bundle
+verification when authenticity is required.
 
 The separate runtime matrices execute native Seatbelt/Landlock acceptance on macOS and
 Linux arm64/x64 and the authenticated worker suite over Windows named pipes on Windows
