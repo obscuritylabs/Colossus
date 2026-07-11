@@ -1346,6 +1346,259 @@ pub struct IntegrationSummary {
     pub updated_at: String,
 }
 
+/// One immutable regular file declared by a capability pack.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackFileEntry {
+    /// Normalized relative path beneath the pack root.
+    pub path: String,
+    /// Lowercase SHA-256 digest of the complete file.
+    pub sha256: String,
+    /// Exact file size in bytes.
+    pub size: u64,
+    /// Bounded media type used for operator evidence.
+    pub content_type: String,
+}
+
+/// Reference to one hash-listed pack file or directory tree.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackPathReference {
+    /// Normalized relative path beneath the pack root.
+    pub path: String,
+}
+
+/// One executable tool exposed by a verified pack.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackToolDeclaration {
+    /// Stable namespaced tool name.
+    pub name: String,
+    /// Hash-listed executable path relative to the pack root.
+    pub command: String,
+    /// Exact argument vector; no shell interpolation is performed.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variable name to credential reference mapping.
+    #[serde(default)]
+    pub env_refs: std::collections::BTreeMap<String, String>,
+    /// Permissions required by this executable.
+    pub permissions: Vec<String>,
+}
+
+/// One out-of-process MCP server exposed by a verified pack.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackMcpServerDeclaration {
+    /// Stable server name.
+    pub name: String,
+    /// Hash-listed executable path relative to the pack root.
+    pub command: String,
+    /// Exact argument vector; no shell interpolation is performed.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variable name to credential reference mapping.
+    #[serde(default)]
+    pub env_refs: std::collections::BTreeMap<String, String>,
+    /// Exact model-callable tool allowlist.
+    pub allowed_tools: Vec<String>,
+    /// Permissions required by this server.
+    pub permissions: Vec<String>,
+}
+
+/// Detached signature embedded in a capability-pack manifest.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackSignature {
+    /// Signature algorithm. Version 1 accepts only `ed25519`.
+    pub algorithm: String,
+    /// SHA-256 identity of the trusted public key.
+    pub key_id: String,
+    /// Base64-encoded Ed25519 signature of the canonical unsigned manifest.
+    pub signature: String,
+}
+
+/// Strict versioned capability-pack manifest.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackManifest {
+    /// Pack format version. Version 1 is currently supported.
+    pub format_version: u16,
+    /// Stable lowercase pack name.
+    pub name: String,
+    /// Immutable semantic version string.
+    pub version: String,
+    /// Human-facing description.
+    pub description: String,
+    /// Publisher identity bound to a trusted signing key.
+    pub publisher: String,
+    /// SPDX-like license identifier.
+    pub license: String,
+    /// Optional publisher homepage without credentials.
+    #[serde(default)]
+    pub homepage: String,
+    /// Declared contribution families.
+    pub capabilities: Vec<String>,
+    /// Maximum permissions requested by pack executables.
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    /// Complete regular-file allowlist.
+    pub files: Vec<PackFileEntry>,
+    /// Declarative integration manifests.
+    #[serde(default)]
+    pub integrations: Vec<PackPathReference>,
+    /// Declarative skill directory roots.
+    #[serde(default)]
+    pub skills: Vec<PackPathReference>,
+    /// Declared executable tools.
+    #[serde(default)]
+    pub tools: Vec<PackToolDeclaration>,
+    /// Declared out-of-process MCP servers.
+    #[serde(default)]
+    pub mcp_servers: Vec<PackMcpServerDeclaration>,
+    /// Hash-listed binary paths.
+    #[serde(default)]
+    pub binaries: Vec<String>,
+    /// Hash-listed container assets.
+    #[serde(default)]
+    pub docker: Vec<String>,
+    /// Hash-listed documentation paths.
+    #[serde(default)]
+    pub docs: Vec<String>,
+    /// Hash-listed test paths.
+    #[serde(default)]
+    pub tests: Vec<String>,
+    /// Exact pack dependencies expressed as `name@version`.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    /// Optional cryptographic signatures. Invalid present signatures are fatal.
+    #[serde(default)]
+    pub signatures: Vec<PackSignature>,
+}
+
+/// Durable lifecycle status for an installed pack.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackStatus {
+    /// Verified files may contribute declared capabilities.
+    Enabled,
+    /// Installed bytes are retained but contribute no capability.
+    Disabled,
+    /// Files were removed while immutable lifecycle history remains.
+    Uninstalled,
+}
+
+/// Canonical pack lifecycle state reconstructed from the event journal.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackInstallation {
+    /// Verified immutable manifest.
+    pub manifest: PackManifest,
+    /// Current lifecycle status.
+    pub status: PackStatus,
+    /// Stable provenance for the installed source.
+    pub source: String,
+    /// Absolute configured installation directory.
+    pub installed_path: String,
+    /// Hash of the canonical unsigned manifest bytes.
+    pub manifest_sha256: String,
+    /// Trusted key that authenticated this exact manifest, if any.
+    pub trust_key_id: Option<String>,
+    /// Original installation timestamp.
+    pub installed_at: String,
+    /// Last lifecycle transition timestamp.
+    pub updated_at: String,
+}
+
+/// Publisher trust is explicitly bound to one Ed25519 public key.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublisherTrust {
+    /// Publisher identity accepted for this key.
+    pub publisher: String,
+    /// Lowercase SHA-256 digest of the raw public key.
+    pub key_id: String,
+    /// Base64-encoded 32-byte Ed25519 public key.
+    pub public_key: String,
+    /// UTC timestamp of the trust decision.
+    pub added_at: String,
+}
+
+/// Retainable evidence produced by strict pack verification.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackVerification {
+    /// Verified manifest.
+    pub manifest: PackManifest,
+    /// SHA-256 of deterministic unsigned manifest bytes.
+    pub manifest_sha256: String,
+    /// Number of declared regular files verified.
+    pub file_count: usize,
+    /// Sum of declared file sizes.
+    pub total_bytes: u64,
+    /// Whether a publisher-bound trusted signature authenticated the manifest.
+    pub trusted: bool,
+    /// Trusted key that authenticated the manifest, if any.
+    pub trust_key_id: Option<String>,
+}
+
+/// One immutable file declared by an offline release bundle.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleFileEntry {
+    /// Normalized relative path beneath the bundle root.
+    pub path: String,
+    /// Lowercase SHA-256 digest of the complete file.
+    pub sha256: String,
+    /// Optional exact byte size for newer bundle producers.
+    #[serde(default)]
+    pub size: Option<u64>,
+}
+
+/// Strict signed offline-bundle manifest.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleManifest {
+    /// Bundle format version. Version 1 is currently supported.
+    pub format_version: u16,
+    /// Human-facing bundle name.
+    pub name: String,
+    /// Release version represented by this bundle.
+    pub version: String,
+    /// Publisher identity bound to the trusted signing key.
+    pub publisher: String,
+    /// UTC bundle creation timestamp.
+    pub created_at: String,
+    /// Optional source revision.
+    #[serde(default)]
+    pub source_revision: Option<String>,
+    /// Complete regular-file allowlist.
+    pub files: Vec<BundleFileEntry>,
+    /// Cryptographic signatures over the canonical unsigned manifest.
+    #[serde(default)]
+    pub signatures: Vec<PackSignature>,
+}
+
+/// Retainable evidence produced without network access by bundle verification.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleVerification {
+    /// Bundle identity.
+    pub name: String,
+    /// Bundle release version.
+    pub version: String,
+    /// SHA-256 of deterministic unsigned manifest bytes.
+    pub manifest_sha256: String,
+    /// Number of regular payload files verified.
+    pub file_count: usize,
+    /// Sum of verified file sizes.
+    pub total_bytes: u64,
+    /// Trusted key that authenticated the manifest.
+    pub trust_key_id: String,
+    /// Exact source revision when supplied.
+    pub source_revision: Option<String>,
+}
+
 /// Provenance for a durable key decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

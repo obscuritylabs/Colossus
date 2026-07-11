@@ -20,6 +20,7 @@ members = [
     "crates/colossus-skills",
     "crates/colossus-integrations",
     "crates/colossus-mcp",
+    "crates/colossus-packs",
     "crates/colossus-workflow",
     "crates/colossus-runtime",
     "crates/colossus-cli",
@@ -45,6 +46,7 @@ getrandom = "0.4.3"
 hex = "0.4.3"
 hmac = "0.12.1"
 futures = "0.3.31"
+flate2 = "1.1.9"
 fs4 = "0.13.1"
 globset = "0.4.18"
 ignore = "0.4.28"
@@ -62,6 +64,7 @@ serde_json = "1.0.149"
 serde-saphyr = "0.0.29"
 sha2 = "0.10.9"
 tempfile = "3.25.0"
+tar = "0.4.46"
 tantivy = "0.26.1"
 thiserror = "2.0.18"
 time = { version = "0.3.53", features = ["formatting", "parsing", "serde"] }
@@ -81,6 +84,7 @@ colossus-testkit = { path = "crates/colossus-testkit" }
 colossus-skills = { path = "crates/colossus-skills" }
 colossus-integrations = { path = "crates/colossus-integrations" }
 colossus-mcp = { path = "crates/colossus-mcp" }
+colossus-packs = { path = "crates/colossus-packs" }
 colossus-policy = { path = "crates/colossus-policy" }
 colossus-provider = { path = "crates/colossus-provider" }
 colossus-tools = { path = "crates/colossus-tools" }

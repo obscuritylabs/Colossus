@@ -7,7 +7,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, CredentialReference, EffectRequest, EventClassification, ExecutionContext,
     IntegrationAuth, IntegrationConnection, IntegrationKind, IntegrationOperation,
-    IntegrationStatus, IntegrationSummary, NewEvent, QuarantinedEffectResult, ToolSpec,
+    IntegrationStatus, IntegrationSummary, NewEvent, PackInstallation, PackStatus, PublisherTrust,
+    QuarantinedEffectResult, ToolSpec,
 };
 use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
 use colossus_ports::{AggregateRepository, EventJournal, ExtensionRepository, StoreError};
@@ -52,6 +53,14 @@ impl EventSourcedExtensionRepository {
         format!("integration:{name}")
     }
 
+    fn pack_stream(name: &str) -> String {
+        format!("pack:{name}")
+    }
+
+    fn trust_stream(publisher: &str, key_id: &str) -> String {
+        format!("publisher-trust:{publisher}:{key_id}")
+    }
+
     fn connection_events(
         &self,
         name: &str,
@@ -94,6 +103,86 @@ impl EventSourcedExtensionRepository {
                 .map_or(head.saturating_add(1), |event| event.global_sequence + 1);
         }
         Ok(names.into_iter().collect())
+    }
+
+    fn stream_names(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
+        let (head, _) = self.journal.head()?;
+        let mut sequence = 1_u64;
+        let mut names = BTreeSet::new();
+        while sequence <= head {
+            let events = self.journal.read_global(sequence, 1_024)?;
+            if events.is_empty() {
+                break;
+            }
+            for event in &events {
+                if let Some(name) = event.stream_id.strip_prefix(prefix) {
+                    names.insert(name.to_owned());
+                }
+            }
+            sequence = events
+                .last()
+                .map_or(head.saturating_add(1), |event| event.global_sequence + 1);
+        }
+        Ok(names.into_iter().collect())
+    }
+
+    fn reduce_pack(&self, name: &str) -> Result<Option<PackInstallation>, StoreError> {
+        let mut installation = None;
+        for event in self.journal.read_stream(&Self::pack_stream(name))? {
+            if matches!(
+                event.event_type.as_str(),
+                "pack.installed.v1"
+                    | "pack.enabled.v1"
+                    | "pack.disabled.v1"
+                    | "pack.uninstalled.v1"
+            ) {
+                installation = Some(
+                    serde_json::from_value(self.journal.decrypt_payload(&event)?)
+                        .map_err(adapter)?,
+                );
+            }
+        }
+        Ok(installation)
+    }
+
+    fn reduce_trust(
+        &self,
+        publisher: &str,
+        key_id: &str,
+    ) -> Result<Option<PublisherTrust>, StoreError> {
+        let events = self
+            .journal
+            .read_stream(&Self::trust_stream(publisher, key_id))?;
+        events
+            .last()
+            .map(|event| {
+                serde_json::from_value(self.journal.decrypt_payload(event)?).map_err(adapter)
+            })
+            .transpose()
+    }
+
+    fn append_pack(
+        &self,
+        installation: &PackInstallation,
+        actor: Actor,
+        event_type: &str,
+    ) -> Result<(), StoreError> {
+        let stream_id = Self::pack_stream(&installation.manifest.name);
+        let events = self.journal.read_stream(&stream_id)?;
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version: events.len() as u64,
+            classification: EventClassification::Domain,
+            event_type: event_type.into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: format!("pack:{}", installation.manifest.name),
+                ..ExecutionContext::default()
+            },
+            payload: serde_json::to_value(installation).map_err(adapter)?,
+        })?;
+        Ok(())
     }
 
     fn append(
@@ -187,6 +276,131 @@ impl ExtensionRepository for EventSourcedExtensionRepository {
         validate_connection(&connection)?;
         self.append(&connection, actor, "integration.disconnected.v1")?;
         Ok(connection)
+    }
+
+    fn get_pack(&self, name: &str) -> Result<Option<PackInstallation>, StoreError> {
+        validate_name(name)?;
+        self.reduce_pack(name)
+    }
+
+    fn list_packs(&self, limit: usize) -> Result<Vec<PackInstallation>, StoreError> {
+        if limit == 0 || limit > MAX_CONNECTIONS {
+            return Err(StoreError::Adapter(
+                "pack list limit must be in 1..=1000".into(),
+            ));
+        }
+        self.stream_names("pack:")?
+            .into_iter()
+            .take(limit)
+            .filter_map(|name| self.reduce_pack(&name).transpose())
+            .collect()
+    }
+
+    fn install_pack(
+        &self,
+        installation: PackInstallation,
+        actor: Actor,
+    ) -> Result<PackInstallation, StoreError> {
+        validate_name(&installation.manifest.name)?;
+        if installation.status == PackStatus::Uninstalled {
+            return Err(StoreError::Adapter(
+                "a new pack installation cannot start uninstalled".into(),
+            ));
+        }
+        if let Some(existing) = self.reduce_pack(&installation.manifest.name)?
+            && existing.status != PackStatus::Uninstalled
+        {
+            return Err(StoreError::Adapter(format!(
+                "pack {} is already installed",
+                installation.manifest.name
+            )));
+        }
+        self.append_pack(&installation, actor, "pack.installed.v1")?;
+        Ok(installation)
+    }
+
+    fn set_pack_status(
+        &self,
+        name: &str,
+        status: PackStatus,
+        actor: Actor,
+        updated_at: &str,
+    ) -> Result<PackInstallation, StoreError> {
+        validate_name(name)?;
+        let mut installation = self
+            .reduce_pack(name)?
+            .ok_or_else(|| StoreError::NotFound(format!("pack {name}")))?;
+        if installation.status == PackStatus::Uninstalled {
+            return Err(StoreError::Adapter(format!(
+                "pack {name} has already been uninstalled"
+            )));
+        }
+        installation.status = status;
+        installation.updated_at = updated_at.into();
+        let event_type = match status {
+            PackStatus::Enabled => "pack.enabled.v1",
+            PackStatus::Disabled => "pack.disabled.v1",
+            PackStatus::Uninstalled => "pack.uninstalled.v1",
+        };
+        self.append_pack(&installation, actor, event_type)?;
+        Ok(installation)
+    }
+
+    fn add_publisher_trust(
+        &self,
+        trust: PublisherTrust,
+        actor: Actor,
+    ) -> Result<PublisherTrust, StoreError> {
+        validate_name(&trust.publisher)?;
+        if self
+            .reduce_trust(&trust.publisher, &trust.key_id)?
+            .is_some()
+        {
+            return Err(StoreError::Adapter(format!(
+                "publisher trust {}:{} already exists",
+                trust.publisher, trust.key_id
+            )));
+        }
+        let stream_id = Self::trust_stream(&trust.publisher, &trust.key_id);
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version: 0,
+            classification: EventClassification::Domain,
+            event_type: "publisher.trusted.v1".into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: format!("publisher-trust:{}", trust.publisher),
+                ..ExecutionContext::default()
+            },
+            payload: serde_json::to_value(&trust).map_err(adapter)?,
+        })?;
+        Ok(trust)
+    }
+
+    fn get_publisher_trust(
+        &self,
+        publisher: &str,
+        key_id: &str,
+    ) -> Result<Option<PublisherTrust>, StoreError> {
+        validate_name(publisher)?;
+        self.reduce_trust(publisher, key_id)
+    }
+
+    fn list_publisher_trust(&self, limit: usize) -> Result<Vec<PublisherTrust>, StoreError> {
+        if limit == 0 || limit > MAX_CONNECTIONS {
+            return Err(StoreError::Adapter(
+                "publisher trust list limit must be in 1..=1000".into(),
+            ));
+        }
+        self.stream_names("publisher-trust:")?
+            .into_iter()
+            .take(limit)
+            .filter_map(|suffix| {
+                let (publisher, key_id) = suffix.rsplit_once(':')?;
+                self.reduce_trust(publisher, key_id).transpose()
+            })
+            .collect()
     }
 }
 

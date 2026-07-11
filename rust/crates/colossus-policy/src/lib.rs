@@ -380,16 +380,18 @@ fn valid_environment_name(name: &str) -> bool {
 }
 
 fn is_process_action(action: &str) -> bool {
-    matches!(
-        action,
-        "process.spawn"
-            | "shell.run"
-            | "git.status"
-            | "git.diff"
-            | "git.show"
-            | "mcp.tools"
-            | "mcp.call"
-    )
+    action.starts_with("pack.tool.")
+        || action.starts_with("pack.mcp.")
+        || matches!(
+            action,
+            "process.spawn"
+                | "shell.run"
+                | "git.status"
+                | "git.diff"
+                | "git.show"
+                | "mcp.tools"
+                | "mcp.call"
+        )
 }
 
 fn canonical_network_origin(resource: &str) -> Result<String, GatewayError> {
@@ -1037,6 +1039,7 @@ pub struct BuiltInPolicy {
     revision: String,
     actions: BTreeMap<String, DecisionOutcome>,
     obligations: PolicyObligations,
+    action_obligations: BTreeMap<String, PolicyObligations>,
 }
 
 impl BuiltInPolicy {
@@ -1046,6 +1049,7 @@ impl BuiltInPolicy {
             revision: "builtin/offline-v1".into(),
             actions: BTreeMap::from([("provider.echo".into(), DecisionOutcome::Allow)]),
             obligations: default_obligations(),
+            action_obligations: BTreeMap::new(),
         }
     }
 
@@ -1123,6 +1127,22 @@ impl BuiltInPolicy {
         self.obligations.max_concurrency = max_concurrency;
         self
     }
+
+    /// Restrict one exact action to its own filesystem, environment, and network grants.
+    pub fn with_action_restrictions(
+        mut self,
+        action: impl Into<String>,
+        filesystem: Vec<colossus_contracts::FilesystemGrant>,
+        allowed_environment: Vec<String>,
+        network_destinations: Vec<String>,
+    ) -> Self {
+        let mut obligations = self.obligations.clone();
+        obligations.filesystem = filesystem;
+        obligations.allowed_environment = allowed_environment;
+        obligations.network_destinations = network_destinations;
+        self.action_obligations.insert(action.into(), obligations);
+        self
+    }
 }
 
 #[async_trait]
@@ -1149,7 +1169,11 @@ impl PolicyDecisionPoint for BuiltInPolicy {
         {
             outcome = DecisionOutcome::Allow;
         }
-        let mut obligations = self.obligations.clone();
+        let mut obligations = self
+            .action_obligations
+            .get(&request.action)
+            .cloned()
+            .unwrap_or_else(|| self.obligations.clone());
         if request.action.starts_with("filesystem.")
             || is_process_action(&request.action)
             || request.action.starts_with("task.")
@@ -1166,6 +1190,8 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("searxng.")
             || request.action.starts_with("opensearch.")
             || request.action.starts_with("mcp.")
+            || request.action.starts_with("pack.")
+            || request.action.starts_with("bundle.")
             || request.action == "network.http"
         {
             obligations.require_post_effect = true;
@@ -1441,6 +1467,37 @@ mod tests {
 
     struct CountingExecutor {
         calls: AtomicUsize,
+    }
+
+    #[tokio::test]
+    async fn action_restrictions_remove_undeclared_global_network_and_environment_grants() {
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("pack.tool.demo.fixed", DecisionOutcome::Allow)
+            .with_network_destination("https://example.com")
+            .with_environment("GLOBAL_SECRET")
+            .with_action_restrictions(
+                "pack.tool.demo.fixed",
+                vec![colossus_contracts::FilesystemGrant {
+                    root: "/verified/pack".into(),
+                    mode: "read".into(),
+                }],
+                Vec::new(),
+                Vec::new(),
+            );
+        let request = effect_request(
+            system_actor("pack-test"),
+            "pack.tool.demo.fixed",
+            "/verified/pack/tool",
+            serde_json::json!({
+                "cwd": "/verified/pack",
+                "environment": {},
+            }),
+        );
+        let decision = policy.decide(&request).await.expect("decision");
+        assert!(decision.obligations.network_destinations.is_empty());
+        assert!(decision.obligations.allowed_environment.is_empty());
+        assert_eq!(decision.obligations.filesystem.len(), 1);
+        assert!(decision.obligations.require_post_effect);
     }
 
     #[async_trait]

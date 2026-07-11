@@ -6,11 +6,12 @@ use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ApprovalProof, ContextSnapshot, DecisionStatus, EffectRequest, EventEnvelope,
     ExecutionContext, GoalRecord, GoalStatus, IntegrationConnection, KeyDecision, MemoryRecord,
-    ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PlanRecord, PlanStatus,
-    PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute,
-    ProviderTurn, ResearchClaim, ResearchRun, ResearchSource, SessionMessage, SessionSummary,
-    SignedCheckpoint, SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord,
-    TaskStatus, ToolCall, ToolResult, ToolSpec, WorkflowDefinition, WorkflowRun,
+    ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PackInstallation, PackStatus,
+    PlanRecord, PlanStatus, PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem,
+    ProviderRoute, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun, ResearchSource,
+    SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord, SubagentJob,
+    SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec, WorkflowDefinition,
+    WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -526,6 +527,45 @@ pub trait ExtensionRepository: AggregateRepository {
         actor: Actor,
         updated_at: &str,
     ) -> Result<IntegrationConnection, StoreError>;
+
+    /// Reconstruct one installed pack lifecycle.
+    fn get_pack(&self, name: &str) -> Result<Option<PackInstallation>, StoreError>;
+
+    /// List installed and historically uninstalled packs in deterministic name order.
+    fn list_packs(&self, limit: usize) -> Result<Vec<PackInstallation>, StoreError>;
+
+    /// Append one fully verified pack installation event.
+    fn install_pack(
+        &self,
+        installation: PackInstallation,
+        actor: Actor,
+    ) -> Result<PackInstallation, StoreError>;
+
+    /// Append an enable, disable, or uninstall lifecycle transition.
+    fn set_pack_status(
+        &self,
+        name: &str,
+        status: PackStatus,
+        actor: Actor,
+        updated_at: &str,
+    ) -> Result<PackInstallation, StoreError>;
+
+    /// Persist a publisher/key binding as an explicit trust decision.
+    fn add_publisher_trust(
+        &self,
+        trust: PublisherTrust,
+        actor: Actor,
+    ) -> Result<PublisherTrust, StoreError>;
+
+    /// Resolve one exact publisher/key binding.
+    fn get_publisher_trust(
+        &self,
+        publisher: &str,
+        key_id: &str,
+    ) -> Result<Option<PublisherTrust>, StoreError>;
+
+    /// List bounded publisher/key bindings in deterministic order.
+    fn list_publisher_trust(&self, limit: usize) -> Result<Vec<PublisherTrust>, StoreError>;
 }
 
 /// Deterministic discovery for declarative data-only skills.

@@ -65,6 +65,12 @@ pub struct McpServerConfig {
     pub timeout_ms: Option<u64>,
     /// Optional server-specific output cap bounded by sandbox policy.
     pub max_output_bytes: Option<u64>,
+    /// Runtime-only action prefix for verified pack-provided servers.
+    #[serde(skip)]
+    pub effect_action_prefix: Option<String>,
+    /// Runtime-only verified pack provenance disclosed to policy.
+    #[serde(skip)]
+    pub provenance: Option<Value>,
 }
 
 /// One allowlisted MCP tool template for the research collector.
@@ -206,6 +212,7 @@ struct McpEffectInput {
     environment: BTreeMap<String, String>,
     timeout_ms: Option<u64>,
     max_output_bytes: Option<u64>,
+    provenance: Option<Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -219,6 +226,8 @@ struct ConfiguredServer {
     research_tools: Vec<McpResearchToolConfig>,
     timeout_ms: Option<u64>,
     max_output_bytes: Option<u64>,
+    effect_action_prefix: Option<String>,
+    provenance: Option<Value>,
 }
 
 /// MCP configuration or protocol validation failure.
@@ -256,6 +265,17 @@ pub fn validate_config(
     let allowed_environment = sandbox_environment.iter().collect::<BTreeSet<_>>();
     for (name, server) in &config.servers {
         validate_name(name, "server")?;
+        if server.effect_action_prefix.as_ref().is_some_and(|prefix| {
+            !prefix.starts_with("pack.mcp.")
+                || prefix.len() > 384
+                || !prefix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        }) {
+            return Err(McpError::Invalid(format!(
+                "server {name} has an invalid runtime effect action prefix"
+            )));
+        }
         if !server.command.is_absolute()
             || !sandbox_executables
                 .iter()
@@ -427,6 +447,8 @@ impl McpExecutor {
                 research_tools: server.research_tools.clone(),
                 timeout_ms: server.timeout_ms,
                 max_output_bytes: server.max_output_bytes,
+                effect_action_prefix: server.effect_action_prefix.clone(),
+                provenance: server.provenance.clone(),
             };
             servers.insert(name.clone(), configured);
         }
@@ -504,7 +526,13 @@ impl McpExecutor {
             }
             validate_arguments(input_schema, arguments)?;
         }
-        let action = operation.action();
+        let action = server.effect_action_prefix.as_ref().map_or_else(
+            || operation.action().to_owned(),
+            |prefix| match &operation {
+                McpOperation::ListTools { .. } => format!("{prefix}.tools"),
+                McpOperation::CallTool { .. } => format!("{prefix}.call"),
+            },
+        );
         let input = McpEffectInput {
             operation,
             cwd: server.cwd.clone(),
@@ -512,10 +540,11 @@ impl McpExecutor {
             environment: server.environment.clone(),
             timeout_ms: server.timeout_ms,
             max_output_bytes: server.max_output_bytes,
+            provenance: server.provenance.clone(),
         };
         let mut request = effect_request(
             actor,
-            action,
+            &action,
             server.command.display().to_string(),
             serde_json::to_value(input).map_err(|error| McpError::Invalid(error.to_string()))?,
         );
@@ -542,13 +571,21 @@ impl McpExecutor {
             .servers
             .get(input.operation.server())
             .ok_or_else(|| failed("MCP server is not configured"))?;
-        if request.action != input.operation.action()
+        let expected_action = server.effect_action_prefix.as_ref().map_or_else(
+            || input.operation.action().to_owned(),
+            |prefix| match &input.operation {
+                McpOperation::ListTools { .. } => format!("{prefix}.tools"),
+                McpOperation::CallTool { .. } => format!("{prefix}.call"),
+            },
+        );
+        if request.action != expected_action
             || request.resource != server.command.display().to_string()
             || input.cwd != server.cwd
             || input.args != server.args
             || input.environment != server.environment
             || input.timeout_ms != server.timeout_ms
             || input.max_output_bytes != server.max_output_bytes
+            || input.provenance != server.provenance
         {
             return Err(failed(
                 "MCP effect does not match its configured server identity",
@@ -922,7 +959,9 @@ impl EffectExecutor for McpExecutor {
         request: &EffectRequest,
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        if !matches!(request.action.as_str(), "mcp.tools" | "mcp.call") {
+        if !matches!(request.action.as_str(), "mcp.tools" | "mcp.call")
+            && !request.action.starts_with("pack.mcp.")
+        {
             return Err(failed("MCP executor received another action"));
         }
         let input: McpEffectInput = serde_json::from_value(request.content.clone())

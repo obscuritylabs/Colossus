@@ -14,6 +14,7 @@ colossus-context.workspace = true
 colossus-journal-redb.workspace = true
 colossus-memory.workspace = true
 colossus-mcp.workspace = true
+colossus-packs.workspace = true
 colossus-research.workspace = true
 colossus-policy.workspace = true
 colossus-provider.workspace = true

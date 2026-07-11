@@ -1,8 +1,8 @@
 # Offline Bundle Format
 
-Offline bundles are directory-based artifacts that Colossus can verify before use.
-The current verifier requires a `manifest.json` file and SHA-256 checksums for every
-listed file.
+Offline bundles are directory-based artifacts that Colossus verifies without network
+access before use. The Rust verifier requires a strict `manifest.json`, a complete
+payload allowlist, SHA-256 checksums, and at least one trusted Ed25519 signature.
 
 ## Required layout
 
@@ -17,13 +17,10 @@ bundle/
       SKILL.md
   sbom/
     sbom.spdx.json
-  signatures/
-    manifest.json.sig
 ```
 
-Only `manifest.json` and the files listed in `manifest.files` are enforced by the
-current verifier. Additional directories are recommended release content for airgapped
-operation.
+Every regular payload file must be listed in `manifest.files`. Undeclared files,
+symlinks, special filesystem entries, and non-normalized paths are rejected.
 
 ## Manifest schema
 
@@ -32,11 +29,20 @@ operation.
   "format_version": 1,
   "name": "colossus-offline-bundle",
   "version": "0.1.0",
+  "publisher": "colossus",
   "created_at": "2026-06-08T00:00:00Z",
   "files": [
     {
       "path": "wheelhouse/colossus-0.1.0-py3-none-any.whl",
-      "sha256": "64-character lowercase hex digest"
+      "sha256": "64-character lowercase hex digest",
+      "size": 1234
+    }
+  ],
+  "signatures": [
+    {
+      "algorithm": "ed25519",
+      "key_id": "sha256-of-raw-public-key",
+      "signature": "base64-signature"
     }
   ]
 }
@@ -49,6 +55,10 @@ Verifier requirements:
 - Each entry must be an object with string `path` and `sha256` fields.
 - Each listed path must point to a regular file under the bundle directory.
 - The SHA-256 digest of each file must match the manifest entry.
+- Every present size must match exactly.
+- Every payload file must be declared; symlinks and traversal are rejected.
+- At least one signature must resolve to an exact trusted publisher/key binding, and
+  every present signature must verify.
 
 Recommended metadata:
 
@@ -57,26 +67,31 @@ Recommended metadata:
 - `version`: Colossus or release version represented by the bundle.
 - `created_at`: UTC timestamp.
 - `source_revision`: Git commit or signed source provenance.
-- `sbom`: relative path to SBOM material.
-- `signatures`: relative paths to detached signatures.
+- `files`: include SBOM, release notes, lock material, and any detached artifact
+  signatures as normal hash-listed payloads.
+- `signatures`: embedded Ed25519 signatures over compact UTF-8 JSON after strict
+  deserialization, default materialization, recursive lexicographic object-key sorting,
+  and clearing this array. Array order remains significant.
 
 ## Verification
 
 ```bash
-uv run colossus bundle verify ./bundle
+cargo run --offline -q --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- \
+  bundle verify ./bundle
 ```
 
-Verification fails if the manifest is missing, malformed, references a missing file, or
-contains a checksum mismatch.
+Verification fails if the manifest is missing or malformed, a file is missing,
+undeclared, oversized, linked, outside the bundle, or mismatched, or a signature is
+missing, unknown, malformed, or invalid. The retained evidence includes manifest hash,
+trusted key id, source revision, file count, and total verified bytes.
 
 ## Release expectations
 
 Production bundles should include:
 
-- Wheels and source distributions for Colossus.
-- A complete dependency wheelhouse for the target platform.
-- `uv.lock` or equivalent lock material.
+- Rust executables for each represented target plus source needed for compliance.
+- `rust/Cargo.lock` and any vendored crate source required for airgapped rebuilds.
 - SBOM output for the package and bundled dependencies.
-- Detached signatures for the manifest and release artifacts.
+- Embedded manifest signatures and hash-listed detached release-artifact signatures.
 - Skill manifests and skill content intended for the isolated environment.
 - A copy of the release notes and security policy.

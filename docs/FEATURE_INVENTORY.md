@@ -674,6 +674,11 @@ show, verify, validate, install, enable, disable, uninstall, and publisher trust
 management. Installation MUST validate containment, hashes, signatures when present,
 permissions, and trust before activation.
 
+Publisher trust MUST bind a publisher identity to an exact Ed25519 public key. A
+publisher name or signature key id alone is not trust evidence. Present invalid or
+unknown signatures fail closed. Pack and bundle filesystem access, installation,
+lifecycle mutation, and trust mutation cross the normal effect gateway and journal.
+
 ### 16.3 Integrations
 
 Connections store manifests, local configuration, scopes, status, and credential
@@ -934,7 +939,7 @@ A reconstruction is complete only when all applicable checks pass:
 - [x] Telemetry derives correct duration and counts from persisted event timestamps.
 - [ ] Credentials remain references until adapter execution and never appear in model or
   user-visible diagnostic payloads.
-- [ ] Skills cannot gain executable privilege; packs cannot activate before verification.
+- [x] Skills cannot gain executable privilege; packs cannot activate before verification.
 - [ ] Audit-chain verification detects tampering.
 - [ ] Journal concurrency, encryption/key rotation, tail truncation, signed checkpoints,
   unknown effects, and read-only recovery behavior pass fault-injection tests.

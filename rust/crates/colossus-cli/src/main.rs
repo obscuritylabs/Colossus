@@ -176,6 +176,10 @@ enum Command {
     Telemetry(TelemetryCommand),
     /// Discover, compose, and read declarative data-only skills.
     Skills(SkillsCommand),
+    /// Verify and lifecycle-manage signed capability packs.
+    Packs(PacksCommand),
+    /// Verify signed offline release bundles.
+    Bundle(BundleCommand),
     /// Manage persisted integrations and imported OpenAPI tools.
     Integrations(IntegrationsCommand),
     /// Discover and invoke explicitly configured MCP servers.
@@ -1072,6 +1076,77 @@ struct IntegrationsCommand {
 }
 
 #[derive(Args)]
+struct PacksCommand {
+    #[command(subcommand)]
+    command: PacksAction,
+}
+
+#[derive(Subcommand)]
+enum PacksAction {
+    /// List canonical pack lifecycles.
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one canonical pack lifecycle.
+    Show { name: String },
+    /// Verify a local pack without installing it.
+    Verify { path: PathBuf },
+    /// Alias for strict local pack verification.
+    Validate { path: PathBuf },
+    /// Install a verified local pack (approval required).
+    Install {
+        path: PathBuf,
+        /// Explicit development override for an unsigned pack.
+        #[arg(long)]
+        allow_untrusted: bool,
+    },
+    /// Reverify and enable an installed pack (approval required).
+    Enable { name: String },
+    /// Disable an installed pack (approval required).
+    Disable { name: String },
+    /// Uninstall a pack while retaining lifecycle history (approval required).
+    Uninstall { name: String },
+    /// Invoke one active verified fixed-argument pack tool (approval required).
+    Call { tool: String },
+    /// Manage publisher/key trust bindings.
+    Trust(PackTrustCommand),
+}
+
+#[derive(Args)]
+struct PackTrustCommand {
+    #[command(subcommand)]
+    command: PackTrustAction,
+}
+
+#[derive(Subcommand)]
+enum PackTrustAction {
+    /// List publisher/key trust bindings.
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Bind a publisher to a base64 Ed25519 public key (approval required).
+    Add {
+        publisher: String,
+        #[arg(long)]
+        public_key: String,
+    },
+}
+
+#[derive(Args)]
+struct BundleCommand {
+    #[command(subcommand)]
+    command: BundleAction,
+}
+
+#[derive(Subcommand)]
+enum BundleAction {
+    /// Verify a signed offline bundle without network access.
+    Verify { path: PathBuf },
+}
+
+#[derive(Args)]
 struct McpCommand {
     #[command(subcommand)]
     command: McpAction,
@@ -1412,7 +1487,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -1490,6 +1565,44 @@ async fn repl(
                     print_json(&runtime.telemetry_metrics(Some(&active_session_id), 100)?)?;
                 } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
                     print_json(&runtime.telemetry_run(run_id.trim(), 500)?)?;
+                } else if line == "/packs" || line == "/packs list" {
+                    print_json(&runtime.list_packs(100)?)?;
+                } else if let Some(name) = line.strip_prefix("/packs show ") {
+                    let name = name.trim();
+                    print_json(
+                        &runtime
+                            .get_pack(name)?
+                            .ok_or_else(|| cli_error(format!("pack not found: {name}")))?,
+                    )?;
+                } else if let Some(path) = line
+                    .strip_prefix("/packs verify ")
+                    .or_else(|| line.strip_prefix("/packs validate "))
+                {
+                    print_json(&runtime.verify_pack(path.trim()).await?)?;
+                } else if let Some(value) = line.strip_prefix("/packs install ") {
+                    let value = value.trim();
+                    let (path, allow_untrusted) = value
+                        .strip_suffix(" --allow-untrusted")
+                        .map_or((value, false), |path| (path.trim(), true));
+                    print_json(&runtime.install_pack(path, allow_untrusted).await?)?;
+                } else if let Some(name) = line.strip_prefix("/packs enable ") {
+                    print_json(&runtime.enable_pack(name.trim()).await?)?;
+                } else if let Some(name) = line.strip_prefix("/packs disable ") {
+                    print_json(&runtime.disable_pack(name.trim()).await?)?;
+                } else if let Some(name) = line.strip_prefix("/packs uninstall ") {
+                    print_json(&runtime.uninstall_pack(name.trim()).await?)?;
+                } else if let Some(tool) = line.strip_prefix("/packs call ") {
+                    print_json(&runtime.call_pack_tool(tool.trim()).await?)?;
+                } else if line == "/packs trust" || line == "/packs trust list" {
+                    print_json(&runtime.list_pack_trust(100)?)?;
+                } else if let Some(value) = line.strip_prefix("/packs trust add ") {
+                    let (publisher, public_key) =
+                        value.trim().split_once(' ').ok_or_else(|| {
+                            cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY")
+                        })?;
+                    print_json(&runtime.add_pack_trust(publisher, public_key.trim()).await?)?;
+                } else if let Some(path) = line.strip_prefix("/bundle verify ") {
+                    print_json(&runtime.verify_bundle(path.trim()).await?)?;
                 } else if line == "/integrations" {
                     print_json(&runtime.list_integrations(100)?)?;
                 } else if let Some(name) = line.strip_prefix("/integration show ") {
@@ -2186,6 +2299,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .read_skill_resource(&name, &path, std::slice::from_ref(&name))
                     .await?,
             )?,
+        },
+        Command::Packs(command) => match command.command {
+            PacksAction::List { limit } => print_json(&runtime.list_packs(limit)?)?,
+            PacksAction::Show { name } => print_json(
+                &runtime
+                    .get_pack(&name)?
+                    .ok_or_else(|| cli_error(format!("pack not found: {name}")))?,
+            )?,
+            PacksAction::Verify { path } | PacksAction::Validate { path } => {
+                print_json(&runtime.verify_pack(path).await?)?;
+            }
+            PacksAction::Install {
+                path,
+                allow_untrusted,
+            } => print_json(&runtime.install_pack(path, allow_untrusted).await?)?,
+            PacksAction::Enable { name } => print_json(&runtime.enable_pack(&name).await?)?,
+            PacksAction::Disable { name } => print_json(&runtime.disable_pack(&name).await?)?,
+            PacksAction::Uninstall { name } => {
+                print_json(&runtime.uninstall_pack(&name).await?)?;
+            }
+            PacksAction::Call { tool } => print_json(&runtime.call_pack_tool(&tool).await?)?,
+            PacksAction::Trust(command) => match command.command {
+                PackTrustAction::List { limit } => {
+                    print_json(&runtime.list_pack_trust(limit)?)?;
+                }
+                PackTrustAction::Add {
+                    publisher,
+                    public_key,
+                } => print_json(&runtime.add_pack_trust(&publisher, &public_key).await?)?,
+            },
+        },
+        Command::Bundle(command) => match command.command {
+            BundleAction::Verify { path } => print_json(&runtime.verify_bundle(path).await?)?,
         },
         Command::Integrations(command) => match command.command {
             IntegrationsAction::List { limit } => {

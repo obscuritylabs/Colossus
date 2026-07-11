@@ -5,17 +5,18 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
 use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
-    Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, DecisionOutcome,
-    DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
-    ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunResult, GoalStatus,
-    IntegrationAuth, IntegrationConnection, IntegrationSummary, KeyDecision, MemoryRecord,
-    MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord,
-    PlanStatus, PlanStep, PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo,
-    ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
-    QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
-    ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage, SessionSummary,
-    SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult,
-    SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
+    Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, CredentialReference,
+    DecisionOutcome, DecisionPriority, DecisionSource, DecisionStatus, EffectRequest,
+    EventClassification, ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord,
+    GoalRunResult, GoalStatus, IntegrationAuth, IntegrationConnection, IntegrationSummary,
+    KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole,
+    ModelRequest, NewEvent, PackInstallation, PackVerification, PlanRecord, PlanStatus, PlanStep,
+    PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness,
+    ProviderReadinessCheck, ProviderRoute, ProviderTurn, PublisherTrust, QuarantinedEffectResult,
+    ResearchClaim, ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind,
+    RunTelemetryDetail, RunTelemetrySummary, SessionMessage, SessionSummary, SkillComposition,
+    SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord,
+    SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
     SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
     TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
 };
@@ -28,12 +29,13 @@ use colossus_journal_redb::{
 };
 use colossus_mcp::{
     MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor, McpOperation,
-    McpServerSummary, McpToolSummary, McpToolsPage, validate_config as validate_mcp_config,
-    validate_tool_arguments,
+    McpServerConfig, McpServerSummary, McpToolSummary, McpToolsPage,
+    validate_config as validate_mcp_config, validate_tool_arguments,
 };
 use colossus_memory::{
     EventSourcedMemoryRepository, MemoryService, TantivyMemoryIndex, UnavailableMemoryIndex,
 };
+use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, OpaConfig,
@@ -121,6 +123,9 @@ pub struct RuntimeConfig {
     /// Declarative skill libraries and precedence policy.
     #[serde(default)]
     pub skills: SkillsConfig,
+    /// Verified executable pack installation boundary.
+    #[serde(default)]
+    pub packs: PacksConfig,
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
@@ -231,6 +236,22 @@ impl Default for SkillsConfig {
             repository: PathBuf::from(".colossus/skills"),
             user: PathBuf::from("skills"),
             disabled: Vec::new(),
+        }
+    }
+}
+
+/// Capability-pack installation configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PacksConfig {
+    /// Fresh Rust pack installation directory.
+    pub install_root: PathBuf,
+}
+
+impl Default for PacksConfig {
+    fn default() -> Self {
+        Self {
+            install_root: PathBuf::from(".colossus/packs"),
         }
     }
 }
@@ -700,6 +721,7 @@ impl RuntimeConfig {
             research: ResearchConfig::default(),
             mcp: McpConfig::default(),
             skills: SkillsConfig::default(),
+            packs: PacksConfig::default(),
             sandbox: SandboxConfig::default(),
         }
     }
@@ -880,6 +902,9 @@ pub enum RuntimeError {
     /// Configured MCP adapter or protocol contract failed.
     #[error(transparent)]
     Mcp(#[from] McpError),
+    /// Capability-pack or offline-bundle contract failed.
+    #[error(transparent)]
+    Pack(#[from] PackError),
     /// Workflow validation or execution failed.
     #[error(transparent)]
     Workflow(#[from] WorkflowError),
@@ -1265,6 +1290,249 @@ impl SkillOperation {
     }
 }
 
+#[derive(Clone)]
+struct PackProcessDeclaration {
+    pack: String,
+    version: String,
+    manifest_sha256: String,
+    tool: String,
+    action: String,
+    executable: PathBuf,
+    cwd: PathBuf,
+    args: Vec<String>,
+    environment: BTreeMap<String, String>,
+    permissions: Vec<String>,
+}
+
+struct ActivePackExtensions {
+    process_declarations: BTreeMap<String, PackProcessDeclaration>,
+    tool_specs: Vec<ToolSpec>,
+    mcp: McpConfig,
+    executables: Vec<PathBuf>,
+    filesystem: Vec<FilesystemGrant>,
+    actions: Vec<String>,
+    restrictions: Vec<PackActionRestriction>,
+}
+
+struct PackActionRestriction {
+    action: String,
+    filesystem: Vec<FilesystemGrant>,
+    allowed_environment: Vec<String>,
+    network_destinations: Vec<String>,
+}
+
+fn pack_action_restriction(
+    action: String,
+    root: &Path,
+    executable: &Path,
+    permissions: &[String],
+    environment: &BTreeMap<String, String>,
+    sandbox: &SandboxConfig,
+) -> PackActionRestriction {
+    let permission_set = permissions
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut filesystem = vec![
+        FilesystemGrant {
+            root: root.display().to_string(),
+            mode: "read".into(),
+        },
+        FilesystemGrant {
+            root: executable.display().to_string(),
+            mode: "execute".into(),
+        },
+    ];
+    if permission_set.contains("filesystem.read") || permission_set.contains("filesystem.write") {
+        filesystem.extend(sandbox.filesystem.iter().filter_map(|grant| {
+            let allowed = match grant.mode.as_str() {
+                "read" => true,
+                "write" => permission_set.contains("filesystem.write"),
+                _ => false,
+            };
+            allowed.then(|| grant.clone())
+        }));
+    }
+    PackActionRestriction {
+        action,
+        filesystem,
+        allowed_environment: environment.keys().cloned().collect(),
+        network_destinations: if permission_set.contains("network") {
+            sandbox.network_destinations.clone()
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+fn compile_active_pack_extensions(
+    installations: &[PackInstallation],
+    configured_mcp: &McpConfig,
+    sandbox: &SandboxConfig,
+) -> Result<ActivePackExtensions, RuntimeError> {
+    let mut process_declarations = BTreeMap::new();
+    let mut tool_specs = Vec::new();
+    let mut mcp = configured_mcp.clone();
+    let mut executables = Vec::new();
+    let mut filesystem = Vec::new();
+    let mut actions = Vec::new();
+    let mut restrictions = Vec::new();
+    let allowed_environment = sandbox.environment.iter().collect::<BTreeSet<_>>();
+    for installation in installations {
+        let root = fs::canonicalize(&installation.installed_path)?;
+        filesystem.push(FilesystemGrant {
+            root: root.display().to_string(),
+            mode: "read".into(),
+        });
+        let mut binary_paths = BTreeMap::new();
+        for binary in &installation.manifest.binaries {
+            let path = fs::canonicalize(root.join(binary))?;
+            if !path.starts_with(&root) || !path.is_file() {
+                return Err(RuntimeError::Config(format!(
+                    "enabled pack {} binary {} escaped its verified root",
+                    installation.manifest.name, binary
+                )));
+            }
+            filesystem.push(FilesystemGrant {
+                root: path.display().to_string(),
+                mode: "execute".into(),
+            });
+            executables.push(path.clone());
+            binary_paths.insert(binary.clone(), path);
+        }
+        for tool in &installation.manifest.tools {
+            for child_name in tool.env_refs.keys() {
+                if !allowed_environment.contains(child_name) {
+                    return Err(RuntimeError::Config(format!(
+                        "enabled pack tool {} requires sandbox environment name {child_name}",
+                        tool.name
+                    )));
+                }
+            }
+            let executable = binary_paths.get(&tool.command).cloned().ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "enabled pack tool {} has no verified binary",
+                    tool.name
+                ))
+            })?;
+            let action = format!("pack.tool.{}.{}", installation.manifest.name, tool.name);
+            let declaration = PackProcessDeclaration {
+                pack: installation.manifest.name.clone(),
+                version: installation.manifest.version.clone(),
+                manifest_sha256: installation.manifest_sha256.clone(),
+                tool: tool.name.clone(),
+                action: action.clone(),
+                executable,
+                cwd: root.clone(),
+                args: tool.args.clone(),
+                environment: tool.env_refs.clone(),
+                permissions: tool.permissions.clone(),
+            };
+            if process_declarations
+                .insert(tool.name.clone(), declaration.clone())
+                .is_some()
+            {
+                return Err(RuntimeError::Config(format!(
+                    "enabled packs contain duplicate tool name {}",
+                    tool.name
+                )));
+            }
+            tool_specs.push(ToolSpec {
+                name: tool.name.clone(),
+                description: format!(
+                    "Verified executable tool from pack {}@{}.",
+                    installation.manifest.name, installation.manifest.version
+                ),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                effect_action: Some(action.clone()),
+                capability: Some(action.clone()),
+                max_output_bytes: sandbox.max_output_bytes,
+            });
+            restrictions.push(pack_action_restriction(
+                action.clone(),
+                &root,
+                &declaration.executable,
+                &tool.permissions,
+                &tool.env_refs,
+                sandbox,
+            ));
+            actions.push(action);
+        }
+        for server in &installation.manifest.mcp_servers {
+            for child_name in server.env_refs.keys() {
+                if !allowed_environment.contains(child_name) {
+                    return Err(RuntimeError::Config(format!(
+                        "enabled pack MCP server {} requires sandbox environment name {child_name}",
+                        server.name
+                    )));
+                }
+            }
+            let command = binary_paths.get(&server.command).cloned().ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "enabled pack MCP server {} has no verified binary",
+                    server.name
+                ))
+            })?;
+            let effect_action_prefix =
+                format!("pack.mcp.{}.{}", installation.manifest.name, server.name);
+            if mcp
+                .servers
+                .insert(
+                    server.name.clone(),
+                    McpServerConfig {
+                        command: command.clone(),
+                        args: server.args.clone(),
+                        working_directory: Some(root.clone()),
+                        environment: server.env_refs.clone(),
+                        allowed_tools: server.allowed_tools.clone(),
+                        research_tools: Vec::new(),
+                        timeout_ms: None,
+                        max_output_bytes: None,
+                        effect_action_prefix: Some(effect_action_prefix.clone()),
+                        provenance: Some(json!({
+                            "pack": installation.manifest.name,
+                            "version": installation.manifest.version,
+                            "manifest_sha256": installation.manifest_sha256,
+                            "permissions": server.permissions,
+                        })),
+                    },
+                )
+                .is_some()
+            {
+                return Err(RuntimeError::Config(format!(
+                    "enabled pack MCP server {} conflicts with another server",
+                    server.name
+                )));
+            }
+            actions.push(format!("{effect_action_prefix}.tools"));
+            actions.push(format!("{effect_action_prefix}.call"));
+            for suffix in ["tools", "call"] {
+                restrictions.push(pack_action_restriction(
+                    format!("{effect_action_prefix}.{suffix}"),
+                    &root,
+                    &command,
+                    &server.permissions,
+                    &server.env_refs,
+                    sandbox,
+                ));
+            }
+        }
+    }
+    Ok(ActivePackExtensions {
+        process_declarations,
+        tool_specs,
+        mcp,
+        executables,
+        filesystem,
+        actions,
+        restrictions,
+    })
+}
+
 /// Fully composed auditable runtime.
 pub struct Runtime {
     writer_lease: RedbWriterLease,
@@ -1277,6 +1545,9 @@ pub struct Runtime {
     skill_composer: Arc<SkillComposer>,
     skill_executor: Arc<SkillEffectExecutor>,
     extensions: Arc<dyn ExtensionRepository>,
+    packs: Arc<PackService>,
+    pack_executor: Arc<PackExecutor>,
+    pack_process_executor: Arc<PackProcessExecutor>,
     integration_executor: Arc<IntegrationExecutor>,
     sessions: Arc<dyn SessionRepository>,
     context: Arc<ContextService>,
@@ -1358,6 +1629,9 @@ impl Runtime {
         let telemetry = Arc::new(TelemetryService::new(Arc::clone(&journal)));
         let extensions: Arc<dyn ExtensionRepository> =
             Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
+        let pack_install_root = absolute_path(&config.packs.install_root)?;
+        let packs = Arc::new(PackService::new(Arc::clone(&extensions), pack_install_root));
+        let pack_executor = Arc::new(PackExecutor::new(Arc::clone(&packs)));
         let integration_executor = Arc::new(IntegrationExecutor::new(Arc::clone(&extensions))?);
         let integration_specs = integration_executor.tool_specs()?;
         let integration_actions = integration_specs
@@ -1365,21 +1639,52 @@ impl Runtime {
             .map(|spec| spec.name.clone())
             .collect::<Vec<_>>();
         let user_skill_root = absolute_path(&config.skills.user)?;
+        let mut skill_roots = vec![
+            SkillRoot {
+                path: absolute_path(&config.skills.bundled)?,
+                label: "bundled".into(),
+            },
+            SkillRoot {
+                path: absolute_path(&config.skills.repository)?,
+                label: "repository".into(),
+            },
+            SkillRoot {
+                path: user_skill_root.clone(),
+                label: "user".into(),
+            },
+        ];
+        let mut active_pack_installations = Vec::new();
+        for installation in packs.list(1_000)? {
+            if installation.status != colossus_contracts::PackStatus::Enabled {
+                continue;
+            }
+            let verification = packs.verify(Path::new(&installation.installed_path))?;
+            if verification.manifest_sha256 != installation.manifest_sha256
+                || verification.trust_key_id != installation.trust_key_id
+            {
+                return Err(RuntimeError::Config(format!(
+                    "enabled pack {} failed canonical re-verification",
+                    installation.manifest.name
+                )));
+            }
+            for skill in &installation.manifest.skills {
+                skill_roots.push(SkillRoot {
+                    path: PathBuf::from(&installation.installed_path).join(&skill.path),
+                    label: format!(
+                        "pack:{}@{}",
+                        installation.manifest.name, installation.manifest.version
+                    ),
+                });
+            }
+            active_pack_installations.push(installation);
+        }
+        let active_pack_extensions = compile_active_pack_extensions(
+            &active_pack_installations,
+            &config.mcp,
+            &config.sandbox,
+        )?;
         let skills: Arc<dyn SkillRepository> = Arc::new(FilesystemSkillRepository::new(
-            vec![
-                SkillRoot {
-                    path: absolute_path(&config.skills.bundled)?,
-                    label: "bundled".into(),
-                },
-                SkillRoot {
-                    path: absolute_path(&config.skills.repository)?,
-                    label: "repository".into(),
-                },
-                SkillRoot {
-                    path: user_skill_root.clone(),
-                    label: "user".into(),
-                },
-            ],
+            skill_roots,
             config.skills.allow_user_overrides,
             config.skills.disabled.clone(),
         )?);
@@ -1465,7 +1770,22 @@ impl Runtime {
                 for action in ["skill.scaffold", "skill.write", "skill.install"] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
-                if !config.mcp.servers.is_empty() {
+                for action in ["pack.verify", "bundle.verify"] {
+                    policy = policy.with_action(action, DecisionOutcome::Allow);
+                }
+                for action in [
+                    "pack.install",
+                    "pack.enable",
+                    "pack.disable",
+                    "pack.uninstall",
+                    "pack.trust.add",
+                ] {
+                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
+                }
+                for action in &active_pack_extensions.actions {
+                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
+                }
+                if !active_pack_extensions.mcp.servers.is_empty() {
                     policy = policy.with_action("mcp.tools", DecisionOutcome::Allow);
                     policy = policy.with_action("mcp.call", DecisionOutcome::RequireApproval);
                 }
@@ -1488,6 +1808,9 @@ impl Runtime {
                     let root = fs::canonicalize(&grant.root)?;
                     policy = policy.with_filesystem_root(root.display().to_string(), &grant.mode);
                 }
+                for grant in &active_pack_extensions.filesystem {
+                    policy = policy.with_filesystem_root(&grant.root, &grant.mode);
+                }
                 for executable in &config.sandbox.executables {
                     let executable = if config.sandbox.backend == "oci" {
                         executable.clone()
@@ -1502,6 +1825,14 @@ impl Runtime {
                 }
                 for destination in &config.sandbox.network_destinations {
                     policy = policy.with_network_destination(destination);
+                }
+                for restriction in &active_pack_extensions.restrictions {
+                    policy = policy.with_action_restrictions(
+                        &restriction.action,
+                        restriction.filesystem.clone(),
+                        restriction.allowed_environment.clone(),
+                        restriction.network_destinations.clone(),
+                    );
                 }
                 for action in allow_actions {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
@@ -1568,84 +1899,106 @@ impl Runtime {
             sandbox_executor_config.clone(),
             sandbox_job_key,
         ));
+        let mut effective_executables = config.sandbox.executables.clone();
+        effective_executables.extend(active_pack_extensions.executables.iter().cloned());
+        let mut effective_filesystem = config.sandbox.filesystem.clone();
+        effective_filesystem.extend(active_pack_extensions.filesystem.iter().cloned());
+        validate_mcp_config(
+            &active_pack_extensions.mcp,
+            &workspace,
+            &effective_executables,
+            &effective_filesystem,
+            &config.sandbox.environment,
+            config.sandbox.timeout_ms,
+            config.sandbox.max_output_bytes,
+        )?;
         let mcp_executor = Arc::new(McpExecutor::new(
-            &config.mcp,
+            &active_pack_extensions.mcp,
             &workspace,
             &config.sandbox.backend,
             Arc::clone(&process_executor),
         )?);
         let http_executor = Arc::new(HttpExecutor::new());
+        let mut known_capabilities = vec![
+            "provider.echo".to_owned(),
+            "provider.openai.responses".to_owned(),
+            "provider.openai.chat".to_owned(),
+            "provider.models".to_owned(),
+            "provider.call".to_owned(),
+            "workflow.execute".to_owned(),
+            "filesystem.read".to_owned(),
+            "filesystem.list".to_owned(),
+            "filesystem.metadata".to_owned(),
+            "filesystem.search".to_owned(),
+            "filesystem.write".to_owned(),
+            "process.spawn".to_owned(),
+            "shell.run".to_owned(),
+            "git.status".to_owned(),
+            "git.diff".to_owned(),
+            "git.show".to_owned(),
+            "network.http".to_owned(),
+            "task.create".to_owned(),
+            "task.update".to_owned(),
+            "task.list".to_owned(),
+            "decision.create".to_owned(),
+            "decision.update".to_owned(),
+            "decision.archive".to_owned(),
+            "decision.supersede".to_owned(),
+            "decision.list".to_owned(),
+            "plan.create".to_owned(),
+            "plan.show".to_owned(),
+            "plan.approve_request".to_owned(),
+            "goal.create".to_owned(),
+            "goal.show".to_owned(),
+            "goal.update".to_owned(),
+            "goal.iteration.record".to_owned(),
+            "subagent.create".to_owned(),
+            "subagent.read".to_owned(),
+            "subagent.list".to_owned(),
+            "subagent.start".to_owned(),
+            "subagent.complete".to_owned(),
+            "subagent.fail".to_owned(),
+            "subagent.cancel".to_owned(),
+            "subagent.interrupt".to_owned(),
+            "subagent.requeue".to_owned(),
+            "memory.create".to_owned(),
+            "memory.update".to_owned(),
+            "memory.archive".to_owned(),
+            "memory.supersede".to_owned(),
+            "memory.read".to_owned(),
+            "memory.list".to_owned(),
+            "memory.search".to_owned(),
+            "memory.index.status".to_owned(),
+            "memory.index.sync".to_owned(),
+            "memory.index.rebuild".to_owned(),
+            "research.run".to_owned(),
+            "skill.scaffold".to_owned(),
+            "skill.inspect".to_owned(),
+            "skill.read".to_owned(),
+            "skill.write".to_owned(),
+            "skill.validate".to_owned(),
+            "skill.install".to_owned(),
+            "skill.resource.list".to_owned(),
+            "skill.resource.read".to_owned(),
+            "integration.openapi.import".to_owned(),
+            "integration.connect".to_owned(),
+            "integration.disconnect".to_owned(),
+            "integration.invoke".to_owned(),
+            "mcp.invoke".to_owned(),
+            "pack.verify".to_owned(),
+            "pack.install".to_owned(),
+            "pack.enable".to_owned(),
+            "pack.disable".to_owned(),
+            "pack.uninstall".to_owned(),
+            "pack.trust.add".to_owned(),
+            "bundle.verify".to_owned(),
+        ];
+        known_capabilities.extend(active_pack_extensions.actions.iter().cloned());
         let gateway = Arc::new(EffectGateway::new(
             Arc::clone(&journal),
             Arc::clone(&policy),
             approvals,
-            SafetyKernel::new([
-                "provider.echo".to_owned(),
-                "provider.openai.responses".to_owned(),
-                "provider.openai.chat".to_owned(),
-                "provider.models".to_owned(),
-                "provider.call".to_owned(),
-                "workflow.execute".to_owned(),
-                "filesystem.read".to_owned(),
-                "filesystem.list".to_owned(),
-                "filesystem.metadata".to_owned(),
-                "filesystem.search".to_owned(),
-                "filesystem.write".to_owned(),
-                "process.spawn".to_owned(),
-                "shell.run".to_owned(),
-                "git.status".to_owned(),
-                "git.diff".to_owned(),
-                "git.show".to_owned(),
-                "network.http".to_owned(),
-                "task.create".to_owned(),
-                "task.update".to_owned(),
-                "task.list".to_owned(),
-                "decision.create".to_owned(),
-                "decision.update".to_owned(),
-                "decision.archive".to_owned(),
-                "decision.supersede".to_owned(),
-                "decision.list".to_owned(),
-                "plan.create".to_owned(),
-                "plan.show".to_owned(),
-                "plan.approve_request".to_owned(),
-                "goal.create".to_owned(),
-                "goal.show".to_owned(),
-                "goal.update".to_owned(),
-                "goal.iteration.record".to_owned(),
-                "subagent.create".to_owned(),
-                "subagent.read".to_owned(),
-                "subagent.list".to_owned(),
-                "subagent.start".to_owned(),
-                "subagent.complete".to_owned(),
-                "subagent.fail".to_owned(),
-                "subagent.cancel".to_owned(),
-                "subagent.interrupt".to_owned(),
-                "subagent.requeue".to_owned(),
-                "memory.create".to_owned(),
-                "memory.update".to_owned(),
-                "memory.archive".to_owned(),
-                "memory.supersede".to_owned(),
-                "memory.read".to_owned(),
-                "memory.list".to_owned(),
-                "memory.search".to_owned(),
-                "memory.index.status".to_owned(),
-                "memory.index.sync".to_owned(),
-                "memory.index.rebuild".to_owned(),
-                "research.run".to_owned(),
-                "skill.scaffold".to_owned(),
-                "skill.inspect".to_owned(),
-                "skill.read".to_owned(),
-                "skill.write".to_owned(),
-                "skill.validate".to_owned(),
-                "skill.install".to_owned(),
-                "skill.resource.list".to_owned(),
-                "skill.resource.read".to_owned(),
-                "integration.openapi.import".to_owned(),
-                "integration.connect".to_owned(),
-                "integration.disconnect".to_owned(),
-                "integration.invoke".to_owned(),
-                "mcp.invoke".to_owned(),
-            ]),
+            SafetyKernel::new(known_capabilities),
             permit_key,
         ));
         let work_executor = Arc::new(WorkEffectExecutor {
@@ -1660,6 +2013,10 @@ impl Runtime {
             resources: Arc::clone(&skill_resources),
             authoring: skill_authoring,
         });
+        let pack_process_executor = Arc::new(PackProcessExecutor::new(
+            active_pack_extensions.process_declarations.clone(),
+            Arc::clone(&process_executor) as Arc<dyn EffectExecutor>,
+        ));
         let memory_retriever: Arc<dyn MemoryRetriever> = Arc::new(GatewayMemoryRetriever {
             gateway: Arc::clone(&gateway),
             executor: Arc::clone(&memory_executor),
@@ -1681,6 +2038,7 @@ impl Runtime {
         }
         let mut tool_specs = StaticToolRegistry::builtins(&active_tools)?.list_specs();
         tool_specs.extend(integration_specs);
+        tool_specs.extend(active_pack_extensions.tool_specs.clone());
         let tool_registry: Arc<dyn ToolRegistry> = Arc::new(StaticToolRegistry::new(tool_specs)?);
         let model_provider: Arc<dyn ModelProvider> = Arc::new(GatewayModelProvider {
             gateway: Arc::clone(&gateway),
@@ -1721,6 +2079,7 @@ impl Runtime {
             work: Some(Arc::clone(&work_executor)),
             memory: Some(Arc::clone(&memory_executor)),
             skills: Some(Arc::clone(&skill_executor)),
+            pack_processes: Some(Arc::clone(&pack_process_executor)),
             integrations: Some(Arc::clone(&integration_executor)),
             mcp: Some(Arc::clone(&mcp_executor)),
             workspace,
@@ -1785,6 +2144,9 @@ impl Runtime {
             skill_composer,
             skill_executor,
             extensions,
+            packs,
+            pack_executor,
+            pack_process_executor,
             integration_executor,
             sessions,
             context,
@@ -2108,6 +2470,177 @@ impl Runtime {
     /// Canonical extension repository for embedded application surfaces.
     pub fn extension_repository(&self) -> Arc<dyn ExtensionRepository> {
         Arc::clone(&self.extensions)
+    }
+
+    async fn execute_pack_operation(
+        &self,
+        operation: PackOperation,
+    ) -> Result<Value, RuntimeError> {
+        let mut request = effect_request(
+            terminal_actor(),
+            operation.action(),
+            operation.resource(),
+            serde_json::to_value(&operation)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![operation.action().into()];
+        let released = self
+            .gateway
+            .execute(request, self.pack_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&released.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// List canonical capability-pack lifecycles.
+    pub fn list_packs(&self, limit: usize) -> Result<Vec<PackInstallation>, RuntimeError> {
+        self.packs.list(limit).map_err(Into::into)
+    }
+
+    /// Reconstruct one canonical capability-pack lifecycle.
+    pub fn get_pack(&self, name: &str) -> Result<Option<PackInstallation>, RuntimeError> {
+        self.packs.get(name).map_err(Into::into)
+    }
+
+    /// Verify a local capability pack through policy and post-effect release.
+    pub async fn verify_pack(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<PackVerification, RuntimeError> {
+        let path = absolute_path(path.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::Verify { path })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Install a verified pack through approval, audit, and one-use permit enforcement.
+    pub async fn install_pack(
+        &self,
+        path: impl AsRef<Path>,
+        allow_untrusted: bool,
+    ) -> Result<PackInstallation, RuntimeError> {
+        let path = absolute_path(path.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::Install {
+                path,
+                allow_untrusted,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Reverify and enable one installed pack through approval and audit.
+    pub async fn enable_pack(&self, name: &str) -> Result<PackInstallation, RuntimeError> {
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::Enable { name: name.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Disable one installed pack through approval and audit.
+    pub async fn disable_pack(&self, name: &str) -> Result<PackInstallation, RuntimeError> {
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::Disable { name: name.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Uninstall one pack through approval and audit while retaining lifecycle history.
+    pub async fn uninstall_pack(&self, name: &str) -> Result<PackInstallation, RuntimeError> {
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::Uninstall { name: name.into() })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Add one publisher/key trust binding through approval and audit.
+    pub async fn add_pack_trust(
+        &self,
+        publisher: &str,
+        public_key: &str,
+    ) -> Result<PublisherTrust, RuntimeError> {
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::TrustAdd {
+                publisher: publisher.into(),
+                public_key: public_key.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// List canonical publisher/key trust bindings.
+    pub fn list_pack_trust(&self, limit: usize) -> Result<Vec<PublisherTrust>, RuntimeError> {
+        self.packs.list_trust(limit).map_err(Into::into)
+    }
+
+    /// Invoke one active verified pack tool through approval, sandboxing, and audit.
+    pub async fn call_pack_tool(&self, tool: &str) -> Result<Value, RuntimeError> {
+        let (declaration, input) = self
+            .pack_process_executor
+            .invocation(tool)
+            .ok_or_else(|| RuntimeError::Config(format!("active pack tool not found: {tool}")))?;
+        let mut request = effect_request(
+            terminal_actor(),
+            &declaration.action,
+            declaration.executable.display().to_string(),
+            serde_json::to_value(input).map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec![declaration.action];
+        request.credential_references = declaration
+            .environment
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|reference| CredentialReference {
+                reference,
+                value_hash: None,
+            })
+            .collect();
+        let released = self
+            .gateway
+            .execute(request, self.pack_process_executor.as_ref())
+            .await?;
+        let process: Value = serde_json::from_slice(&released.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let decode = |field: &str| -> Result<String, RuntimeError> {
+            let encoded = process
+                .get(field)
+                .and_then(Value::as_str)
+                .ok_or_else(|| RuntimeError::Config(format!("pack output lacks {field}")))?;
+            let bytes = BASE64
+                .decode(encoded)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        };
+        Ok(json!({
+            "pack": declaration.pack,
+            "tool": declaration.tool,
+            "stdout": decode("stdout_base64")?,
+            "stderr": decode("stderr_base64")?,
+            "exit_code": process.get("exit_code").and_then(Value::as_i64),
+            "truncated": process.get("truncated").and_then(Value::as_bool).unwrap_or(false),
+        }))
+    }
+
+    /// Verify a signed offline release bundle through policy and post-effect release.
+    pub async fn verify_bundle(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<colossus_contracts::BundleVerification, RuntimeError> {
+        let path = absolute_path(path.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::BundleVerify { path })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Compile and persist a JSON OpenAPI connection through policy and approval.
@@ -3848,11 +4381,186 @@ struct GatewayToolExecutor {
     work: Option<Arc<WorkEffectExecutor>>,
     memory: Option<Arc<MemoryEffectExecutor>>,
     skills: Option<Arc<SkillEffectExecutor>>,
+    pack_processes: Option<Arc<PackProcessExecutor>>,
     integrations: Option<Arc<IntegrationExecutor>>,
     mcp: Option<Arc<McpExecutor>>,
     workspace: PathBuf,
     repository_id: String,
     executables: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackToolEffectInput {
+    pack: String,
+    version: String,
+    manifest_sha256: String,
+    tool: String,
+    executable: PathBuf,
+    cwd: PathBuf,
+    args: Vec<String>,
+    environment: BTreeMap<String, String>,
+    permissions: Vec<String>,
+}
+
+struct PackProcessExecutor {
+    declarations: BTreeMap<String, PackProcessDeclaration>,
+    process: Arc<dyn EffectExecutor>,
+}
+
+impl PackProcessExecutor {
+    fn new(
+        declarations: BTreeMap<String, PackProcessDeclaration>,
+        process: Arc<dyn EffectExecutor>,
+    ) -> Self {
+        Self {
+            declarations,
+            process,
+        }
+    }
+
+    fn invocation(&self, tool: &str) -> Option<(PackProcessDeclaration, PackToolEffectInput)> {
+        let declaration = self.declarations.get(tool)?.clone();
+        let input = PackToolEffectInput {
+            pack: declaration.pack.clone(),
+            version: declaration.version.clone(),
+            manifest_sha256: declaration.manifest_sha256.clone(),
+            tool: declaration.tool.clone(),
+            executable: declaration.executable.clone(),
+            cwd: declaration.cwd.clone(),
+            args: declaration.args.clone(),
+            environment: declaration.environment.clone(),
+            permissions: declaration.permissions.clone(),
+        };
+        Some((declaration, input))
+    }
+}
+
+#[async_trait]
+impl EffectExecutor for PackProcessExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let input: PackToolEffectInput = serde_json::from_value(request.content.clone())
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        let declaration = self
+            .declarations
+            .get(&input.tool)
+            .ok_or_else(|| ExecutionError::Failed("pack tool is no longer active".into()))?;
+        let expected = PackToolEffectInput {
+            pack: declaration.pack.clone(),
+            version: declaration.version.clone(),
+            manifest_sha256: declaration.manifest_sha256.clone(),
+            tool: declaration.tool.clone(),
+            executable: declaration.executable.clone(),
+            cwd: declaration.cwd.clone(),
+            args: declaration.args.clone(),
+            environment: declaration.environment.clone(),
+            permissions: declaration.permissions.clone(),
+        };
+        if request.action != declaration.action
+            || request.resource != declaration.executable.display().to_string()
+            || serde_json::to_value(&input).map_err(execution_failure)?
+                != serde_json::to_value(&expected).map_err(execution_failure)?
+        {
+            return Err(ExecutionError::Failed(
+                "pack tool request does not match its verified declaration".into(),
+            ));
+        }
+        let expected_refs = declaration
+            .environment
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let actual_refs = request
+            .credential_references
+            .iter()
+            .map(|reference| reference.reference.clone())
+            .collect::<BTreeSet<_>>();
+        if expected_refs != actual_refs
+            || request
+                .credential_references
+                .iter()
+                .any(|reference| reference.value_hash.is_some())
+        {
+            return Err(ExecutionError::Failed(
+                "pack tool credential references do not match its verified declaration".into(),
+            ));
+        }
+        let mut secrets = Vec::new();
+        let mut environment = BTreeMap::new();
+        for (child_name, reference) in &declaration.environment {
+            let variable = reference.strip_prefix("env:").ok_or_else(|| {
+                ExecutionError::Failed("pack credential reference must use env:VARIABLE".into())
+            })?;
+            let value = std::env::var(variable).map_err(|_| {
+                ExecutionError::Failed(format!(
+                    "pack credential reference {reference} is unresolved"
+                ))
+            })?;
+            secrets.push(value.as_bytes().to_vec());
+            environment.insert(child_name.clone(), value);
+        }
+        let mut process_request = request.clone();
+        process_request.content = serde_json::to_value(ProcessSpec {
+            cwd: declaration.cwd.clone(),
+            args: declaration.args.clone(),
+            environment,
+            stdin_base64: None,
+            timeout_ms: None,
+            max_output_bytes: None,
+        })
+        .map_err(execution_failure)?;
+        let mut result = self.process.execute(&process_request, permit).await?;
+        redact_process_credentials(&mut result.bytes, &secrets)?;
+        Ok(result)
+    }
+}
+
+fn execution_failure(error: impl std::fmt::Display) -> ExecutionError {
+    ExecutionError::Failed(error.to_string())
+}
+
+fn redact_process_credentials(
+    bytes: &mut Vec<u8>,
+    secrets: &[Vec<u8>],
+) -> Result<(), ExecutionError> {
+    if secrets.is_empty() {
+        return Ok(());
+    }
+    let mut value: Value = serde_json::from_slice(bytes).map_err(execution_failure)?;
+    for field in ["stdout_base64", "stderr_base64"] {
+        let Some(encoded) = value.get(field).and_then(Value::as_str) else {
+            continue;
+        };
+        let mut decoded = BASE64.decode(encoded).map_err(execution_failure)?;
+        for secret in secrets {
+            decoded = redact_bytes(&decoded, secret);
+        }
+        value[field] = Value::String(BASE64.encode(decoded));
+    }
+    *bytes = serde_json::to_vec(&value).map_err(execution_failure)?;
+    Ok(())
+}
+
+fn redact_bytes(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
+    if secret.is_empty() || secret.len() > bytes.len() {
+        return bytes.to_vec();
+    }
+    let mut redacted = Vec::with_capacity(bytes.len());
+    let mut offset = 0;
+    while offset < bytes.len() {
+        if bytes[offset..].starts_with(secret) {
+            redacted.extend_from_slice(b"[REDACTED]");
+            offset += secret.len();
+        } else {
+            redacted.push(bytes[offset]);
+            offset += 1;
+        }
+    }
+    redacted
 }
 
 struct ProcessToolOutput {
@@ -4009,6 +4717,80 @@ impl GatewayToolExecutor {
         serde_json::from_str::<Value>(&output)
             .map_err(|error| ToolError::Failed(format!("invalid integration result: {error}")))?;
         Ok(Some(bounded_tool_text(&output, 1024 * 1024)))
+    }
+
+    async fn execute_pack_tool(
+        &self,
+        call: &ToolCall,
+        context: ExecutionContext,
+    ) -> Result<Option<(String, i32)>, ToolError> {
+        let executor = self
+            .pack_processes
+            .as_deref()
+            .ok_or_else(|| ToolError::Failed("pack process adapter is unavailable".into()))?;
+        let Some((declaration, input)) = executor.invocation(&call.name) else {
+            return Ok(None);
+        };
+        if !call
+            .arguments
+            .as_object()
+            .is_some_and(serde_json::Map::is_empty)
+        {
+            return Err(ToolError::InvalidArguments {
+                tool: call.name.clone(),
+                message: "verified pack tool accepts no dynamic arguments".into(),
+            });
+        }
+        let mut request = effect_request(
+            model_actor(call, &context),
+            &declaration.action,
+            declaration.executable.display().to_string(),
+            serde_json::to_value(input).map_err(|error| ToolError::Failed(error.to_string()))?,
+        );
+        request.capabilities = vec![declaration.action];
+        request.credential_references = declaration
+            .environment
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|reference| CredentialReference {
+                reference,
+                value_hash: None,
+            })
+            .collect();
+        request.context = context;
+        let result = self
+            .gateway
+            .execute(request, executor)
+            .await
+            .map_err(tool_gateway_error)?;
+        let value: Value = serde_json::from_slice(&result.bytes)
+            .map_err(|error| ToolError::Failed(format!("invalid pack process result: {error}")))?;
+        let decode = |field: &str| -> Result<String, ToolError> {
+            let encoded = value.get(field).and_then(Value::as_str).ok_or_else(|| {
+                ToolError::Failed(format!("pack process result field {field} is absent"))
+            })?;
+            let bytes = BASE64
+                .decode(encoded)
+                .map_err(|error| ToolError::Failed(format!("invalid pack output: {error}")))?;
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        };
+        let exit_code = value
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .and_then(|code| i32::try_from(code).ok())
+            .ok_or_else(|| ToolError::Failed("pack process exit_code is absent".into()))?;
+        let output = serde_json::to_string(&json!({
+            "pack": declaration.pack,
+            "tool": declaration.tool,
+            "stdout": decode("stdout_base64")?,
+            "stderr": decode("stderr_base64")?,
+            "exit_code": exit_code,
+            "truncated": value.get("truncated").and_then(Value::as_bool).unwrap_or(false),
+        }))
+        .map_err(|error| ToolError::Failed(error.to_string()))?;
+        Ok(Some((bounded_tool_text(&output, 1024 * 1024), exit_code)))
     }
 
     async fn discover_mcp_tool_output(
@@ -5013,10 +5795,17 @@ impl ToolExecutor for GatewayToolExecutor {
                     1024 * 1024,
                 )
             }
-            name => self
-                .execute_integration_tool(&call, context)
-                .await?
-                .ok_or_else(|| ToolError::Unknown(name.into()))?,
+            name => {
+                if let Some((output, code)) = self.execute_pack_tool(&call, context.clone()).await?
+                {
+                    exit_code = code;
+                    output
+                } else {
+                    self.execute_integration_tool(&call, context)
+                        .await?
+                        .ok_or_else(|| ToolError::Unknown(name.into()))?
+                }
+            }
         };
         Ok(ToolResult {
             call_id: call.call_id,
@@ -6697,15 +7486,17 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 #[cfg(test)]
 mod tests {
     use super::{
-        GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, ProviderProfileConfig,
-        ResearchSearchConfig, RuntimeConfig, SkillEffectExecutor, SkillOperation,
-        SkillScaffoldResult, WorkEffectExecutor, goal_objective_from_plan,
-        recover_interrupted_subagents, recover_unknown_effects,
+        GatewayMemoryRetriever, GatewayToolExecutor, MemoryEffectExecutor, PackProcessDeclaration,
+        PackProcessExecutor, PackToolEffectInput, ProviderProfileConfig, ResearchSearchConfig,
+        RuntimeConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult,
+        WorkEffectExecutor, goal_objective_from_plan, recover_interrupted_subagents,
+        recover_unknown_effects,
     };
     use colossus_contracts::{
-        Actor, ActorType, DecisionOutcome, EventClassification, ExecutionContext, FilesystemGrant,
-        GoalStatus, MemoryScope, MemoryStatus, ModelRequest, NewEvent, PlanRecord, PlanStatus,
-        PlanStep, ProviderEvent, ProviderRoute, ProviderTurn, SubagentStatus, TaskStatus, ToolCall,
+        Actor, ActorType, CredentialReference, DecisionOutcome, EffectRequest, EventClassification,
+        ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus, ModelRequest,
+        NewEvent, PlanRecord, PlanStatus, PlanStep, ProviderEvent, ProviderRoute, ProviderTurn,
+        QuarantinedEffectResult, SubagentStatus, TaskStatus, ToolCall,
     };
     use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
     use colossus_ports::{
@@ -6723,6 +7514,37 @@ mod tests {
         sync::{Arc, Mutex},
     };
     use tempfile::tempdir;
+
+    struct SecretEchoProcess;
+
+    #[async_trait::async_trait]
+    impl colossus_policy::EffectExecutor for SecretEchoProcess {
+        async fn execute(
+            &self,
+            request: &EffectRequest,
+            _permit: colossus_policy::ExecutionPermit,
+        ) -> Result<QuarantinedEffectResult, colossus_policy::ExecutionError> {
+            use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+            let spec: colossus_sandbox::ProcessSpec =
+                serde_json::from_value(request.content.clone())
+                    .map_err(|error| colossus_policy::ExecutionError::Failed(error.to_string()))?;
+            let secret = spec.environment.get("PACK_SECRET").ok_or_else(|| {
+                colossus_policy::ExecutionError::Failed("resolved secret is absent".into())
+            })?;
+            Ok(QuarantinedEffectResult {
+                media_type: "application/json".into(),
+                bytes: serde_json::to_vec(&json!({
+                    "stdout_base64": BASE64.encode(secret),
+                    "stderr_base64": BASE64.encode([]),
+                    "exit_code": 0,
+                    "truncated": false
+                }))
+                .map_err(|error| colossus_policy::ExecutionError::Failed(error.to_string()))?,
+                effect_succeeded: true,
+            })
+        }
+    }
 
     #[test]
     fn strict_config_rejects_unknown_fields() {
@@ -6746,6 +7568,92 @@ workflows:
 surprise: true
 "#;
         assert!(RuntimeConfig::from_yaml(yaml).is_err());
+    }
+
+    #[tokio::test]
+    async fn pack_process_resolves_credentials_only_after_permit_and_redacts_output() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        use colossus_policy::{
+            BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request,
+        };
+        use colossus_ports::PolicyDecisionPoint;
+
+        let secret = std::env::var("PATH").expect("PATH");
+        let executable = fs::canonicalize(std::env::current_exe().expect("current executable"))
+            .expect("canonical executable");
+        let cwd = executable.parent().expect("executable parent").to_owned();
+        let action = "pack.tool.demo.secret".to_owned();
+        let declaration = PackProcessDeclaration {
+            pack: "demo".into(),
+            version: "1.0.0".into(),
+            manifest_sha256: "a".repeat(64),
+            tool: "demo.secret".into(),
+            action: action.clone(),
+            executable: executable.clone(),
+            cwd: cwd.clone(),
+            args: Vec::new(),
+            environment: BTreeMap::from([("PACK_SECRET".into(), "env:PATH".into())]),
+            permissions: vec!["process".into(), "credentials".into()],
+        };
+        let executor = PackProcessExecutor::new(
+            BTreeMap::from([("demo.secret".into(), declaration.clone())]),
+            Arc::new(SecretEchoProcess),
+        );
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy: Arc<dyn PolicyDecisionPoint> = Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action(&action, DecisionOutcome::Allow)
+                .with_post_effect(true)
+                .with_sandbox("native", "pack-secret-test", false)
+                .with_filesystem_root(executable.display().to_string(), "execute")
+                .with_filesystem_root(cwd.display().to_string(), "read")
+                .with_environment("PACK_SECRET"),
+        );
+        let gateway = EffectGateway::new(
+            journal,
+            policy,
+            Arc::new(DenyApproval),
+            SafetyKernel::new([action.clone()]),
+            [42_u8; 32],
+        );
+        let input = PackToolEffectInput {
+            pack: declaration.pack.clone(),
+            version: declaration.version.clone(),
+            manifest_sha256: declaration.manifest_sha256.clone(),
+            tool: declaration.tool.clone(),
+            executable: executable.clone(),
+            cwd,
+            args: Vec::new(),
+            environment: declaration.environment.clone(),
+            permissions: declaration.permissions.clone(),
+        };
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "pack-test".into(),
+            },
+            &action,
+            executable.display().to_string(),
+            serde_json::to_value(input).expect("input"),
+        );
+        request.capabilities = vec![action];
+        request.credential_references = vec![CredentialReference {
+            reference: "env:PATH".into(),
+            value_hash: None,
+        }];
+        let released = gateway.execute(request, &executor).await.expect("execute");
+        let value: serde_json::Value =
+            serde_json::from_slice(&released.bytes).expect("result JSON");
+        let stdout = BASE64
+            .decode(value["stdout_base64"].as_str().expect("stdout"))
+            .expect("stdout base64");
+        assert_eq!(stdout, b"[REDACTED]");
+        assert!(
+            !released
+                .bytes
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes())
+        );
     }
 
     #[test]
@@ -6862,6 +7770,8 @@ surprise: true
                 }],
                 timeout_ms: Some(5_000),
                 max_output_bytes: Some(64 * 1024),
+                effect_action_prefix: None,
+                provenance: None,
             },
         );
         assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
@@ -7125,6 +8035,7 @@ surprise: true
             work: None,
             memory: None,
             skills: Some(skill_executor),
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: directory.path().to_path_buf(),
@@ -7363,6 +8274,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: allowed.path().to_path_buf(),
@@ -7432,6 +8344,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: allowed.path().to_path_buf(),
@@ -7517,6 +8430,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: workspace.path().to_path_buf(),
@@ -7562,6 +8476,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: workspace.path().to_path_buf(),
@@ -7680,6 +8595,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
@@ -7842,6 +8758,7 @@ surprise: true
             work: None,
             memory: Some(memory),
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
@@ -8055,6 +8972,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
@@ -8185,6 +9103,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
@@ -8320,6 +9239,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
@@ -8460,6 +9380,7 @@ surprise: true
             work: None,
             memory: Some(Arc::clone(&memory)),
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
@@ -8624,6 +9545,7 @@ surprise: true
             work: Some(work),
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: std::env::current_dir().expect("cwd"),
@@ -8791,6 +9713,7 @@ surprise: true
             work: None,
             memory: None,
             skills: None,
+            pack_processes: None,
             integrations: None,
             mcp: None,
             workspace: workspace.path().to_path_buf(),

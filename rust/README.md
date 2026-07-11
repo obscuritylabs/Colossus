@@ -101,6 +101,21 @@ the SHA-256 returned by `skills file-read`; candidates are validated before repl
 and local install sources must be traversal-free, symlink-free workspace directories.
 Executable activation belongs exclusively to verified packs.
 
+Capability packs are managed with
+`packs list|show|verify|validate|install|enable|disable|uninstall` and publisher/key trust
+with `packs trust list|add`. Pack verification rejects traversal, symlinks, undeclared
+payloads, hash/size mismatches, excessive permissions, and invalid Ed25519 signatures.
+Installed lifecycle and publisher trust are reconstructed from the encrypted journal.
+Enabled pack skills are reverified and added to skill discovery on the next runtime
+start. Local OCI-layout tar and tar+gzip pack sources are descriptor-verified and
+bounded before extraction. Enabled fixed-argument tools and MCP servers are reverified,
+added to their normal runtime registries on restart, permission-restricted per declared
+capability, and executed only through approval, one-use permits, sandboxing, quarantine,
+post-effect policy, audit, and credential redaction.
+
+Signed offline releases use `bundle verify PATH`. Verification is fully offline and
+requires a trusted publisher/key signature plus a complete bounded payload allowlist.
+
 OpenAPI 3 JSON imports are compiled into strict `openapi.NAME.OPERATION` tools and
 persisted as immutable integration lifecycle events. Path, query, and JSON-body fields
 become operation arguments; authentication never does. Missing environment credentials
