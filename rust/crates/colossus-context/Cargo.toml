@@ -1,0 +1,22 @@
+[package]
+name = "colossus-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+colossus-contracts.workspace = true
+colossus-ports.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+colossus-session.workspace = true
+colossus-testkit = { path = "../colossus-testkit" }
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -76,6 +76,12 @@ obsolete Go launcher.
   discovery, exact and latest resume, provider-history restoration, and restart
   acceptance across separate CLI processes. The REPL maintains one active session and
   exposes `/sessions`, exact resume, new session, and a numbered `/resume` picker.
+- Durable Rust context preparation before every provider turn, with complete-request
+  token estimates, 32,768-token fallback windows, 70/45 percent threshold and target,
+  eight-message tail preservation, encrypted immutable snapshots, explicit activation
+  and restoration events, optional policy-bound `context_summarizer` calls,
+  deterministic fallback, and `context.prepared.v1` audit records. CLI and REPL expose
+  status, list, compact, and restore operations without deleting canonical messages.
 - A locked Cargo dependency graph and CI jobs for formatting, Clippy with warnings
   denied, and workspace tests while the frozen Python job remains green.
 
@@ -93,6 +99,8 @@ cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- p
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- models routes
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tools list
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sessions list
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- context status SESSION_ID
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- context compact SESSION_ID
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
@@ -128,7 +136,8 @@ cutover. The following planned work remains:
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
 - Incremental provider transport streaming, remaining core filesystem/search/write/git/
-  process tools, usage accounting, and context compaction. The durable
+  process tools, usage accounting, and context injection from durable decisions and
+  memories. The durable context budget/snapshot boundary, durable
   multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
   permit-bound file reads, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The

@@ -108,7 +108,7 @@ sandbox:
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "offline agent");
     assert_eq!(result["profile"], "echo");
-    assert_eq!(result["event_count"], 3);
+    assert_eq!(result["event_count"], 4);
     let session_id = result["session_id"]
         .as_str()
         .expect("session id")
@@ -151,6 +151,44 @@ sandbox:
     assert_eq!(messages[0]["message"]["content"], "offline agent");
     assert_eq!(messages[5]["message"]["content"], "third turn");
 
+    let status = run(binary, &config, &["context", "status", &session_id]);
+    assert!(status.status.success());
+    let status: Value = serde_json::from_slice(&status.stdout).expect("context status JSON");
+    assert_eq!(status["message_count"], 6);
+    assert_eq!(status["active_snapshot_id"], Value::Null);
+
+    let compacted = run(binary, &config, &["context", "compact", &session_id]);
+    assert!(
+        compacted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compacted.stderr)
+    );
+    let compacted: Value =
+        serde_json::from_slice(&compacted.stdout).expect("compacted context JSON");
+    let snapshot_id = compacted["snapshot_id"]
+        .as_str()
+        .expect("snapshot id")
+        .to_owned();
+    assert_eq!(compacted["strategy"], "deterministic");
+
+    let snapshots = run(binary, &config, &["context", "list", &session_id]);
+    assert!(snapshots.status.success());
+    let snapshots: Value =
+        serde_json::from_slice(&snapshots.stdout).expect("context snapshots JSON");
+    assert_eq!(snapshots.as_array().map(Vec::len), Some(1));
+    assert_eq!(snapshots[0]["id"], snapshot_id);
+
+    let restored = run(
+        binary,
+        &config,
+        &["context", "restore", &session_id, &snapshot_id],
+    );
+    assert!(restored.status.success());
+    let messages_after = run(binary, &config, &["sessions", "messages", &session_id]);
+    let messages_after: Value =
+        serde_json::from_slice(&messages_after.stdout).expect("messages after compact JSON");
+    assert_eq!(messages_after.as_array().map(Vec::len), Some(6));
+
     let audit = run(binary, &config, &["audit", "show", "--limit", "20"]);
     assert!(audit.status.success());
     let events: Vec<Value> = serde_json::from_slice(&audit.stdout).expect("audit JSON");
@@ -159,6 +197,7 @@ sandbox:
         .filter_map(|event| event["event_type"].as_str())
         .collect::<Vec<_>>();
     assert!(event_types.contains(&"model.request.prepared.v1"));
+    assert!(event_types.contains(&"context.prepared.v1"));
     assert!(event_types.contains(&"effect.requested.v1"));
     assert!(event_types.contains(&"final.output.v1"));
 }

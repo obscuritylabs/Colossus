@@ -7,8 +7,8 @@ use colossus_contracts::{
     ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, ProviderEvent, ToolCall, ToolResult,
 };
 use colossus_ports::{
-    EventJournal, ModelProvider, ModelProviderError, SessionRepository, StoreError, ToolError,
-    ToolExecutor, ToolRegistry,
+    ContextError, ContextPreparer, EventJournal, ModelProvider, ModelProviderError,
+    SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
 };
 use colossus_tools::model_definitions;
 use serde_json::{Value, json};
@@ -38,6 +38,9 @@ pub enum AgentError {
     /// Journal durability failed.
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// Context preparation could not safely fit or persist model-visible history.
+    #[error(transparent)]
+    Context(#[from] ContextError),
     /// Malformed tool-call recovery was exhausted without executing a tool.
     #[error("provider tool-call argument recovery exhausted after {attempts} attempts")]
     ToolArgumentRecoveryExhausted {
@@ -62,6 +65,7 @@ pub struct AgentService {
     tools: Arc<dyn ToolRegistry>,
     executor: Arc<dyn ToolExecutor>,
     sessions: Arc<dyn SessionRepository>,
+    context_preparer: Option<Arc<dyn ContextPreparer>>,
 }
 
 impl AgentService {
@@ -79,7 +83,14 @@ impl AgentService {
             tools,
             executor,
             sessions,
+            context_preparer: None,
         }
+    }
+
+    /// Attach the shared durable context boundary used before every provider turn.
+    pub fn with_context_preparer(mut self, preparer: Arc<dyn ContextPreparer>) -> Self {
+        self.context_preparer = Some(preparer);
+        self
     }
 
     /// Execute one durable bounded run.
@@ -165,10 +176,45 @@ impl AgentService {
         let mut recovery_attempts = 0_u8;
 
         for turn in 1..=max_turns {
+            let prepared = if let Some(preparer) = &self.context_preparer {
+                let prepared = preparer
+                    .prepare(
+                        &session_id,
+                        instructions,
+                        messages.clone(),
+                        &definitions,
+                        context.clone(),
+                        false,
+                    )
+                    .await?;
+                self.append(
+                    &stream_id,
+                    &mut stream_version,
+                    "context.prepared.v1",
+                    system_actor(),
+                    &context,
+                    json!({
+                        "turn": turn,
+                        "original_token_estimate": prepared.original_token_estimate,
+                        "token_estimate": prepared.token_estimate,
+                        "context_window_tokens": prepared.context_window_tokens,
+                        "threshold_tokens": prepared.threshold_tokens,
+                        "target_tokens": prepared.target_tokens,
+                        "snapshot_id": prepared.snapshot_id,
+                        "compacted": prepared.compacted,
+                        "snapshot_created": prepared.snapshot_created,
+                        "strategy": prepared.strategy,
+                        "message_count": prepared.messages.len(),
+                    }),
+                )?;
+                prepared.messages
+            } else {
+                messages.clone()
+            };
             let request = ModelRequest {
                 model: route.model.clone(),
                 instructions: instructions.into(),
-                messages: messages.clone(),
+                messages: prepared,
                 tools: definitions.clone(),
             };
             self.append(
@@ -501,7 +547,7 @@ fn system_actor() -> Actor {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use colossus_contracts::{ProviderRoute, ProviderTurn};
+    use colossus_contracts::{PreparedContext, ProviderRoute, ProviderTurn};
     use colossus_session::EventSourcedSessionRepository;
     use colossus_testkit::InMemoryEventJournal;
     use colossus_tools::StaticToolRegistry;
@@ -575,6 +621,34 @@ mod tests {
         calls: AtomicUsize,
     }
 
+    struct FixedContext;
+
+    #[async_trait]
+    impl ContextPreparer for FixedContext {
+        async fn prepare(
+            &self,
+            _session_id: &str,
+            _instructions: &str,
+            messages: Vec<ModelMessage>,
+            _tools: &[colossus_contracts::ModelToolDefinition],
+            _context: ExecutionContext,
+            _force: bool,
+        ) -> Result<PreparedContext, ContextError> {
+            Ok(PreparedContext {
+                messages,
+                token_estimate: 10,
+                original_token_estimate: 100,
+                context_window_tokens: 1_024,
+                threshold_tokens: 700,
+                target_tokens: 450,
+                snapshot_id: Some("snapshot-1".into()),
+                compacted: true,
+                snapshot_created: true,
+                strategy: Some("deterministic".into()),
+            })
+        }
+    }
+
     #[async_trait]
     impl ToolExecutor for CountingTools {
         async fn execute(
@@ -600,6 +674,40 @@ mod tests {
             response_id: None,
             events,
         })
+    }
+
+    #[tokio::test]
+    async fn every_provider_turn_records_context_preparation() {
+        let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+            ProviderEvent::FinalOutput {
+                text: "done".into(),
+            },
+        ])]));
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let service = AgentService::new(
+            Arc::clone(&journal),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(StaticToolRegistry::builtins(&[]).expect("catalog")),
+            Arc::new(EchoTools),
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+        )
+        .with_context_preparer(Arc::new(FixedContext));
+
+        let result = service
+            .run("primary", "test", "hello", 1)
+            .await
+            .expect("run");
+        let events = journal
+            .read_stream(&format!("run:{}", result.run_id))
+            .expect("events");
+        let prepared = events
+            .iter()
+            .find(|event| event.event_type == "context.prepared.v1")
+            .expect("context event");
+        let payload = journal.decrypt_payload(prepared).expect("payload");
+        assert_eq!(payload["snapshot_id"], "snapshot-1");
+        assert_eq!(payload["original_token_estimate"], 100);
+        assert_eq!(payload["token_estimate"], 10);
     }
 
     #[tokio::test]

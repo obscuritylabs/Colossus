@@ -4,9 +4,10 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ApprovalProof, EffectRequest, EventEnvelope, ExecutionContext, MemoryRecord,
-    ModelRequest, NewEvent, PolicyDecision, ProjectionBatch, ProjectionWorkItem, ProviderRoute,
-    ProviderTurn, SessionMessage, SessionSummary, SignedCheckpoint, ToolCall, ToolResult, ToolSpec,
+    Actor, ApprovalProof, ContextSnapshot, EffectRequest, EventEnvelope, ExecutionContext,
+    MemoryRecord, ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PolicyDecision,
+    PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderRoute, ProviderTurn,
+    SessionMessage, SessionSummary, SignedCheckpoint, ToolCall, ToolResult, ToolSpec,
     WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
@@ -90,6 +91,20 @@ pub enum ToolError {
     /// Tool effect may have occurred and cannot be retried implicitly.
     #[error("tool outcome is unknown: {0}")]
     OutcomeUnknown(String),
+}
+
+/// Context preparation or snapshot lifecycle failure.
+#[derive(Debug, Error)]
+pub enum ContextError {
+    /// Context configuration or request cannot satisfy the safety contract.
+    #[error("context configuration failed: {0}")]
+    Configuration(String),
+    /// Canonical snapshot persistence or session reconstruction failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// Optional model summarization failed before deterministic fallback could run.
+    #[error(transparent)]
+    Provider(#[from] ModelProviderError),
 }
 
 /// Result of full journal verification.
@@ -267,6 +282,45 @@ pub trait SessionRepository: Send + Sync {
 
     /// Reconstruct every append-only message in sequence order.
     fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError>;
+}
+
+/// Canonical immutable context snapshots and explicit activation history.
+pub trait ContextRepository: Send + Sync {
+    /// Append and activate a new snapshot using session-stream concurrency.
+    fn create(
+        &self,
+        snapshot: ContextSnapshot,
+        actor: Actor,
+    ) -> Result<ContextSnapshot, StoreError>;
+
+    /// Reconstruct every snapshot for a session in creation order.
+    fn list(&self, session_id: &str) -> Result<Vec<ContextSnapshot>, StoreError>;
+
+    /// Return the explicitly active snapshot, if any.
+    fn active(&self, session_id: &str) -> Result<Option<ContextSnapshot>, StoreError>;
+
+    /// Activate an existing snapshot without mutating or deleting later snapshots.
+    fn activate(
+        &self,
+        session_id: &str,
+        snapshot_id: &str,
+        actor: Actor,
+    ) -> Result<ContextSnapshot, StoreError>;
+}
+
+/// Shared context preparation boundary used by every agent provider turn.
+#[async_trait]
+pub trait ContextPreparer: Send + Sync {
+    /// Apply an active snapshot or create one when the configured budget requires it.
+    async fn prepare(
+        &self,
+        session_id: &str,
+        instructions: &str,
+        messages: Vec<ModelMessage>,
+        tools: &[ModelToolDefinition],
+        context: ExecutionContext,
+        force: bool,
+    ) -> Result<PreparedContext, ContextError>;
 }
 /// Task, decision, plan, and goal repository.
 pub trait WorkRepository: AggregateRepository {}

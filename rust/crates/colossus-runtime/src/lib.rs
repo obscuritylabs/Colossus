@@ -3,11 +3,13 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
+use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
-    Actor, ActorType, AgentRunResult, DecisionOutcome, EffectRequest, EventClassification,
-    ExecutionContext, FilesystemGrant, NewEvent, ProjectionStatus, ProviderModelInfo,
-    ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderTurn,
-    QuarantinedEffectResult, SessionMessage, SessionSummary, ToolCall, ToolResult, ToolSpec,
+    Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, DecisionOutcome,
+    EffectRequest, EventClassification, ExecutionContext, FilesystemGrant, NewEvent,
+    PreparedContext, ProjectionStatus, ProviderModelInfo, ProviderReadiness,
+    ProviderReadinessCheck, ProviderRoute, ProviderTurn, QuarantinedEffectResult, SessionMessage,
+    SessionSummary, ToolCall, ToolResult, ToolSpec,
 };
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
@@ -19,9 +21,9 @@ use colossus_policy::{
     OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
-    EventJournal, KeyProvider, ModelProvider, ModelProviderError, PolicyDecisionPoint,
-    ProjectionStore, SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
-    WorkRepository, WorkflowRepository,
+    ContextError, ContextPreparer, ContextRepository, EventJournal, KeyProvider, ModelProvider,
+    ModelProviderError, PolicyDecisionPoint, ProjectionStore, SessionRepository, StoreError,
+    ToolError, ToolExecutor, ToolRegistry, WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{
     ProjectedWorkRepository, ProjectionRunReport, ProjectionWorker, default_handlers,
@@ -70,6 +72,9 @@ pub struct RuntimeConfig {
     /// Agent model-turn and active-tool limits.
     #[serde(default)]
     pub agent: AgentConfig,
+    /// Long-session budgeting and immutable snapshot settings.
+    #[serde(default)]
+    pub context: ContextConfig,
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
@@ -430,6 +435,7 @@ impl RuntimeConfig {
             )));
         }
         StaticToolRegistry::builtins(&config.agent.tools)?;
+        config.context.validate()?;
         validate_provider_config(&config)?;
         Ok(config)
     }
@@ -463,6 +469,7 @@ impl RuntimeConfig {
             },
             providers: ProvidersConfig::default(),
             agent: AgentConfig::default(),
+            context: ContextConfig::default(),
             sandbox: SandboxConfig::default(),
         }
     }
@@ -593,6 +600,9 @@ pub enum RuntimeError {
     /// Agent application loop failed.
     #[error(transparent)]
     Agent(#[from] AgentError),
+    /// Context preparation or snapshot lifecycle failed.
+    #[error(transparent)]
+    Context(#[from] ContextError),
     /// Active tool catalog is invalid.
     #[error(transparent)]
     ToolCatalog(#[from] ToolCatalogError),
@@ -629,6 +639,7 @@ pub struct Runtime {
     recovery_reason: Option<String>,
     projections: Arc<ProjectionWorker>,
     sessions: Arc<dyn SessionRepository>,
+    context: Arc<ContextService>,
     work: Arc<dyn WorkRepository>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
@@ -838,13 +849,24 @@ impl Runtime {
             filesystem: Arc::clone(&filesystem_executor),
             http: Arc::clone(&http_executor),
         });
-        let agent = Arc::new(AgentService::new(
-            Arc::clone(&journal),
-            model_provider,
-            Arc::clone(&tool_registry),
-            tool_executor,
+        let context_repository: Arc<dyn ContextRepository> =
+            Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
+        let context = Arc::new(ContextService::new(
+            config.context.clone(),
             Arc::clone(&sessions),
-        ));
+            context_repository,
+            Arc::clone(&model_provider),
+        )?);
+        let agent = Arc::new(
+            AgentService::new(
+                Arc::clone(&journal),
+                model_provider,
+                Arc::clone(&tool_registry),
+                tool_executor,
+                Arc::clone(&sessions),
+            )
+            .with_context_preparer(Arc::clone(&context) as Arc<dyn ContextPreparer>),
+        );
         let workflow_repository: Arc<dyn WorkflowRepository> =
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
         let effects = Arc::new(GatewayWorkflowEffects {
@@ -865,6 +887,7 @@ impl Runtime {
             recovery_reason,
             projections,
             sessions,
+            context,
             work,
             policy,
             gateway,
@@ -939,6 +962,39 @@ impl Runtime {
     /// Reconstruct append-only messages for an exact session.
     pub fn session_messages(&self, id: &str) -> Result<Vec<SessionMessage>, RuntimeError> {
         self.sessions.list_messages(id).map_err(Into::into)
+    }
+
+    /// Show active context budget and canonical-history size for one session.
+    pub fn context_status(&self, session_id: &str) -> Result<ContextStatus, RuntimeError> {
+        self.context.status(session_id).map_err(Into::into)
+    }
+
+    /// List immutable context snapshots for one session.
+    pub fn context_snapshots(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ContextSnapshot>, RuntimeError> {
+        self.context.list_snapshots(session_id).map_err(Into::into)
+    }
+
+    /// Force a new context snapshot while preserving every canonical message.
+    pub async fn compact_context(&self, session_id: &str) -> Result<PreparedContext, RuntimeError> {
+        let definitions = colossus_tools::model_definitions(self.tools.as_ref());
+        self.context
+            .compact(session_id, "You are Colossus.", &definitions)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Activate an existing snapshot for subsequent provider turns.
+    pub fn restore_context(
+        &self,
+        session_id: &str,
+        snapshot_id: &str,
+    ) -> Result<ContextSnapshot, RuntimeError> {
+        self.context
+            .restore(session_id, snapshot_id)
+            .map_err(Into::into)
     }
 
     /// Current task, decision, plan, and goal snapshots.

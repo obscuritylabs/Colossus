@@ -41,6 +41,16 @@ request and attach the same session id to run/effect provenance. The `sessions-v
 projection contains only bounded discovery metadata (counts, last run, title, and recent
 user preview), never full message bodies; it can be deleted and rebuilt from the journal.
 
+`colossus-context` is the long-session safety boundary. Before every Rust provider turn,
+the agent asks the `ContextPreparer` port to estimate the complete request, including
+instructions and tool schemas. At the configured threshold it appends an encrypted,
+immutable snapshot plus an explicit activation event to the same optimistic session
+stream. Provider input becomes a synthetic system snapshot plus the preserved recent
+tail, while canonical messages remain untouched. The `context_summarizer` role is used
+through the normal provider gateway when available; invalid, failed, or echo summaries
+fall back to deterministic extraction. Every turn records `context.prepared.v1` on its
+run stream.
+
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
 subprocess specifications are authenticated to a one-shot helper, which clears the
 environment and applies the selected native or OCI isolation profile before spawning.

@@ -53,6 +53,8 @@ enum Command {
     Tools(ToolsCommand),
     /// Create, inspect, and resume durable sessions.
     Sessions(SessionsCommand),
+    /// Inspect, compact, and restore durable long-session context.
+    Context(ContextCommand),
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
@@ -326,6 +328,27 @@ enum SessionsAction {
     New { title: Option<String> },
 }
 
+#[derive(Args)]
+struct ContextCommand {
+    #[command(subcommand)]
+    command: ContextAction,
+}
+
+#[derive(Subcommand)]
+enum ContextAction {
+    /// Show the active context budget and snapshot.
+    Status { session_id: String },
+    /// List immutable snapshots for one session.
+    List { session_id: String },
+    /// Force a new snapshot without deleting canonical messages.
+    Compact { session_id: String },
+    /// Activate an existing snapshot for future turns.
+    Restore {
+        session_id: String,
+        snapshot_id: String,
+    },
+}
+
 async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, Box<dyn Error>> {
     let document = if let Some(path) = source.strip_prefix('@') {
         runtime.read_text_file(path).await?
@@ -542,7 +565,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /workflow list | /audit verify | /tools | /exit"
+                        "/resume [LIMIT] | /sessions | /session show|new|resume ID | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -563,6 +586,14 @@ async fn repl(
                     print_json(&runtime.tool_specs())?;
                 } else if line == "/sessions" {
                     print_json(&runtime.list_sessions(20)?)?;
+                } else if line == "/context" || line == "/context status" {
+                    print_json(&runtime.context_status(&active_session_id)?)?;
+                } else if line == "/context list" {
+                    print_json(&runtime.context_snapshots(&active_session_id)?)?;
+                } else if line == "/context compact" {
+                    print_json(&runtime.compact_context(&active_session_id).await?)?;
+                } else if let Some(snapshot_id) = line.strip_prefix("/context restore ") {
+                    print_json(&runtime.restore_context(&active_session_id, snapshot_id.trim())?)?;
                 } else if line == "/session" || line == "/session show" {
                     print_json(
                         &runtime
@@ -715,6 +746,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
             SessionsAction::New { title } => {
                 print_json(&runtime.create_session(title.as_deref())?)?;
             }
+        },
+        Command::Context(command) => match command.command {
+            ContextAction::Status { session_id } => {
+                print_json(&runtime.context_status(&session_id)?)?;
+            }
+            ContextAction::List { session_id } => {
+                print_json(&runtime.context_snapshots(&session_id)?)?;
+            }
+            ContextAction::Compact { session_id } => {
+                print_json(&runtime.compact_context(&session_id).await?)?;
+            }
+            ContextAction::Restore {
+                session_id,
+                snapshot_id,
+            } => print_json(&runtime.restore_context(&session_id, &snapshot_id)?)?,
         },
         Command::Run {
             prompt,

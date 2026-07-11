@@ -162,6 +162,14 @@ provider-neutral messages without changing policy, filesystem, workspace, approv
 network configuration. Every resumed provider and tool effect carries the session and
 run identifiers in its execution context.
 
+Rust context snapshots are encrypted domain events on the canonical session stream.
+They contain bounded derived summaries and metadata, never replace source messages, and
+are activated only by an explicit journal event. Model-assisted summaries use the
+`context_summarizer` role through the same policy-enforced provider gateway as other
+model effects. Provider failure produces a deterministic local summary; it never causes
+silent history deletion or unbounded request truncation. Restoring an older snapshot is
+auditable and changes only future provider-visible composition.
+
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
 are validated against the agent allowlist and active tool catalog before provider calls;
 `required_tools` never auto-approves a tool. Skill audit records include names, versions,
@@ -281,7 +289,7 @@ deterministic policy.
 
 ## Context Compaction
 
-Context snapshots are derived from raw session messages and persisted in SQLite. They are
+Python 0.5 context snapshots are derived from raw session messages and persisted in SQLite. They are
 used to reduce what is sent to a provider, but they do not delete, rewrite, or replace
 raw message history. `context.restore` is approval-required because it changes which
 snapshot is active for future model requests. Model-assisted compaction is best-effort;
