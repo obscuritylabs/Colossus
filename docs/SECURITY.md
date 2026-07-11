@@ -146,6 +146,13 @@ visible text, strict object-shaped tool calls, and explicitly typed safe reasoni
 summaries enter the model event stream; raw response chunks and hidden reasoning fields
 are discarded.
 
+Streaming does not weaken that boundary. The adapter submits one normalized item at a
+time to the gateway, the gateway enforces cumulative output limits and any post-effect
+decision before observation, and the agent journals the released item before forwarding
+it to CLI or REPL rendering. The gateway latches the first sink failure, so an adapter
+cannot ignore a denied callback and continue the effect. A denied item never reaches
+either observer.
+
 The Rust agent loop receives tool specifications and execution through separate ports.
 The active catalog is explicit in configuration, rejects duplicate/unknown names, and
 compiles every object schema at startup. Each model call is validated against that schema

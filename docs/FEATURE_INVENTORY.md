@@ -229,8 +229,9 @@ The baseline provider catalog contains:
 - An OpenAI Responses API provider.
 - A local or hosted OpenAI-compatible Chat Completions provider.
 
-All providers MUST normalize streaming text, tool calls, final output, safe reasoning
-summaries, diagnostics, and errors into the same domain contracts.
+All providers MUST normalize streaming text, tool calls, final output, token usage, safe
+reasoning summaries, diagnostics, and errors into the same domain contracts. Raw SSE
+frames remain adapter-private; only normalized items cross the per-item release gate.
 
 ### 8.2 Model Roles
 
@@ -267,6 +268,7 @@ hidden reasoning MUST NOT be persisted as default events.
 | Event type | Required purpose and minimum payload |
 | --- | --- |
 | `model.delta` | Stream visible text with `text`. |
+| `provider.usage` | Record normalized input, output, total, cached-input, and reasoning token counts. |
 | `reasoning.summary` | Safe provider summary with `summary` and optional format/id. |
 | `model.request.prepared` | Record turn, model, composed request metadata, and size estimate. |
 | `context.prepared` | Record token estimates, window, thresholds, snapshot, and compaction flags. |

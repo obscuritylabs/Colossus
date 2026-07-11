@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
-    MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ResearchDepth,
+    MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
     ResearchSourceKind, SubagentStatus, TaskStatus,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
-use colossus_ports::{ApprovalProvider, PolicyError};
+use colossus_ports::{ApprovalProvider, ModelProviderError, PolicyError, ProviderEventObserver};
 use colossus_runtime::{Runtime, RuntimeConfig};
 use reedline::{DefaultPrompt, Reedline, Signal};
 use serde_json::{Value, json};
@@ -97,6 +97,65 @@ impl ApprovalProvider for TerminalApproval {
             decision,
         )
         .await
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StreamTarget {
+    Stdout,
+    Stderr,
+}
+
+struct TerminalStreamObserver {
+    target: StreamTarget,
+    wrote_text: bool,
+}
+
+impl TerminalStreamObserver {
+    fn new(target: StreamTarget) -> Self {
+        Self {
+            target,
+            wrote_text: false,
+        }
+    }
+
+    fn finish_line(&mut self) -> io::Result<()> {
+        if self.wrote_text {
+            match self.target {
+                StreamTarget::Stdout => {
+                    println!();
+                    io::stdout().flush()?;
+                }
+                StreamTarget::Stderr => {
+                    eprintln!();
+                    io::stderr().flush()?;
+                }
+            }
+            self.wrote_text = false;
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ProviderEventObserver for TerminalStreamObserver {
+    async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError> {
+        let ProviderEvent::ModelDelta { text } = event else {
+            return Ok(());
+        };
+        let result = match self.target {
+            StreamTarget::Stdout => {
+                print!("{text}");
+                io::stdout().flush()
+            }
+            StreamTarget::Stderr => {
+                eprint!("{text}");
+                io::stderr().flush()
+            }
+        };
+        result.map_err(|error| ModelProviderError::Failed(error.to_string()))?;
+        self.wrote_text = true;
+        Ok(())
     }
 }
 
@@ -206,6 +265,9 @@ enum Command {
         /// Explicitly activate one declarative skill. Repeat as needed.
         #[arg(long = "skill")]
         skills: Vec<String>,
+        /// Render policy-released text deltas to stderr while preserving JSON on stdout.
+        #[arg(long)]
+        stream: bool,
     },
     /// Run the credential-free, network-free echo smoke provider.
     Echo {
@@ -1728,8 +1790,9 @@ async fn repl(
                         println!("session={active_session_id}");
                     }
                 } else {
+                    let mut observer = TerminalStreamObserver::new(StreamTarget::Stdout);
                     let result = runtime
-                        .run_model_with_skills(
+                        .run_model_with_skills_stream(
                             "primary",
                             "You are Colossus.",
                             line,
@@ -1737,9 +1800,11 @@ async fn repl(
                             Some(&active_session_id),
                             &[],
                             &sticky_skills,
+                            &mut observer,
                         )
-                        .await?;
-                    println!("{}", result.output);
+                        .await;
+                    observer.finish_line()?;
+                    result?;
                 }
             }
             Signal::CtrlD | Signal::CtrlC => break,
@@ -2439,23 +2504,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
             session,
             resume,
             skills,
+            stream,
         } => {
             let session_id = if resume {
                 Some(runtime.latest_session()?.id)
             } else {
                 session
             };
-            let result = runtime
-                .run_model_with_skills(
-                    &role,
-                    &instructions,
-                    &prompt,
-                    max_turns,
-                    session_id.as_deref(),
-                    &skills,
-                    &[],
-                )
-                .await?;
+            let result = if stream {
+                let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
+                let result = runtime
+                    .run_model_with_skills_stream(
+                        &role,
+                        &instructions,
+                        &prompt,
+                        max_turns,
+                        session_id.as_deref(),
+                        &skills,
+                        &[],
+                        &mut observer,
+                    )
+                    .await;
+                observer.finish_line()?;
+                result?
+            } else {
+                runtime
+                    .run_model_with_skills(
+                        &role,
+                        &instructions,
+                        &prompt,
+                        max_turns,
+                        session_id.as_deref(),
+                        &skills,
+                        &[],
+                    )
+                    .await?
+            };
             runtime.drain_subagents().await?;
             print_json(&result)?;
         }

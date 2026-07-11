@@ -6,9 +6,13 @@ use async_trait::async_trait;
 use colossus_contracts::{
     CredentialReference, EffectRequest, ModelMessage, ModelMessageRole, ModelRequest,
     ModelToolCall, ModelToolDefinition, ProviderEvent, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderTurn, QuarantinedEffectResult,
+    ProviderReadinessCheck, ProviderStreamItem, ProviderTurn, ProviderUsage,
+    QuarantinedEffectResult,
 };
-use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
+use colossus_policy::{
+    EffectExecutor, ExecutionError, ExecutionPermit, QuarantinedEffectObserver,
+    StreamingEffectExecutor,
+};
 use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
@@ -281,7 +285,7 @@ impl ProviderExecutor {
             provider: self.profile.kind.as_str().into(),
             ready: echo,
             tool_calls: !echo,
-            streaming: false,
+            streaming: true,
             checks: vec![ProviderReadinessCheck {
                 name: if echo { "offline" } else { "models_endpoint" }.into(),
                 status: if echo { "pass" } else { "not_checked" }.into(),
@@ -304,19 +308,133 @@ impl EffectExecutor for ProviderExecutor {
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         self.execute_permitted(request, &permit)
             .await
-            .map_err(|error| match error {
-                ProviderError::Transport(message) => ExecutionError::OutcomeUnknown(format!(
-                    "provider transport failed after execution began; outcome is unknown: {message}"
-                )),
-                ProviderError::Malformed(message) if invalid_tool_argument_message(&message) => {
-                    ExecutionError::Recoverable {
-                        code: "provider.invalid_tool_arguments".into(),
-                        message,
-                    }
-                }
-                error => ExecutionError::Failed(error.to_string()),
-            })
+            .map_err(provider_execution_error)
     }
+}
+
+fn provider_execution_error(error: ProviderError) -> ExecutionError {
+    match error {
+        ProviderError::Transport(message) => ExecutionError::OutcomeUnknown(format!(
+            "provider transport failed after execution began; outcome is unknown: {message}"
+        )),
+        ProviderError::Malformed(message) if invalid_tool_argument_message(&message) => {
+            ExecutionError::Recoverable {
+                code: "provider.invalid_tool_arguments".into(),
+                message,
+            }
+        }
+        error => ExecutionError::Failed(error.to_string()),
+    }
+}
+
+#[async_trait]
+impl StreamingEffectExecutor for ProviderExecutor {
+    async fn execute_stream(
+        &self,
+        effect: &EffectRequest,
+        permit: ExecutionPermit,
+        observer: &mut dyn QuarantinedEffectObserver,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let input: ProviderEffectInput =
+            serde_json::from_value(effect.content.clone()).map_err(|error| {
+                provider_execution_error(ProviderError::Malformed(error.to_string()))
+            })?;
+        if input.profile != self.profile.name {
+            return Err(provider_execution_error(ProviderError::Configuration(
+                "provider effect profile does not match its adapter".into(),
+            )));
+        }
+        validate_credential_disclosure(effect, &self.profile).map_err(provider_execution_error)?;
+        if effect.action != self.profile.kind.generation_action() {
+            return Err(provider_execution_error(ProviderError::Configuration(
+                "streaming provider adapter received an unsupported action".into(),
+            )));
+        }
+        let model_request = input.request.ok_or_else(|| {
+            provider_execution_error(ProviderError::Configuration(
+                "provider generation request is absent".into(),
+            ))
+        })?;
+        validate_model_request(&model_request, &self.profile).map_err(provider_execution_error)?;
+        let endpoint = self
+            .profile
+            .generation_endpoint()
+            .map_err(provider_execution_error)?;
+        if self.profile.kind == ProviderKind::Echo {
+            if effect.resource != endpoint {
+                return Err(provider_execution_error(ProviderError::Configuration(
+                    "echo resource does not match the selected profile".into(),
+                )));
+            }
+            let text = model_request
+                .messages
+                .last()
+                .map(|message| message.content.clone())
+                .ok_or_else(|| {
+                    provider_execution_error(ProviderError::Malformed(
+                        "echo request has no message".into(),
+                    ))
+                })?;
+            emit_stream_item(
+                ProviderStreamItem::Event {
+                    event: ProviderEvent::ModelDelta { text: text.clone() },
+                },
+                &permit,
+                observer,
+            )
+            .await?;
+            emit_stream_item(
+                ProviderStreamItem::Event {
+                    event: ProviderEvent::FinalOutput { text },
+                },
+                &permit,
+                observer,
+            )
+            .await?;
+            return emit_stream_item(
+                ProviderStreamItem::Completed {
+                    profile: self.profile.name.clone(),
+                    provider: self.profile.kind.as_str().into(),
+                    model: self.profile.model.clone(),
+                    response_id: None,
+                },
+                &permit,
+                observer,
+            )
+            .await;
+        }
+        self.validate_resource(effect, &endpoint, &permit)
+            .map_err(provider_execution_error)?;
+        let payload = match self.profile.kind {
+            ProviderKind::OpenAiResponses => responses_payload(&model_request, true),
+            ProviderKind::OpenAiCompatible => chat_payload(&model_request, true),
+            ProviderKind::Echo => unreachable!("handled above"),
+        }
+        .map_err(provider_execution_error)?;
+        self.stream_generation(&endpoint, payload, &permit, observer)
+            .await
+    }
+}
+
+async fn emit_stream_item(
+    item: ProviderStreamItem,
+    permit: &ExecutionPermit,
+    observer: &mut dyn QuarantinedEffectObserver,
+) -> Result<QuarantinedEffectResult, ExecutionError> {
+    let bytes =
+        serde_json::to_vec(&item).map_err(|error| ExecutionError::Failed(error.to_string()))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > permit.obligations().max_output_bytes {
+        return Err(ExecutionError::Failed(
+            "normalized provider stream item exceeds the permitted bound".into(),
+        ));
+    }
+    let result = QuarantinedEffectResult {
+        media_type: "application/vnd.colossus.provider-stream+json".into(),
+        bytes,
+        effect_succeeded: true,
+    };
+    observer.observe(result.clone()).await?;
+    Ok(result)
 }
 
 impl ProviderExecutor {
@@ -385,8 +503,8 @@ impl ProviderExecutor {
         }
         self.validate_resource(effect, &endpoint, permit)?;
         let payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses => responses_payload(&model_request),
-            ProviderKind::OpenAiCompatible => chat_payload(&model_request),
+            ProviderKind::OpenAiResponses => responses_payload(&model_request, false),
+            ProviderKind::OpenAiCompatible => chat_payload(&model_request, false),
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
         let bytes = self.request_json(&endpoint, Some(payload), permit).await?;
@@ -427,6 +545,30 @@ impl ProviderExecutor {
         payload: Option<Value>,
         permit: &ExecutionPermit,
     ) -> Result<Vec<u8>, ProviderError> {
+        let (response, secret) = self.send_request(endpoint, payload, permit).await?;
+        let limit = usize::try_from(permit.obligations().max_output_bytes)
+            .map_err(|error| ProviderError::Configuration(error.to_string()))?;
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if bytes.len().saturating_add(chunk.len()) > limit {
+                return Err(ProviderError::Malformed(
+                    "provider response exceeds the permitted output bound".into(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        redact_exact_bytes(&mut bytes, secret.as_deref());
+        Ok(bytes)
+    }
+
+    async fn send_request(
+        &self,
+        endpoint: &str,
+        payload: Option<Value>,
+        permit: &ExecutionPermit,
+    ) -> Result<(reqwest::Response, Option<String>), ProviderError> {
         let url = Url::parse(endpoint)?;
         let host = url
             .host_str()
@@ -445,10 +587,18 @@ impl ProviderExecutor {
         let mut builder = payload
             .as_ref()
             .map_or_else(|| client.get(url.clone()), |_| client.post(url.clone()));
-        if let Some(reference) = self.profile.credential_reference.as_deref() {
+        let secret = if let Some(reference) = self.profile.credential_reference.as_deref() {
             let secret = self.credentials.resolve(reference)?;
-            builder = builder.bearer_auth(secret);
-        }
+            if secret.is_empty() {
+                return Err(ProviderError::Credential(
+                    "resolved provider credential is empty".into(),
+                ));
+            }
+            builder = builder.bearer_auth(&secret);
+            Some(secret)
+        } else {
+            None
+        };
         if let Some(payload) = payload {
             let body = serde_json::to_vec(&payload)
                 .map_err(|error| ProviderError::Malformed(error.to_string()))?;
@@ -467,21 +617,611 @@ impl ProviderExecutor {
                 status: response.status().as_u16(),
             });
         }
+        Ok((response, secret))
+    }
+
+    async fn stream_generation(
+        &self,
+        endpoint: &str,
+        payload: Value,
+        permit: &ExecutionPermit,
+        observer: &mut dyn QuarantinedEffectObserver,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let (response, secret) = self
+            .send_request(endpoint, Some(payload), permit)
+            .await
+            .map_err(provider_execution_error)?;
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !content_type
+            .split(';')
+            .next()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
+        {
+            return Err(provider_execution_error(ProviderError::Malformed(
+                "streaming provider response is not text/event-stream".into(),
+            )));
+        }
         let limit = usize::try_from(permit.obligations().max_output_bytes)
-            .map_err(|error| ProviderError::Configuration(error.to_string()))?;
-        let mut bytes = Vec::new();
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        let mut decoder = SseDecoder::default();
+        let mut state = ProviderStreamState::new(self.profile.kind);
+        let mut raw_bytes = 0_usize;
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            if bytes.len().saturating_add(chunk.len()) > limit {
+            let chunk = chunk.map_err(|error| {
+                provider_execution_error(ProviderError::Transport(error.to_string()))
+            })?;
+            raw_bytes = raw_bytes.saturating_add(chunk.len());
+            if raw_bytes > limit {
+                return Err(provider_execution_error(ProviderError::Malformed(
+                    "raw provider event stream exceeds the permitted output bound".into(),
+                )));
+            }
+            for data in decoder.feed(&chunk).map_err(provider_execution_error)? {
+                let mut data = data;
+                redact_exact_bytes(&mut data, secret.as_deref());
+                if data == b"[DONE]" {
+                    state.mark_done();
+                    continue;
+                }
+                let mut value: Value = serde_json::from_slice(&data).map_err(|error| {
+                    provider_execution_error(ProviderError::Malformed(format!(
+                        "provider SSE data is not valid JSON: {error}"
+                    )))
+                })?;
+                redact_value_exact(&mut value, secret.as_deref());
+                for event in state.ingest(value).map_err(provider_execution_error)? {
+                    emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
+                }
+            }
+        }
+        decoder.finish().map_err(provider_execution_error)?;
+        for event in state.finish().map_err(provider_execution_error)? {
+            emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
+        }
+        let response_id = state.response_id().map(str::to_owned);
+        emit_stream_item(
+            ProviderStreamItem::Completed {
+                profile: self.profile.name.clone(),
+                provider: self.profile.kind.as_str().into(),
+                model: self.profile.model.clone(),
+                response_id,
+            },
+            permit,
+            observer,
+        )
+        .await
+    }
+}
+
+fn redact_exact_bytes(bytes: &mut Vec<u8>, secret: Option<&str>) {
+    let Some(secret) = secret.filter(|secret| !secret.is_empty()) else {
+        return;
+    };
+    let needle = secret.as_bytes();
+    let replacement = b"[REDACTED]";
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor..].starts_with(needle) {
+            output.extend_from_slice(replacement);
+            cursor = cursor.saturating_add(needle.len());
+        } else {
+            output.push(bytes[cursor]);
+            cursor = cursor.saturating_add(1);
+        }
+    }
+    *bytes = output;
+}
+
+fn redact_value_exact(value: &mut Value, secret: Option<&str>) {
+    let Some(secret) = secret.filter(|secret| !secret.is_empty()) else {
+        return;
+    };
+    match value {
+        Value::String(text) => {
+            if text.contains(secret) {
+                *text = text.replace(secret, "[REDACTED]");
+            }
+        }
+        Value::Array(values) => values
+            .iter_mut()
+            .for_each(|value| redact_value_exact(value, Some(secret))),
+        Value::Object(values) => values
+            .values_mut()
+            .for_each(|value| redact_value_exact(value, Some(secret))),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+#[derive(Default)]
+struct SseDecoder {
+    buffer: Vec<u8>,
+    data_lines: Vec<Vec<u8>>,
+}
+
+impl SseDecoder {
+    fn feed(&mut self, chunk: &[u8]) -> Result<Vec<Vec<u8>>, ProviderError> {
+        self.buffer.extend_from_slice(chunk);
+        if self.buffer.len() > MAX_PROVIDER_REQUEST_BYTES {
+            return Err(ProviderError::Malformed(
+                "provider SSE frame exceeds 1 MiB".into(),
+            ));
+        }
+        let mut events = Vec::new();
+        while let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.buffer.drain(..=end).collect::<Vec<_>>();
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            self.process_line(&line, &mut events)?;
+        }
+        Ok(events)
+    }
+
+    fn process_line(
+        &mut self,
+        line: &[u8],
+        events: &mut Vec<Vec<u8>>,
+    ) -> Result<(), ProviderError> {
+        if line.is_empty() {
+            if !self.data_lines.is_empty() {
+                let size = self
+                    .data_lines
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>()
+                    .saturating_add(self.data_lines.len().saturating_sub(1));
+                if size > MAX_PROVIDER_REQUEST_BYTES {
+                    return Err(ProviderError::Malformed(
+                        "provider SSE data exceeds 1 MiB".into(),
+                    ));
+                }
+                let mut data = Vec::with_capacity(size);
+                for (index, line) in self.data_lines.drain(..).enumerate() {
+                    if index > 0 {
+                        data.push(b'\n');
+                    }
+                    data.extend_from_slice(&line);
+                }
+                events.push(data);
+            }
+            return Ok(());
+        }
+        if line.starts_with(b":") {
+            return Ok(());
+        }
+        let (field, mut value) =
+            line.iter()
+                .position(|byte| *byte == b':')
+                .map_or((line, &[][..]), |index| {
+                    let (field, value) = line.split_at(index);
+                    (field, &value[1..])
+                });
+        if value.first() == Some(&b' ') {
+            value = &value[1..];
+        }
+        if field == b"data" {
+            self.data_lines.push(value.to_vec());
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<(), ProviderError> {
+        if self.buffer.iter().any(|byte| !byte.is_ascii_whitespace()) || !self.data_lines.is_empty()
+        {
+            return Err(ProviderError::Transport(
+                "provider event stream ended inside an SSE frame".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+enum ProviderStreamState {
+    Responses(ResponsesStreamState),
+    Chat(ChatStreamState),
+}
+
+impl ProviderStreamState {
+    fn new(kind: ProviderKind) -> Self {
+        match kind {
+            ProviderKind::OpenAiResponses => Self::Responses(ResponsesStreamState::default()),
+            ProviderKind::OpenAiCompatible => Self::Chat(ChatStreamState::default()),
+            ProviderKind::Echo => unreachable!("echo streaming is handled without SSE"),
+        }
+    }
+
+    fn mark_done(&mut self) {
+        match self {
+            Self::Responses(state) => state.done_marker = true,
+            Self::Chat(state) => state.done_marker = true,
+        }
+    }
+
+    fn ingest(&mut self, value: Value) -> Result<Vec<ProviderEvent>, ProviderError> {
+        match self {
+            Self::Responses(state) => state.ingest(value),
+            Self::Chat(state) => state.ingest(value),
+        }
+    }
+
+    fn finish(&mut self) -> Result<Vec<ProviderEvent>, ProviderError> {
+        match self {
+            Self::Responses(state) => state.finish(),
+            Self::Chat(state) => state.finish(),
+        }
+    }
+
+    fn response_id(&self) -> Option<&str> {
+        match self {
+            Self::Responses(state) => state.response_id.as_deref(),
+            Self::Chat(state) => state.response_id.as_deref(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ResponsesStreamState {
+    response_id: Option<String>,
+    text: String,
+    tool_call_ids: BTreeSet<String>,
+    completed: bool,
+    done_marker: bool,
+}
+
+impl ResponsesStreamState {
+    fn ingest(&mut self, value: Value) -> Result<Vec<ProviderEvent>, ProviderError> {
+        let object = value.as_object().ok_or_else(|| {
+            ProviderError::Malformed("Responses stream event is not an object".into())
+        })?;
+        let event_type = required_string(object, "type")?;
+        match event_type.as_str() {
+            "response.created" | "response.in_progress" => {
+                if let Some(response) = object.get("response").and_then(Value::as_object) {
+                    self.capture_response_id(response.get("id"))?;
+                }
+                Ok(Vec::new())
+            }
+            "response.output_text.delta" => {
+                let delta = required_string(object, "delta")?;
+                self.text.push_str(&delta);
+                Ok(vec![ProviderEvent::ModelDelta { text: delta }])
+            }
+            "response.reasoning_summary_text.done" => {
+                let summary = required_string(object, "text")?;
+                Ok(vec![ProviderEvent::ReasoningSummary { summary }])
+            }
+            "response.output_item.done" => {
+                let Some(item) = object.get("item").and_then(Value::as_object) else {
+                    return Err(ProviderError::Malformed(
+                        "Responses output_item.done has no item object".into(),
+                    ));
+                };
+                self.tool_event(item)
+                    .map(|event| event.into_iter().collect())
+            }
+            "response.completed" => self.complete(object),
+            "response.failed" | "response.incomplete" | "error" => Err(ProviderError::Malformed(
+                format!("provider stream terminated with {event_type}"),
+            )),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn capture_response_id(&mut self, value: Option<&Value>) -> Result<(), ProviderError> {
+        let Some(id) = value.and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+            return Ok(());
+        };
+        if self
+            .response_id
+            .as_deref()
+            .is_some_and(|current| current != id)
+        {
+            return Err(ProviderError::Malformed(
+                "provider stream changed response id".into(),
+            ));
+        }
+        self.response_id = Some(id.into());
+        Ok(())
+    }
+
+    fn tool_event(
+        &mut self,
+        item: &Map<String, Value>,
+    ) -> Result<Option<ProviderEvent>, ProviderError> {
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => {
+                let event = function_call_event(
+                    item.get("call_id"),
+                    item.get("name"),
+                    item.get("arguments"),
+                )?;
+                let ProviderEvent::ToolCallRequested { call_id, .. } = &event else {
+                    unreachable!("function call normalization returned another event")
+                };
+                if self.tool_call_ids.insert(call_id.clone()) {
+                    Ok(Some(event))
+                } else {
+                    Ok(None)
+                }
+            }
+            Some("custom_tool_call") => {
+                let call_id = required_string(item, "call_id")?;
+                if !self.tool_call_ids.insert(call_id.clone()) {
+                    return Ok(None);
+                }
+                Ok(Some(ProviderEvent::ToolCallRequested {
+                    call_id,
+                    name: required_string(item, "name")?,
+                    arguments: json!({
+                        "input": item.get("input").and_then(Value::as_str).unwrap_or_default()
+                    }),
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn complete(
+        &mut self,
+        event: &Map<String, Value>,
+    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if self.completed {
+            return Err(ProviderError::Malformed(
+                "provider emitted response.completed more than once".into(),
+            ));
+        }
+        let response = event
+            .get("response")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                ProviderError::Malformed("response.completed has no response object".into())
+            })?;
+        if response.get("status").and_then(Value::as_str) != Some("completed") {
+            return Err(ProviderError::Malformed(
+                "response.completed does not carry completed status".into(),
+            ));
+        }
+        self.capture_response_id(response.get("id"))?;
+        let mut events = Vec::new();
+        if let Some(output) = response.get("output").and_then(Value::as_array) {
+            for item in output.iter().filter_map(Value::as_object) {
+                if let Some(event) = self.tool_event(item)? {
+                    events.push(event);
+                }
+            }
+        }
+        if self.tool_call_ids.is_empty() && !self.text.is_empty() {
+            events.push(ProviderEvent::FinalOutput {
+                text: self.text.clone(),
+            });
+        }
+        if let Some(usage) = normalize_usage(response.get("usage"), UsageShape::Responses)? {
+            events.push(ProviderEvent::Usage { usage });
+        }
+        self.completed = true;
+        Ok(events)
+    }
+
+    fn finish(&self) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if !self.completed || self.response_id.is_none() {
+            return Err(ProviderError::Transport(
+                "Responses stream ended before response.completed".into(),
+            ));
+        }
+        let _ = self.done_marker;
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Default)]
+struct ChatStreamState {
+    response_id: Option<String>,
+    text: String,
+    tool_calls: BTreeMap<u64, PartialChatToolCall>,
+    terminal_seen: bool,
+    done_marker: bool,
+    finalized: bool,
+    usage_seen: bool,
+}
+
+#[derive(Default)]
+struct PartialChatToolCall {
+    call_id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+impl ChatStreamState {
+    fn ingest(&mut self, value: Value) -> Result<Vec<ProviderEvent>, ProviderError> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| ProviderError::Malformed("chat stream chunk is not an object".into()))?;
+        if let Some(id) = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            if self
+                .response_id
+                .as_deref()
+                .is_some_and(|current| current != id)
+            {
                 return Err(ProviderError::Malformed(
-                    "provider response exceeds the permitted output bound".into(),
+                    "chat stream changed response id".into(),
                 ));
             }
-            bytes.extend_from_slice(&chunk);
+            self.response_id = Some(id.into());
         }
-        Ok(bytes)
+        let mut events = Vec::new();
+        if let Some(usage) = normalize_usage(object.get("usage"), UsageShape::Chat)? {
+            if self.usage_seen {
+                return Err(ProviderError::Malformed(
+                    "chat stream emitted usage more than once".into(),
+                ));
+            }
+            self.usage_seen = true;
+            events.push(ProviderEvent::Usage { usage });
+        }
+        let choices = object
+            .get("choices")
+            .and_then(Value::as_array)
+            .ok_or_else(|| ProviderError::Malformed("chat stream has no choices array".into()))?;
+        for choice in choices {
+            let choice = choice.as_object().ok_or_else(|| {
+                ProviderError::Malformed("chat stream choice is not an object".into())
+            })?;
+            if choice.get("index").and_then(Value::as_u64).unwrap_or(0) != 0 {
+                return Err(ProviderError::Malformed(
+                    "chat stream returned an unexpected choice index".into(),
+                ));
+            }
+            let delta = choice
+                .get("delta")
+                .and_then(Value::as_object)
+                .ok_or_else(|| ProviderError::Malformed("chat choice has no delta".into()))?;
+            if let Some(text) = delta.get("content").and_then(Value::as_str)
+                && !text.is_empty()
+            {
+                self.text.push_str(text);
+                events.push(ProviderEvent::ModelDelta { text: text.into() });
+            }
+            self.ingest_tool_deltas(delta.get("tool_calls"))?;
+            if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+                match reason {
+                    "stop" | "tool_calls" | "function_call" => self.terminal_seen = true,
+                    "length" | "content_filter" => {
+                        return Err(ProviderError::Malformed(format!(
+                            "chat stream terminated with finish_reason={reason}"
+                        )));
+                    }
+                    other => {
+                        return Err(ProviderError::Malformed(format!(
+                            "chat stream returned unknown finish_reason={other}"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(events)
     }
+
+    fn ingest_tool_deltas(&mut self, value: Option<&Value>) -> Result<(), ProviderError> {
+        let Some(calls) = value.and_then(Value::as_array) else {
+            return Ok(());
+        };
+        for call in calls {
+            let call = call.as_object().ok_or_else(|| {
+                ProviderError::Malformed("chat tool delta is not an object".into())
+            })?;
+            let index = call
+                .get("index")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| ProviderError::Malformed("chat tool delta has no index".into()))?;
+            let partial = self.tool_calls.entry(index).or_default();
+            set_partial_string(&mut partial.call_id, call.get("id"), "tool call id")?;
+            if let Some(function) = call.get("function").and_then(Value::as_object) {
+                set_partial_string(&mut partial.name, function.get("name"), "tool call name")?;
+                if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
+                    partial.arguments.push_str(arguments);
+                    if partial.arguments.len() > MAX_PROVIDER_REQUEST_BYTES {
+                        return Err(ProviderError::Malformed(
+                            "streamed tool arguments exceed 1 MiB".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<Vec<ProviderEvent>, ProviderError> {
+        if self.finalized {
+            return Err(ProviderError::Malformed(
+                "chat stream was finalized more than once".into(),
+            ));
+        }
+        if !self.terminal_seen || self.response_id.is_none() {
+            return Err(ProviderError::Transport(
+                "chat stream ended before a terminal choice".into(),
+            ));
+        }
+        let _ = self.done_marker;
+        let mut events = Vec::new();
+        if self.tool_calls.is_empty() {
+            if self.text.is_empty() {
+                return Err(ProviderError::Malformed(
+                    "chat stream completed without visible text or tool calls".into(),
+                ));
+            }
+            events.push(ProviderEvent::FinalOutput {
+                text: self.text.clone(),
+            });
+        } else {
+            for (expected, (index, partial)) in self.tool_calls.iter().enumerate() {
+                if *index != expected as u64 {
+                    return Err(ProviderError::Malformed(
+                        "chat stream tool indexes are not contiguous".into(),
+                    ));
+                }
+                let call_id = partial.call_id.clone().ok_or_else(|| {
+                    ProviderError::Malformed("streamed tool call id is absent".into())
+                })?;
+                let name = partial.name.clone().ok_or_else(|| {
+                    ProviderError::Malformed("streamed tool call name is absent".into())
+                })?;
+                let arguments_text = if partial.arguments.is_empty() {
+                    "{}"
+                } else {
+                    &partial.arguments
+                };
+                let arguments: Value = serde_json::from_str(arguments_text).map_err(|error| {
+                    ProviderError::Malformed(format!(
+                        "tool call arguments are invalid JSON; call_id={call_id} tool={name} position={}",
+                        error.column()
+                    ))
+                })?;
+                if !arguments.is_object() {
+                    return Err(ProviderError::Malformed(format!(
+                        "tool call arguments are not an object; call_id={call_id} tool={name}"
+                    )));
+                }
+                events.push(ProviderEvent::ToolCallRequested {
+                    call_id,
+                    name,
+                    arguments,
+                });
+            }
+        }
+        self.finalized = true;
+        Ok(events)
+    }
+}
+
+fn set_partial_string(
+    target: &mut Option<String>,
+    value: Option<&Value>,
+    label: &str,
+) -> Result<(), ProviderError> {
+    let Some(value) = value
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    if target.as_deref().is_some_and(|current| current != value) {
+        return Err(ProviderError::Malformed(format!(
+            "streamed {label} changed during assembly"
+        )));
+    }
+    *target = Some(value.into());
+    Ok(())
 }
 
 /// Role-to-profile routing and permit-bound adapters.
@@ -642,7 +1382,7 @@ fn validate_model_request(
     Ok(())
 }
 
-fn responses_payload(request: &ModelRequest) -> Result<Value, ProviderError> {
+fn responses_payload(request: &ModelRequest, streaming: bool) -> Result<Value, ProviderError> {
     let mut input = Vec::new();
     for message in &request.messages {
         input.extend(responses_messages(message)?);
@@ -665,6 +1405,7 @@ fn responses_payload(request: &ModelRequest) -> Result<Value, ProviderError> {
         "instructions": request.instructions,
         "input": input,
         "store": false,
+        "stream": streaming,
     });
     if !tools.is_empty() {
         payload["tools"] = Value::Array(tools);
@@ -713,7 +1454,7 @@ fn responses_tool_call(call: &ModelToolCall) -> Value {
     })
 }
 
-fn chat_payload(request: &ModelRequest) -> Result<Value, ProviderError> {
+fn chat_payload(request: &ModelRequest, streaming: bool) -> Result<Value, ProviderError> {
     let mut messages = Vec::new();
     if !request.instructions.is_empty() {
         messages.push(json!({"role": "system", "content": request.instructions}));
@@ -726,7 +1467,10 @@ fn chat_payload(request: &ModelRequest) -> Result<Value, ProviderError> {
             .collect::<Result<Vec<_>, _>>()?,
     );
     let tools = request.tools.iter().map(chat_tool).collect::<Vec<_>>();
-    let mut payload = json!({"model": request.model, "messages": messages, "stream": false});
+    let mut payload = json!({"model": request.model, "messages": messages, "stream": streaming});
+    if streaming {
+        payload["stream_options"] = json!({"include_usage": true});
+    }
     if !tools.is_empty() {
         payload["tools"] = Value::Array(tools);
     }
@@ -845,6 +1589,9 @@ fn normalize_responses(
     if !text.is_empty() && tool_calls == 0 {
         events.push(ProviderEvent::FinalOutput { text });
     }
+    if let Some(usage) = normalize_usage(object.get("usage"), UsageShape::Responses)? {
+        events.push(ProviderEvent::Usage { usage });
+    }
     if events.is_empty() {
         return Err(ProviderError::Malformed(response_shape(object, "output")));
     }
@@ -897,6 +1644,9 @@ fn normalize_chat(profile: &ProviderProfile, bytes: &[u8]) -> Result<ProviderTur
             events.push(ProviderEvent::FinalOutput { text });
         }
     }
+    if let Some(usage) = normalize_usage(object.get("usage"), UsageShape::Chat)? {
+        events.push(ProviderEvent::Usage { usage });
+    }
     if !events.iter().any(|event| {
         matches!(
             event,
@@ -912,6 +1662,94 @@ fn normalize_chat(profile: &ProviderProfile, bytes: &[u8]) -> Result<ProviderTur
         response_id: object.get("id").and_then(Value::as_str).map(str::to_owned),
         events,
     })
+}
+
+#[derive(Clone, Copy)]
+enum UsageShape {
+    Responses,
+    Chat,
+}
+
+fn normalize_usage(
+    value: Option<&Value>,
+    shape: UsageShape,
+) -> Result<Option<ProviderUsage>, ProviderError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| ProviderError::Malformed("provider usage is not an object".into()))?;
+    let (input_name, output_name, input_details, output_details) = match shape {
+        UsageShape::Responses => (
+            "input_tokens",
+            "output_tokens",
+            "input_tokens_details",
+            "output_tokens_details",
+        ),
+        UsageShape::Chat => (
+            "prompt_tokens",
+            "completion_tokens",
+            "prompt_tokens_details",
+            "completion_tokens_details",
+        ),
+    };
+    let input_tokens = usage_u64(object, input_name)?;
+    let output_tokens = usage_u64(object, output_name)?;
+    let total_tokens = usage_u64(object, "total_tokens")?;
+    let cached_input_tokens = usage_detail(object, input_details, "cached_tokens")?;
+    let reasoning_tokens = usage_detail(object, output_details, "reasoning_tokens")?;
+    if input_tokens.saturating_add(output_tokens) > total_tokens
+        || cached_input_tokens.is_some_and(|tokens| tokens > input_tokens)
+        || reasoning_tokens.is_some_and(|tokens| tokens > output_tokens)
+    {
+        return Err(ProviderError::Malformed(
+            "provider usage totals or details are inconsistent".into(),
+        ));
+    }
+    Ok(Some(ProviderUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        cached_input_tokens,
+        reasoning_tokens,
+    }))
+}
+
+fn usage_u64(object: &Map<String, Value>, field: &str) -> Result<u64, ProviderError> {
+    object
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| ProviderError::Malformed(format!("provider usage has no {field}")))
+}
+
+fn usage_detail(
+    object: &Map<String, Value>,
+    details_field: &str,
+    value_field: &str,
+) -> Result<Option<u64>, ProviderError> {
+    let Some(details) = object.get(details_field) else {
+        return Ok(None);
+    };
+    if details.is_null() {
+        return Ok(None);
+    }
+    let details = details.as_object().ok_or_else(|| {
+        ProviderError::Malformed(format!("provider usage {details_field} is not an object"))
+    })?;
+    details
+        .get(value_field)
+        .map(|value| {
+            value.as_u64().ok_or_else(|| {
+                ProviderError::Malformed(format!(
+                    "provider usage {details_field}.{value_field} is invalid"
+                ))
+            })
+        })
+        .transpose()
 }
 
 fn normalize_models(bytes: &[u8]) -> Result<Vec<ProviderModelInfo>, ProviderError> {
@@ -1119,8 +1957,8 @@ mod tests {
     use super::*;
     use colossus_contracts::{DecisionOutcome, ProviderEvent};
     use colossus_policy::{
-        BuiltInPolicy, DenyApproval, EffectGateway, GatewayError, SafetyKernel, effect_request,
-        system_actor,
+        BuiltInPolicy, DenyApproval, EffectGateway, ExecutionError, GatewayError,
+        ReleasedEffectObserver, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
     };
     use colossus_ports::EventJournal;
     use colossus_testkit::InMemoryEventJournal;
@@ -1232,6 +2070,52 @@ mod tests {
         (format!("http://{address}/v1"), task)
     }
 
+    async fn one_sse_server(body: String) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut request = Vec::new();
+            let mut scratch = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut scratch).await.expect("read request");
+                assert_ne!(read, 0, "client closed before completing request");
+                request.extend_from_slice(&scratch[..read]);
+                if request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8_lossy(&request).into_owned();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write headers");
+            for chunk in body.as_bytes().chunks(17) {
+                stream.write_all(chunk).await.expect("write SSE chunk");
+                tokio::task::yield_now().await;
+            }
+            request_text
+        });
+        (format!("http://{address}/v1"), task)
+    }
+
+    #[derive(Default)]
+    struct ReleasedItems(Vec<ProviderStreamItem>);
+
+    #[async_trait]
+    impl ReleasedEffectObserver for ReleasedItems {
+        async fn observe(&mut self, result: ReleasedEffectResult) -> Result<(), ExecutionError> {
+            let item = serde_json::from_slice(&result.bytes)
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+            self.0.push(item);
+            Ok(())
+        }
+    }
+
     #[test]
     fn malformed_tool_arguments_fail_closed() {
         let profile = ProviderProfile::new(
@@ -1312,6 +2196,90 @@ mod tests {
     }
 
     #[test]
+    fn responses_stream_normalizes_deltas_completion_and_usage() {
+        let mut state = ResponsesStreamState::default();
+        assert!(
+            state
+                .ingest(json!({
+                    "type": "response.created",
+                    "response": {"id": "resp-stream"}
+                }))
+                .expect("created")
+                .is_empty()
+        );
+        let events = state
+            .ingest(json!({
+                "type": "response.output_text.delta",
+                "delta": "hello"
+            }))
+            .expect("delta");
+        assert!(matches!(
+            &events[0],
+            ProviderEvent::ModelDelta { text } if text == "hello"
+        ));
+        let events = state
+            .ingest(json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-stream",
+                    "status": "completed",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 5,
+                        "output_tokens": 2,
+                        "total_tokens": 7,
+                        "input_tokens_details": {"cached_tokens": 1},
+                        "output_tokens_details": {"reasoning_tokens": 1}
+                    }
+                }
+            }))
+            .expect("completed");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderEvent::FinalOutput { text } if text == "hello"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderEvent::Usage { usage }
+                if usage.input_tokens == 5
+                    && usage.output_tokens == 2
+                    && usage.total_tokens == 7
+                    && usage.cached_input_tokens == Some(1)
+                    && usage.reasoning_tokens == Some(1)
+        )));
+        assert!(state.finish().expect("finished").is_empty());
+    }
+
+    #[test]
+    fn incomplete_sse_and_unterminated_chat_streams_fail_closed() {
+        let mut decoder = SseDecoder::default();
+        assert!(
+            decoder
+                .feed(br#"data: {"id":"chat-1"}"#)
+                .expect("buffered partial frame")
+                .is_empty()
+        );
+        assert!(matches!(decoder.finish(), Err(ProviderError::Transport(_))));
+
+        let mut state = ChatStreamState::default();
+        let events = state
+            .ingest(json!({
+                "id": "chat-1",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": "partial"},
+                    "finish_reason": null
+                }]
+            }))
+            .expect("partial chat chunk");
+        assert!(matches!(
+            &events[0],
+            ProviderEvent::ModelDelta { text } if text == "partial"
+        ));
+        assert!(matches!(state.finish(), Err(ProviderError::Transport(_))));
+    }
+
+    #[test]
     fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
         let request = ModelRequest {
             model: "unit-model".into(),
@@ -1336,13 +2304,13 @@ mod tests {
             ],
             tools: Vec::new(),
         };
-        let responses = responses_payload(&request).expect("Responses payload");
+        let responses = responses_payload(&request, false).expect("Responses payload");
         assert_eq!(responses["input"][0]["type"], "function_call");
         assert_eq!(responses["input"][0]["call_id"], "call-1");
         assert_eq!(responses["input"][1]["type"], "function_call_output");
         assert_eq!(responses["input"][1]["call_id"], "call-1");
 
-        let chat = chat_payload(&request).expect("chat payload");
+        let chat = chat_payload(&request, false).expect("chat payload");
         assert_eq!(chat["messages"][1]["tool_calls"][0]["id"], "call-1");
         assert_eq!(chat["messages"][2]["tool_call_id"], "call-1");
     }
@@ -1475,6 +2443,150 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(event_types.contains(&"effect.release_requested.v1".into()));
         assert!(event_types.contains(&"effect.completed.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn compatible_sse_stream_releases_ordered_deltas_usage_and_completion() {
+        let body = [
+            r#"data: {"id":"chat-1","choices":[{"index":0,"delta":{"content":"con"},"finish_reason":null}]}
+
+"#,
+            r#"data: {"id":"chat-1","choices":[{"index":0,"delta":{"content":"nected"},"finish_reason":"stop"}]}
+
+"#,
+            r#"data: {"id":"chat-1","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":1}}}
+
+"#,
+            "data: [DONE]\n\n",
+        ]
+        .concat();
+        let (base_url, server) = one_sse_server(body).await;
+        let profile = ProviderProfile::new(
+            "local",
+            ProviderKind::OpenAiCompatible,
+            "unit-model",
+            Some(base_url),
+            None,
+            5_000,
+        )
+        .expect("profile");
+        let origin = profile
+            .network_origin()
+            .expect("origin")
+            .expect("network origin");
+        let executor = ProviderExecutor::new(profile.clone());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+            .with_network_destination(origin)
+            .with_post_effect(true);
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["provider.call".into()]),
+            [4_u8; 32],
+        );
+        let mut released = ReleasedItems::default();
+        let terminal = gateway
+            .execute_stream(provider_request(&profile), &executor, &mut released)
+            .await
+            .expect("streamed provider call");
+        let terminal: ProviderStreamItem =
+            serde_json::from_slice(&terminal.bytes).expect("terminal item");
+        assert!(matches!(
+            terminal,
+            ProviderStreamItem::Completed {
+                ref response_id, ..
+            }
+                if response_id.as_deref() == Some("chat-1")
+        ));
+        assert!(matches!(
+            &released.0[0],
+            ProviderStreamItem::Event { event: ProviderEvent::ModelDelta { text } }
+                if text == "con"
+        ));
+        assert!(matches!(
+            &released.0[1],
+            ProviderStreamItem::Event { event: ProviderEvent::ModelDelta { text } }
+                if text == "nected"
+        ));
+        assert!(released.0.iter().any(|item| matches!(
+            item,
+            ProviderStreamItem::Event { event: ProviderEvent::Usage { usage } }
+                if usage.input_tokens == 7
+                    && usage.output_tokens == 2
+                    && usage.total_tokens == 9
+                    && usage.cached_input_tokens == Some(3)
+                    && usage.reasoning_tokens == Some(1)
+        )));
+        assert!(released.0.iter().any(|item| matches!(
+            item,
+            ProviderStreamItem::Event { event: ProviderEvent::FinalOutput { text } }
+                if text == "connected"
+        )));
+        assert_eq!(released.0.last(), Some(&terminal));
+        let raw_request = server.await.expect("server task");
+        assert!(raw_request.contains("\"stream\":true"));
+        assert!(raw_request.contains("\"include_usage\":true"));
+        assert!(
+            journal
+                .read_global(1, 50)
+                .expect("events")
+                .iter()
+                .any(|event| event.event_type == "effect.chunk_released.v1")
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_credential_echo_is_redacted_before_release() {
+        let body = [
+            r#"data: {"id":"chat-secret","choices":[{"index":0,"delta":{"content":"unit-secret"},"finish_reason":"stop"}]}
+
+"#,
+            "data: [DONE]\n\n",
+        ]
+        .concat();
+        let (base_url, server) = one_sse_server(body).await;
+        let profile = ProviderProfile::new(
+            "local",
+            ProviderKind::OpenAiCompatible,
+            "unit-model",
+            Some(base_url),
+            Some("env:UNIT_PROVIDER_KEY".into()),
+            5_000,
+        )
+        .expect("profile");
+        let origin = profile
+            .network_origin()
+            .expect("origin")
+            .expect("network origin");
+        let credentials = Arc::new(CountingCredentialResolver::new());
+        let executor = ProviderExecutor::with_credentials(
+            profile.clone(),
+            Arc::clone(&credentials) as Arc<dyn CredentialResolver>,
+        );
+        let policy = BuiltInPolicy::offline_default()
+            .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+            .with_network_destination(origin)
+            .with_post_effect(true);
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["provider.call".into()]),
+            [5_u8; 32],
+        );
+        let mut released = ReleasedItems::default();
+        gateway
+            .execute_stream(provider_request(&profile), &executor, &mut released)
+            .await
+            .expect("streamed provider call");
+        let serialized = serde_json::to_string(&released.0).expect("released JSON");
+        assert!(!serialized.contains("unit-secret"));
+        assert!(serialized.contains("[REDACTED]"));
+        assert_eq!(credentials.calls.load(Ordering::Acquire), 1);
+        server.await.expect("server task");
     }
 
     #[tokio::test]

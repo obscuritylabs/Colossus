@@ -165,6 +165,14 @@ Streaming providers emit `ModelDeltaEvent`, `ToolCallRequestedEvent`, and option
 safe `ReasoningSummaryEvent` values through the same observer path used by the CLI,
 and REPL.
 
+The Rust provider boundary consumes Responses API and compatible Chat Completions SSE
+incrementally. Each normalized event is quarantined, independently post-authorized when
+required, durably appended to the run stream, and only then forwarded to an interface
+observer. A terminal stream item carries provider response metadata and must be the final
+released item. An interrupted stream preserves already released events and returns an
+unknown outcome instead of synthesizing completion or retrying. Provider usage is a typed
+event and telemetry aggregates its normalized token counts.
+
 User surfaces must be thin:
 
 - CLI commands compose services and render results.

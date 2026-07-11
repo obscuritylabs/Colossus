@@ -8,10 +8,10 @@ use colossus_contracts::{
     ExecutionContext, GoalRecord, GoalStatus, IntegrationConnection, KeyDecision, MemoryRecord,
     ModelMessage, ModelRequest, ModelToolDefinition, NewEvent, PackInstallation, PackStatus,
     PlanRecord, PlanStatus, PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem,
-    ProviderRoute, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun, ResearchSource,
-    SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord, SubagentJob,
-    SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec, WorkflowDefinition,
-    WorkflowRun,
+    ProviderEvent, ProviderRoute, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun,
+    ResearchSource, SessionMessage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord,
+    SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall, ToolResult, ToolSpec,
+    WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -177,6 +177,28 @@ pub trait ModelProvider: Send + Sync {
         request: ModelRequest,
         context: ExecutionContext,
     ) -> Result<ProviderTurn, ModelProviderError>;
+
+    /// Execute one provider turn while observing safe events as they are released.
+    async fn turn_stream(
+        &self,
+        role: &str,
+        request: ModelRequest,
+        context: ExecutionContext,
+        observer: &mut dyn ProviderEventObserver,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        let turn = self.turn(role, request, context).await?;
+        for event in &turn.events {
+            observer.observe(event.clone()).await?;
+        }
+        Ok(turn)
+    }
+}
+
+/// Application observer for provider events released through policy.
+#[async_trait]
+pub trait ProviderEventObserver: Send {
+    /// Persist or render one safe ordered event.
+    async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError>;
 }
 
 /// Active model-visible tool catalog with strict schema validation.

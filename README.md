@@ -19,6 +19,7 @@ Rust foundation smoke test (fresh YAML and fresh encrypted state):
 ```bash
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- config init
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- echo hello
+cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --stream "hello"
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
 cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sandbox doctor

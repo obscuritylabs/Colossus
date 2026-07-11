@@ -12,11 +12,11 @@ use colossus_contracts::{
     KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole,
     ModelRequest, NewEvent, PackInstallation, PackVerification, PlanRecord, PlanStatus, PlanStep,
     PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderRoute, ProviderTurn, PublisherTrust, QuarantinedEffectResult,
-    ResearchClaim, ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind,
-    RunTelemetryDetail, RunTelemetrySummary, SessionMessage, SessionSummary, SkillComposition,
-    SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord,
-    SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
+    ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
+    QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
+    ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage, SessionSummary,
+    SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult,
+    SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
     SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
     TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
 };
@@ -43,14 +43,15 @@ use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, OpaConfig,
-    OpaPolicy, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
+    OpaPolicy, ReleasedEffectObserver, ReleasedEffectResult, SafetyKernel, effect_request,
+    system_actor,
 };
 use colossus_ports::{
     ApprovalProvider, ContextError, ContextPreparer, ContextRepository, EmbeddingProvider,
     EventJournal, ExtensionRepository, KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever,
-    ModelProvider, ModelProviderError, PolicyDecisionPoint, ProjectionStore, ResearchRepository,
-    SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
-    WorkRepository, WorkflowRepository,
+    ModelProvider, ModelProviderError, PolicyDecisionPoint, ProjectionStore, ProviderEventObserver,
+    ResearchRepository, SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor,
+    ToolRegistry, WorkRepository, WorkflowRepository,
 };
 use colossus_projection::{ProjectionRunReport, ProjectionWorker, default_handlers};
 use colossus_provider::{
@@ -3885,6 +3886,46 @@ impl Runtime {
             .map_err(Into::into)
     }
 
+    /// Execute a normal run and forward only policy-released provider events.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_model_with_skills_stream(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+        observer: &mut dyn ProviderEventObserver,
+    ) -> Result<AgentRunResult, RuntimeError> {
+        let composition = self.skill_composer.compose(
+            instructions,
+            prompt,
+            explicit_skills,
+            sticky_skills,
+            self.skills_enabled,
+            &self.tools.list_specs(),
+        )?;
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<Vec<_>>();
+        self.agent
+            .run_in_session_with_skills_stream(
+                role,
+                &composition.instructions,
+                prompt,
+                max_turns.unwrap_or(self.agent_max_turns),
+                session_id,
+                &active,
+                observer,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     /// Run bounded autonomous iterations using the normal agent, session, policy, and tools.
     pub async fn run_goal(
         &self,
@@ -4573,6 +4614,132 @@ impl ModelProvider for GatewayModelProvider {
                 "released provider output violated the normalized turn contract".into(),
             )
         })
+    }
+
+    async fn turn_stream(
+        &self,
+        role: &str,
+        request: ModelRequest,
+        context: ExecutionContext,
+        observer: &mut dyn ProviderEventObserver,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        let provider = self
+            .providers
+            .resolve(role)
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+        let endpoint = provider
+            .profile()
+            .generation_endpoint()
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+        let mut effect = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            provider.profile().kind.generation_action(),
+            endpoint,
+            serde_json::to_value(ProviderEffectInput {
+                profile: provider.profile().name.clone(),
+                request: Some(request),
+            })
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?,
+        );
+        effect.capabilities = vec!["provider.call".into()];
+        effect.context = context;
+        effect.credential_references = provider.credential_reference().into_iter().collect();
+        let mut bridge = ReleasedProviderStream::new(observer);
+        let terminal = self
+            .gateway
+            .execute_stream(effect, provider.as_ref(), &mut bridge)
+            .await
+            .map_err(model_gateway_error)?;
+        bridge.finish(&terminal.bytes)
+    }
+}
+
+struct ReleasedProviderStream<'a> {
+    observer: &'a mut dyn ProviderEventObserver,
+    events: Vec<ProviderEvent>,
+    completed: Option<(String, String, String, Option<String>)>,
+}
+
+impl<'a> ReleasedProviderStream<'a> {
+    fn new(observer: &'a mut dyn ProviderEventObserver) -> Self {
+        Self {
+            observer,
+            events: Vec::new(),
+            completed: None,
+        }
+    }
+
+    fn finish(self, terminal: &[u8]) -> Result<ProviderTurn, ModelProviderError> {
+        let expected: ProviderStreamItem = serde_json::from_slice(terminal).map_err(|_| {
+            ModelProviderError::Failed(
+                "released provider stream terminal violated its contract".into(),
+            )
+        })?;
+        let ProviderStreamItem::Completed {
+            profile,
+            provider,
+            model,
+            response_id,
+        } = expected
+        else {
+            return Err(ModelProviderError::Failed(
+                "released provider stream did not end with completion metadata".into(),
+            ));
+        };
+        if self.completed.as_ref()
+            != Some(&(
+                profile.clone(),
+                provider.clone(),
+                model.clone(),
+                response_id.clone(),
+            ))
+        {
+            return Err(ModelProviderError::Failed(
+                "released provider stream completion metadata did not match".into(),
+            ));
+        }
+        Ok(ProviderTurn {
+            profile,
+            provider,
+            model,
+            response_id,
+            events: self.events,
+        })
+    }
+}
+
+#[async_trait]
+impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
+    async fn observe(&mut self, result: ReleasedEffectResult) -> Result<(), ExecutionError> {
+        let item: ProviderStreamItem = serde_json::from_slice(&result.bytes).map_err(|_| {
+            ExecutionError::Failed("released provider stream item violated its contract".into())
+        })?;
+        match item {
+            ProviderStreamItem::Event { event } => {
+                self.observer
+                    .observe(event.clone())
+                    .await
+                    .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+                self.events.push(event);
+            }
+            ProviderStreamItem::Completed {
+                profile,
+                provider,
+                model,
+                response_id,
+            } => {
+                if self.completed.is_some() {
+                    return Err(ExecutionError::Failed(
+                        "provider stream completed more than once".into(),
+                    ));
+                }
+                self.completed = Some((profile, provider, model, response_id));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -98,6 +98,11 @@ impl TelemetryService {
             context_compactions: 0,
             error_events: 0,
             final_outputs: 0,
+            provider_input_tokens: 0,
+            provider_output_tokens: 0,
+            provider_total_tokens: 0,
+            provider_cached_input_tokens: 0,
+            provider_reasoning_tokens: 0,
             event_types: BTreeMap::new(),
         };
         let mut duration_total = 0.0;
@@ -131,6 +136,21 @@ impl TelemetryService {
                 .saturating_add(summary.context_compactions);
             metrics.error_events = metrics.error_events.saturating_add(summary.error_events);
             metrics.final_outputs = metrics.final_outputs.saturating_add(summary.final_outputs);
+            metrics.provider_input_tokens = metrics
+                .provider_input_tokens
+                .saturating_add(summary.provider_input_tokens);
+            metrics.provider_output_tokens = metrics
+                .provider_output_tokens
+                .saturating_add(summary.provider_output_tokens);
+            metrics.provider_total_tokens = metrics
+                .provider_total_tokens
+                .saturating_add(summary.provider_total_tokens);
+            metrics.provider_cached_input_tokens = metrics
+                .provider_cached_input_tokens
+                .saturating_add(summary.provider_cached_input_tokens);
+            metrics.provider_reasoning_tokens = metrics
+                .provider_reasoning_tokens
+                .saturating_add(summary.provider_reasoning_tokens);
             for (event_type, count) in summary.event_types {
                 let total = metrics.event_types.entry(event_type).or_default();
                 *total = total.saturating_add(count);
@@ -249,7 +269,14 @@ fn summarize(
         context_compactions: 0,
         error_events: 0,
         final_outputs: 0,
+        provider_input_tokens: 0,
+        provider_output_tokens: 0,
+        provider_total_tokens: 0,
+        provider_cached_input_tokens: 0,
+        provider_reasoning_tokens: 0,
     };
+    let mut delta_output_chars = 0_usize;
+    let mut final_output_chars = 0_usize;
     for event in events {
         *summary
             .event_types
@@ -257,15 +284,13 @@ fn summarize(
             .or_default() += 1;
         match event.event_type.as_str() {
             "model.delta.v1" => {
-                summary.model_output_chars = summary
-                    .model_output_chars
-                    .saturating_add(payload_text_chars(journal, event, "text")?);
+                delta_output_chars =
+                    delta_output_chars.saturating_add(payload_text_chars(journal, event, "text")?);
             }
             "final.output.v1" => {
                 summary.final_outputs = summary.final_outputs.saturating_add(1);
-                summary.model_output_chars = summary
-                    .model_output_chars
-                    .saturating_add(payload_text_chars(journal, event, "text")?);
+                final_output_chars =
+                    final_output_chars.saturating_add(payload_text_chars(journal, event, "text")?);
             }
             "tool.call.requested.v1" => {
                 summary.tool_calls = summary.tool_calls.saturating_add(1);
@@ -274,6 +299,41 @@ fn summarize(
                 if payload_i64(journal, event, "exit_code")?.is_some_and(|code| code != 0) {
                     summary.tool_errors = summary.tool_errors.saturating_add(1);
                 }
+            }
+            "provider.usage.v1" => {
+                let usage = payload(journal, event)?;
+                summary.provider_input_tokens = summary.provider_input_tokens.saturating_add(
+                    usage
+                        .get("input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                );
+                summary.provider_output_tokens = summary.provider_output_tokens.saturating_add(
+                    usage
+                        .get("output_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                );
+                summary.provider_total_tokens = summary.provider_total_tokens.saturating_add(
+                    usage
+                        .get("total_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                );
+                summary.provider_cached_input_tokens =
+                    summary.provider_cached_input_tokens.saturating_add(
+                        usage
+                            .get("cached_input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                    );
+                summary.provider_reasoning_tokens =
+                    summary.provider_reasoning_tokens.saturating_add(
+                        usage
+                            .get("reasoning_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                    );
             }
             "approval.granted.v1" | "approval.denied.v1" | "approval.error.v1" => {
                 summary.approval_requests = summary.approval_requests.saturating_add(1);
@@ -305,6 +365,11 @@ fn summarize(
             summary.error_events = summary.error_events.saturating_add(1);
         }
     }
+    summary.model_output_chars = if delta_output_chars > 0 {
+        delta_output_chars
+    } else {
+        final_output_chars
+    };
     Ok(summary)
 }
 
@@ -443,18 +508,35 @@ mod tests {
             "final.output.v1",
             json!({"text": "done"}),
         );
+        append(
+            journal.as_ref(),
+            6,
+            "provider.usage.v1",
+            json!({
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "total_tokens": 14,
+                "cached_input_tokens": 3,
+                "reasoning_tokens": 2,
+            }),
+        );
         let service = TelemetryService::new(journal);
         let summary = service
             .list_runs(Some("session-1"), 20)
             .expect("runs")
             .remove(0);
-        assert_eq!(summary.events, 6);
-        assert_eq!(summary.model_output_chars, 22);
+        assert_eq!(summary.events, 7);
+        assert_eq!(summary.model_output_chars, 18);
         assert_eq!(summary.tool_calls, 1);
         assert_eq!(summary.tool_errors, 1);
         assert_eq!(summary.context_compactions, 1);
         assert_eq!(summary.research_events, 1);
         assert_eq!(summary.final_outputs, 1);
+        assert_eq!(summary.provider_input_tokens, 10);
+        assert_eq!(summary.provider_output_tokens, 4);
+        assert_eq!(summary.provider_total_tokens, 14);
+        assert_eq!(summary.provider_cached_input_tokens, 3);
+        assert_eq!(summary.provider_reasoning_tokens, 2);
         let detail = service.get_run("run-tele", 3).expect("detail");
         assert!(detail.truncated);
         assert_eq!(detail.records.len(), 3);
@@ -463,7 +545,8 @@ mod tests {
         assert!(!rendered.contains("secret tool output"));
         let metrics = service.metrics(None, 100).expect("metrics");
         assert_eq!(metrics.run_count, 1);
-        assert_eq!(metrics.event_count, 6);
+        assert_eq!(metrics.event_count, 7);
+        assert_eq!(metrics.provider_total_tokens, 14);
     }
 
     #[test]

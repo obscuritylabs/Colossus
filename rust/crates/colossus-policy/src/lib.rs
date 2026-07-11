@@ -104,6 +104,9 @@ pub enum ExecutionError {
     /// Adapter cannot prove whether the external effect occurred.
     #[error("{0}")]
     OutcomeUnknown(String),
+    /// Gateway post-effect policy rejected one streamed result before observation.
+    #[error("stream release denied: {0}")]
+    ReleaseDenied(String),
 }
 
 /// Output released only after all required policy decisions.
@@ -190,6 +193,33 @@ pub trait EffectExecutor: Send + Sync {
         request: &EffectRequest,
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError>;
+}
+
+/// Receives bounded adapter chunks that have not yet crossed post-effect policy.
+#[async_trait]
+pub trait QuarantinedEffectObserver: Send {
+    /// Submit one normalized chunk for policy-controlled release.
+    async fn observe(&mut self, result: QuarantinedEffectResult) -> Result<(), ExecutionError>;
+}
+
+/// Effectful adapter capable of producing ordered normalized chunks.
+#[async_trait]
+pub trait StreamingEffectExecutor: Send + Sync {
+    /// Execute with one permit and submit every externally observable chunk to the sink.
+    /// The returned terminal result must exactly match the last submitted chunk.
+    async fn execute_stream(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+        observer: &mut dyn QuarantinedEffectObserver,
+    ) -> Result<QuarantinedEffectResult, ExecutionError>;
+}
+
+/// Observer that can receive only results released by the effect gateway.
+#[async_trait]
+pub trait ReleasedEffectObserver: Send {
+    /// Observe one ordered, bounded, post-authorized result.
+    async fn observe(&mut self, result: ReleasedEffectResult) -> Result<(), ExecutionError>;
 }
 
 /// Hard safety checks policy is never allowed to override.
@@ -612,6 +642,145 @@ pub struct EffectGateway {
     permit_key: [u8; 32],
 }
 
+struct StreamBridge<'a> {
+    gateway: &'a EffectGateway,
+    executor: &'a dyn StreamingEffectExecutor,
+    observer: tokio::sync::Mutex<&'a mut dyn ReleasedEffectObserver>,
+}
+
+struct GatewayStreamSink<'a> {
+    gateway: &'a EffectGateway,
+    request: &'a EffectRequest,
+    obligations: PolicyObligations,
+    observer: &'a mut dyn ReleasedEffectObserver,
+    sequence: u64,
+    total_bytes: usize,
+    last: Option<QuarantinedEffectResult>,
+    failure: Option<StreamSinkFailure>,
+}
+
+enum StreamSinkFailure {
+    Failed(String),
+    Unknown(String),
+    Denied(String),
+}
+
+impl StreamSinkFailure {
+    fn execution_error(&self) -> ExecutionError {
+        match self {
+            Self::Failed(message) => ExecutionError::Failed(message.clone()),
+            Self::Unknown(message) => ExecutionError::OutcomeUnknown(message.clone()),
+            Self::Denied(message) => ExecutionError::ReleaseDenied(message.clone()),
+        }
+    }
+}
+
+#[async_trait]
+impl QuarantinedEffectObserver for GatewayStreamSink<'_> {
+    async fn observe(&mut self, result: QuarantinedEffectResult) -> Result<(), ExecutionError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.execution_error());
+        }
+        if !result.effect_succeeded {
+            let failure =
+                StreamSinkFailure::Failed("streaming adapter reported chunk failure".into());
+            let error = failure.execution_error();
+            self.failure = Some(failure);
+            return Err(error);
+        }
+        let limit = match usize::try_from(self.obligations.max_output_bytes) {
+            Ok(limit) => limit,
+            Err(error) => {
+                let failure = StreamSinkFailure::Failed(error.to_string());
+                let error = failure.execution_error();
+                self.failure = Some(failure);
+                return Err(error);
+            }
+        };
+        self.total_bytes = self.total_bytes.saturating_add(result.bytes.len());
+        if self.total_bytes > limit {
+            let failure = StreamSinkFailure::Unknown(
+                "streamed provider output exceeds the cumulative permitted bound".into(),
+            );
+            let error = failure.execution_error();
+            self.failure = Some(failure);
+            return Err(error);
+        }
+        self.sequence = self.sequence.saturating_add(1);
+        let released = match self
+            .gateway
+            .release_stream_chunk(self.request, &self.obligations, self.sequence, &result)
+            .await
+        {
+            Ok(released) => released,
+            Err(GatewayError::Denied(message)) => {
+                let failure = StreamSinkFailure::Denied(message);
+                let error = failure.execution_error();
+                self.failure = Some(failure);
+                return Err(error);
+            }
+            Err(error) => {
+                let failure = StreamSinkFailure::Unknown(format!(
+                    "stream release failed after execution began: {error}"
+                ));
+                let error = failure.execution_error();
+                self.failure = Some(failure);
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.observer.observe(released).await {
+            let failure = match error {
+                ExecutionError::ReleaseDenied(message) => StreamSinkFailure::Denied(message),
+                ExecutionError::Failed(message)
+                | ExecutionError::OutcomeUnknown(message)
+                | ExecutionError::Recoverable { message, .. } => StreamSinkFailure::Unknown(
+                    format!("released stream observation failed: {message}"),
+                ),
+            };
+            let error = failure.execution_error();
+            self.failure = Some(failure);
+            return Err(error);
+        }
+        self.last = Some(result);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EffectExecutor for StreamBridge<'_> {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        let obligations = permit.obligations().clone();
+        let mut observer = self.observer.lock().await;
+        let mut sink = GatewayStreamSink {
+            gateway: self.gateway,
+            request,
+            obligations,
+            observer: &mut **observer,
+            sequence: 0,
+            total_bytes: 0,
+            last: None,
+            failure: None,
+        };
+        let terminal = self
+            .executor
+            .execute_stream(request, permit, &mut sink)
+            .await?;
+        if let Some(failure) = &sink.failure {
+            return Err(failure.execution_error());
+        }
+        if sink.sequence == 0 || sink.last.as_ref() != Some(&terminal) {
+            return Err(ExecutionError::Failed(
+                "streaming adapter terminal result did not match its last released chunk".into(),
+            ));
+        }
+        Ok(terminal)
+    }
+}
+
 impl EffectGateway {
     /// Compose trusted journal, policy, approval, and permit services.
     pub fn new(
@@ -779,6 +948,30 @@ impl EffectGateway {
         request: EffectRequest,
         executor: &dyn EffectExecutor,
     ) -> Result<ReleasedEffectResult, GatewayError> {
+        self.execute_internal(request, executor, false).await
+    }
+
+    /// Authorize one streaming effect and release only gateway-approved normalized chunks.
+    pub async fn execute_stream(
+        &self,
+        request: EffectRequest,
+        executor: &dyn StreamingEffectExecutor,
+        observer: &mut dyn ReleasedEffectObserver,
+    ) -> Result<ReleasedEffectResult, GatewayError> {
+        let bridge = StreamBridge {
+            gateway: self,
+            executor,
+            observer: tokio::sync::Mutex::new(observer),
+        };
+        self.execute_internal(request, &bridge, true).await
+    }
+
+    async fn execute_internal(
+        &self,
+        request: EffectRequest,
+        executor: &dyn EffectExecutor,
+        chunks_already_released: bool,
+    ) -> Result<ReleasedEffectResult, GatewayError> {
         if self.journal.is_recovery_mode() {
             return Err(GatewayError::Journal(StoreError::RecoveryMode));
         }
@@ -924,6 +1117,9 @@ impl EffectGateway {
                 )?;
                 return Err(GatewayError::OutcomeUnknown(message));
             }
+            Ok(Err(ExecutionError::ReleaseDenied(message))) => {
+                return Err(GatewayError::Denied(message));
+            }
             Err(_) => {
                 let message = "adapter timed out after execution began".to_owned();
                 self.event(
@@ -960,7 +1156,7 @@ impl EffectGateway {
             ));
         }
 
-        if decision.obligations.require_post_effect {
+        if decision.obligations.require_post_effect && !chunks_already_released {
             let mut post_request = request.clone();
             post_request.request_id = format!("{}:post", request.request_id);
             post_request.phase = EffectPhase::PostEffect;
@@ -1010,6 +1206,68 @@ impl EffectGateway {
         Ok(ReleasedEffectResult {
             media_type: result.media_type,
             bytes: result.bytes,
+        })
+    }
+
+    async fn release_stream_chunk(
+        &self,
+        request: &EffectRequest,
+        obligations: &PolicyObligations,
+        sequence: u64,
+        result: &QuarantinedEffectResult,
+    ) -> Result<ReleasedEffectResult, GatewayError> {
+        if obligations.require_post_effect {
+            let mut post_request = request.clone();
+            post_request.request_id = format!("{}:post:chunk:{sequence}", request.request_id);
+            post_request.phase = EffectPhase::PostEffect;
+            post_request.approval = None;
+            post_request.content = json!({
+                "media_type": result.media_type,
+                "size": result.bytes.len(),
+                "sequence": sequence,
+                "content_base64": BASE64.encode(&result.bytes),
+            });
+            let post_request = self.kernel.prepare(&post_request)?;
+            self.event(
+                &post_request,
+                "effect.release_requested.v1",
+                EventClassification::Effect,
+                disclosure_summary(&post_request),
+            )?;
+            let post_decision = self.decide(&post_request).await?;
+            if post_decision.outcome != DecisionOutcome::Allow {
+                self.event(
+                    &post_request,
+                    "effect.release_denied.v1",
+                    EventClassification::Effect,
+                    json!({
+                        "decision_id": post_decision.decision_id,
+                        "reason": post_decision.reason,
+                        "content_hash": sha256_hex(&result.bytes),
+                        "size": result.bytes.len(),
+                        "sequence": sequence,
+                    }),
+                )?;
+                return Err(GatewayError::Denied(format!(
+                    "stream chunk post-effect release denied: {}",
+                    post_decision.reason
+                )));
+            }
+        }
+        self.event(
+            request,
+            "effect.chunk_released.v1",
+            EventClassification::Effect,
+            json!({
+                "content_hash": sha256_hex(&result.bytes),
+                "size": result.bytes.len(),
+                "sequence": sequence,
+                "media_type": result.media_type,
+            }),
+        )?;
+        Ok(ReleasedEffectResult {
+            media_type: result.media_type.clone(),
+            bytes: result.bytes.clone(),
         })
     }
 }
@@ -1448,7 +1706,8 @@ pub fn system_actor(id: impl Into<String>) -> Actor {
 mod tests {
     use super::{
         AllowApproval, BuiltInPolicy, EffectExecutor, EffectGateway, ExecutionError,
-        ExecutionPermit, GatewayError, SafetyKernel, effect_request, system_actor,
+        ExecutionPermit, GatewayError, QuarantinedEffectObserver, ReleasedEffectObserver,
+        ReleasedEffectResult, SafetyKernel, StreamingEffectExecutor, effect_request, system_actor,
     };
     use async_trait::async_trait;
     use colossus_contracts::{DecisionOutcome, QuarantinedEffectResult};
@@ -1931,6 +2190,74 @@ mod tests {
             .expect_err("post deny");
         assert!(matches!(error, GatewayError::Denied(_)));
         assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+    }
+
+    struct OneChunkExecutor;
+
+    #[async_trait]
+    impl StreamingEffectExecutor for OneChunkExecutor {
+        async fn execute_stream(
+            &self,
+            _request: &colossus_contracts::EffectRequest,
+            _permit: ExecutionPermit,
+            observer: &mut dyn QuarantinedEffectObserver,
+        ) -> Result<QuarantinedEffectResult, ExecutionError> {
+            let result = QuarantinedEffectResult {
+                media_type: "text/plain".into(),
+                bytes: b"must-not-release".to_vec(),
+                effect_succeeded: true,
+            };
+            let _ignored = observer.observe(result.clone()).await;
+            Ok(result)
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingReleasedObserver(usize);
+
+    #[async_trait]
+    impl ReleasedEffectObserver for CountingReleasedObserver {
+        async fn observe(&mut self, _result: ReleasedEffectResult) -> Result<(), ExecutionError> {
+            self.0 = self.0.saturating_add(1);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_stream_chunk_is_latched_even_when_adapter_ignores_sink_error() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(PostDenyPolicy),
+            Arc::new(AllowApproval {
+                approved_by: "user".into(),
+            }),
+            SafetyKernel::new([]),
+            [6_u8; 32],
+        );
+        let mut observer = CountingReleasedObserver::default();
+        let error = gateway
+            .execute_stream(
+                effect_request(
+                    system_actor("test"),
+                    "provider.remote",
+                    "https://example.test",
+                    serde_json::json!({"prompt":"x"}),
+                ),
+                &OneChunkExecutor,
+                &mut observer,
+            )
+            .await
+            .expect_err("post-effect policy must deny the stream chunk");
+        assert!(matches!(error, GatewayError::Denied(_)));
+        assert_eq!(observer.0, 0);
+        assert!(
+            journal
+                .read_global(1, 20)
+                .expect("events")
+                .iter()
+                .any(|event| event.event_type == "effect.release_denied.v1")
+        );
     }
 
     struct RecordingPolicy {

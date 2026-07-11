@@ -69,8 +69,10 @@ obsolete Go launcher.
 - A composition root and strict YAML config with role-routed echo, OpenAI Responses, and
   OpenAI-compatible provider profiles. Provider generation and model-catalog calls use
   permit-bound adapters, disclose credential references (never values) to policy, resolve
-  credentials only after authorization, quarantine and normalize responses, discard raw
-  hidden reasoning, and durably append safe typed model events.
+  credentials only after authorization, incrementally decode Responses and compatible
+  SSE, quarantine and optionally post-authorize every normalized item, discard raw hidden
+  reasoning, durably append safe typed model events before observation, and aggregate
+  normalized provider usage in telemetry.
 - One-shot `run`, provider profile/doctor/model diagnostics, role-route inspection, a
   Reedline REPL using the same primary-role application path, audit and policy diagnostics,
   workflow CLI surface, and one-shot worker recovery/drain entry point.
@@ -234,10 +236,10 @@ cutover. The following planned work remains:
   helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
   tests are implemented. CI compiles every
   Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
-- Incremental provider transport streaming and usage accounting. Durable Plan Mode,
-  single-use approval, plan-to-goal handoff, bounded Goal Mode, and durable subagents are
-  implemented. The durable memory, task/decision, and context budget/snapshot boundaries, durable
-  multi-turn loop, bounded malformed-tool recovery, strict catalog validation, pure echo,
+- Durable Plan Mode, single-use approval, plan-to-goal handoff, bounded Goal Mode, and
+  durable subagents are implemented. The durable memory, task/decision, and context
+  budget/snapshot boundaries, durable multi-turn loop, bounded malformed-tool recovery,
+  strict catalog validation, pure echo,
   permit-bound file list/read/search/write/replace, Git inspection, structured shell
   execution, and permit-bound HTTP GET are implemented.
 - Long-running worker ownership and authenticated Unix-socket/named-pipe IPC. The

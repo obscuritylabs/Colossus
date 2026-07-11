@@ -109,8 +109,9 @@ sandbox:
     let output = run(
         binary,
         &config,
-        &["run", "offline agent", "--max-turns", "4"],
+        &["run", "offline agent", "--max-turns", "4", "--stream"],
     );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "offline agent\n");
     assert!(
         output.status.success(),
         "{}",

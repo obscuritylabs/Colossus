@@ -2,13 +2,14 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, AgentRunResult, EventClassification, ExecutionContext, ModelMessage,
     ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, ProviderEvent, ToolCall, ToolResult,
 };
 use colossus_ports::{
     ContextError, ContextPreparer, EventJournal, ModelProvider, ModelProviderError,
-    SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
+    ProviderEventObserver, SessionRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
 };
 use colossus_tools::model_definitions;
 use serde_json::{Value, json};
@@ -124,6 +125,7 @@ impl AgentService {
             None,
             None,
             &[],
+            None,
         )
         .await
     }
@@ -149,6 +151,34 @@ impl AgentService {
             None,
             None,
             active_skills,
+            None,
+        )
+        .await
+    }
+
+    /// Execute a skilled run and forward only policy-released provider events.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_in_session_with_skills_stream(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        observer: &mut dyn ProviderEventObserver,
+    ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            None,
+            None,
+            None,
+            active_skills,
+            Some(observer),
         )
         .await
     }
@@ -175,6 +205,7 @@ impl AgentService {
             plan_id,
             None,
             &[],
+            None,
         )
         .await
     }
@@ -200,6 +231,7 @@ impl AgentService {
             None,
             Some(subagent_id),
             &[],
+            None,
         )
         .await
     }
@@ -216,6 +248,7 @@ impl AgentService {
         plan_id: Option<&str>,
         subagent_id: Option<&str>,
         active_skills: &[String],
+        mut released_observer: Option<&mut dyn ProviderEventObserver>,
     ) -> Result<AgentRunResult, AgentError> {
         if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
@@ -349,7 +382,23 @@ impl AgentService {
                     "active_skills": active_skills,
                 }),
             )?;
-            let provider_turn = match self.provider.turn(role, request, context.clone()).await {
+            let provider_result = {
+                let downstream = released_observer
+                    .as_mut()
+                    .map(|observer| &mut **observer as &mut dyn ProviderEventObserver);
+                let mut observer = RunProviderObserver {
+                    journal: self.journal.as_ref(),
+                    stream_id: &stream_id,
+                    stream_version: &mut stream_version,
+                    actor_id: &route.profile,
+                    context: &context,
+                    downstream,
+                };
+                self.provider
+                    .turn_stream(role, request, context.clone(), &mut observer)
+                    .await
+            };
+            let provider_turn = match provider_result {
                 Ok(provider_turn) => provider_turn,
                 Err(ModelProviderError::Recoverable { code, message })
                     if code == INVALID_TOOL_ARGUMENTS_CODE =>
@@ -401,18 +450,6 @@ impl AgentService {
             let mut final_output = None;
             let mut calls = Vec::new();
             for event in &provider_turn.events {
-                let (event_type, payload) = provider_event_payload(event);
-                self.append(
-                    &stream_id,
-                    &mut stream_version,
-                    event_type,
-                    Actor {
-                        actor_type: ActorType::Model,
-                        id: route.profile.clone(),
-                    },
-                    &context,
-                    payload,
-                )?;
                 match event {
                     ProviderEvent::ModelDelta { text } => visible_text.push_str(text),
                     ProviderEvent::ToolCallRequested {
@@ -425,7 +462,7 @@ impl AgentService {
                         arguments: arguments.clone(),
                     }),
                     ProviderEvent::FinalOutput { text } => final_output = Some(text.clone()),
-                    ProviderEvent::ReasoningSummary { .. } => {}
+                    ProviderEvent::ReasoningSummary { .. } | ProviderEvent::Usage { .. } => {}
                 }
             }
             if calls.is_empty() {
@@ -586,6 +623,46 @@ impl AgentService {
     }
 }
 
+struct RunProviderObserver<'local, 'downstream> {
+    journal: &'local dyn EventJournal,
+    stream_id: &'local str,
+    stream_version: &'local mut u64,
+    actor_id: &'local str,
+    context: &'local ExecutionContext,
+    downstream: Option<&'downstream mut dyn ProviderEventObserver>,
+}
+
+#[async_trait]
+impl ProviderEventObserver for RunProviderObserver<'_, '_> {
+    async fn observe(&mut self, event: ProviderEvent) -> Result<(), ModelProviderError> {
+        let (event_type, payload) = provider_event_payload(&event);
+        self.journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: self.stream_id.into(),
+                expected_stream_version: *self.stream_version,
+                classification: EventClassification::Domain,
+                event_type: event_type.into(),
+                actor: Actor {
+                    actor_type: ActorType::Model,
+                    id: self.actor_id.into(),
+                },
+                context: self.context.clone(),
+                payload,
+            })
+            .map_err(|error| {
+                ModelProviderError::Failed(format!(
+                    "released provider event could not be durably recorded: {error}"
+                ))
+            })?;
+        *self.stream_version = self.stream_version.saturating_add(1);
+        if let Some(observer) = self.downstream.as_deref_mut() {
+            observer.observe(event).await?;
+        }
+        Ok(())
+    }
+}
+
 fn recovery_prompt(attempt: u8, definitions: &[colossus_contracts::ModelToolDefinition]) -> String {
     let names = definitions
         .iter()
@@ -628,6 +705,16 @@ fn provider_event_payload(event: &ProviderEvent) -> (&'static str, Value) {
             json!({"call_id": call_id, "name": name, "arguments": arguments}),
         ),
         ProviderEvent::FinalOutput { text } => ("final.output.v1", json!({"text": text})),
+        ProviderEvent::Usage { usage } => (
+            "provider.usage.v1",
+            json!({
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "total_tokens": usage.total_tokens,
+                "cached_input_tokens": usage.cached_input_tokens,
+                "reasoning_tokens": usage.reasoning_tokens,
+            }),
+        ),
     }
 }
 
@@ -712,6 +799,48 @@ mod tests {
     }
 
     struct EchoTools;
+
+    struct PartialFailureProvider;
+
+    #[async_trait]
+    impl ModelProvider for PartialFailureProvider {
+        fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+            Ok(ProviderRoute {
+                role: role.into(),
+                profile: "partial".into(),
+                provider: "test".into(),
+                model: "test-model".into(),
+            })
+        }
+
+        async fn turn(
+            &self,
+            _role: &str,
+            _request: ModelRequest,
+            _context: ExecutionContext,
+        ) -> Result<ProviderTurn, ModelProviderError> {
+            Err(ModelProviderError::OutcomeUnknown(
+                "stream interrupted".into(),
+            ))
+        }
+
+        async fn turn_stream(
+            &self,
+            _role: &str,
+            _request: ModelRequest,
+            _context: ExecutionContext,
+            observer: &mut dyn ProviderEventObserver,
+        ) -> Result<ProviderTurn, ModelProviderError> {
+            observer
+                .observe(ProviderEvent::ModelDelta {
+                    text: "partial".into(),
+                })
+                .await?;
+            Err(ModelProviderError::OutcomeUnknown(
+                "stream interrupted".into(),
+            ))
+        }
+    }
 
     #[async_trait]
     impl ToolExecutor for EchoTools {
@@ -1116,5 +1245,35 @@ mod tests {
             .expect("session");
         assert_eq!(summary.message_count, 4);
         assert_eq!(summary.last_run_id.as_deref(), Some(second.run_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn released_partial_stream_is_durable_before_unknown_outcome() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let service = AgentService::new(
+            Arc::clone(&journal),
+            Arc::new(PartialFailureProvider),
+            Arc::new(StaticToolRegistry::builtins(&[]).expect("catalog")),
+            Arc::new(EchoTools),
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+        );
+        let error = service
+            .run("primary", "test", "interrupt", 1)
+            .await
+            .expect_err("interrupted stream");
+        assert!(matches!(
+            error,
+            AgentError::Provider(ModelProviderError::OutcomeUnknown(_))
+        ));
+        let events = journal.read_global(1, 30).expect("events");
+        let delta = events
+            .iter()
+            .find(|event| event.event_type == "model.delta.v1")
+            .expect("durable partial delta");
+        assert_eq!(
+            journal.decrypt_payload(delta).expect("payload")["text"],
+            "partial"
+        );
+        assert!(events.iter().any(|event| event.event_type == "error.v1"));
     }
 }
