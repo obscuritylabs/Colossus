@@ -33,7 +33,11 @@ fn command(binary: &Path, config: &Path) -> Command {
         .arg("--config")
         .arg(config)
         .env("COLOSSUS_WORKER_TEST_JOURNAL_KEY", JOURNAL_KEY)
-        .env("COLOSSUS_WORKER_TEST_SIGNING_KEY", SIGNING_KEY);
+        .env("COLOSSUS_WORKER_TEST_SIGNING_KEY", SIGNING_KEY)
+        .env(
+            "COLOSSUS_THEME_DIR",
+            config.parent().expect("config parent").join("themes"),
+        );
     command
 }
 
@@ -93,6 +97,23 @@ fn worker_owns_lease_routes_streams_rejects_wrong_key_and_shuts_down_cleanly() {
     let anchor = directory.path().join("anchor.json");
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
+    let themes = directory.path().join("themes");
+    fs::create_dir_all(&themes).expect("themes");
+    fs::write(
+        themes.join("ocean.json"),
+        r##"{
+          "schemaVersion": 1,
+          "name": "ocean",
+          "base": "default",
+          "title": "Ocean",
+          "caret": ">",
+          "continuation": "|",
+          "prompt": {"left": "#00ffff", "indicator": "#00d7ff"},
+          "styles": {"assistant": {"foreground": "#d7ffff"}},
+          "spinner": "line"
+        }"##,
+    )
+    .expect("ocean theme");
     #[cfg(unix)]
     let process_executable = Path::new("/bin/echo").to_path_buf();
     #[cfg(windows)]
@@ -512,7 +533,7 @@ sandbox:
         binary,
         &config,
         &["repl", "--session", session_id],
-        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/repl prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
+        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/theme preview ocean\n/theme ocean\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/repl prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
     );
     assert!(
         repl.status.success(),
@@ -524,10 +545,12 @@ sandbox:
     assert!(repl_stdout.contains("Colossus Rust REPL via authenticated worker"));
     assert!(repl_stdout.contains(session_id));
     assert!(repl_stdout.contains("worker IPC replacement"));
-    assert!(repl_stdout.contains("WORK: session="));
-    assert!(repl_stdout.contains("CONTEXT: session="));
+    assert!(repl_stdout.contains("[work] session="));
+    assert!(repl_stdout.contains("[context] session="));
     assert!(repl_stdout.contains("tasks-through-worker"));
     assert!(repl_stdout.contains(r#""stream_mode": "off""#));
+    assert!(repl_stdout.contains(r#""name": "ocean""#));
+    assert!(repl_stdout.contains(r#""sourceHash": ""#));
     assert!(repl_stdout.contains("recoverable: invalid presentation command"));
     assert!(repl_stdout.contains("global_sequence"));
     assert!(!repl_stdout.contains("not yet available through worker IPC"));
@@ -548,13 +571,22 @@ sandbox:
     let history: Vec<String> = serde_json::from_slice(&history.stdout).expect("REPL history JSON");
     assert!(history.iter().any(|entry| entry == "tasks-through-worker"));
     assert!(history.iter().any(|entry| entry == "/theme hacker"));
+    assert!(history.iter().any(|entry| entry == "/theme ocean"));
     assert!(history.iter().any(|entry| entry == "/context status"));
     assert_eq!(history.last().map(String::as_str), Some("/exit"));
 
     let preferences = run(binary, &config, &["preferences", "show"]);
     assert!(preferences.status.success());
     let preferences: Value = serde_json::from_slice(&preferences.stdout).expect("preferences JSON");
-    assert_eq!(preferences["theme"], "high_contrast");
+    assert_eq!(preferences["theme"], "default");
+    assert_eq!(preferences["custom_theme"]["name"], "ocean");
+    assert_eq!(preferences["custom_theme"]["base"], "default");
+    assert_eq!(
+        preferences["custom_theme"]["sourceHash"]
+            .as_str()
+            .map(str::len),
+        Some(64)
+    );
     assert_eq!(preferences["multiline"], true);
     assert_eq!(preferences["stream_mode"], "off");
     assert_eq!(preferences["events_mode"], "off");

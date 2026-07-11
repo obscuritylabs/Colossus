@@ -16,7 +16,7 @@ use colossus_ports::{
 };
 use colossus_presentation::{
     EventDisplayMode, ReplPreferences, RgbColor, SemanticRenderer, StreamDisplayMode,
-    TerminalPalette, ThemeName, TranscriptDensity,
+    TerminalPalette, ThemeLibrary, ThemeName, TranscriptDensity,
 };
 use colossus_runtime::{Runtime, RuntimeConfig};
 use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
@@ -278,14 +278,15 @@ impl TerminalStreamObserver {
         let target = self.target;
         let output_lock = Arc::clone(&self.output_lock);
         let template = line.to_owned();
-        let theme = self.preferences.theme;
-        write_transient_line(target, &output_lock, &template, elapsed_seconds, theme)?;
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        write_transient_line(target, &output_lock, &template, elapsed_seconds, palette)?;
         let started = std::time::Instant::now();
         self.activity = Some(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 let elapsed = elapsed_seconds + started.elapsed().as_secs_f64();
-                if write_transient_line(target, &output_lock, &template, elapsed, theme).is_err() {
+                if write_transient_line(target, &output_lock, &template, elapsed, palette).is_err()
+                {
                     break;
                 }
             }
@@ -359,10 +360,10 @@ fn write_transient_line(
     output_lock: &Mutex<()>,
     template: &str,
     elapsed_seconds: f64,
-    theme: ThemeName,
+    palette: TerminalPalette,
 ) -> io::Result<()> {
     let line = activity_line_at(template, elapsed_seconds);
-    let spinner = TerminalPalette::for_theme(theme).activity_frame(elapsed_seconds, true);
+    let spinner = palette.activity_frame(elapsed_seconds, true);
     let rendered = format!("{spinner} {line}");
     let _guard = output_lock
         .lock()
@@ -1714,6 +1715,7 @@ fn remember_history_entry(history_entries: &mut Vec<String>, entry: &str) {
 fn handle_presentation_command(
     line: &str,
     preferences: &mut ReplPreferences,
+    themes: &ThemeLibrary,
 ) -> Result<PresentationCommandResult, Box<dyn Error>> {
     let mut changed = false;
     match line {
@@ -1723,33 +1725,35 @@ fn handle_presentation_command(
             *preferences = ReplPreferences::default();
             changed = true;
         }
-        "/theme" => println!(
-            "theme={}; available=default,mono,high_contrast,carrot,hacker",
-            preferences.theme.as_str()
-        ),
-        "/theme default" => {
-            preferences.theme = ThemeName::Default;
-            changed = true;
-        }
-        "/theme mono" | "/theme plain" => {
-            preferences.theme = ThemeName::Mono;
-            changed = true;
-        }
-        "/theme high_contrast" | "/theme high-contrast" => {
-            preferences.theme = ThemeName::HighContrast;
-            changed = true;
-        }
-        "/theme carrot" => {
-            preferences.theme = ThemeName::Carrot;
-            changed = true;
-        }
-        "/theme hacker" => {
-            preferences.theme = ThemeName::Hacker;
-            changed = true;
-        }
+        "/theme" => print_json(&json!({
+            "selected": preferences.theme_name(),
+            "library": themes.status(),
+        }))?,
         "/theme reset" => {
-            preferences.theme = ThemeName::Default;
+            preferences.select_builtin_theme(ThemeName::Default);
             changed = true;
+        }
+        "/theme preview" => print_json(&themes.status())?,
+        command if command.starts_with("/theme preview ") => {
+            match themes.preview(command.trim_start_matches("/theme preview ").trim()) {
+                Ok(theme) => print_json(&theme)?,
+                Err(error) => println!("recoverable: {error}"),
+            }
+        }
+        command if command.starts_with("/theme save ") => {
+            match themes.select(
+                command.trim_start_matches("/theme save ").trim(),
+                preferences,
+            ) {
+                Ok(()) => changed = true,
+                Err(error) => println!("recoverable: {error}"),
+            }
+        }
+        command if command.starts_with("/theme ") => {
+            match themes.select(command.trim_start_matches("/theme ").trim(), preferences) {
+                Ok(()) => changed = true,
+                Err(error) => println!("recoverable: {error}"),
+            }
         }
         "/events" => println!("events={}", preferences.events_mode.as_str()),
         "/events compact" => {
@@ -1828,7 +1832,6 @@ fn handle_presentation_command(
         }
         command
             if command.starts_with("/repl ")
-                || command.starts_with("/theme ")
                 || command.starts_with("/events ")
                 || command.starts_with("/transcript ")
                 || command.starts_with("/stream ") =>
@@ -2030,6 +2033,9 @@ struct ColossusPrompt {
     left: String,
     right: String,
     multiline: bool,
+    indicator: String,
+    multiline_indicator: String,
+    continuation_indicator: String,
     palette: TerminalPalette,
 }
 
@@ -2063,17 +2069,32 @@ impl ColossusPrompt {
         } else {
             "off"
         };
+        let (title, indicator, multiline_indicator, continuation_indicator) =
+            preferences.custom_theme.as_ref().map_or_else(
+                || ("Colossus".into(), " › ".into(), " · ".into(), " … ".into()),
+                |theme| {
+                    (
+                        theme.title.clone(),
+                        format!(" {} ", theme.caret),
+                        format!(" {} ", theme.continuation),
+                        format!(" {} ", theme.continuation),
+                    )
+                },
+            );
         Self {
-            left: format!("Colossus {short_session}"),
+            left: format!("{title} {short_session}"),
             right: format!(
                 "{route} {context} {work} approval={approval} theme={} stream={} events={} reasoning={reasoning} status={}",
-                preferences.theme.as_str(),
+                preferences.theme_name(),
                 preferences.stream_mode.as_str(),
                 preferences.events_mode.as_str(),
                 state.last_status,
             ),
             multiline: preferences.multiline,
-            palette: TerminalPalette::for_theme(preferences.theme),
+            indicator,
+            multiline_indicator,
+            continuation_indicator,
+            palette: TerminalPalette::for_preferences(preferences),
         }
     }
 }
@@ -2102,11 +2123,15 @@ impl Prompt for ColossusPrompt {
     }
 
     fn render_prompt_indicator(&self, _prompt_mode: PromptEditMode) -> Cow<'_, str> {
-        Cow::Borrowed(if self.multiline { " · " } else { " › " })
+        Cow::Borrowed(if self.multiline {
+            &self.multiline_indicator
+        } else {
+            &self.indicator
+        })
     }
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
-        Cow::Borrowed(" … ")
+        Cow::Borrowed(&self.continuation_indicator)
     }
 
     fn render_prompt_history_search_indicator(
@@ -2231,6 +2256,7 @@ async fn repl(
     initial_session: Option<String>,
     resume_latest: bool,
     approval_mode: ApprovalMode,
+    themes: &ThemeLibrary,
 ) -> Result<(), Box<dyn Error>> {
     let mut preferences = runtime.presentation_preferences()?;
     let mut history_entries = runtime.repl_history(REPL_HISTORY_CAPACITY)?;
@@ -2281,7 +2307,7 @@ async fn repl(
                 }
                 prompt_dirty = repl_line_changes_status(line);
                 let prior_multiline = preferences.multiline;
-                match handle_presentation_command(line, &mut preferences)? {
+                match handle_presentation_command(line, &mut preferences, themes)? {
                     PresentationCommandResult::NotHandled => {}
                     PresentationCommandResult::Handled => continue,
                     PresentationCommandResult::Save => {
@@ -2297,7 +2323,7 @@ async fn repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/repl [prefs|reset] | /theme [default|mono|high_contrast|carrot|hacker] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/repl [prefs|reset] | /theme [NAME|preview NAME|save NAME|reset] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -2595,6 +2621,7 @@ async fn repl(
 
 async fn dispatch_to_worker_if_active(
     config: &RuntimeConfig,
+    config_path: &Path,
     command: &Command,
     approval_mode: Option<ApprovalMode>,
 ) -> Result<bool, Box<dyn Error>> {
@@ -3483,7 +3510,8 @@ async fn dispatch_to_worker_if_active(
             Ok(true)
         }
         Command::Repl { session, resume } => {
-            worker_repl(&client, session.clone(), *resume).await?;
+            let themes = ThemeLibrary::load_for_config(config_path)?;
+            worker_repl(&client, session.clone(), *resume, &themes).await?;
             Ok(true)
         }
         Command::Preferences(command) => {
@@ -3507,6 +3535,7 @@ async fn worker_repl(
     client: &WorkerClient,
     requested_session: Option<String>,
     resume: bool,
+    themes: &ThemeLibrary,
 ) -> Result<(), Box<dyn Error>> {
     let mut active_session_id = if let Some(session_id) = requested_session {
         let session = client
@@ -3577,7 +3606,7 @@ async fn worker_repl(
                 }
                 prompt_dirty = repl_line_changes_status(line);
                 let prior_multiline = preferences.multiline;
-                match handle_presentation_command(line, &mut preferences)? {
+                match handle_presentation_command(line, &mut preferences, themes)? {
                     PresentationCommandResult::NotHandled => {}
                     PresentationCommandResult::Handled => continue,
                     PresentationCommandResult::Save => {
@@ -3597,7 +3626,7 @@ async fn worker_repl(
                 }
                 if line == "/help" {
                     println!(
-                        "/repl [prefs|reset] | /theme [default|mono|high_contrast|carrot|hacker] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
+                        "/repl [prefs|reset] | /theme [NAME|preview NAME|save NAME|reset] | /stream on|raw|off | /events compact|verbose|off | /reasoning on|off | /transcript comfortable|compact | /multiline on|off|toggle | /trace | /resume [LIMIT] | /sessions | /session show|new|resume ID | /work | /tasks | /decisions | /plans | /goals | /goal OBJECTIVE | /agents | /agents drain | /memories | /memory search QUERY | /research QUESTION | /research list | /telemetry [RUN_ID] | /telemetry metrics | /skills | /skill use|clear|show|resources|read | /packs list|show|verify|validate|install|enable|disable|uninstall|call|trust | /bundle verify | /integrations | /integration show|call|disconnect | /mcp servers|tools|call | /context status|list|compact|restore ID | /workflow list | /audit verify | /tools | /exit"
                     );
                     println!("Any other line is sent through the configured primary model role.");
                 } else if line == "/workflow list" {
@@ -4248,7 +4277,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         _ => {}
     }
-    if dispatch_to_worker_if_active(&config, &cli.command, cli.approval_mode).await? {
+    if dispatch_to_worker_if_active(&config, &cli.config, &cli.command, cli.approval_mode).await? {
         return Ok(());
     }
     let approvals = approval_provider(&cli.command, cli.approval_mode);
@@ -4989,11 +5018,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("{}", String::from_utf8_lossy(&result.bytes));
         }
         Command::Repl { session, resume } => {
+            let themes = ThemeLibrary::load_for_config(&cli.config)?;
             repl(
                 &runtime,
                 session,
                 resume,
                 cli.approval_mode.unwrap_or(ApprovalMode::Ask),
+                &themes,
             )
             .await?
         }
@@ -5118,8 +5149,10 @@ mod tests {
     #[test]
     fn builtin_theme_commands_drive_reedline_prompt_colors() {
         let mut preferences = ReplPreferences::default();
+        let themes = ThemeLibrary::default();
         assert_eq!(
-            handle_presentation_command("/theme hacker", &mut preferences).expect("hacker theme"),
+            handle_presentation_command("/theme hacker", &mut preferences, &themes)
+                .expect("hacker theme"),
             PresentationCommandResult::Save
         );
         assert_eq!(preferences.theme, ThemeName::Hacker);
@@ -5133,7 +5166,8 @@ mod tests {
         assert_ne!(prompt.get_indicator_color(), CrosstermColor::Reset);
 
         assert_eq!(
-            handle_presentation_command("/theme plain", &mut preferences).expect("plain alias"),
+            handle_presentation_command("/theme plain", &mut preferences, &themes)
+                .expect("plain alias"),
             PresentationCommandResult::Save
         );
         assert_eq!(preferences.theme, ThemeName::Mono);
@@ -5144,5 +5178,50 @@ mod tests {
             "ask",
         );
         assert_eq!(mono.get_prompt_color(), CrosstermColor::Reset);
+    }
+
+    #[test]
+    fn custom_theme_snapshot_drives_prompt_identity_indicators_and_colors() {
+        let directory = tempfile::tempdir().expect("directory");
+        fs::write(
+            directory.path().join("ocean.json"),
+            r##"{
+              "schemaVersion": 1,
+              "name": "ocean",
+              "title": "Ocean",
+              "caret": ">>",
+              "continuation": "||",
+              "prompt": {"left": "#010203", "indicator": "#040506"}
+            }"##,
+        )
+        .expect("theme");
+        let themes = ThemeLibrary::load(&[directory.path().to_path_buf()]).expect("library");
+        let mut preferences = ReplPreferences::default();
+        assert_eq!(
+            handle_presentation_command("/theme ocean", &mut preferences, &themes)
+                .expect("custom theme"),
+            PresentationCommandResult::Save
+        );
+        assert_eq!(preferences.theme_name(), "ocean");
+        let prompt = ColossusPrompt::new(
+            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
+            &ReplPromptState::new(),
+            &preferences,
+            "ask",
+        );
+        assert_eq!(prompt.render_prompt_left(), "Ocean 019f4ddd");
+        assert_eq!(
+            prompt.render_prompt_indicator(PromptEditMode::Emacs),
+            " >> "
+        );
+        assert_eq!(prompt.render_prompt_multiline_indicator(), " || ");
+        assert_eq!(
+            prompt.get_prompt_color(),
+            CrosstermColor::Rgb { r: 1, g: 2, b: 3 }
+        );
+        assert_eq!(
+            prompt.get_indicator_color(),
+            CrosstermColor::Rgb { r: 4, g: 5, b: 6 }
+        );
     }
 }

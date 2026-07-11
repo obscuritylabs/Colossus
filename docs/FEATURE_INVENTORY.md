@@ -803,6 +803,14 @@ plaintext history sidecar. Embedded and authenticated-worker REPLs MUST hydrate 
 bounded newest entries, suppress consecutive duplicates, and keep history persistence
 failure from blocking the requested command.
 
+Rust custom themes MUST be configuration-only JSON or TOML with strict bounded schemas.
+Loading MUST reject symlinks, oversized/count-excess libraries, invalid colors, unknown
+fields, duplicate identities, and built-in name collisions. Selecting a custom theme
+MUST persist the fully resolved palette and source hash so later source mutation or
+deletion cannot silently change the reconstructed preference. Embedded and worker REPLs
+MUST expose identical list, preview, selection, restart, and ANSI-free redirected-output
+behavior.
+
 ### 18.4 Rendering
 
 - Compact, verbose, and off event modes are supported.
@@ -982,6 +990,9 @@ A reconstruction is complete only when all applicable checks pass:
   persistence, restart parity, consecutive deduplication, and redacted audit envelopes.
 - [x] Built-in theme palettes cover prompt, assistant, semantic event, and activity-frame
   styling without emitting ANSI sequences to redirected output.
+- [x] Bounded JSON/TOML custom themes have strict parsing, immutable source-hash-bound
+  preference snapshots, legacy data-only schema mapping, embedded/worker parity,
+  restart reconstruction, and ANSI-free redirected output.
 - [x] Telemetry derives correct duration and counts from persisted event timestamps.
 - [ ] Credentials remain references until adapter execution and never appear in model or
   user-visible diagnostic payloads.

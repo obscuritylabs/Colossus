@@ -581,6 +581,15 @@ palettes can add ANSI styling only after the terminal interface confirms an inte
 terminal; redirected output remains control-sequence-free. The frozen Python implementation
 retains its legacy SQLite preferences and plaintext history separately.
 
+Custom Rust themes remain configuration-only data. The loader accepts only bounded JSON
+or TOML from non-symlink config-adjacent and platform theme directories, caps individual
+files and total theme count, rejects unknown fields and identity collisions, and parses
+colors/styles/spinners into typed values. It never loads code or follows theme symlinks.
+Selection stores the fully resolved palette and SHA-256 source hash in the encrypted
+preference event, so restart does not reread mutable theme content to reconstruct the
+active appearance. The supported data-only Python schema is mapped through the same
+bounds during cutover.
+
 ## Audit Logs
 
 The frozen Python audit records are append-only hash-chained JSONL. The Rust canonical

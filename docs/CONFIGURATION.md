@@ -451,9 +451,18 @@ newest 1,000 encrypted journal entries and persists through the authenticated wo
 embedded runtime. Rust ships typed `default`, `mono`, `high_contrast`, `carrot`, and
 `hacker` palettes for Reedline prompts, assistant text, semantic labels, and activity
 frames; `plain` remains a migration alias for `mono`. Colors and animated frames are
-terminal-only, so redirected output stays ANSI-free. User-authored theme files and
-cursor/draft counters remain cutover UX work; Reedline's prompt contract does not
-currently expose editor-buffer counters.
+terminal-only, so redirected output stays ANSI-free. Rust loads bounded, data-only JSON
+and TOML themes from the repository/config-adjacent `themes/` directory and the platform
+`colossus/themes/` directory. `/theme preview NAME` does not mutate preferences;
+`/theme NAME` and `/theme save NAME` persist an immutable resolved palette plus its
+SHA-256 source hash. Later file changes therefore cannot silently alter the active,
+audited appearance. Versioned files use `schemaVersion: 1`, a simple unique `name`, an
+optional built-in `base`, prompt colors in `#RRGGBB`, semantic style overrides, and one
+of the bounded spinner names. The legacy Python data-only theme schema is also mapped
+strictly during cutover. Unknown keys, invalid colors, duplicate/built-in names,
+oversized files, symlinked files/directories, or more than 64 custom themes fail closed.
+Only cursor/draft counters remain cutover UX work because Reedline's prompt contract does
+not currently expose editor-buffer counters.
 
 ## Agent telemetry
 
@@ -487,14 +496,14 @@ the requested command. Use `colossus preferences show|history|reset` for non-int
 inspection or reset. The frozen Python implementation keeps its legacy SQLite preferences
 and plaintext history separately, and Rust does not import them.
 
-You can choose a one-launch startup theme with:
+In the frozen Python implementation, you can choose a one-launch startup theme with:
 
 ```bash
 uv run colossus repl --theme high-contrast
 ```
 
-Built-in themes are `default`, `mono`, `high-contrast`, `carrot`, and `hacker`. Add user
-themes as JSON or TOML files under the Colossus config directory:
+The frozen Python built-ins are `default`, `mono`, `high-contrast`, `carrot`, and
+`hacker`. Its legacy JSON/TOML theme files live under the Colossus config directory:
 
 ```text
 <config-dir>/colossus/themes/ocean.json
@@ -527,9 +536,9 @@ The file is data-only and may override a subset of prompt, toolbar, and trace st
 ```
 
 Unsupported style keys, non-string values, invalid Rich spinner names, and non-simple
-theme names are rejected at startup. Use `/theme preview ocean` inside the REPL to
-inspect prompt, toolbar, event, transcript colors, and the theme's activity spinner
-before saving.
+theme names are rejected at startup. Rust accepts this data-only legacy schema during
+cutover and maps its supported prompt, event, transcript, and spinner values into an
+immutable Rust palette snapshot.
 
 ## Approval modes
 

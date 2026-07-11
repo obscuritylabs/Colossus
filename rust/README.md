@@ -242,7 +242,8 @@ The REPL persists strict presentation preferences and submitted history entries 
 encrypted event journal, hydrating only the newest 1,000 into Reedline. Each change
 crosses the effect gateway and uses authenticated worker IPC when a worker owns the state
 lease; Rust never writes a plaintext Reedline history sidecar. Use
-`/theme default|mono|high_contrast|carrot|hacker`, `/stream on|raw|off`,
+`/theme NAME`, `/theme preview NAME`, `/theme save NAME`, `/theme reset`,
+`/stream on|raw|off`,
 `/events compact|verbose|off`, `/reasoning on|off`,
 `/transcript comfortable|compact`, `/multiline on|off|toggle`, `/trace`, and
 `/repl prefs|save|reset`. These settings affect terminal rendering only. Work and context
@@ -263,6 +264,32 @@ approval mode, display preferences, and last run status.
 
 The five built-in data-only palettes style Reedline prompt segments, assistant text,
 semantic event labels, and animated activity frames only on an interactive terminal.
+Custom `.json` and `.toml` files load from the directory beside the selected config
+(`themes/`) and the platform config directory (`colossus/themes/`). Files are limited to
+64 KiB and libraries to 64 custom themes; symlinks, unknown fields, invalid colors,
+duplicates, and built-in name collisions fail closed. Versioned files use this shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "ocean",
+  "base": "default",
+  "title": "Ocean",
+  "caret": ">",
+  "continuation": "|",
+  "prompt": {"left": "#00ffff", "indicator": "#00d7ff"},
+  "styles": {
+    "assistant": {"foreground": "#d7ffff"},
+    "tool": {"foreground": "#00afff", "bold": true}
+  },
+  "spinner": "line"
+}
+```
+
+Allowed spinners are `dots`, `line`, `arc`, `bouncingBar`, and `aesthetic`. Selecting a
+custom theme persists its fully resolved palette and SHA-256 source hash, so restarts do
+not depend on the file remaining unchanged. Rust also strictly maps the frozen Python
+data-only theme schema during cutover.
 Redirected and authenticated scripted output remains ANSI-free. The legacy Rust alpha
 value `plain` is accepted as an alias for `mono` when loading state or handling commands.
 

@@ -117,6 +117,10 @@ obsolete Go launcher.
   session, routed model, context, work, approval, preference, and last-run status through
   bounded application operations. Raw provider frames and hidden reasoning never enter
   this presentation path.
+- Strict versioned JSON/TOML custom themes load from bounded config-adjacent and
+  platform user libraries. Theme selection journals an immutable resolved palette and
+  source hash, embedded and authenticated-worker REPLs share list/preview/select
+  behavior, and the data-only legacy Python schema is strictly mapped for cutover.
 - Policy-bound canonical memory create/update/archive/supersede/read/list/search operations;
   an atomic journal external-work outbox with independent durable consumer checkpoints;
   a disposable Tantivy lexical index with event-id idempotency, retryable lag,
@@ -317,8 +321,9 @@ cutover. The following planned work remains:
   implemented through the normal permission, quarantine, and audit boundaries.
 - The first fully green remote Windows x64/arm64 named-pipe runtime matrix. The
   cross-platform suite and CI jobs are implemented.
-- User-authored theme files, editor-buffer counters, and broader live provider/tool-use
-  terminal acceptance. Five typed built-in palettes, encrypted REPL history with bounded
+- Editor-buffer counters and broader live provider/tool-use terminal acceptance. Five
+  typed built-in palettes, bounded data-only custom theme libraries with immutable
+  audited snapshots, encrypted REPL history with bounded
   hydration, prompt-safe in-place activity refresh, a cached embedded/worker status prompt,
   durable correlated run envelopes, semantic tool-family results, recoverability labels,
   and phase/action elapsed lines are implemented.
