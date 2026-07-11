@@ -86,11 +86,17 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check independent fuzz harness formatting
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+
       - name: Run Clippy with warnings denied
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Run workspace tests
         run: cargo test --locked --workspace
+
+      - name: Lint locked fuzz harnesses on stable
+        run: cargo clippy --locked --manifest-path fuzz/Cargo.toml --bins -- -D warnings
 
   rust-portability:
     name: Rust portability (${{ matrix.os }})
@@ -120,6 +126,52 @@ jobs:
 
       - name: Compile every target
         run: cargo check --locked --workspace --all-targets
+
+  rust-fuzz:
+    name: Rust bounded libFuzzer smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: rust
+    defaults:
+      run:
+        working-directory: rust
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned nightly Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-10
+
+      - name: Cache fuzz dependencies and targets
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/fuzz -> target
+
+      - name: Install cargo-fuzz 0.13.2
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Run bounded security parser fuzzing
+        run: |
+          set -euo pipefail
+          for target in contracts_json workflow_yaml workflow_condition; do
+            cargo fuzz run "$target" -- \
+              -runs=5000 \
+              -max_len=65536 \
+              -timeout=10 \
+              -rss_limit_mb=2048 \
+              -print_final_stats=1
+          done
+
+      - name: Upload minimized crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: colossus-fuzz-artifacts
+          path: rust/fuzz/artifacts/
+          if-no-files-found: ignore
 
   rust-live-chroma:
     name: Rust live Chroma ${{ matrix.chroma }} compatibility

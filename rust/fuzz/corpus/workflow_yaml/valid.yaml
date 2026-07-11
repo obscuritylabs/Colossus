@@ -1,0 +1,15 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: fuzz-seed
+  version: 1.0.0
+  description: Valid fuzz seed
+inputs: {type: object}
+outputs: {type: object}
+maxCapabilities: []
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - id: done
+    type: emit
+    value: {ok: true}

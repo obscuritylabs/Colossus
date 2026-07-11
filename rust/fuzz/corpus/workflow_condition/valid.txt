@@ -1,0 +1,1 @@
+exists(/inputs/name) && /inputs/count >= 2 && !(/inputs/enabled == false)

@@ -1,0 +1,9 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata: &metadata {name: fuzz-anchor, version: 1.0.0, description: Must reject anchors}
+inputs: {type: object}
+outputs: {type: object}
+maxCapabilities: []
+maxConcurrency: 1
+stepBudget: 1
+steps: *metadata

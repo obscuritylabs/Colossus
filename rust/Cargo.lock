@@ -746,6 +746,16 @@ name = "colossus-domain"
 version = "0.6.0-alpha.1"
 
 [[package]]
+name = "colossus-fuzzing"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "colossus-contracts",
+ "colossus-workflow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "colossus-integrations"
 version = "0.6.0-alpha.1"
 dependencies = [

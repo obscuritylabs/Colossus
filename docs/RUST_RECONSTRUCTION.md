@@ -48,6 +48,11 @@ obsolete Go launcher.
   signing interval. Secure anchors are persisted before checkpoint metadata, with a
   process-kill test proving a missing signed checkpoint is recreated from the verified
   anchored head.
+- A separate `cargo-fuzz` workspace drives nightly libFuzzer targets for strict
+  journal/audit/effect/policy JSON contracts, workflow YAML/schema validation, and the
+  non-executable condition grammar. The same committed seed corpora run on stable in the
+  ordinary workspace test gate. Condition byte, token, and recursive nesting ceilings
+  prevent parser and evaluator resource exhaustion.
 - Startup conversion of abandoned `effect.started` records to
   `effect.outcome_unknown`, with no automatic retry.
 - One effect gateway with a hard safety kernel, built-in deny-by-default policy, strict

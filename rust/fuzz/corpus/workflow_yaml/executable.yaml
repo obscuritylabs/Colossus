@@ -1,0 +1,12 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata: {name: fuzz-exec, version: 1.0.0, description: Must reject code}
+inputs: {type: object}
+outputs: {type: object}
+maxCapabilities: []
+maxConcurrency: 1
+stepBudget: 1
+steps:
+  - id: unsafe
+    type: emit
+    shell: whoami

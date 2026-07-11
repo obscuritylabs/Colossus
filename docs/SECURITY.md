@@ -30,6 +30,14 @@ recreates the signed checkpoint from the anchored journal head. It also repairs 
 100-event checkpoint when termination occurs immediately after the event transaction;
 an invalid or mismatched anchor still enters read-only recovery.
 
+Security-critical untrusted parsers have shared stable and libFuzzer exercises. The
+fuzz boundary covers strict journal envelopes, redacted audit evidence, signed
+checkpoints, effect requests, policy decisions, workflow YAML/schema validation, and the
+non-executable condition grammar. Workflow conditions fail closed above 16 KiB, 4,096
+tokens, 128 recursive levels, or 128 boolean-composition nodes. Committed corpora run in
+normal workspace tests; pinned nightly CI performs bounded mutation runs and retains crash
+artifacts.
+
 Configured external audit export is itself an effect; it never receives a trusted-service
 bypass. The exporter discloses only ciphertext-free `AuditEvidence` envelope metadata and
 hashes. Every directory write requires `audit.export.write`, a matching sandbox write

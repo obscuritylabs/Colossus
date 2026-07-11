@@ -312,3 +312,18 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+The stable workspace suite includes the committed fuzz corpus through
+`colossus-fuzzing`. Full mutation fuzzing uses the independent `fuzz/` workspace so the
+nightly sanitizer toolchain and `libfuzzer-sys` never enter the production lockfile.
+Install nightly plus `cargo-fuzz` 0.13.2, then run:
+
+```sh
+cargo fuzz run contracts_json
+cargo fuzz run workflow_yaml
+cargo fuzz run workflow_condition
+```
+
+CI pins its nightly toolchain, executes 5,000 inputs per target, and uploads any crash
+artifacts. Add minimized reproductions to the matching `fuzz/corpus/` directory before
+fixing a discovered defect.

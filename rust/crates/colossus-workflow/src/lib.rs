@@ -26,6 +26,9 @@ const MAX_CONCURRENCY: u32 = 64;
 const MAX_STEP_BUDGET: u32 = 10_000;
 const MAX_FOREACH_ITEMS: u32 = 1_000;
 const MAX_WORKFLOW_CALL_DEPTH: usize = 16;
+const MAX_CONDITION_BYTES: usize = 16 * 1024;
+const MAX_CONDITION_TOKENS: usize = 4_096;
+const MAX_CONDITION_DEPTH: usize = 128;
 
 /// Workflow validation or durable execution failure.
 #[derive(Debug, Error)]
@@ -519,10 +522,22 @@ enum Token {
 impl Condition {
     /// Parse and validate the entire restricted expression.
     pub fn parse(source: &str) -> Result<Self, WorkflowError> {
+        if source.len() > MAX_CONDITION_BYTES {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "condition exceeds {MAX_CONDITION_BYTES} bytes"
+            )));
+        }
         let tokens = tokenize(source)?;
+        if tokens.len() > MAX_CONDITION_TOKENS {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "condition exceeds {MAX_CONDITION_TOKENS} tokens"
+            )));
+        }
         let mut parser = Parser {
             tokens,
             position: 0,
+            depth: 0,
+            complexity: 0,
         };
         let expression = parser.parse_or()?;
         if parser.position != parser.tokens.len() {
@@ -629,12 +644,40 @@ fn json_string_length(source: &str) -> Result<usize, WorkflowError> {
 struct Parser {
     tokens: Vec<Token>,
     position: usize,
+    depth: usize,
+    complexity: usize,
 }
 
 impl Parser {
+    fn add_boolean_node(&mut self) -> Result<(), WorkflowError> {
+        if self.complexity >= MAX_CONDITION_DEPTH {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "condition boolean complexity exceeds {MAX_CONDITION_DEPTH} nodes"
+            )));
+        }
+        self.complexity += 1;
+        Ok(())
+    }
+
+    fn nested<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Result<T, WorkflowError>,
+    ) -> Result<T, WorkflowError> {
+        if self.depth >= MAX_CONDITION_DEPTH {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "condition nesting exceeds {MAX_CONDITION_DEPTH} levels"
+            )));
+        }
+        self.depth += 1;
+        let result = parse(self);
+        self.depth -= 1;
+        result
+    }
+
     fn parse_or(&mut self) -> Result<Expr, WorkflowError> {
         let mut expression = self.parse_and()?;
         while self.consume(&Token::Or) {
+            self.add_boolean_node()?;
             expression = Expr::Or(Box::new(expression), Box::new(self.parse_and()?));
         }
         Ok(expression)
@@ -643,6 +686,7 @@ impl Parser {
     fn parse_and(&mut self) -> Result<Expr, WorkflowError> {
         let mut expression = self.parse_unary()?;
         while self.consume(&Token::And) {
+            self.add_boolean_node()?;
             expression = Expr::And(Box::new(expression), Box::new(self.parse_unary()?));
         }
         Ok(expression)
@@ -650,10 +694,13 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<Expr, WorkflowError> {
         if self.consume(&Token::Not) {
-            return Ok(Expr::Not(Box::new(self.parse_unary()?)));
+            self.add_boolean_node()?;
+            return self
+                .nested(Self::parse_unary)
+                .map(|expression| Expr::Not(Box::new(expression)));
         }
         if self.consume(&Token::LParen) {
-            let expression = self.parse_or()?;
+            let expression = self.nested(Self::parse_or)?;
             if !self.consume(&Token::RParen) {
                 return Err(WorkflowError::InvalidDefinition(
                     "condition is missing a closing parenthesis".into(),
@@ -2378,8 +2425,9 @@ impl WorkflowEffectRunner for DenyWorkflowEffects {
 #[cfg(test)]
 mod tests {
     use super::{
-        Condition, DenyWorkflowEffects, EventSourcedWorkflowRepository, WorkflowEffect,
-        WorkflowEffectRunner, WorkflowError, WorkflowService, validate_definition,
+        Condition, DenyWorkflowEffects, EventSourcedWorkflowRepository, MAX_CONDITION_BYTES,
+        MAX_CONDITION_DEPTH, MAX_CONDITION_TOKENS, WorkflowEffect, WorkflowEffectRunner,
+        WorkflowError, WorkflowService, validate_definition,
     };
     use async_trait::async_trait;
     use colossus_ports::{EventJournal, WorkflowRepository};
@@ -2508,6 +2556,24 @@ steps:
             Condition::parse("exists(/inputs/name) && /inputs/count >= 2").expect("condition");
         assert!(condition.evaluate(&json!({"inputs":{"name":"a","count":2}})));
         assert!(Condition::parse("system(\"whoami\")").is_err());
+    }
+
+    #[test]
+    fn condition_grammar_rejects_unbounded_input_tokens_and_recursion() {
+        assert!(Condition::parse(&" ".repeat(MAX_CONDITION_BYTES + 1)).is_err());
+        assert!(Condition::parse(&")".repeat(MAX_CONDITION_TOKENS + 1)).is_err());
+        let excessive_not = format!("{}exists(/a)", "!".repeat(MAX_CONDITION_DEPTH + 1));
+        assert!(Condition::parse(&excessive_not).is_err());
+        let excessive_parentheses = format!(
+            "{}exists(/a){}",
+            "(".repeat(MAX_CONDITION_DEPTH + 1),
+            ")".repeat(MAX_CONDITION_DEPTH + 1)
+        );
+        assert!(Condition::parse(&excessive_parentheses).is_err());
+        let excessive_boolean = std::iter::repeat_n("exists(/a)", MAX_CONDITION_DEPTH + 2)
+            .collect::<Vec<_>>()
+            .join(" && ");
+        assert!(Condition::parse(&excessive_boolean).is_err());
     }
 
     #[tokio::test]

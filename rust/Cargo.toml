@@ -29,6 +29,7 @@ members = [
     "crates/colossus-worker",
     "crates/colossus-cli",
     "crates/colossus-testkit",
+    "crates/colossus-fuzzing",
 ]
 
 [workspace.package]
@@ -89,6 +90,7 @@ colossus-memory-chroma = { path = "crates/colossus-memory-chroma" }
 colossus-research = { path = "crates/colossus-research" }
 colossus-telemetry = { path = "crates/colossus-telemetry" }
 colossus-testkit = { path = "crates/colossus-testkit" }
+colossus-fuzzing = { path = "crates/colossus-fuzzing" }
 colossus-skills = { path = "crates/colossus-skills" }
 colossus-integrations = { path = "crates/colossus-integrations" }
 colossus-mcp = { path = "crates/colossus-mcp" }
