@@ -524,7 +524,7 @@ enum Command {
     Skills(SkillsCommand),
     /// Verify and lifecycle-manage signed capability packs.
     Packs(PacksCommand),
-    /// Verify signed offline release bundles.
+    /// Build, verify, and install signed offline release bundles.
     Bundle(BundleCommand),
     /// Manage persisted integrations and imported OpenAPI tools.
     Integrations(IntegrationsCommand),
@@ -1530,8 +1530,38 @@ struct BundleCommand {
 
 #[derive(Subcommand)]
 enum BundleAction {
+    /// Derive the safe public identity for a referenced signing seed.
+    KeyInfo {
+        #[arg(long)]
+        signing_key_reference: String,
+    },
     /// Verify a signed offline bundle without network access.
     Verify { path: PathBuf },
+    /// Materialize a signed bundle from a staged payload directory.
+    Build {
+        source: PathBuf,
+        destination: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        publisher: String,
+        /// Explicit RFC3339 UTC timestamp for reproducible output.
+        #[arg(long)]
+        created_at: String,
+        #[arg(long)]
+        source_revision: Option<String>,
+        /// Environment credential reference containing an Ed25519 signing seed.
+        #[arg(long)]
+        signing_key_reference: String,
+    },
+    /// Verify and install the current-target executable into a clean prefix.
+    Install {
+        path: PathBuf,
+        #[arg(long)]
+        prefix: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -3180,8 +3210,36 @@ async fn dispatch_to_worker_if_active(
         }
         Command::Bundle(command) => {
             let operation = match &command.command {
+                BundleAction::KeyInfo {
+                    signing_key_reference,
+                } => WorkerOperation::BundleKeyInfo {
+                    signing_key_reference: signing_key_reference.clone(),
+                },
                 BundleAction::Verify { path } => WorkerOperation::BundleVerify {
                     path: path.to_string_lossy().into_owned(),
+                },
+                BundleAction::Build {
+                    source,
+                    destination,
+                    name,
+                    version,
+                    publisher,
+                    created_at,
+                    source_revision,
+                    signing_key_reference,
+                } => WorkerOperation::BundleBuild {
+                    source: source.to_string_lossy().into_owned(),
+                    destination: destination.to_string_lossy().into_owned(),
+                    name: name.clone(),
+                    version: version.clone(),
+                    publisher: publisher.clone(),
+                    created_at: created_at.clone(),
+                    source_revision: source_revision.clone(),
+                    signing_key_reference: signing_key_reference.clone(),
+                },
+                BundleAction::Install { path, prefix } => WorkerOperation::BundleInstall {
+                    path: path.to_string_lossy().into_owned(),
+                    prefix: prefix.to_string_lossy().into_owned(),
                 },
             };
             print_json(&client.call(operation).await?)?;
@@ -4962,7 +5020,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
         },
         Command::Bundle(command) => match command.command {
+            BundleAction::KeyInfo {
+                signing_key_reference,
+            } => print_json(
+                &runtime
+                    .bundle_signing_key_info(&signing_key_reference)
+                    .await?,
+            )?,
             BundleAction::Verify { path } => print_json(&runtime.verify_bundle(path).await?)?,
+            BundleAction::Build {
+                source,
+                destination,
+                name,
+                version,
+                publisher,
+                created_at,
+                source_revision,
+                signing_key_reference,
+            } => print_json(
+                &runtime
+                    .build_bundle(
+                        source,
+                        destination,
+                        &name,
+                        &version,
+                        &publisher,
+                        &created_at,
+                        source_revision.as_deref(),
+                        &signing_key_reference,
+                    )
+                    .await?,
+            )?,
+            BundleAction::Install { path, prefix } => {
+                print_json(&runtime.install_bundle(path, prefix).await?)?
+            }
         },
         Command::Integrations(command) => match command.command {
             IntegrationsAction::List { limit } => {

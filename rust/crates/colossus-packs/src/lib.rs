@@ -5,12 +5,13 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
-    Actor, BundleManifest, BundleVerification, EffectRequest, PackInstallation, PackManifest,
+    Actor, BundleFileEntry, BundleInstallation, BundleManifest, BundleMaterialization,
+    BundleSigningKeyInfo, BundleVerification, EffectRequest, PackInstallation, PackManifest,
     PackSignature, PackStatus, PackVerification, PublisherTrust, QuarantinedEffectResult,
 };
 use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
 use colossus_ports::{ExtensionRepository, StoreError};
-use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
+use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -31,6 +32,14 @@ const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_FILES: usize = 10_000;
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = MAX_TOTAL_BYTES;
+const RELEASE_TARGETS: [&str; 6] = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-unknown-linux-musl",
+    "x86_64-unknown-linux-musl",
+    "aarch64-pc-windows-msvc",
+    "x86_64-pc-windows-msvc",
+];
 
 const OCI_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 const OCI_TAR_MEDIA_TYPES: [&str; 2] = [
@@ -157,6 +166,37 @@ pub enum PackOperation {
         /// Absolute or workspace-relative bundle directory.
         path: String,
     },
+    /// Materialize and sign an offline release bundle from a staged payload tree.
+    BundleBuild {
+        /// Absolute or workspace-relative staged payload directory.
+        source: String,
+        /// Absolute or workspace-relative destination directory, which must not exist.
+        destination: String,
+        /// Stable bundle identity.
+        name: String,
+        /// Release version represented by the payload.
+        version: String,
+        /// Publisher already bound to the signing key in canonical trust state.
+        publisher: String,
+        /// Explicit reproducible RFC3339 UTC timestamp.
+        created_at: String,
+        /// Optional source revision.
+        source_revision: Option<String>,
+        /// Environment reference containing a 32-byte Ed25519 signing seed.
+        signing_key_reference: String,
+    },
+    /// Verify and install the current-target native executable from an offline bundle.
+    BundleInstall {
+        /// Absolute or workspace-relative bundle directory.
+        path: String,
+        /// Absolute clean installation prefix.
+        prefix: String,
+    },
+    /// Derive the safe public identity for a referenced signing seed.
+    BundleKeyInfo {
+        /// Environment reference containing a 32-byte Ed25519 signing seed.
+        signing_key_reference: String,
+    },
 }
 
 impl PackOperation {
@@ -170,6 +210,9 @@ impl PackOperation {
             Self::Uninstall { .. } => "pack.uninstall",
             Self::TrustAdd { .. } => "pack.trust.add",
             Self::BundleVerify { .. } => "bundle.verify",
+            Self::BundleBuild { .. } => "bundle.build",
+            Self::BundleInstall { .. } => "bundle.install",
+            Self::BundleKeyInfo { .. } => "bundle.key.inspect",
         }
     }
 
@@ -182,7 +225,29 @@ impl PackOperation {
             }
             Self::TrustAdd { publisher, .. } => format!("publisher:{publisher}"),
             Self::BundleVerify { path } => format!("bundle-source:{path}"),
+            Self::BundleBuild { destination, .. } => {
+                format!("bundle-destination:{destination}")
+            }
+            Self::BundleInstall { path, prefix } => {
+                format!("bundle-source:{path}:install-prefix:{prefix}")
+            }
+            Self::BundleKeyInfo { .. } => "bundle-signing-key:referenced".into(),
         }
+    }
+}
+
+/// Native artifact target expected by this running executable.
+pub fn current_release_target() -> Result<&'static str, PackError> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
+        ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
+        ("linux", "aarch64") => Ok("aarch64-unknown-linux-musl"),
+        ("linux", "x86_64") => Ok("x86_64-unknown-linux-musl"),
+        ("windows", "aarch64") => Ok("aarch64-pc-windows-msvc"),
+        ("windows", "x86_64") => Ok("x86_64-pc-windows-msvc"),
+        (os, arch) => Err(PackError::Invalid(format!(
+            "no native release target is defined for {os}/{arch}"
+        ))),
     }
 }
 
@@ -384,6 +449,154 @@ impl PackService {
     fn verify_bundle(&self, root: &Path) -> Result<BundleVerification, PackError> {
         verify_bundle(root, self.repository.as_ref())
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_bundle(
+        &self,
+        source: &Path,
+        destination: &Path,
+        name: &str,
+        version: &str,
+        publisher: &str,
+        created_at: &str,
+        source_revision: Option<String>,
+        signing_seed: [u8; 32],
+    ) -> Result<BundleMaterialization, PackError> {
+        validate_identity("bundle name", name)?;
+        validate_identity("publisher", publisher)?;
+        validate_bounded("bundle version", version, 128)?;
+        validate_bundle_timestamp(created_at)?;
+        if let Some(revision) = source_revision.as_deref() {
+            validate_bounded("bundle source_revision", revision, 256)?;
+        }
+        let source = verified_root(source)?;
+        if fs::symlink_metadata(source.join(BUNDLE_MANIFEST)).is_ok() {
+            return Err(PackError::Invalid(format!(
+                "staged bundle payload must not contain {BUNDLE_MANIFEST}"
+            )));
+        }
+        validate_absolute_normalized(destination, "bundle destination")?;
+        if fs::symlink_metadata(destination).is_ok() {
+            return Err(PackError::Invalid(format!(
+                "bundle destination already exists: {}",
+                destination.display()
+            )));
+        }
+        let parent = destination.parent().ok_or_else(|| {
+            PackError::Invalid("bundle destination has no parent directory".into())
+        })?;
+        let parent = verified_root(parent)?;
+        if parent.starts_with(&source) {
+            return Err(PackError::Invalid(
+                "bundle destination cannot be inside the staged payload".into(),
+            ));
+        }
+        let temporary = tempfile::Builder::new()
+            .prefix(".bundle-build-")
+            .tempdir_in(&parent)?;
+        copy_bundle_payload(&source, temporary.path())?;
+        let files = collect_bundle_entries(temporary.path())?;
+        let targets = installable_bundle_targets(&files);
+        if targets.is_empty() {
+            return Err(PackError::Invalid(
+                "bundle must contain at least one artifacts/TARGET/colossus native executable"
+                    .into(),
+            ));
+        }
+        let signing_key = SigningKey::from_bytes(&signing_seed);
+        let signing_key_id = digest_hex(signing_key.verifying_key().as_bytes());
+        let mut manifest = BundleManifest {
+            format_version: 1,
+            name: name.into(),
+            version: version.into(),
+            publisher: publisher.into(),
+            created_at: created_at.into(),
+            source_revision,
+            files,
+            signatures: Vec::new(),
+        };
+        let unsigned = canonical_bundle_signing_bytes(&manifest)?;
+        manifest.signatures.push(PackSignature {
+            algorithm: "ed25519".into(),
+            key_id: signing_key_id.clone(),
+            signature: BASE64.encode(signing_key.sign(&unsigned).to_bytes()),
+        });
+        let manifest_path = temporary.path().join(BUNDLE_MANIFEST);
+        let mut manifest_file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&manifest_path)?;
+        serde_json::to_writer_pretty(&mut manifest_file, &manifest)?;
+        manifest_file.write_all(b"\n")?;
+        manifest_file.sync_all()?;
+        let verification = self.verify_bundle(temporary.path())?;
+        fs::rename(temporary.path(), destination)?;
+        Ok(BundleMaterialization {
+            path: destination.display().to_string(),
+            verification,
+            signing_key_id,
+            targets,
+        })
+    }
+
+    fn install_bundle(&self, root: &Path, prefix: &Path) -> Result<BundleInstallation, PackError> {
+        let root = verified_root(root)?;
+        let verification = self.verify_bundle(&root)?;
+        let manifest: BundleManifest = read_manifest(&root.join(BUNDLE_MANIFEST))?;
+        let target = current_release_target()?.to_owned();
+        let artifact = bundle_artifact_path(&target);
+        let entry = manifest
+            .files
+            .iter()
+            .find(|entry| entry.path == artifact)
+            .ok_or_else(|| {
+                PackError::Invalid(format!(
+                    "bundle does not contain a native executable for {target}"
+                ))
+            })?;
+        let source = root.join(&artifact);
+        reject_symlink_chain(&root, &source)?;
+        checked_regular_file(&source)?;
+        if hash_file(&source, MAX_FILE_BYTES)? != entry.sha256 {
+            return Err(PackError::Invalid(
+                "bundle artifact changed after verification".into(),
+            ));
+        }
+        let prefix = ensure_real_directory(prefix, "bundle install prefix")?;
+        let bin = prefix.join("bin");
+        let bin = ensure_real_directory(&bin, "bundle install bin directory")?;
+        let installed = bin.join(if cfg!(windows) {
+            "colossus.exe"
+        } else {
+            "colossus"
+        });
+        if fs::symlink_metadata(&installed).is_ok() {
+            return Err(PackError::Invalid(format!(
+                "bundle installation refuses to replace existing path: {}",
+                installed.display()
+            )));
+        }
+        let mut temporary = tempfile::NamedTempFile::new_in(&bin)?;
+        let mut input = fs::File::open(&source)?;
+        std::io::copy(&mut input, temporary.as_file_mut())?;
+        temporary.as_file_mut().sync_all()?;
+        set_executable_permissions(temporary.path())?;
+        if hash_file(temporary.path(), MAX_FILE_BYTES)? != entry.sha256 {
+            return Err(PackError::Invalid(
+                "bundle artifact changed while it was copied".into(),
+            ));
+        }
+        temporary
+            .persist_noclobber(&installed)
+            .map_err(|error| error.error)?;
+        Ok(BundleInstallation {
+            verification,
+            target,
+            artifact,
+            artifact_sha256: entry.sha256.clone(),
+            installed_path: installed.display().to_string(),
+        })
+    }
 }
 
 /// Permit-bearing adapter for pack and bundle effects.
@@ -414,6 +627,9 @@ impl EffectExecutor for PackExecutor {
         }
         if let Some(path) = source_path(&operation) {
             enforce_read_grant(path, &permit)?;
+        }
+        if let Some(path) = destination_path(&operation) {
+            enforce_write_grant(path, &permit)?;
         }
         let value = match operation {
             PackOperation::Verify { path } => {
@@ -455,6 +671,39 @@ impl EffectExecutor for PackExecutor {
                     .verify_bundle(Path::new(&path))
                     .map_err(execution)?,
             ),
+            PackOperation::BundleBuild {
+                source,
+                destination,
+                name,
+                version,
+                publisher,
+                created_at,
+                source_revision,
+                signing_key_reference,
+            } => serde_json::to_value(
+                self.service
+                    .build_bundle(
+                        Path::new(&source),
+                        Path::new(&destination),
+                        &name,
+                        &version,
+                        &publisher,
+                        &created_at,
+                        source_revision,
+                        resolve_signing_seed(&signing_key_reference).map_err(execution)?,
+                    )
+                    .map_err(execution)?,
+            ),
+            PackOperation::BundleInstall { path, prefix } => serde_json::to_value(
+                self.service
+                    .install_bundle(Path::new(&path), Path::new(&prefix))
+                    .map_err(execution)?,
+            ),
+            PackOperation::BundleKeyInfo {
+                signing_key_reference,
+            } => serde_json::to_value(signing_key_info(
+                resolve_signing_seed(&signing_key_reference).map_err(execution)?,
+            )),
         }
         .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         Ok(QuarantinedEffectResult {
@@ -470,8 +719,27 @@ fn source_path(operation: &PackOperation) -> Option<&Path> {
     match operation {
         PackOperation::Verify { path }
         | PackOperation::Install { path, .. }
-        | PackOperation::BundleVerify { path } => Some(Path::new(path)),
+        | PackOperation::BundleVerify { path }
+        | PackOperation::BundleInstall { path, .. } => Some(Path::new(path)),
+        PackOperation::BundleBuild { source, .. } => Some(Path::new(source)),
         _ => None,
+    }
+}
+
+fn destination_path(operation: &PackOperation) -> Option<&Path> {
+    match operation {
+        PackOperation::BundleBuild { destination, .. } => Some(Path::new(destination)),
+        PackOperation::BundleInstall { prefix, .. } => Some(Path::new(prefix)),
+        _ => None,
+    }
+}
+
+fn signing_key_info(seed: [u8; 32]) -> BundleSigningKeyInfo {
+    let signing_key = SigningKey::from_bytes(&seed);
+    let public = signing_key.verifying_key().to_bytes();
+    BundleSigningKeyInfo {
+        key_id: digest_hex(&public),
+        public_key: BASE64.encode(public),
     }
 }
 
@@ -488,6 +756,63 @@ fn enforce_read_grant(path: &Path, permit: &ExecutionPermit) -> Result<(), Execu
         )));
     }
     Ok(())
+}
+
+fn enforce_write_grant(path: &Path, permit: &ExecutionPermit) -> Result<(), ExecutionError> {
+    validate_absolute_normalized(path, "bundle write destination").map_err(execution)?;
+    let mut existing = path;
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                existing = existing.parent().ok_or_else(|| {
+                    ExecutionError::Failed(format!(
+                        "bundle destination {} has no existing ancestor",
+                        path.display()
+                    ))
+                })?;
+            }
+            Err(error) => return Err(execution(error)),
+        }
+    }
+    let resolved_existing = fs::canonicalize(existing).map_err(execution)?;
+    let allowed = permit.obligations().filesystem.iter().any(|grant| {
+        if grant.mode != "write" || !path.starts_with(Path::new(&grant.root)) {
+            return false;
+        }
+        fs::canonicalize(&grant.root).is_ok_and(|root| resolved_existing.starts_with(root))
+    });
+    if !allowed {
+        return Err(ExecutionError::Failed(format!(
+            "bundle destination {} is outside policy-authorized write roots",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_signing_seed(reference: &str) -> Result<[u8; 32], PackError> {
+    let variable = reference.strip_prefix("env:").ok_or_else(|| {
+        PackError::Invalid("bundle signing keys must use env:VARIABLE references".into())
+    })?;
+    if variable.is_empty()
+        || !variable.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
+        })
+    {
+        return Err(PackError::Invalid(
+            "bundle signing keys must use env:VARIABLE references".into(),
+        ));
+    }
+    let encoded = std::env::var(variable).map_err(|_| {
+        PackError::Invalid(format!("bundle signing credential {variable} is unset"))
+    })?;
+    let decoded = hex::decode(&encoded)
+        .or_else(|_| BASE64.decode(&encoded))
+        .map_err(|_| PackError::Invalid("bundle signing seed must be hex or base64".into()))?;
+    decoded.try_into().map_err(|_| {
+        PackError::Invalid("bundle signing seed must decode to exactly 32 bytes".into())
+    })
 }
 
 fn execution(error: impl std::fmt::Display) -> ExecutionError {
@@ -893,6 +1218,211 @@ fn verify_bundle(
         trust_key_id,
         source_revision: manifest.source_revision,
     })
+}
+
+fn validate_bundle_timestamp(created_at: &str) -> Result<(), PackError> {
+    validate_bounded("bundle created_at", created_at, 128)?;
+    if !created_at.ends_with('Z') {
+        return Err(PackError::Invalid(
+            "bundle created_at must use the UTC Z designator".into(),
+        ));
+    }
+    OffsetDateTime::parse(created_at, &Rfc3339)
+        .map(|_| ())
+        .map_err(|_| PackError::Invalid("bundle created_at must be RFC3339 UTC".into()))
+}
+
+fn copy_bundle_payload(source: &Path, destination: &Path) -> Result<(), PackError> {
+    fn copy_directory(source: &Path, destination: &Path) -> Result<(), PackError> {
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+            let before = fs::symlink_metadata(&source_path)?;
+            if before.file_type().is_symlink() {
+                return Err(PackError::Invalid(format!(
+                    "symlink is forbidden: {}",
+                    source_path.display()
+                )));
+            }
+            if before.is_dir() {
+                fs::create_dir(&destination_path)?;
+                copy_directory(&source_path, &destination_path)?;
+            } else if before.is_file() {
+                fs::copy(&source_path, &destination_path)?;
+                let after = fs::symlink_metadata(&source_path)?;
+                if after.file_type().is_symlink()
+                    || !after.is_file()
+                    || after.len() != before.len()
+                    || hash_file(&source_path, MAX_FILE_BYTES)?
+                        != hash_file(&destination_path, MAX_FILE_BYTES)?
+                {
+                    return Err(PackError::Invalid(format!(
+                        "bundle source changed while it was copied: {}",
+                        source_path.display()
+                    )));
+                }
+            } else {
+                return Err(PackError::Invalid(format!(
+                    "special filesystem entry is forbidden: {}",
+                    source_path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+    copy_directory(source, destination)
+}
+
+fn collect_bundle_entries(root: &Path) -> Result<Vec<BundleFileEntry>, PackError> {
+    fn collect(
+        root: &Path,
+        directory: &Path,
+        entries: &mut Vec<BundleFileEntry>,
+        total: &mut u64,
+    ) -> Result<(), PackError> {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(PackError::Invalid(format!(
+                    "symlink is forbidden: {}",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                collect(root, &path, entries, total)?;
+            } else if metadata.is_file() {
+                if metadata.len() > MAX_FILE_BYTES {
+                    return Err(PackError::Invalid(format!(
+                        "bundle file exceeds {MAX_FILE_BYTES} bytes: {}",
+                        path.display()
+                    )));
+                }
+                *total = total
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| PackError::Invalid("bundle payload size overflow".into()))?;
+                if *total > MAX_TOTAL_BYTES {
+                    return Err(PackError::Invalid(format!(
+                        "bundle payload exceeds {MAX_TOTAL_BYTES} bytes"
+                    )));
+                }
+                entries.push(BundleFileEntry {
+                    path: normalized_relative(root, &path)?,
+                    sha256: hash_file(&path, MAX_FILE_BYTES)?,
+                    size: Some(metadata.len()),
+                });
+                if entries.len() > MAX_FILES {
+                    return Err(PackError::Invalid(format!(
+                        "bundle contains more than {MAX_FILES} files"
+                    )));
+                }
+            } else {
+                return Err(PackError::Invalid(format!(
+                    "special filesystem entry is forbidden: {}",
+                    path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    let mut entries = Vec::new();
+    let mut total = 0;
+    collect(root, root, &mut entries, &mut total)?;
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    if entries.is_empty() {
+        return Err(PackError::Invalid(
+            "bundle payload must contain at least one file".into(),
+        ));
+    }
+    Ok(entries)
+}
+
+fn bundle_artifact_path(target: &str) -> String {
+    format!(
+        "artifacts/{target}/{}",
+        if target.ends_with("windows-msvc") {
+            "colossus.exe"
+        } else {
+            "colossus"
+        }
+    )
+}
+
+fn installable_bundle_targets(files: &[BundleFileEntry]) -> Vec<String> {
+    let paths = files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<BTreeSet<_>>();
+    RELEASE_TARGETS
+        .iter()
+        .filter(|target| paths.contains(bundle_artifact_path(target).as_str()))
+        .map(|target| (*target).to_owned())
+        .collect()
+}
+
+fn validate_absolute_normalized(path: &Path, label: &str) -> Result<(), PackError> {
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            !matches!(
+                component,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        })
+    {
+        return Err(PackError::Invalid(format!(
+            "{label} must be absolute and normalized: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_real_directory(path: &Path, label: &str) -> Result<PathBuf, PackError> {
+    validate_absolute_normalized(path, label)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(PackError::Invalid(format!(
+                    "{label} must be a real directory: {}",
+                    path.display()
+                )));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path.parent().ok_or_else(|| {
+                PackError::Invalid(format!("{label} has no parent: {}", path.display()))
+            })?;
+            ensure_real_directory(parent, label)?;
+            match fs::create_dir(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            let metadata = fs::symlink_metadata(path)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(PackError::Invalid(format!(
+                    "{label} became unsafe while it was created: {}",
+                    path.display()
+                )));
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(fs::canonicalize(path)?)
+}
+
+fn set_executable_permissions(path: &Path) -> Result<(), PackError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn read_manifest<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, PackError> {
@@ -1557,8 +2087,9 @@ fn now() -> Result<String, PackError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUNDLE_MANIFEST, PACK_MANIFEST, PackError, PackService, canonical_bundle_signing_bytes,
-        canonical_pack_signing_bytes, digest_hex,
+        BUNDLE_MANIFEST, PACK_MANIFEST, PackError, PackService, RELEASE_TARGETS,
+        bundle_artifact_path, canonical_bundle_signing_bytes, canonical_pack_signing_bytes,
+        current_release_target, digest_hex,
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use colossus_contracts::{
@@ -1989,6 +2520,161 @@ mod tests {
             service.verify_bundle(source.path()),
             Err(PackError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn signed_bundle_build_is_reproducible_and_installs_only_into_a_clean_prefix() {
+        let root = TempDir::new().expect("root");
+        let root = fs::canonicalize(root.path()).expect("canonical root");
+        let source = root.join("staged");
+        let target = current_release_target().expect("release target");
+        let artifact = bundle_artifact_path(target);
+        let artifact_path = source.join(&artifact);
+        fs::create_dir_all(artifact_path.parent().expect("artifact parent"))
+            .expect("artifact directory");
+        fs::write(&artifact_path, b"standalone-native-binary").expect("artifact");
+        fs::write(source.join("LICENSE"), b"Apache-2.0\n").expect("license");
+
+        let (_, repository) = repository();
+        let signing_key = SigningKey::from_bytes(&[33_u8; 32]);
+        let key_id = trust_key(repository.as_ref(), "colossus", &signing_key);
+        let service = PackService::new(repository, root.join("packs"));
+        let first = root.join("bundle-one");
+        let second = root.join("bundle-two");
+        for destination in [&first, &second] {
+            let materialization = service
+                .build_bundle(
+                    &source,
+                    destination,
+                    "colossus-offline",
+                    "0.6.0-alpha.1",
+                    "colossus",
+                    "2026-07-11T00:00:00Z",
+                    Some("0123456789abcdef".into()),
+                    signing_key.to_bytes(),
+                )
+                .expect("build bundle");
+            assert_eq!(materialization.signing_key_id, key_id);
+            assert_eq!(materialization.targets, [target.to_owned()]);
+            assert_eq!(materialization.verification.file_count, 2);
+        }
+        assert_eq!(
+            fs::read(first.join(BUNDLE_MANIFEST)).expect("first manifest"),
+            fs::read(second.join(BUNDLE_MANIFEST)).expect("second manifest")
+        );
+
+        let prefix = root.join("prefix");
+        let installation = service
+            .install_bundle(&first, &prefix)
+            .expect("install bundle");
+        assert_eq!(installation.target, target);
+        assert_eq!(installation.artifact, artifact);
+        assert_eq!(
+            fs::read(&installation.installed_path).expect("installed bytes"),
+            b"standalone-native-binary"
+        );
+        assert!(matches!(
+            service.install_bundle(&first, &prefix),
+            Err(PackError::Invalid(message))
+                if message.contains("refuses to replace existing path")
+        ));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let actual_prefix = root.join("actual-prefix");
+            fs::create_dir(&actual_prefix).expect("actual prefix");
+            let linked_prefix = root.join("linked-prefix");
+            symlink(&actual_prefix, &linked_prefix).expect("linked prefix");
+            let error = service
+                .install_bundle(&first, &linked_prefix)
+                .expect_err("linked prefix must fail");
+            assert!(
+                error.to_string().contains("must be a real directory"),
+                "{error}"
+            );
+        }
+
+        let other_target = RELEASE_TARGETS
+            .iter()
+            .find(|candidate| **candidate != target)
+            .expect("other release target");
+        let other_source = root.join("other-staged");
+        let other_artifact = other_source.join(bundle_artifact_path(other_target));
+        fs::create_dir_all(other_artifact.parent().expect("other artifact parent"))
+            .expect("other artifact directory");
+        fs::write(&other_artifact, b"other-native-binary").expect("other artifact");
+        let other_bundle = root.join("other-bundle");
+        service
+            .build_bundle(
+                &other_source,
+                &other_bundle,
+                "colossus-offline-other",
+                "0.6.0-alpha.1",
+                "colossus",
+                "2026-07-11T00:00:00Z",
+                None,
+                signing_key.to_bytes(),
+            )
+            .expect("build other-target bundle");
+        let error = service
+            .install_bundle(&other_bundle, &root.join("other-prefix"))
+            .expect_err("wrong-target bundle must not install");
+        assert!(
+            error
+                .to_string()
+                .contains("does not contain a native executable"),
+            "{error}"
+        );
+
+        fs::OpenOptions::new()
+            .write(true)
+            .open(first.join(&installation.artifact))
+            .expect("open artifact for tampering")
+            .write_all(b"tampered")
+            .expect("tamper artifact");
+        let error = service
+            .verify_bundle(&first)
+            .expect_err("tampered bundle must fail");
+        assert!(error.to_string().contains("file hash mismatch"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signed_bundle_build_rejects_linked_staging_payloads() {
+        use std::os::unix::fs::symlink;
+
+        let root = TempDir::new().expect("root");
+        let root = fs::canonicalize(root.path()).expect("canonical root");
+        let source = root.join("staged");
+        let artifact = source.join(bundle_artifact_path(
+            current_release_target().expect("release target"),
+        ));
+        fs::create_dir_all(artifact.parent().expect("artifact parent"))
+            .expect("artifact directory");
+        let outside = root.join("outside-binary");
+        fs::write(&outside, b"outside").expect("outside binary");
+        symlink(&outside, &artifact).expect("linked artifact");
+        let (_, repository) = repository();
+        let signing_key = SigningKey::from_bytes(&[34_u8; 32]);
+        trust_key(repository.as_ref(), "colossus", &signing_key);
+        let service = PackService::new(repository, root.join("packs"));
+        let error = service
+            .build_bundle(
+                &source,
+                &root.join("bundle"),
+                "colossus-linked",
+                "0.6.0-alpha.1",
+                "colossus",
+                "2026-07-11T00:00:00Z",
+                None,
+                signing_key.to_bytes(),
+            )
+            .expect_err("linked payload must fail");
+        assert!(
+            error.to_string().contains("symlink is forbidden"),
+            "{error}"
+        );
     }
 
     #[test]

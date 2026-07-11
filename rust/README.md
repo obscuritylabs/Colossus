@@ -184,8 +184,13 @@ added to their normal runtime registries on restart, permission-restricted per d
 capability, and executed only through approval, one-use permits, sandboxing, quarantine,
 post-effect policy, audit, and credential redaction.
 
-Signed offline releases use `bundle verify PATH`. Verification is fully offline and
-requires a trusted publisher/key signature plus a complete bounded payload allowlist.
+Signed offline releases use `bundle build`, `bundle verify`, and `bundle install`.
+Build deterministically copies a staged multi-target payload, late-resolves an
+environment signing-seed reference, requires matching publisher/key trust, signs and
+re-verifies the completed bundle, then publishes atomically. Install fully re-verifies
+offline, selects only the current native target, and creates a clean-prefix executable
+without clobbering an existing path. Both mutations require approval plus matching
+filesystem obligations.
 
 OpenAPI 3 JSON imports are compiled into strict `openapi.NAME.OPERATION` tools and
 persisted as immutable integration lifecycle events. Path, query, and JSON-body fields

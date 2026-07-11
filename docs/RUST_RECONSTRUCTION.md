@@ -332,9 +332,11 @@ cutover. The following planned work remains:
   hydration, prompt-safe in-place activity refresh, a cached embedded/worker status prompt,
   durable correlated run envelopes, semantic tool-family results, recoverability labels,
   and phase/action elapsed lines are implemented.
-- Signed offline-bundle materialization, additional MCP transports/conformance coverage,
-  and the rest of P2 remain. Native release archives now include clean-prefix offline
-  installers; native GitHub,
+- Additional MCP transports/conformance coverage and the rest of P2 remain. Native
+  release archives now include clean-prefix offline installers, and signed offline
+  bundles can be deterministically materialized from staged native targets then verified
+  and installed through approval-required gateway effects with late signing-key
+  resolution and exact current-target/no-clobber enforcement. Native GitHub,
   SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
   pending-auth hiding, environment credential brokering, exact-origin HTTP execution,
   permit/approval enforcement, bounded quarantine, and post-effect release are implemented.

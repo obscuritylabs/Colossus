@@ -187,6 +187,12 @@ auto-discover the worker and otherwise use the same runtime in-process. Durable 
 decision, plan, goal, child-agent, and memory lifecycle commands use that application
 protocol as well. Research, declarative skill, signed pack/bundle, integration, MCP,
 process, and network terminal operations are also dispatched to the worker when active.
+Offline-bundle build/install are normal pack-adapter effects rather than release-script
+bypasses. Build copies a staged target tree, derives a signature from a late-resolved
+credential reference, re-verifies it against canonical publisher trust, and publishes
+atomically. Install re-verifies and selects the compile-platform target convention before
+no-clobber creation in a permitted prefix. Both operations use the same worker routing,
+approval proof, one-use permit, disclosure, and effect lifecycle as other writes.
 The worker-backed REPL exposes the same implemented slash-command operations as embedded
 mode, and both REPL paths accept either an interactive terminal or line-oriented stdin
 for automation and acceptance testing.

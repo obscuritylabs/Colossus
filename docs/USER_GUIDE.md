@@ -174,6 +174,14 @@ colossus --config .colossus/config.yaml --approval-mode ask packs install ./pack
 colossus --config .colossus/config.yaml packs list
 ```
 
+Signed release bundles can be verified and installed without network access:
+
+```bash
+colossus --config .colossus/config.yaml bundle verify ./bundle
+colossus --config .colossus/config.yaml --approval-mode ask bundle install \
+  ./bundle --prefix "$HOME/.local"
+```
+
 ## Research
 
 ```bash

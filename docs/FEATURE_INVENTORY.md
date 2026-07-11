@@ -976,8 +976,10 @@ A reconstruction is complete only when all applicable checks pass:
 - [ ] Offline install and echo smoke test require no provider credentials or network.
   Native archive installers now require no Cargo or Python; clean-prefix install,
   echo-agent, and encrypted audit verification pass locally on Unix and are wired into
-  every Unix/Windows native release job. This remains open until the remote six-target
-  installer matrix is green.
+  every Unix/Windows native release job. Signed bundles also materialize reproducibly,
+  verify publisher/key trust and copied bytes, install only the exact current target into
+  a clean prefix, then pass echo and encrypted audit verification. This remains open
+  until the remote six-target installer/bundle matrix is green.
 - [ ] One agent run supports streaming text, multiple tool turns, final output, run id,
   session id, event count, and elapsed time.
 - [ ] Malformed provider tool arguments are retried within bounds and never executed.

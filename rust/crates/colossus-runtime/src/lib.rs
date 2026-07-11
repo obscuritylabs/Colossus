@@ -8,21 +8,22 @@ use colossus_audit::{
 };
 use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
-    Actor, ActorType, AgentRunResult, ContextSnapshot, ContextStatus, CredentialReference,
-    DecisionOutcome, DecisionPriority, DecisionSource, DecisionStatus, EffectRequest,
-    EventClassification, ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord,
-    GoalRunResult, GoalStatus, IntegrationAuth, IntegrationConnection, IntegrationSummary,
-    KeyDecision, MemoryRecord, MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole,
-    ModelRequest, ModelToolDefinition, NewEvent, PackInstallation, PackVerification, PlanRecord,
-    PlanStatus, PlanStep, PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo,
-    ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn,
-    PublisherTrust, QuarantinedEffectResult, ReplPreferences, ResearchClaim, ResearchDepth,
-    ResearchRun, ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary,
-    SessionMessage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
-    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
-    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
-    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
-    UserPromptRequest, WorkStateSnapshot,
+    Actor, ActorType, AgentRunResult, BundleInstallation, BundleMaterialization,
+    BundleSigningKeyInfo, ContextSnapshot, ContextStatus, CredentialReference, DecisionOutcome,
+    DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
+    ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunResult, GoalStatus,
+    IntegrationAuth, IntegrationConnection, IntegrationSummary, KeyDecision, MemoryRecord,
+    MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole, ModelRequest, ModelToolDefinition,
+    NewEvent, PackInstallation, PackVerification, PlanRecord, PlanStatus, PlanStep,
+    PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness,
+    ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
+    QuarantinedEffectResult, ReplPreferences, ResearchClaim, ResearchDepth, ResearchRun,
+    ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
+    SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection,
+    SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult,
+    SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus,
+    TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
+    WorkStateSnapshot,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -2127,6 +2128,9 @@ impl Runtime {
                     "pack.disable",
                     "pack.uninstall",
                     "pack.trust.add",
+                    "bundle.build",
+                    "bundle.install",
+                    "bundle.key.inspect",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
@@ -2361,6 +2365,9 @@ impl Runtime {
             "pack.uninstall".to_owned(),
             "pack.trust.add".to_owned(),
             "bundle.verify".to_owned(),
+            "bundle.build".to_owned(),
+            "bundle.install".to_owned(),
+            "bundle.key.inspect".to_owned(),
         ];
         known_capabilities.extend(active_pack_extensions.actions.iter().cloned());
         let gateway = Arc::new(EffectGateway::new(
@@ -2941,6 +2948,19 @@ impl Runtime {
                 .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
         request.capabilities = vec![operation.action().into()];
+        if let PackOperation::BundleBuild {
+            signing_key_reference,
+            ..
+        }
+        | PackOperation::BundleKeyInfo {
+            signing_key_reference,
+        } = &operation
+        {
+            request.credential_references = vec![CredentialReference {
+                reference: signing_key_reference.clone(),
+                value_hash: None,
+            }];
+        }
         let released = self
             .gateway
             .execute(request, self.pack_executor.as_ref())
@@ -3096,6 +3116,66 @@ impl Runtime {
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::BundleVerify { path })
                 .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Build and sign a deterministic offline release bundle through policy.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build_bundle(
+        &self,
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+        name: &str,
+        version: &str,
+        publisher: &str,
+        created_at: &str,
+        source_revision: Option<&str>,
+        signing_key_reference: &str,
+    ) -> Result<BundleMaterialization, RuntimeError> {
+        let source = absolute_path(source.as_ref())?.display().to_string();
+        let destination = absolute_path(destination.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::BundleBuild {
+                source,
+                destination,
+                name: name.into(),
+                version: version.into(),
+                publisher: publisher.into(),
+                created_at: created_at.into(),
+                source_revision: source_revision.map(Into::into),
+                signing_key_reference: signing_key_reference.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Verify and install the current-target native executable into a clean prefix.
+    pub async fn install_bundle(
+        &self,
+        path: impl AsRef<Path>,
+        prefix: impl AsRef<Path>,
+    ) -> Result<BundleInstallation, RuntimeError> {
+        let path = absolute_path(path.as_ref())?.display().to_string();
+        let prefix = absolute_path(prefix.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::BundleInstall { path, prefix })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Derive the public identity of a referenced bundle signing seed through policy.
+    pub async fn bundle_signing_key_info(
+        &self,
+        signing_key_reference: &str,
+    ) -> Result<BundleSigningKeyInfo, RuntimeError> {
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::BundleKeyInfo {
+                signing_key_reference: signing_key_reference.into(),
+            })
+            .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))
     }

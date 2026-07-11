@@ -74,6 +74,18 @@ Verify without network:
 colossus --config .colossus/config.yaml bundle verify ./bundle
 ```
 
+The release operator can materialize a deterministic signed bundle from a reviewed
+staging tree and install its current-target executable without an archive tool:
+
+```bash
+colossus --config .colossus/config.yaml --approval-mode ask bundle build \
+  ./bundle-stage ./bundle --name colossus-offline --version 0.6.0-alpha.N \
+  --publisher colossus --created-at CREATED_AT --source-revision GIT_COMMIT \
+  --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED
+colossus --config .colossus/config.yaml --approval-mode ask bundle install \
+  ./bundle --prefix "$HOME/.local"
+```
+
 Retain bundle verification, installed-binary smoke, audit verification, secure-anchor
 status, and artifact hashes as release evidence.
 

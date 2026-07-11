@@ -558,6 +558,226 @@ jobs:
             Pop-Location
           }
 
+      - name: Build and install signed bundle offline on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          COLOSSUS_BUNDLE_JOURNAL_KEY: "9999999999999999999999999999999999999999999999999999999999999999"
+          COLOSSUS_BUNDLE_CHECKPOINT_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          COLOSSUS_BUNDLE_SIGNING_SEED: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        run: |
+          set -euo pipefail
+          binary="$GITHUB_WORKSPACE/rust/target/${{ matrix.target }}/release/colossus-rs"
+          root="$RUNNER_TEMP/colossus-bundle-smoke-${{ matrix.target }}"
+          stage="$root/stage"
+          bundle="$root/bundle"
+          prefix="$root/prefix"
+          rm -rf "$root"
+          mkdir -p "$stage/artifacts/${{ matrix.target }}" "$root/workflows"
+          install -m 0755 "$binary" "$stage/artifacts/${{ matrix.target }}/colossus"
+          cp "$GITHUB_WORKSPACE/LICENSE" "$stage/LICENSE"
+          export BUNDLE_SMOKE_ROOT="$root"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["BUNDLE_SMOKE_ROOT"]).resolve()
+          config = {
+              "schemaVersion": 1,
+              "storage": {
+                  "path": str(root / "state.redb"),
+                  "keys": {
+                      "kind": "environment",
+                      "journal_variable": "COLOSSUS_BUNDLE_JOURNAL_KEY",
+                      "journal_key_id": "release-bundle-journal-v1",
+                      "signing_variable": "COLOSSUS_BUNDLE_CHECKPOINT_KEY",
+                      "anchor_path": str(root / "anchor.json"),
+                  },
+              },
+              "policy": {
+                  "kind": "built_in",
+                  "allow_actions": [],
+                  "approval_actions": [],
+                  "require_post_effect": True,
+              },
+              "workflows": {
+                  "repository": str(root / "workflows"),
+                  "user": str(root / "workflows"),
+              },
+              "providers": {
+                  "profiles": {
+                      "echo": {
+                          "kind": "echo",
+                          "model": "echo",
+                          "baseUrl": None,
+                          "credentialReference": None,
+                          "timeoutMs": 5000,
+                      }
+                  },
+                  "roles": {"primary": "echo"},
+              },
+              "agent": {"maxTurns": 2, "tools": ["echo"]},
+              "subagents": {"maxConcurrent": 1},
+              "sandbox": {
+                  "backend": "native",
+                  "profile": "release-bundle-smoke-v1",
+                  "allowBrokerFallback": False,
+                  "helperPath": None,
+                  "ociRuntime": None,
+                  "ociImage": None,
+                  "ociProxyImage": None,
+                  "filesystem": [{"root": str(root), "mode": "write"}],
+                  "executables": [],
+                  "environment": [],
+                  "networkDestinations": [],
+                  "timeoutMs": 30000,
+                  "maxOutputBytes": 1048576,
+                  "maxProcesses": 1,
+                  "maxMemoryBytes": 67108864,
+                  "maxConcurrency": 1,
+              },
+          }
+          (root / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
+          PY
+          config="$root/config.yaml"
+          version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "colossus-cli"))')
+          "$binary" --config "$config" --approval-mode full-access bundle key-info \
+            --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED >"$root/key.json"
+          public=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["public_key"])' "$root/key.json")
+          "$binary" --config "$config" --approval-mode full-access packs trust add colossus \
+            --public-key "$public" >/dev/null
+          "$binary" --config "$config" --approval-mode full-access bundle build \
+            "$stage" "$bundle" --name colossus-offline \
+            --version "$version" --publisher colossus \
+            --created-at 2026-07-11T00:00:00Z \
+            --source-revision "$GITHUB_SHA" \
+            --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED >"$root/build.json"
+          "$binary" --config "$config" bundle verify "$bundle" >/dev/null
+          "$binary" --config "$config" --approval-mode full-access bundle install \
+            "$bundle" --prefix "$prefix" >"$root/install.json"
+          installed="$prefix/bin/colossus"
+          "$installed" --config "$config" run bundle-installed >"$root/result.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["BUNDLE_SMOKE_ROOT"])
+          build = json.loads((root / "build.json").read_text())
+          install = json.loads((root / "install.json").read_text())
+          result = json.loads((root / "result.json").read_text())
+          assert build["targets"] == ["${{ matrix.target }}"], build
+          assert install["target"] == "${{ matrix.target }}", install
+          assert result["output"] == "bundle-installed", result
+          PY
+          "$installed" --config "$config" audit verify >/dev/null
+
+      - name: Build and install signed bundle offline on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          COLOSSUS_BUNDLE_JOURNAL_KEY: "9999999999999999999999999999999999999999999999999999999999999999"
+          COLOSSUS_BUNDLE_CHECKPOINT_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          COLOSSUS_BUNDLE_SIGNING_SEED: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $binary = Join-Path $env:GITHUB_WORKSPACE "rust/target/${{ matrix.target }}/release/colossus-rs.exe"
+          $root = Join-Path $env:RUNNER_TEMP "colossus-bundle-smoke-${{ matrix.target }}"
+          $stage = Join-Path $root "stage"
+          $bundle = Join-Path $root "bundle"
+          $prefix = Join-Path $root "prefix"
+          $workflows = Join-Path $root "workflows"
+          Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          $artifactDirectory = Join-Path $stage "artifacts/${{ matrix.target }}"
+          New-Item -ItemType Directory -Force $artifactDirectory, $workflows | Out-Null
+          Copy-Item $binary (Join-Path $artifactDirectory "colossus.exe")
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "LICENSE") (Join-Path $stage "LICENSE")
+          $config = [ordered]@{
+            schemaVersion = 1
+            storage = [ordered]@{
+              path = (Join-Path $root "state.redb")
+              keys = [ordered]@{
+                kind = "environment"
+                journal_variable = "COLOSSUS_BUNDLE_JOURNAL_KEY"
+                journal_key_id = "release-bundle-journal-v1"
+                signing_variable = "COLOSSUS_BUNDLE_CHECKPOINT_KEY"
+                anchor_path = (Join-Path $root "anchor.json")
+              }
+            }
+            policy = [ordered]@{
+              kind = "built_in"
+              allow_actions = @()
+              approval_actions = @()
+              require_post_effect = $true
+            }
+            workflows = [ordered]@{ repository = $workflows; user = $workflows }
+            providers = [ordered]@{
+              profiles = [ordered]@{
+                echo = [ordered]@{
+                  kind = "echo"
+                  model = "echo"
+                  baseUrl = $null
+                  credentialReference = $null
+                  timeoutMs = 5000
+                }
+              }
+              roles = [ordered]@{ primary = "echo" }
+            }
+            agent = [ordered]@{ maxTurns = 2; tools = @("echo") }
+            subagents = [ordered]@{ maxConcurrent = 1 }
+            sandbox = [ordered]@{
+              backend = "native"
+              profile = "release-bundle-smoke-v1"
+              allowBrokerFallback = $false
+              helperPath = $null
+              ociRuntime = $null
+              ociImage = $null
+              ociProxyImage = $null
+              filesystem = @([ordered]@{ root = $root; mode = "write" })
+              executables = @()
+              environment = @()
+              networkDestinations = @()
+              timeoutMs = 30000
+              maxOutputBytes = 1048576
+              maxProcesses = 1
+              maxMemoryBytes = 67108864
+              maxConcurrency = 1
+            }
+          }
+          $configPath = Join-Path $root "config.yaml"
+          $config | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 $configPath
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object name -eq "colossus-cli").version
+          $keyInfo = & $binary --config $configPath --approval-mode full-access bundle key-info `
+            --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "bundle key-info failed" }
+          & $binary --config $configPath --approval-mode full-access packs trust add colossus `
+            --public-key $keyInfo.public_key | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "bundle trust failed" }
+          $build = & $binary --config $configPath --approval-mode full-access bundle build `
+            $stage $bundle --name colossus-offline --version $version `
+            --publisher colossus --created-at 2026-07-11T00:00:00Z `
+            --source-revision $env:GITHUB_SHA `
+            --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "bundle build failed" }
+          & $binary --config $configPath bundle verify $bundle | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "bundle verify failed" }
+          $install = & $binary --config $configPath --approval-mode full-access bundle install `
+            $bundle --prefix $prefix | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "bundle install failed" }
+          $installed = Join-Path $prefix "bin/colossus.exe"
+          $result = & $installed --config $configPath run bundle-installed | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "bundle-installed run failed" }
+          if ($build.targets.Count -ne 1 -or $build.targets[0] -ne "${{ matrix.target }}") {
+            throw "unexpected bundle targets"
+          }
+          if ($install.target -ne "${{ matrix.target }}" -or $result.output -ne "bundle-installed") {
+            throw "unexpected bundle install result"
+          }
+          & $installed --config $configPath audit verify | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "bundle-installed audit verify failed" }
+
       - name: Upload release artifact and checksum
         uses: actions/upload-artifact@v4
         with:

@@ -1964,6 +1964,46 @@ pub struct BundleVerification {
     pub source_revision: Option<String>,
 }
 
+/// Evidence returned after deterministic signed-bundle materialization.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleMaterialization {
+    /// Absolute destination directory containing the completed bundle.
+    pub path: String,
+    /// Verification evidence for the exact completed bytes.
+    pub verification: BundleVerification,
+    /// Publisher-bound Ed25519 key identity used for the signature.
+    pub signing_key_id: String,
+    /// Supported native artifact targets discovered in the bundle.
+    pub targets: Vec<String>,
+}
+
+/// Evidence returned after installing one verified native bundle artifact.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleInstallation {
+    /// Verification evidence for the source bundle.
+    pub verification: BundleVerification,
+    /// Native release target selected from the running executable.
+    pub target: String,
+    /// Manifest-relative artifact path copied into the prefix.
+    pub artifact: String,
+    /// SHA-256 of the installed executable.
+    pub artifact_sha256: String,
+    /// Absolute installed executable path.
+    pub installed_path: String,
+}
+
+/// Public identity derived from a referenced offline-bundle signing seed.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleSigningKeyInfo {
+    /// SHA-256 identity of the raw Ed25519 public key.
+    pub key_id: String,
+    /// Base64-encoded Ed25519 public key safe to add to publisher trust.
+    pub public_key: String,
+}
+
 /// Provenance for a durable key decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -64,6 +64,16 @@ installers reject linked source executables and linked destination `bin` directo
 Unix replacement uses a same-directory temporary file and atomic rename. Installation
 does not resolve provider credentials or make network requests.
 
+Signed-bundle construction and installation are separate approval-required effects.
+Construction receives only an environment credential reference in policy/audit content;
+the permit-bearing adapter resolves the 32-byte Ed25519 seed, requires the derived key to
+match canonical publisher trust, copies a link-free bounded staging tree, hashes the
+copied bytes, signs deterministic canonical JSON, re-verifies the result, and atomically
+publishes a new destination. Installation re-verifies every signature/hash, selects the
+running platform's exact artifact path, requires a matching write root, copies through a
+same-directory temporary file, and creates a previously absent executable without
+clobbering. A modified bundle or linked/existing destination fails before release.
+
 Configured external audit export is itself an effect; it never receives a trusted-service
 bypass. The exporter discloses only ciphertext-free `AuditEvidence` envelope metadata and
 hashes. Every directory write requires `audit.export.write`, a matching sandbox write

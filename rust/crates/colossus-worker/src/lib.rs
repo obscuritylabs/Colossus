@@ -721,6 +721,37 @@ pub enum WorkerOperation {
         /// Server-local bundle path.
         path: String,
     },
+    /// Derive the public identity for a referenced bundle signing seed.
+    BundleKeyInfo {
+        /// Environment reference for the signing seed.
+        signing_key_reference: String,
+    },
+    /// Build and sign a server-local staged bundle payload.
+    BundleBuild {
+        /// Server-local staged payload path.
+        source: String,
+        /// Server-local destination path.
+        destination: String,
+        /// Bundle identity.
+        name: String,
+        /// Release version.
+        version: String,
+        /// Trusted publisher identity.
+        publisher: String,
+        /// Explicit RFC3339 UTC timestamp.
+        created_at: String,
+        /// Optional source revision.
+        source_revision: Option<String>,
+        /// Environment reference for the signing seed.
+        signing_key_reference: String,
+    },
+    /// Verify and install the current-target bundle artifact.
+    BundleInstall {
+        /// Server-local bundle path.
+        path: String,
+        /// Server-local clean installation prefix.
+        prefix: String,
+    },
     /// List safe integration summaries.
     IntegrationList {
         /// Maximum records.
@@ -1331,6 +1362,9 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::PackTrustList { .. } => "pack_trust_list",
         WorkerOperation::PackTrustAdd { .. } => "pack_trust_add",
         WorkerOperation::BundleVerify { .. } => "bundle_verify",
+        WorkerOperation::BundleKeyInfo { .. } => "bundle_key_info",
+        WorkerOperation::BundleBuild { .. } => "bundle_build",
+        WorkerOperation::BundleInstall { .. } => "bundle_install",
         WorkerOperation::IntegrationList { .. } => "integration_list",
         WorkerOperation::IntegrationGet { .. } => "integration_get",
         WorkerOperation::IntegrationConnect { .. } => "integration_connect",
@@ -1983,6 +2017,39 @@ async fn dispatch(
         WorkerOperation::BundleVerify { path } => {
             Ok(serde_json::to_value(runtime.verify_bundle(path).await?)?)
         }
+        WorkerOperation::BundleKeyInfo {
+            signing_key_reference,
+        } => Ok(serde_json::to_value(
+            runtime
+                .bundle_signing_key_info(&signing_key_reference)
+                .await?,
+        )?),
+        WorkerOperation::BundleBuild {
+            source,
+            destination,
+            name,
+            version,
+            publisher,
+            created_at,
+            source_revision,
+            signing_key_reference,
+        } => Ok(serde_json::to_value(
+            runtime
+                .build_bundle(
+                    source,
+                    destination,
+                    &name,
+                    &version,
+                    &publisher,
+                    &created_at,
+                    source_revision.as_deref(),
+                    &signing_key_reference,
+                )
+                .await?,
+        )?),
+        WorkerOperation::BundleInstall { path, prefix } => Ok(serde_json::to_value(
+            runtime.install_bundle(path, prefix).await?,
+        )?),
         WorkerOperation::IntegrationList { limit } => Ok(serde_json::to_value(
             runtime.list_integrations(limit.clamp(1, 1_000))?,
         )?),

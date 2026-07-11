@@ -32,6 +32,17 @@ installation root. Installation uses only files already in the archive, rejects 
 package executables and linked destination `bin` directories, and never invokes Cargo,
 Python, or a network client.
 
+A trusted multi-target offline bundle can instead install the exact current target after
+signature/hash verification:
+
+```bash
+colossus --config .colossus/config.yaml bundle verify ./bundle
+colossus --config .colossus/config.yaml --approval-mode ask bundle install \
+  ./bundle --prefix "$HOME/.local"
+```
+
+Bundle installation is clean-prefix/no-clobber and requires an authorized write root.
+
 ## Initialize Offline State
 
 Create fresh Rust YAML and state; Rust does not reuse the frozen Python configuration or

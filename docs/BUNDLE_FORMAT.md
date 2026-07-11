@@ -10,8 +10,18 @@ signature bound to an explicitly trusted publisher/key pair.
 bundle/
   manifest.json
   artifacts/
-    colossus-0.6.0-alpha.1-aarch64-apple-darwin.tar.gz
-    colossus-0.6.0-alpha.1-aarch64-apple-darwin.tar.gz.sha256
+    aarch64-apple-darwin/
+      colossus
+    x86_64-apple-darwin/
+      colossus
+    aarch64-unknown-linux-musl/
+      colossus
+    x86_64-unknown-linux-musl/
+      colossus
+    aarch64-pc-windows-msvc/
+      colossus.exe
+    x86_64-pc-windows-msvc/
+      colossus.exe
   sbom/
     colossus.spdx.json
   policy/
@@ -36,7 +46,7 @@ hash mismatch fail verification.
   "source_revision": "GIT_COMMIT",
   "files": [
     {
-      "path": "artifacts/colossus-0.6.0-alpha.1-aarch64-apple-darwin.tar.gz",
+      "path": "artifacts/aarch64-apple-darwin/colossus",
       "sha256": "64-character-lowercase-hex-digest",
       "size": 12345678
     }
@@ -61,9 +71,12 @@ signature is valid.
 
 ## Establish Trust And Verify
 
-Trust is an audited, approval-required local lifecycle:
+Derive the safe public identity from the private-seed reference, then bind it to the
+publisher through an audited approval-required lifecycle:
 
 ```bash
+colossus --config .colossus/config.yaml --approval-mode ask bundle key-info \
+  --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED
 colossus --config .colossus/config.yaml --approval-mode ask \
   packs trust add colossus --public-key BASE64_ED25519_PUBLIC_KEY
 colossus --config .colossus/config.yaml packs trust list
@@ -74,11 +87,52 @@ Verification returns bounded evidence: bundle name/version, canonical manifest h
 file count, total verified bytes, trusted key ID, and optional source revision. It does
 not install or execute payloads.
 
+## Build A Signed Bundle
+
+Stage one or more exact native executables under the target paths above, plus any
+additional hash-listed payload such as license, SBOM, policies, workflows, or skills.
+The staging directory must not contain `manifest.json`. Register the `bundle key-info`
+public key, keep the 32-byte Ed25519 signing seed in an environment credential, and use
+an explicit timestamp for reproducible output:
+
+```bash
+export COLOSSUS_BUNDLE_SIGNING_SEED=...
+colossus --config .colossus/config.yaml --approval-mode ask bundle build \
+  ./bundle-stage ./bundle \
+  --name colossus-offline \
+  --version 0.6.0-alpha.1 \
+  --publisher colossus \
+  --created-at 2026-07-11T00:00:00Z \
+  --source-revision GIT_COMMIT \
+  --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED
+```
+
+`bundle build` crosses the effect gateway, requires read and write roots, resolves the
+seed only after permit issuance, rejects links/special files/oversized payloads, copies
+through a destination-local temporary directory, hashes the copied bytes, writes files
+in deterministic manifest order, signs canonical JSON, re-verifies against publisher
+trust, and atomically publishes a previously absent destination. Equal payload, metadata,
+and key inputs produce identical manifests.
+
+## Install The Current Target
+
+```bash
+colossus --config .colossus/config.yaml --approval-mode ask bundle install \
+  ./bundle --prefix "$HOME/.local"
+```
+
+Installation re-verifies the complete signed bundle, selects only the exact target for
+the running OS/architecture, rechecks the artifact hash after copying, makes Unix output
+executable, and atomically creates `bin/colossus` or `bin/colossus.exe`. The prefix must
+fit an authorized write root. Existing targets and linked directories fail closed;
+bundle installation is intentionally clean-prefix/no-clobber.
+
 ## Production Contents
 
 A production bundle should hash-list:
 
-- native archive(s), installers, and SHA-256 sidecars for represented targets;
+- installable native executables under exact supported target paths, plus native
+  archive(s), installers, and SHA-256 sidecars when archive distribution is included;
 - SBOM and detached artifact-signature material;
 - exact source revision, license, release notes, security policy, and Rust lockfiles;
 - any reviewed OPA bundles, workflows, skills, packs, MCP servers, local model assets,
