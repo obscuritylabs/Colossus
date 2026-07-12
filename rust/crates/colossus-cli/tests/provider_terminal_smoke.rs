@@ -124,7 +124,12 @@ fn sse_server(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<S
 }
 
 fn live_server() -> (String, thread::JoinHandle<Vec<String>>) {
-    let tool_call = r#"data: {"id":"chat-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"echo","arguments":"{\"text\":\"terminal-tool\"}"}}]},"finish_reason":"tool_calls"}]}
+    let first_tool_call = r#"data: {"id":"chat-tool-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"echo","arguments":"{\"text\":\"terminal-tool-one\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    let second_tool_call = r#"data: {"id":"chat-tool-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-2","type":"function","function":{"name":"echo","arguments":"{\"text\":\"terminal-tool-two\"}"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
 
@@ -152,7 +157,13 @@ data: {"id":"chat-worker","choices":[{"index":0,"delta":{"content":"connected"},
 data: [DONE]
 
 "#;
-    sse_server(vec![tool_call, final_answer, repl_answer, worker_answer])
+    sse_server(vec![
+        first_tool_call,
+        second_tool_call,
+        final_answer,
+        repl_answer,
+        worker_answer,
+    ])
 }
 
 fn responses_server() -> (String, thread::JoinHandle<Vec<String>>) {
@@ -271,21 +282,36 @@ sandbox:
         terminal.contains("[activity] waiting_for_model terminal-model"),
         "{terminal}"
     );
-    assert!(terminal.contains("[tool] start echo"), "{terminal}");
-    assert!(
-        terminal.contains("[tool] complete echo status=ok"),
+    assert_eq!(
+        terminal.matches("[tool] start echo").count(),
+        2,
+        "{terminal}"
+    );
+    assert_eq!(
+        terminal.matches("[tool] complete echo status=ok").count(),
+        2,
         "{terminal}"
     );
     assert!(terminal.contains("connected"), "{terminal}");
     assert!(!terminal.contains("\x1b["));
     let result: Value = serde_json::from_slice(&run_output.stdout).expect("run JSON");
+    let run_id = result["run_id"].as_str().expect("run id");
+    let session_id = result["session_id"].as_str().expect("session id");
+    assert!(!run_id.is_empty());
+    assert!(!session_id.is_empty());
+    assert_ne!(run_id, session_id);
     assert_eq!(result["profile"], "live");
     assert_eq!(result["model"], "terminal-model");
     assert_eq!(result["output"], "connected");
     assert!(
         result["event_count"]
             .as_u64()
-            .is_some_and(|count| count >= 10)
+            .is_some_and(|count| count >= 14)
+    );
+    assert!(
+        result["elapsed_seconds"]
+            .as_f64()
+            .is_some_and(|seconds| seconds > 0.0)
     );
 
     let mut repl = command(binary, &config);
@@ -343,16 +369,19 @@ sandbox:
     wait_for_exit(&mut worker.0);
 
     let requests = server.join().expect("provider server");
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert!(requests[0].starts_with("POST /v1/chat/completions HTTP/1.1"));
     assert!(requests[0].contains("Use the echo tool and then answer."));
     assert!(requests[0].contains(r#""name":"echo""#));
     assert!(requests[0].contains(r#""stream":true"#));
     assert!(requests[1].contains(r#""tool_call_id":"call-1""#));
     assert!(requests[1].contains(r#""role":"tool""#));
-    assert!(requests[1].contains("terminal-tool"));
-    assert!(requests[2].contains("Reply from the live endpoint."));
-    assert!(requests[3].contains("Reply through the worker endpoint."));
+    assert!(requests[1].contains("terminal-tool-one"));
+    assert!(requests[2].contains(r#""tool_call_id":"call-2""#));
+    assert!(requests[2].contains("terminal-tool-one"));
+    assert!(requests[2].contains("terminal-tool-two"));
+    assert!(requests[3].contains("Reply from the live endpoint."));
+    assert!(requests[4].contains("Reply through the worker endpoint."));
 }
 
 #[test]

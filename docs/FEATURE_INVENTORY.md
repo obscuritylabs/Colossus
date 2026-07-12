@@ -980,8 +980,10 @@ A reconstruction is complete only when all applicable checks pass:
   verify publisher/key trust and copied bytes, install only the exact current target into
   a clean prefix, then pass echo and encrypted audit verification. This remains open
   until the remote six-target installer/bundle matrix is green.
-- [ ] One agent run supports streaming text, multiple tool turns, final output, run id,
-  session id, event count, and elapsed time.
+- [x] One loopback-live compatible-provider CLI run streams released text across SSE
+  deltas, completes two sequential tool turns, preserves both tool results in provider
+  continuation requests, and returns final output, distinct run/session IDs, durable
+  event count, and positive elapsed time together.
 - [ ] Malformed provider tool arguments are retried within bounds and never executed.
 - [ ] Max-turn exhaustion is reported separately from empty or malformed provider output.
 - [ ] Filesystem escapes, shell wrappers, unknown tool arguments, and deterministic
