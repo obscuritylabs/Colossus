@@ -127,3 +127,9 @@ must_use_candidate = "allow"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Integration acceptance stages the real test-built executable inside a bounded signed
+# bundle. Keep code and panic metadata, but do not make distribution behavior depend on
+# platform-specific linker debug-section size.
+[profile.test]
+strip = "debuginfo"
