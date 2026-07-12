@@ -986,7 +986,10 @@ A reconstruction is complete only when all applicable checks pass:
 - [ ] Max-turn exhaustion is reported separately from empty or malformed provider output.
 - [ ] Filesystem escapes, shell wrappers, unknown tool arguments, and deterministic
   policy denies stop before execution.
-- [ ] Every approval mode has tests for allowed, denied, and approval-required tools.
+- [x] Every approval mode preserves allowed, deterministic-denied, and approval-required
+  tool semantics in loopback-live agent acceptance; denied writes never reach the
+  filesystem, interactive modes require explicit approval, and `full-access` cannot
+  override a deterministic deny.
 - [ ] Sessions, messages, events, tasks, decisions, memories, plans, goals, subagents,
   and research survive restart.
 - [ ] Automatic compaction is visible, preserves raw history, and has deterministic
