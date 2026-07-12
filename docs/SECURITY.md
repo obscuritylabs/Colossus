@@ -199,8 +199,11 @@ security capabilities, and exact inherited standard-I/O handle list are installe
 atomically at process creation, eliminating a create-then-assign descendant race. Closing
 the helper or Job handle terminates the whole tree. UI and clipboard access, desktop
 switching, global atoms, and system-parameter mutation are also Job-restricted. The
-profile is deleted after confirmed termination; an interrupted helper can leave only an
-unreferenced unique profile/ACL identity while Job-handle close still terminates processes.
+authenticated helper job carries a canonical host temporary root; the helper creates one
+unpredictable package-ACL-scoped directory directly beneath it, supplies only that path as
+`TEMP`/`TMP`, and removes it after confirmed termination. The profile is then deleted; an
+interrupted helper can leave only an unreferenced unique profile/ACL identity and private
+temporary directory while Job-handle close still terminates processes.
 Windows network-free execution is supported. Networked jobs receive only an authenticated
 per-permit loopback proxy URL. A temporary package-scoped loopback exemption is wrapped by
 dynamic WFP filters that permit that AppContainer SID to reach only the proxy's exact TCP

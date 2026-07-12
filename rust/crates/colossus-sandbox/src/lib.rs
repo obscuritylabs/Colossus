@@ -50,7 +50,7 @@ use nono::{AccessMode, CapabilitySet, Sandbox};
 use colossus_windows_process::{ResourceLimitViolation, SpawnRequest as WindowsSpawnRequest};
 #[cfg(target_os = "windows")]
 use rappct::{
-    AppContainerProfile,
+    AppContainerProfile, AppContainerSid,
     acl::{self, AccessMask, ResourcePath},
     net::LoopbackExemptionGuard,
 };
@@ -1053,8 +1053,9 @@ impl EffectExecutor for SandboxProcessExecutor {
         let mut job_obligations = permit.obligations().clone();
         job_obligations.timeout_ms = effective_timeout_ms;
         job_obligations.max_output_bytes = effective_output_bytes;
+        let temporary_root = sandbox_temporary_root(&job_obligations.sandbox_backend)?;
         let job = SandboxJob {
-            schema_version: 1,
+            schema_version: 2,
             job_id: Uuid::now_v7().to_string(),
             request_id: request.request_id.clone(),
             request_hash: permit.request_hash().into(),
@@ -1070,6 +1071,7 @@ impl EffectExecutor for SandboxProcessExecutor {
             oci_runtime: self.config.oci_runtime.clone(),
             oci_image: self.config.oci_image.clone(),
             oci_proxy_image: self.config.oci_proxy_image.clone(),
+            temporary_root,
         };
         let resources = oci_resource_names(&job.job_id);
         let is_oci = job.obligations.sandbox_backend == "oci";
@@ -1347,6 +1349,28 @@ struct SandboxJob {
     oci_runtime: Option<PathBuf>,
     oci_image: Option<String>,
     oci_proxy_image: Option<String>,
+    temporary_root: Option<PathBuf>,
+}
+
+#[cfg(target_os = "windows")]
+fn sandbox_temporary_root(backend: &str) -> Result<Option<PathBuf>, ExecutionError> {
+    if backend != "windows_job" {
+        return Ok(None);
+    }
+    let root = fs::canonicalize(std::env::temp_dir()).map_err(|error| {
+        adapter_failure(format!("canonicalize Windows temporary root: {error}"))
+    })?;
+    if !root.is_dir() {
+        return Err(adapter_failure(
+            "canonical Windows temporary root is not a directory",
+        ));
+    }
+    Ok(Some(root))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sandbox_temporary_root(_backend: &str) -> Result<Option<PathBuf>, ExecutionError> {
+    Ok(None)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1374,7 +1398,7 @@ impl SignedSandboxJob {
             .map_err(|error| SandboxHelperError::InvalidJob(error.to_string()))?;
         mac.verify_slice(&tag)
             .map_err(|_| SandboxHelperError::InvalidJob("job authentication failed".into()))?;
-        if self.job.schema_version != 1
+        if self.job.schema_version != 2
             || Uuid::parse_str(&self.job.job_id).is_err()
             || self.job.request_id.is_empty()
             || self.job.request_hash.is_empty()
@@ -1389,6 +1413,10 @@ impl SignedSandboxJob {
                     credential.len() != 64
                         || !credential.bytes().all(|byte| byte.is_ascii_hexdigit())
                 })
+            || (self.job.obligations.sandbox_backend == "windows_job"
+                && self.job.temporary_root.is_none())
+            || (self.job.obligations.sandbox_backend != "windows_job"
+                && self.job.temporary_root.is_some())
         {
             return Err(SandboxHelperError::InvalidJob(
                 "required authenticated job field is absent".into(),
@@ -1617,6 +1645,9 @@ fn native_command(_job: &SandboxJob) -> Result<Command, SandboxHelperError> {
 struct WindowsProfileGuard(Option<AppContainerProfile>);
 
 #[cfg(target_os = "windows")]
+struct WindowsTemporaryGuard(Option<PathBuf>);
+
+#[cfg(target_os = "windows")]
 impl WindowsProfileGuard {
     fn remove(&mut self) -> Result<(), SandboxHelperError> {
         if let Some(profile) = self.0.take()
@@ -1632,10 +1663,77 @@ impl WindowsProfileGuard {
 }
 
 #[cfg(target_os = "windows")]
+impl WindowsTemporaryGuard {
+    fn create(job: &SandboxJob, package: &AppContainerSid) -> Result<Self, SandboxHelperError> {
+        let root = job.temporary_root.as_ref().ok_or_else(|| {
+            SandboxHelperError::Setup("authenticated Windows temporary root is absent".into())
+        })?;
+        let root = fs::canonicalize(root).map_err(|error| {
+            SandboxHelperError::Setup(format!("Windows temporary root: {error}"))
+        })?;
+        if !root.is_dir() {
+            return Err(SandboxHelperError::Setup(
+                "Windows temporary root is not a directory".into(),
+            ));
+        }
+        let requested = root.join(format!("colossus-sandbox-{}", job.job_id));
+        fs::create_dir(&requested).map_err(|error| {
+            SandboxHelperError::Setup(format!(
+                "create Windows sandbox temporary directory: {error}"
+            ))
+        })?;
+        let mut guard = Self(Some(requested.clone()));
+        let temporary = fs::canonicalize(&requested).map_err(|error| {
+            SandboxHelperError::Setup(format!("Windows sandbox temporary directory: {error}"))
+        })?;
+        if temporary.parent() != Some(root.as_path()) {
+            return Err(SandboxHelperError::Setup(
+                "Windows sandbox temporary directory escaped its authenticated root".into(),
+            ));
+        }
+        guard.0 = Some(temporary.clone());
+        acl::grant_to_package(
+            ResourcePath::Directory(temporary),
+            package,
+            AccessMask(0x0012_0089 | 0x0012_0116 | 0x0012_00A0),
+        )
+        .map_err(|error| SandboxHelperError::Setup(format!("sandbox temp ACL: {error}")))?;
+        Ok(guard)
+    }
+
+    fn path(&self) -> &Path {
+        self.0.as_deref().expect("temporary directory is present")
+    }
+
+    fn remove(&mut self) -> Result<(), SandboxHelperError> {
+        if let Some(path) = self.0.take() {
+            if let Err(error) = fs::remove_dir_all(&path) {
+                let message = format!(
+                    "remove Windows sandbox temporary directory {}: {error}",
+                    path.display()
+                );
+                self.0 = Some(path);
+                return Err(SandboxHelperError::Execution(message));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
 impl Drop for WindowsProfileGuard {
     fn drop(&mut self) {
         if let Some(profile) = self.0.take() {
             let _ = profile.delete();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsTemporaryGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = fs::remove_dir_all(path);
         }
     }
 }
@@ -1709,21 +1807,7 @@ fn supervise_windows_job(
         })?;
     }
 
-    let profile_folder = profile
-        .0
-        .as_ref()
-        .expect("profile is present")
-        .folder_path()
-        .map_err(|error| SandboxHelperError::Setup(format!("profile folder: {error}")))?;
-    let temporary = profile_folder.join("Temp");
-    fs::create_dir_all(&temporary)
-        .map_err(|error| SandboxHelperError::Setup(format!("profile temp: {error}")))?;
-    acl::grant_to_package(
-        ResourcePath::Directory(temporary.clone()),
-        package,
-        AccessMask(0x0012_0089 | 0x0012_0116 | 0x0012_00A0),
-    )
-    .map_err(|error| SandboxHelperError::Setup(format!("profile temp ACL: {error}")))?;
+    let mut temporary = WindowsTemporaryGuard::create(job, package)?;
     let mut environment = job.process.environment.clone();
     for reserved in [
         "systemroot",
@@ -1765,8 +1849,8 @@ fn supervise_windows_job(
             .to_string(),
     );
     environment.insert("PATHEXT".into(), ".COM;.EXE;.BAT;.CMD".into());
-    environment.insert("TEMP".into(), temporary.display().to_string());
-    environment.insert("TMP".into(), temporary.display().to_string());
+    environment.insert("TEMP".into(), temporary.path().display().to_string());
+    environment.insert("TMP".into(), temporary.path().display().to_string());
     if let Some(port) = job.proxy_port {
         let proxy = authenticated_proxy_url(port, job.proxy_credential.as_deref());
         environment.insert("HTTP_PROXY".into(), proxy.clone());
@@ -1887,6 +1971,7 @@ fn supervise_windows_job(
     drop(state);
     drop(child);
     drop(loopback);
+    temporary.remove()?;
     profile.remove()?;
     Ok(result)
 }
@@ -3806,7 +3891,7 @@ mod tests {
     #[test]
     fn authenticated_helper_job_rejects_tampering_and_expiry() {
         let job = SandboxJob {
-            schema_version: 1,
+            schema_version: 2,
             job_id: "018f0f9b-7b6e-7cc0-8000-000000000001".into(),
             request_id: "request".into(),
             request_hash: "hash".into(),
@@ -3829,17 +3914,37 @@ mod tests {
             oci_runtime: None,
             oci_image: None,
             oci_proxy_image: None,
+            temporary_root: None,
         };
         let key = [7_u8; 32];
         let signed = SignedSandboxJob::sign(job.clone(), &key).expect("sign");
         assert!(signed.clone().verify(&key).is_ok());
         assert!(signed.verify(&[8_u8; 32]).is_err());
 
+        let mut legacy = job.clone();
+        legacy.schema_version = 1;
+        assert!(
+            SignedSandboxJob::sign(legacy, &key)
+                .expect("sign legacy job")
+                .verify(&key)
+                .is_err()
+        );
+
         let mut mismatched = job;
         mismatched.proxy_port = Some(42);
         assert!(
-            SignedSandboxJob::sign(mismatched, &key)
+            SignedSandboxJob::sign(mismatched.clone(), &key)
                 .expect("sign mismatched proxy")
+                .verify(&key)
+                .is_err()
+        );
+
+        let mut missing_temporary_root = mismatched;
+        missing_temporary_root.proxy_port = None;
+        missing_temporary_root.obligations.sandbox_backend = "windows_job".into();
+        assert!(
+            SignedSandboxJob::sign(missing_temporary_root, &key)
+                .expect("sign Windows job without temporary root")
                 .verify(&key)
                 .is_err()
         );
@@ -3994,6 +4099,7 @@ mod tests {
             oci_runtime: Some(PathBuf::from("/usr/bin/docker")),
             oci_image: Some(format!("example@sha256:{}", "a".repeat(64))),
             oci_proxy_image: None,
+            temporary_root: None,
         };
         validate_process_spec(&job.process, "/usr/bin/example", &job.obligations)
             .expect("exact OCI image executable");

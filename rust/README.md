@@ -332,9 +332,10 @@ cargo test -p colossus-memory-chroma --test chroma_live -- --ignored
 ```
 
 `COLOSSUS_OCI_PROXY_IMAGE` is the immutable ID of the preloaded scratch image built from
-`oci-proxy.Dockerfile`; CI builds its static musl binary and loads the same image into
-Docker and Podman. OCI executable grants are exact normalized paths inside the immutable
-workload image, while bind-mounted filesystem grants remain canonical host paths.
+`oci-proxy.Dockerfile`; CI builds one static musl binary and creates the equivalent
+scratch image directly with Docker and Podman so each runtime verifies its own image
+store path. OCI executable grants are exact normalized paths inside the immutable workload
+image, while bind-mounted filesystem grants remain canonical host paths.
 For a networked OCI configuration, set `sandbox.ociProxyImage` to that immutable image
 ID or repository digest, list canonical origins under `sandbox.networkDestinations`, and
 use `sandbox.timeoutMs: 10000` or higher. Network-free OCI configurations may leave
