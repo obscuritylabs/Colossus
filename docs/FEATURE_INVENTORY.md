@@ -987,7 +987,10 @@ A reconstruction is complete only when all applicable checks pass:
 - [x] Loopback-live malformed provider tool arguments cover invalid JSON and non-object
   shapes, produce exactly two correction attempts, recover on the third provider turn,
   and create neither a tool-start event nor the policy-allowed target file.
-- [ ] Max-turn exhaustion is reported separately from empty or malformed provider output.
+- [x] Loopback-live terminal acceptance distinguishes `agent.max_turns` after two valid
+  tool turns from `provider.failed` empty output and three-attempt
+  `provider.invalid_tool_arguments` recovery exhaustion; only the turn-budget path
+  records `run.max_turns.v1`.
 - [ ] Filesystem escapes, shell wrappers, unknown tool arguments, and deterministic
   policy denies stop before execution.
 - [x] Every approval mode preserves allowed, deterministic-denied, and approval-required

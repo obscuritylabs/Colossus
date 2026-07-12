@@ -1,6 +1,6 @@
 //! Loopback-live provider terminal, credential, worker, and tool-loop acceptance.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{Read as _, Write as _},
@@ -42,6 +42,116 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> std::process::Output
         .args(arguments)
         .output()
         .expect("run Colossus")
+}
+
+fn write_failure_config(directory: &Path, origin: &str, tool: &str) -> std::path::PathBuf {
+    let workflows = directory.join("workflows");
+    fs::create_dir_all(&workflows).expect("workflows");
+    let config = directory.join("config.json");
+    let document = json!({
+        "schemaVersion": 1,
+        "storage": {
+            "path": directory.join("state.redb"),
+            "keys": {
+                "kind": "environment",
+                "journal_variable": "COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY",
+                "journal_key_id": "provider-failure-journal-v1",
+                "signing_variable": "COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY",
+                "anchor_path": directory.join("anchor.json")
+            }
+        },
+        "policy": {
+            "kind": "built_in",
+            "allow_actions": ["provider.openai.chat", "filesystem.write"],
+            "approval_actions": [],
+            "require_post_effect": true
+        },
+        "workflows": {"repository": workflows, "user": workflows},
+        "providers": {
+            "profiles": {
+                "failure": {
+                    "kind": "open_ai_compatible",
+                    "model": "failure-model",
+                    "baseUrl": format!("{origin}/v1"),
+                    "credentialReference": null,
+                    "timeoutMs": 5000
+                }
+            },
+            "roles": {"primary": "failure"}
+        },
+        "agent": {"maxTurns": 4, "tools": [tool]},
+        "subagents": {"maxConcurrent": 1},
+        "sandbox": {
+            "backend": "native",
+            "profile": "provider-failure-v1",
+            "allowBrokerFallback": false,
+            "helperPath": null,
+            "ociRuntime": null,
+            "ociImage": null,
+            "ociProxyImage": null,
+            "filesystem": [{"root": directory, "mode": "write"}],
+            "executables": [],
+            "environment": [],
+            "networkDestinations": [origin],
+            "timeoutMs": 5000,
+            "maxOutputBytes": 1048576,
+            "maxProcesses": 2,
+            "maxMemoryBytes": 67108864,
+            "maxConcurrency": 1
+        }
+    });
+    fs::write(
+        &config,
+        serde_json::to_vec_pretty(&document).expect("config JSON"),
+    )
+    .expect("write config");
+    config
+}
+
+fn failed_run(
+    binary: &Path,
+    directory: &Path,
+    config: &Path,
+    max_turns: &str,
+) -> std::process::Output {
+    command(binary, config)
+        .current_dir(directory)
+        .args([
+            "run",
+            "Exercise one terminal failure classification.",
+            "--stream",
+            "--max-turns",
+            max_turns,
+        ])
+        .output()
+        .expect("failed run")
+}
+
+fn audited_run_events(binary: &Path, config: &Path) -> Vec<Value> {
+    let audit = run(binary, config, &["audit", "show", "--limit", "200"]);
+    assert!(
+        audit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&audit.stderr)
+    );
+    let events: Vec<Value> = serde_json::from_slice(&audit.stdout).expect("audit JSON");
+    let stream_id = events
+        .iter()
+        .filter_map(|event| event["stream_id"].as_str())
+        .find(|stream_id| stream_id.starts_with("run:"))
+        .expect("run stream")
+        .to_owned();
+    events
+        .into_iter()
+        .filter(|event| event["stream_id"] == stream_id)
+        .collect()
+}
+
+fn event_count(events: &[Value], event_type: &str) -> usize {
+    events
+        .iter()
+        .filter(|event| event["event_type"] == event_type)
+        .count()
 }
 
 fn wait_for_worker(binary: &Path, config: &Path) {
@@ -207,6 +317,48 @@ data: [DONE]
 
 "#;
     sse_server(vec![first_invalid, second_invalid, recovered])
+}
+
+fn max_turn_server() -> (String, thread::JoinHandle<Vec<String>>) {
+    let first = r#"data: {"id":"max-turn-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"max-call-1","type":"function","function":{"name":"echo","arguments":"{\"text\":\"first\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    let second = r#"data: {"id":"max-turn-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"max-call-2","type":"function","function":{"name":"echo","arguments":"{\"text\":\"second\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    sse_server(vec![first, second])
+}
+
+fn empty_output_server() -> (String, thread::JoinHandle<Vec<String>>) {
+    let empty = r#"data: {"id":"empty-output","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+    sse_server(vec![empty])
+}
+
+fn malformed_exhaustion_server() -> (String, thread::JoinHandle<Vec<String>>) {
+    let first = r#"data: {"id":"malformed-exhaust-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-1","type":"function","function":{"name":"filesystem.write","arguments":"{\"path\":\"exhausted-must-not-exist.txt\""}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    let second = r#"data: {"id":"malformed-exhaust-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-2","type":"function","function":{"name":"filesystem.write","arguments":"[]"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    let third = r#"data: {"id":"malformed-exhaust-3","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"malformed-exhaust-call-3","type":"function","function":{"name":"filesystem.write","arguments":"not-json"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    sse_server(vec![first, second, third])
 }
 
 #[test]
@@ -668,4 +820,109 @@ sandbox:
         run_events.last().map(|event| &event["event_type"]),
         Some(&Value::String("run.completed.v1".into()))
     );
+}
+
+#[test]
+fn max_turn_empty_output_and_malformed_recovery_have_distinct_terminal_states() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let root = tempdir().expect("root directory");
+
+    let max_turn_directory = root.path().join("max-turn");
+    fs::create_dir(&max_turn_directory).expect("max-turn directory");
+    let (max_turn_origin, max_turn_server) = max_turn_server();
+    let max_turn_config = write_failure_config(&max_turn_directory, &max_turn_origin, "echo");
+    let max_turn = failed_run(binary, &max_turn_directory, &max_turn_config, "2");
+    assert!(!max_turn.status.success(), "turn exhaustion succeeded");
+    let max_turn_terminal = String::from_utf8_lossy(&max_turn.stderr);
+    assert!(
+        max_turn_terminal.contains("code=agent.max_turns recoverable=no"),
+        "{max_turn_terminal}"
+    );
+    assert!(
+        max_turn_terminal.contains("model turn limit exhausted after 2 turns"),
+        "{max_turn_terminal}"
+    );
+    assert!(!max_turn_terminal.contains("provider.empty_turn"));
+    assert!(!max_turn_terminal.contains("provider.invalid_tool_arguments"));
+    let max_turn_requests = max_turn_server.join().expect("max-turn provider");
+    assert_eq!(max_turn_requests.len(), 2);
+    assert!(max_turn_requests[1].contains(r#""tool_call_id":"max-call-1""#));
+    let max_turn_events = audited_run_events(binary, &max_turn_config);
+    assert_eq!(
+        event_count(&max_turn_events, "model.request.prepared.v1"),
+        2
+    );
+    assert_eq!(event_count(&max_turn_events, "tool.call.started.v1"), 2);
+    assert_eq!(event_count(&max_turn_events, "tool.call.completed.v1"), 2);
+    assert_eq!(event_count(&max_turn_events, "run.max_turns.v1"), 1);
+    assert_eq!(event_count(&max_turn_events, "error.v1"), 0);
+    assert_eq!(
+        max_turn_events.last().map(|event| &event["event_type"]),
+        Some(&Value::String("run.max_turns.v1".into()))
+    );
+
+    let empty_directory = root.path().join("empty-output");
+    fs::create_dir(&empty_directory).expect("empty-output directory");
+    let (empty_origin, empty_server) = empty_output_server();
+    let empty_config = write_failure_config(&empty_directory, &empty_origin, "echo");
+    let empty = failed_run(binary, &empty_directory, &empty_config, "4");
+    assert!(!empty.status.success(), "empty provider output succeeded");
+    let empty_terminal = String::from_utf8_lossy(&empty.stderr);
+    assert!(
+        empty_terminal.contains("code=provider.failed recoverable=no"),
+        "{empty_terminal}"
+    );
+    assert!(
+        empty_terminal.contains("chat stream completed without visible text or tool calls"),
+        "{empty_terminal}"
+    );
+    assert!(!empty_terminal.contains("agent.max_turns"));
+    assert_eq!(empty_server.join().expect("empty provider").len(), 1);
+    let empty_events = audited_run_events(binary, &empty_config);
+    assert_eq!(event_count(&empty_events, "model.request.prepared.v1"), 1);
+    assert_eq!(event_count(&empty_events, "error.v1"), 1);
+    assert_eq!(event_count(&empty_events, "run.max_turns.v1"), 0);
+    assert_eq!(event_count(&empty_events, "tool.call.started.v1"), 0);
+
+    let malformed_directory = root.path().join("malformed-exhaustion");
+    fs::create_dir(&malformed_directory).expect("malformed directory");
+    let (malformed_origin, malformed_server) = malformed_exhaustion_server();
+    let malformed_config =
+        write_failure_config(&malformed_directory, &malformed_origin, "filesystem.write");
+    let malformed = failed_run(binary, &malformed_directory, &malformed_config, "4");
+    assert!(
+        !malformed.status.success(),
+        "malformed recovery exhaustion succeeded"
+    );
+    assert!(
+        !malformed_directory
+            .join("exhausted-must-not-exist.txt")
+            .exists(),
+        "malformed recovery reached the filesystem"
+    );
+    let malformed_terminal = String::from_utf8_lossy(&malformed.stderr);
+    assert_eq!(
+        malformed_terminal
+            .matches("code=provider.invalid_tool_arguments")
+            .count(),
+        3,
+        "{malformed_terminal}"
+    );
+    assert!(
+        malformed_terminal.contains("ToolArgumentRecoveryExhausted { attempts: 3 }"),
+        "{malformed_terminal}"
+    );
+    assert!(!malformed_terminal.contains("agent.max_turns"));
+    let malformed_requests = malformed_server.join().expect("malformed provider");
+    assert_eq!(malformed_requests.len(), 3);
+    assert!(malformed_requests[1].contains("Recovery attempt 1/2"));
+    assert!(malformed_requests[2].contains("Recovery attempt 2/2"));
+    let malformed_events = audited_run_events(binary, &malformed_config);
+    assert_eq!(
+        event_count(&malformed_events, "model.request.prepared.v1"),
+        3
+    );
+    assert_eq!(event_count(&malformed_events, "error.v1"), 3);
+    assert_eq!(event_count(&malformed_events, "run.max_turns.v1"), 0);
+    assert_eq!(event_count(&malformed_events, "tool.call.started.v1"), 0);
 }
