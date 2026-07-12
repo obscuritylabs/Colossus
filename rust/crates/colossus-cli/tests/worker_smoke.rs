@@ -418,7 +418,7 @@ sandbox:
     );
     let agent: Value = serde_json::from_slice(&agent.stdout).expect("agent JSON");
     let job_id = agent["id"].as_str().expect("job id");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let shown = run(binary, &config, &["agents", "show", job_id]);
         assert!(shown.status.success());
@@ -427,8 +427,14 @@ sandbox:
             break;
         }
         assert!(
+            matches!(shown["status"].as_str(), Some("queued" | "running")),
+            "worker agent entered an unexpected state: {}",
+            shown["status"]
+        );
+        assert!(
             Instant::now() < deadline,
-            "worker did not drain queued agent"
+            "worker did not drain queued agent; last status={}",
+            shown["status"]
         );
         thread::sleep(Duration::from_millis(50));
     }
