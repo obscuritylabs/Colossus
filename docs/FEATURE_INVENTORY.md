@@ -1003,8 +1003,10 @@ A reconstruction is complete only when all applicable checks pass:
   decisions, draft plans, superseded memories, bounded goals, completed subagents,
   offline repository research, and cited sources through fresh CLI processes, with final
   exact-ID reads and audit-event verification for every named domain.
-- [ ] Automatic compaction is visible, preserves raw history, and has deterministic
-  fallback.
+- [x] Cross-process CLI acceptance proves automatic compaction is visible through
+  `context status` and `context list`, preserves all raw session messages, emits one
+  immutable snapshot plus prepared-event provenance, and selects the deterministic
+  fallback when model-assisted compaction is unavailable.
 - [ ] Plan Mode cannot mutate; approved plans can execute once or enter Goal Mode.
 - [x] Goal Mode stops correctly on complete, blocked, error, or budget exhaustion.
 - [x] Subagents respect configured concurrency, cannot delegate recursively, and can be
