@@ -226,6 +226,13 @@ their declared ID, while nested repeated work receives bounded paths such as
 idempotency, retry, effect context, and child-workflow links use that scoped identity.
 Replay therefore cannot apply one `foreach` item's result or approval to another item.
 
+Recovery binds an abandoned attempt to its scoped execution id as well as its static step
+id. A process loss after a durable primary effect permits operator resume only when that
+exact primary step declared idempotency. An uncertain compensation is phase-labeled and
+always remains fail-closed because ordinary run resume would otherwise return to the primary
+sequence. A durable step completion found after its matching start is resumed from the next
+root step rather than labeled unknown or executed again.
+
 Interactive work refresh is an application-layer aggregate, not terminal-owned state.
 `Runtime::work_state` reconstructs a bounded exact-session snapshot of tasks, active
 decisions, actionable plans, current goals, and nonterminal subagents. The `work` CLI,

@@ -97,6 +97,13 @@ obsolete Go launcher.
   cascade. Repeated and parallel steps use durable scoped execution identities, so
   per-item inputs, effects, idempotency keys, retries, and child links reconstruct without
   cross-iteration reuse.
+- Durable redb process-kill acceptance terminates a separate test process after a simulated
+  external primary or compensation effect has been synced but before the workflow records
+  a terminal result. Startup records one exact execution/attempt as `outcome_unknown`,
+  refuses non-idempotent primary and all uncertain compensation replay, permits only the
+  explicitly idempotent primary retry with the same key, and remains stable after another
+  reopen. A separate kill immediately after durable step completion proves resume advances
+  without repeating the completed step.
 - Shared factory-based conformance suites reopen the event-sourced research and extension
   repositories against the same journal. Research acceptance covers provenance, sequential
   source labels, citation integrity, terminal immutability, session filtering, and source/

@@ -1412,11 +1412,17 @@ impl WorkflowService {
                 )
             });
             if let Some((started_index, started_event)) = latest_started {
+                let compensation =
+                    started_event.event_type == "workflow.compensation.step.started.v1";
                 let started = self.journal.decrypt_payload(started_event)?;
                 let step_id = started
                     .get("step_id")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
+                let execution_id = started
+                    .get("execution_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(step_id);
                 let completed_after = events[started_index.saturating_add(1)..]
                     .iter()
                     .filter(|event| {
@@ -1429,7 +1435,13 @@ impl WorkflowService {
                     .map(|event| self.journal.decrypt_payload(event))
                     .collect::<Result<Vec<_>, _>>()?
                     .iter()
-                    .any(|payload| payload.get("step_id").and_then(Value::as_str) == Some(step_id));
+                    .any(|payload| {
+                        payload
+                            .get("execution_id")
+                            .or_else(|| payload.get("step_id"))
+                            .and_then(Value::as_str)
+                            == Some(execution_id)
+                    });
                 if completed_after {
                     self.append_run_event(
                         &run.run_id,
@@ -1439,22 +1451,24 @@ impl WorkflowService {
                     recovered.push(self.get_run(&run.run_id)?);
                     continue;
                 }
-                let retry_allowed = self
-                    .repository
-                    .definition(&run.workflow_name, &run.workflow_version)?
-                    .and_then(|(definition, _)| {
-                        find_step(&definition.steps, step_id)
-                            .map(step_retryable)
-                            .or_else(|| {
-                                find_step(&definition.compensation, step_id).map(step_retryable)
-                            })
-                    })
-                    .unwrap_or(false);
+                // Compensation requires its own explicit operator path. Resuming the primary
+                // sequence after an uncertain compensation would execute the wrong phase, so it
+                // remains fail-closed even when the compensation declares idempotency.
+                let retry_allowed = !compensation
+                    && self
+                        .repository
+                        .definition(&run.workflow_name, &run.workflow_version)?
+                        .and_then(|(definition, _)| {
+                            find_step(&definition.steps, step_id).map(step_retryable)
+                        })
+                        .unwrap_or(false);
                 self.append_run_event(
                     &run.run_id,
                     "workflow.step.outcome_unknown.v1",
                     json!({
+                        "phase": if compensation { "compensation" } else { "primary" },
                         "step_id": step_id,
+                        "execution_id": execution_id,
                         "attempt": started.get("attempt").cloned().unwrap_or(Value::Null),
                         "retry_allowed": retry_allowed,
                         "reason": "startup found an abandoned step attempt",
@@ -2430,13 +2444,22 @@ mod tests {
         WorkflowError, WorkflowService, validate_definition,
     };
     use async_trait::async_trait;
-    use colossus_ports::{EventJournal, WorkflowRepository};
+    use colossus_contracts::{EventEnvelope, NewEvent, ProjectionWorkItem, SignedCheckpoint};
+    use colossus_journal_redb::{Ed25519CheckpointSigner, RedbEventJournal};
+    use colossus_ports::{
+        EventJournal, KeyProvider, StoreError, VerificationReport, WorkflowRepository,
+    };
     use colossus_testkit::InMemoryEventJournal;
     use serde_json::json;
     use std::{
         collections::BTreeMap,
+        fs::{self, OpenOptions},
+        io::Write as _,
+        path::{Path, PathBuf},
+        process::Command,
         sync::{Arc, Mutex},
     };
+    use tempfile::tempdir;
 
     const SIMPLE: &str = r#"
 apiVersion: colossus.dev/v1alpha1
@@ -2539,6 +2562,284 @@ steps:
             }
             Ok(json!({"action": effect.action, "compensation": effect.compensation}))
         }
+    }
+
+    struct FileKeyProvider {
+        anchor: PathBuf,
+    }
+
+    impl KeyProvider for FileKeyProvider {
+        fn active_key(&self) -> Result<(String, [u8; 32]), StoreError> {
+            Ok(("workflow-process-kill-key".into(), [31_u8; 32]))
+        }
+
+        fn key_by_id(&self, key_id: &str) -> Result<[u8; 32], StoreError> {
+            if key_id == "workflow-process-kill-key" {
+                Ok([31_u8; 32])
+            } else {
+                Err(StoreError::KeyUnavailable(key_id.into()))
+            }
+        }
+
+        fn store_anchor(&self, sequence: u64, hash: &str) -> Result<(), StoreError> {
+            fs::write(
+                &self.anchor,
+                serde_json::to_vec(&json!({"sequence": sequence, "hash": hash}))
+                    .map_err(|error| StoreError::Adapter(error.to_string()))?,
+            )
+            .map_err(|error| StoreError::Adapter(error.to_string()))
+        }
+
+        fn load_anchor(&self) -> Result<Option<(u64, String)>, StoreError> {
+            if !self.anchor.exists() {
+                return Ok(None);
+            }
+            let value: serde_json::Value = serde_json::from_slice(
+                &fs::read(&self.anchor).map_err(|error| StoreError::Adapter(error.to_string()))?,
+            )
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+            let sequence = value
+                .get("sequence")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| StoreError::Verification("test anchor sequence is absent".into()))?;
+            let hash = value
+                .get("hash")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| StoreError::Verification("test anchor hash is absent".into()))?;
+            Ok(Some((sequence, hash.into())))
+        }
+    }
+
+    struct KillAfterDurableMarkerEffects {
+        marker: PathBuf,
+        fail_primary: bool,
+    }
+
+    struct CrashAfterEventJournal {
+        inner: Arc<dyn EventJournal>,
+        event_type: &'static str,
+    }
+
+    impl CrashAfterEventJournal {
+        fn terminate_if_target(&self, target: bool) {
+            if target {
+                std::process::abort();
+            }
+        }
+    }
+
+    impl EventJournal for CrashAfterEventJournal {
+        fn append(&self, event: NewEvent) -> Result<EventEnvelope, StoreError> {
+            let target = event.event_type == self.event_type;
+            let appended = self.inner.append(event)?;
+            self.terminate_if_target(target);
+            Ok(appended)
+        }
+
+        fn append_batch(&self, events: Vec<NewEvent>) -> Result<Vec<EventEnvelope>, StoreError> {
+            let target = events
+                .iter()
+                .any(|event| event.event_type == self.event_type);
+            let appended = self.inner.append_batch(events)?;
+            self.terminate_if_target(target);
+            Ok(appended)
+        }
+
+        fn read_stream(&self, stream_id: &str) -> Result<Vec<EventEnvelope>, StoreError> {
+            self.inner.read_stream(stream_id)
+        }
+
+        fn read_global(
+            &self,
+            from_sequence: u64,
+            limit: usize,
+        ) -> Result<Vec<EventEnvelope>, StoreError> {
+            self.inner.read_global(from_sequence, limit)
+        }
+
+        fn read_projection_work(
+            &self,
+            from_sequence: u64,
+            limit: usize,
+        ) -> Result<Vec<ProjectionWorkItem>, StoreError> {
+            self.inner.read_projection_work(from_sequence, limit)
+        }
+
+        fn head(&self) -> Result<(u64, String), StoreError> {
+            self.inner.head()
+        }
+
+        fn decrypt_payload(&self, event: &EventEnvelope) -> Result<serde_json::Value, StoreError> {
+            self.inner.decrypt_payload(event)
+        }
+
+        fn verify(&self) -> Result<VerificationReport, StoreError> {
+            self.inner.verify()
+        }
+
+        fn is_recovery_mode(&self) -> bool {
+            self.inner.is_recovery_mode()
+        }
+
+        fn checkpoint(&self) -> Result<Option<SignedCheckpoint>, StoreError> {
+            self.inner.checkpoint()
+        }
+    }
+
+    #[async_trait]
+    impl WorkflowEffectRunner for KillAfterDurableMarkerEffects {
+        async fn run(&self, effect: WorkflowEffect) -> Result<serde_json::Value, WorkflowError> {
+            if self.fail_primary && !effect.compensation {
+                return Err(WorkflowError::Effect(
+                    "known primary failure before compensation".into(),
+                ));
+            }
+            let mut marker = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.marker)
+                .expect("open durable external-effect marker");
+            writeln!(marker, "{}:{}", effect.action, effect.attempt)
+                .expect("write durable external-effect marker");
+            marker.sync_all().expect("sync external-effect marker");
+            std::process::abort();
+        }
+    }
+
+    fn process_kill_journal(root: &Path) -> Arc<dyn EventJournal> {
+        Arc::new(
+            RedbEventJournal::open(
+                root.join("workflow.redb"),
+                Arc::new(FileKeyProvider {
+                    anchor: root.join("workflow.anchor"),
+                }),
+                Arc::new(Ed25519CheckpointSigner::new(
+                    "workflow-process-kill-signing",
+                    [47_u8; 32],
+                )),
+            )
+            .expect("open durable workflow journal"),
+        )
+    }
+
+    fn process_kill_definition(mode: &str) -> String {
+        if mode == "completed-step" {
+            return r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: process-kill
+  version: 1.0.0
+  description: Durable completed-step process-kill recovery
+inputs: { type: object }
+outputs: { type: object }
+capabilities: []
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - type: emit
+    id: durable
+    value: { persisted: true }
+"#
+            .into();
+        }
+        if mode == "compensation" {
+            return r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: process-kill
+  version: 1.0.0
+  description: Durable compensation process-kill recovery
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - type: tool
+    id: primary
+    tool: primary.fail
+    arguments: {}
+    idempotency: null
+compensation:
+  - type: tool
+    id: rollback
+    tool: rollback.run
+    arguments: {}
+    idempotency: durable-rollback
+"#
+            .into();
+        }
+        format!(
+            r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: process-kill
+  version: 1.0.0
+  description: Durable process-kill recovery
+inputs: {{ type: object }}
+outputs: {{ type: object }}
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - type: tool
+    id: mutate
+    tool: mutation.run
+    arguments: {{}}
+    idempotency: {}
+"#,
+            if mode == "idempotent" {
+                "durable-key"
+            } else {
+                "null"
+            }
+        )
+    }
+
+    async fn process_kill_child(root: &Path, marker: &Path, run_id: &str, mode: &str) {
+        let durable_journal = process_kill_journal(root);
+        let journal: Arc<dyn EventJournal> = if mode == "completed-step" {
+            Arc::new(CrashAfterEventJournal {
+                inner: durable_journal,
+                event_type: "workflow.step.completed.v1",
+            })
+        } else {
+            durable_journal
+        };
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects: Arc<dyn WorkflowEffectRunner> = if mode == "completed-step" {
+            Arc::new(DenyWorkflowEffects)
+        } else {
+            Arc::new(KillAfterDurableMarkerEffects {
+                marker: marker.into(),
+                fail_primary: mode == "compensation",
+            })
+        };
+        let service = WorkflowService::new(journal, repository, effects);
+        service
+            .register_definition(&process_kill_definition(mode), "process-kill-test")
+            .expect("register process-kill workflow");
+        service
+            .queue_run_with_lineage(
+                run_id,
+                "process-kill",
+                "1.0.0",
+                json!({}),
+                None,
+                None,
+                None,
+                1,
+            )
+            .expect("queue process-kill workflow");
+        service
+            .run_queued(run_id)
+            .await
+            .expect("effect runner must terminate this process");
+        panic!("process-kill effect returned without terminating the child");
     }
 
     #[test]
@@ -3301,6 +3602,204 @@ compensation:
             .expect("rollback call");
         assert!(rollback.compensation);
         assert_ne!(rollback.step_id, calls[0].step_id);
+    }
+
+    #[tokio::test]
+    async fn process_kill_after_external_effect_recovers_without_unsafe_replay() {
+        if let Some(mode) = std::env::var_os("COLOSSUS_WORKFLOW_PROCESS_KILL_CHILD") {
+            let root = PathBuf::from(
+                std::env::var_os("COLOSSUS_WORKFLOW_PROCESS_KILL_ROOT")
+                    .expect("process-kill child root"),
+            );
+            let marker = PathBuf::from(
+                std::env::var_os("COLOSSUS_WORKFLOW_PROCESS_KILL_MARKER")
+                    .expect("process-kill child marker"),
+            );
+            let run_id = std::env::var("COLOSSUS_WORKFLOW_PROCESS_KILL_RUN_ID")
+                .expect("process-kill child run id");
+            process_kill_child(
+                &root,
+                &marker,
+                &run_id,
+                mode.to_str().expect("process-kill mode is UTF-8"),
+            )
+            .await;
+            return;
+        }
+
+        for (mode, run_id, expected_marker, expected_step, expected_phase, retry_allowed) in [
+            (
+                "non-idempotent",
+                "018f0000-0000-7000-8000-000000000001",
+                Some("mutation.run:1\n"),
+                "mutate",
+                "primary",
+                Some(false),
+            ),
+            (
+                "idempotent",
+                "018f0000-0000-7000-8000-000000000002",
+                Some("mutation.run:1\n"),
+                "mutate",
+                "primary",
+                Some(true),
+            ),
+            (
+                "compensation",
+                "018f0000-0000-7000-8000-000000000003",
+                Some("rollback.run:2\n"),
+                "rollback",
+                "compensation",
+                Some(false),
+            ),
+            (
+                "completed-step",
+                "018f0000-0000-7000-8000-000000000004",
+                None,
+                "durable",
+                "primary",
+                None,
+            ),
+        ] {
+            let directory = tempdir().expect("process-kill directory");
+            let marker = directory.path().join("external-effect.log");
+            let output = Command::new(std::env::current_exe().expect("current test executable"))
+                .args([
+                    "--exact",
+                    "tests::process_kill_after_external_effect_recovers_without_unsafe_replay",
+                    "--nocapture",
+                ])
+                .env("COLOSSUS_WORKFLOW_PROCESS_KILL_CHILD", mode)
+                .env("COLOSSUS_WORKFLOW_PROCESS_KILL_ROOT", directory.path())
+                .env("COLOSSUS_WORKFLOW_PROCESS_KILL_MARKER", &marker)
+                .env("COLOSSUS_WORKFLOW_PROCESS_KILL_RUN_ID", run_id)
+                .output()
+                .expect("spawn process-kill child");
+            assert!(
+                !output.status.success(),
+                "process-kill child unexpectedly succeeded: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if let Some(expected_marker) = expected_marker {
+                assert_eq!(
+                    fs::read_to_string(&marker).expect("durable external-effect marker"),
+                    expected_marker,
+                    "the child must terminate only after the simulated effect is durable"
+                );
+            } else {
+                assert!(!marker.exists());
+            }
+
+            let journal = process_kill_journal(directory.path());
+            journal.verify().expect("verify journal after process kill");
+            let repository: Arc<dyn WorkflowRepository> =
+                Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+            let effects = Arc::new(RecordingEffects::default());
+            let service = WorkflowService::new(Arc::clone(&journal), repository, effects.clone());
+            let recovered = service.recover_interrupted().expect("recover killed run");
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(
+                recovered[0].status,
+                colossus_contracts::WorkflowStatus::Interrupted
+            );
+            let events = journal
+                .read_stream(&format!("workflow-run:{run_id}"))
+                .expect("recovered workflow events");
+            let unknown = events
+                .iter()
+                .filter(|event| event.event_type == "workflow.step.outcome_unknown.v1")
+                .collect::<Vec<_>>();
+            if let Some(retry_allowed) = retry_allowed {
+                assert_eq!(unknown.len(), 1);
+                let unknown = journal
+                    .decrypt_payload(unknown[0])
+                    .expect("unknown-outcome payload");
+                assert_eq!(unknown["step_id"], expected_step);
+                assert_eq!(unknown["execution_id"], expected_step);
+                assert_eq!(unknown["phase"], expected_phase);
+                assert_eq!(
+                    unknown["attempt"],
+                    if mode == "compensation" { 2 } else { 1 }
+                );
+                assert_eq!(unknown["retry_allowed"], retry_allowed);
+            } else {
+                assert!(unknown.is_empty());
+            }
+            assert!(
+                service
+                    .recover_interrupted()
+                    .expect("idempotent recovery")
+                    .is_empty()
+            );
+            assert!(
+                service
+                    .drain()
+                    .await
+                    .expect("drain after recovery")
+                    .is_empty()
+            );
+
+            if retry_allowed == Some(true) {
+                let completed = service.resume_run(run_id).await.expect("safe retry");
+                assert_eq!(
+                    completed.status,
+                    colossus_contracts::WorkflowStatus::Completed
+                );
+                let calls = effects.calls();
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].attempt, 2);
+                let expected_idempotency = format!("durable-key:{run_id}:mutate");
+                assert_eq!(
+                    calls[0].idempotency.as_deref(),
+                    Some(expected_idempotency.as_str())
+                );
+            } else if retry_allowed.is_none() {
+                let completed = service
+                    .resume_run(run_id)
+                    .await
+                    .expect("resume after durable completion");
+                assert_eq!(
+                    completed.status,
+                    colossus_contracts::WorkflowStatus::Completed
+                );
+                assert_eq!(
+                    completed.outputs.as_ref().expect("completed outputs")["durable"]["persisted"],
+                    true
+                );
+                assert!(effects.calls().is_empty());
+            } else {
+                assert!(
+                    service
+                        .resume_run(run_id)
+                        .await
+                        .expect_err("unsafe retry must fail")
+                        .to_string()
+                        .contains("cannot be retried")
+                );
+                assert!(effects.calls().is_empty());
+            }
+            journal.verify().expect("verify recovered workflow journal");
+            let expected_status = if retry_allowed == Some(false) {
+                colossus_contracts::WorkflowStatus::Interrupted
+            } else {
+                colossus_contracts::WorkflowStatus::Completed
+            };
+            drop(service);
+            drop(journal);
+
+            let reopened = process_kill_journal(directory.path());
+            reopened.verify().expect("verify reopened workflow journal");
+            let repository = EventSourcedWorkflowRepository::new(reopened);
+            assert_eq!(
+                repository
+                    .run(run_id)
+                    .expect("reopened run")
+                    .expect("run")
+                    .status,
+                expected_status
+            );
+        }
     }
 
     #[tokio::test]
