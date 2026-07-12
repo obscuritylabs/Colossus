@@ -162,9 +162,11 @@ represented as sandbox isolation.
 The OCI backend constructs Docker/Podman invocations with no network, a read-only root,
 all capabilities dropped, `no-new-privileges`, bounded PIDs/memory, and only explicit
 bind mounts and environment names. The target starts through a fixed `env -i` bootstrap,
-so image-defined environment variables do not cross into the executable. OCI execution
-uses `--pull=never`; images must be preloaded and referenced by a complete immutable
-SHA-256 digest so the Docker/Podman daemon cannot perform an unapproved registry request.
+so image-defined environment variables do not cross into the executable. Docker/Podman
+enforces the workload PID and memory limits; the trusted local container-control process
+is not measured as though it were the workload. OCI execution uses `--pull=never`; images
+must be preloaded and referenced by a complete immutable SHA-256 digest so the
+Docker/Podman daemon cannot perform an unapproved registry request.
 Networked OCI execution additionally requires a preloaded immutable Colossus proxy image.
 The workload joins only a per-job internal network and receives no usable DNS resolver;
 the proxy sidecar alone also joins a per-job egress network. After authorization, the

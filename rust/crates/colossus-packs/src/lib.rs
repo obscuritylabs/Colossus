@@ -747,7 +747,7 @@ fn enforce_read_grant(path: &Path, permit: &ExecutionPermit) -> Result<(), Execu
     let canonical = fs::canonicalize(path).map_err(execution)?;
     let allowed = permit.obligations().filesystem.iter().any(|grant| {
         matches!(grant.mode.as_str(), "read" | "write")
-            && canonical.starts_with(Path::new(&grant.root))
+            && fs::canonicalize(&grant.root).is_ok_and(|root| canonical.starts_with(root))
     });
     if !allowed {
         return Err(ExecutionError::Failed(format!(
@@ -777,7 +777,7 @@ fn enforce_write_grant(path: &Path, permit: &ExecutionPermit) -> Result<(), Exec
     }
     let resolved_existing = fs::canonicalize(existing).map_err(execution)?;
     let allowed = permit.obligations().filesystem.iter().any(|grant| {
-        if grant.mode != "write" || !path.starts_with(Path::new(&grant.root)) {
+        if grant.mode != "write" {
             return false;
         }
         fs::canonicalize(&grant.root).is_ok_and(|root| resolved_existing.starts_with(root))

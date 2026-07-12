@@ -192,7 +192,12 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     );
 
     let doctor = run(binary, &config, &["sandbox", "doctor"]);
-    assert!(doctor.status.success());
+    assert!(
+        doctor.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr)
+    );
     let doctor = json(&doctor);
     assert_eq!(doctor["platform"], "windows");
     assert_eq!(doctor["native_supported"], true);

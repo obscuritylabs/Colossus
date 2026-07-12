@@ -58,7 +58,9 @@ use rappct::{
 type HmacSha256 = Hmac<Sha256>;
 
 const HELPER_KEY_VARIABLE: &str = "COLOSSUS_SANDBOX_JOB_KEY";
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const NATIVE_INNER_VARIABLE: &str = "COLOSSUS_SANDBOX_NATIVE_INNER";
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const NATIVE_TARGET_PID_PREFIX: &[u8] = b"colossus-native-target-pid:";
 const OCI_PROXY_CONFIG_VARIABLE: &str = "COLOSSUS_OCI_PROXY_CONFIG";
 const OCI_PROXY_PORT: u16 = 18_080;
@@ -2772,13 +2774,20 @@ fn supervise(
             let _ = child.kill();
             break (child.wait()?, true, None);
         }
-        let usage = process_tree_usage(&mut system, root_pid);
-        let limit = if usage.processes
-            > usize::try_from(job.obligations.max_processes).unwrap_or(usize::MAX)
-        {
-            Some("process-count")
-        } else if usage.memory > job.obligations.max_memory_bytes {
-            Some("memory")
+        // OCI policy limits belong to the workload container. The trusted Docker/Podman
+        // control process can legitimately exceed those limits while it creates the
+        // already bounded container, so host accounting applies only to direct targets.
+        let limit = if host_process_limits_apply(&backend) {
+            let usage = process_tree_usage(&mut system, root_pid);
+            if usage.processes
+                > usize::try_from(job.obligations.max_processes).unwrap_or(usize::MAX)
+            {
+                Some("process-count")
+            } else if usage.memory > job.obligations.max_memory_bytes {
+                Some("memory")
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -2809,6 +2818,10 @@ fn supervise(
         stdout_base64: BASE64.encode(stdout),
         stderr_base64: BASE64.encode(stderr),
     })
+}
+
+fn host_process_limits_apply(backend: &str) -> bool {
+    backend != "oci"
 }
 
 fn process_tree_usage(system: &mut System, root: SystemPid) -> ProcessTreeUsage {
@@ -3641,9 +3654,9 @@ fn canonical_origin(scheme: &str, host: &str, port: u16) -> Result<String, Execu
 mod tests {
     use super::{
         AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
-        atomic_create, atomic_write, authority, non_public_ip, oci_command, oci_remove_arguments,
-        proposed_write_bytes, redact_proxy_credential, resolve_oci_origins, tls_server_name,
-        validate_process_spec,
+        atomic_create, atomic_write, authority, host_process_limits_apply, non_public_ip,
+        oci_command, oci_remove_arguments, proposed_write_bytes, redact_proxy_credential,
+        resolve_oci_origins, tls_server_name, validate_process_spec,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::{native_helper_diagnostics, native_target_pid};
@@ -3959,6 +3972,9 @@ mod tests {
         assert!(args.contains(&"--cap-drop=ALL".into()));
         assert!(args.contains(&"--pids-limit=2".into()));
         assert!(args.contains(&format!("--memory={}", 64 * 1024 * 1024)));
+        assert!(!host_process_limits_apply("oci"));
+        assert!(host_process_limits_apply("native"));
+        assert!(host_process_limits_apply("broker"));
         assert!(args.contains(&"--entrypoint".into()));
         assert!(args.contains(&"colossus-018f0f9b7b6e7cc08000000000000002".into()));
         assert!(

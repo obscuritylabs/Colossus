@@ -227,7 +227,7 @@ jobs:
         run: |
           set -euo pipefail
           for target in contracts_json workflow_yaml workflow_condition; do
-            cargo fuzz run "$target" -- \
+            cargo +nightly-2026-07-10 fuzz run "$target" -- \
               -runs=5000 \
               -max_len=65536 \
               -timeout=10 \
@@ -488,9 +488,10 @@ jobs:
           rm -rf "$extract" "$prefix" "$smoke"
           mkdir -p "$extract" "$smoke/workflows"
           tar -xzf "$archive" -C "$extract"
-          mapfile -d '' packages < <(find "$extract" -mindepth 1 -maxdepth 1 -type d -print0)
+          packages=("$extract"/colossus-*)
           test "${#packages[@]}" -eq 1
           package=${packages[0]}
+          test -d "$package"
           "$package/install.sh" --prefix "$prefix"
           cp release/smoke-config.yaml "$smoke/config.yaml"
           cd "$smoke"

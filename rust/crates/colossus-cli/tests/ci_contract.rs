@@ -69,6 +69,16 @@ fn matrix_includes<'a>(jobs: &'a Map<String, Value>, name: &str) -> &'a Vec<Valu
         .expect("matrix include must be a sequence")
 }
 
+fn named_step<'a>(job: &'a Map<String, Value>, name: &str) -> &'a Map<String, Value> {
+    field(job, "steps")
+        .as_array()
+        .expect("job steps must be a sequence")
+        .iter()
+        .map(|step| mapping(step, "job step"))
+        .find(|step| field(step, "name").as_str() == Some(name))
+        .unwrap_or_else(|| panic!("missing job step {name}"))
+}
+
 #[test]
 fn cutover_gate_fails_closed_over_every_required_rust_job() {
     let workflow = workflow();
@@ -187,5 +197,53 @@ fn hosted_platform_and_release_matrices_cover_every_supported_architecture() {
         .into_iter()
         .map(|(runner, target, archive)| (runner.into(), target.into(), archive.into()))
         .collect()
+    );
+}
+
+#[test]
+fn bounded_fuzzing_executes_with_the_pinned_nightly_toolchain() {
+    let workflow = workflow();
+    let jobs = jobs(&workflow);
+    let fuzz = job(jobs, "rust-fuzz");
+    let install = named_step(fuzz, "Install pinned nightly Rust");
+    let toolchain = mapping(field(install, "with"), "nightly install inputs");
+    assert_eq!(
+        field(toolchain, "toolchain").as_str(),
+        Some("nightly-2026-07-10")
+    );
+
+    let run = field(
+        named_step(fuzz, "Run bounded security parser fuzzing"),
+        "run",
+    )
+    .as_str()
+    .expect("fuzz run script");
+    assert!(run.contains("cargo +nightly-2026-07-10 fuzz run"));
+    for bound in [
+        "-runs=5000",
+        "-max_len=65536",
+        "-timeout=10",
+        "-rss_limit_mb=2048",
+    ] {
+        assert!(run.contains(bound), "fuzz run must retain {bound}");
+    }
+}
+
+#[test]
+fn unix_release_install_smoke_is_compatible_with_macos_bash() {
+    let workflow = workflow();
+    let jobs = jobs(&workflow);
+    let release = job(jobs, "rust-release-smoke");
+    let run = field(
+        named_step(release, "Install packaged Unix artifact offline"),
+        "run",
+    )
+    .as_str()
+    .expect("Unix install smoke script");
+    assert!(run.contains("packages=(\"$extract\"/colossus-*)"));
+    assert!(run.contains("test -d \"$package\""));
+    assert!(
+        !run.contains("mapfile"),
+        "macOS ships Bash 3.2 without mapfile"
     );
 }
