@@ -162,8 +162,11 @@ represented as sandbox isolation.
 The OCI backend constructs Docker/Podman invocations with no network, a read-only root,
 all capabilities dropped, `no-new-privileges`, bounded PIDs/memory, and only explicit
 bind mounts and environment names. The target starts through a fixed `env -i` bootstrap,
-so image-defined environment variables do not cross into the executable. Docker/Podman
-enforces the workload PID and memory limits; the trusted local container-control process
+so image-defined environment variables do not cross into the executable. Control commands
+also clear the host environment; their only search path is the exact
+configured runtime's parent directory so a rootless runtime can resolve its adjacent
+network helper without inheriting ambient `PATH` entries. The selected runtime enforces
+the workload PID and memory limits; the trusted local container-control process
 is not measured as though it were the workload. The container process uses the owner UID
 and GID of its authorized working directory; rootless Podman additionally uses `keep-id`,
 so writable grants do not require container root or relaxed host permissions. The proxy
@@ -198,7 +201,9 @@ The `windows_job` backend never relies on a Job Object alone. A unique AppContai
 is created for each authenticated helper job, canonical grant roots receive package-SID
 ACLs, and a bounded preflight rejects reparse points before applying the same job SID to
 existing descendants so directory inheritance cannot omit pre-existing files. The child
-starts with no network capability. The Job Object, AppContainer
+receives ordinary drive-path syntax only after canonical authorization so Windows tools
+do not reject the `\\?\` form used for containment checks, then starts with no network
+capability. The Job Object, AppContainer
 security capabilities, and exact inherited standard-I/O handle list are installed
 atomically at process creation, eliminating a create-then-assign descendant race. Closing
 the helper or Job handle terminates the whole tree. UI and clipboard access, desktop

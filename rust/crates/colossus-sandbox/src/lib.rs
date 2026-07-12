@@ -1330,7 +1330,14 @@ fn normalize_path_arguments(
                 candidate.display()
             )));
         }
-        *argument = canonical.display().to_string();
+        #[cfg(target_os = "windows")]
+        {
+            *argument = windows_process_path(&canonical);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            *argument = canonical.display().to_string();
+        }
     }
     Ok(())
 }
@@ -1883,7 +1890,12 @@ fn supervise_windows_job(
     }
 
     let mut temporary = WindowsTemporaryGuard::create(job, package)?;
-    let mut environment = job.process.environment.clone();
+    let mut environment = job
+        .process
+        .environment
+        .iter()
+        .map(|(name, value)| (name.clone(), windows_process_value(value)))
+        .collect::<BTreeMap<_, _>>();
     for reserved in [
         "systemroot",
         "windir",
@@ -1925,9 +1937,9 @@ fn supervise_windows_job(
             .to_string(),
     );
     environment.insert("PATHEXT".into(), ".COM;.EXE;.BAT;.CMD".into());
-    environment.insert("LOCALAPPDATA".into(), local_app_data.display().to_string());
-    environment.insert("TEMP".into(), temporary.path().display().to_string());
-    environment.insert("TMP".into(), temporary.path().display().to_string());
+    environment.insert("LOCALAPPDATA".into(), windows_process_path(&local_app_data));
+    environment.insert("TEMP".into(), windows_process_path(temporary.path()));
+    environment.insert("TMP".into(), windows_process_path(temporary.path()));
     if let Some(port) = job.proxy_port {
         let proxy = authenticated_proxy_url(port, job.proxy_credential.as_deref());
         environment.insert("HTTP_PROXY".into(), proxy.clone());
@@ -2051,6 +2063,23 @@ fn supervise_windows_job(
     temporary.remove()?;
     profile.remove()?;
     Ok(result)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_process_path(path: &Path) -> String {
+    windows_process_value(&path.display().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_process_value(value: &str) -> String {
+    value
+        .strip_prefix(r"\\?\")
+        .filter(|path| {
+            path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                && path.as_bytes().get(1) == Some(&b':')
+        })
+        .unwrap_or(value)
+        .to_owned()
 }
 
 #[cfg(target_os = "windows")]
@@ -2391,7 +2420,10 @@ fn oci_command(
         ));
     }
     let mut command = Command::new(runtime);
-    command.env_clear().args(["run", "--rm", "--pull=never"]);
+    command
+        .env_clear()
+        .env("PATH", oci_runtime_search_path(runtime)?)
+        .args(["run", "--rm", "--pull=never"]);
     let (uid, gid) = oci_mount_identity(&job.process.cwd)?;
     if runtime_kind == OciRuntimeKind::Podman {
         command.arg("--userns=keep-id");
@@ -2553,6 +2585,7 @@ fn run_oci_control(
     let mut command = Command::new(runtime);
     command
         .env_clear()
+        .env("PATH", oci_runtime_search_path(runtime)?)
         .envs(environment.iter().copied())
         .args(arguments);
     match bounded_control_command(command) {
@@ -2571,6 +2604,17 @@ fn run_oci_control(
             "failed to {operation}: runtime command timed out"
         ))),
     }
+}
+
+fn oci_runtime_search_path(runtime: &Path) -> Result<&Path, SandboxHelperError> {
+    runtime
+        .parent()
+        .filter(|parent| parent.is_absolute())
+        .ok_or_else(|| {
+            SandboxHelperError::Setup(
+                "OCI runtime must have an absolute parent directory for helper resolution".into(),
+            )
+        })
 }
 
 fn cleanup_oci_resources(runtime: &Path, names: &OciResourceNames) {
@@ -3901,6 +3945,19 @@ mod tests {
         net::{TcpListener, TcpStream},
     };
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn canonical_drive_paths_use_process_compatible_syntax_after_authorization() {
+        assert_eq!(
+            super::windows_process_value(r"\\?\C:\workspace\allowed.txt"),
+            r"C:\workspace\allowed.txt"
+        );
+        assert_eq!(
+            super::windows_process_value(r"\\?\UNC\server\share"),
+            r"\\?\UNC\server\share"
+        );
+    }
+
     struct AdapterPostDenyPolicy(BuiltInPolicy);
 
     #[async_trait::async_trait]
@@ -4227,6 +4284,9 @@ mod tests {
         assert!(command.get_envs().any(|(name, value)| {
             name == "TOKEN" && value.is_some_and(|value| value == "secret-value")
         }));
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "PATH" && value.is_some_and(|value| value == "/usr/bin")
+        }));
         assert_eq!(
             oci_remove_arguments(PathBuf::from("/usr/bin/docker").as_path(), "job")
                 .expect("Docker cleanup"),
@@ -4258,6 +4318,9 @@ mod tests {
                 .get_args()
                 .any(|argument| argument == "--userns=keep-id")
         );
+        assert!(podman.get_envs().any(|(name, value)| {
+            name == "PATH" && value.is_some_and(|value| value == "/usr/bin")
+        }));
         let podman_proxy =
             oci_proxy_run_arguments(&job, &names, &proxy_image).expect("Podman proxy arguments");
         assert!(!podman_proxy.contains(&"--userns=keep-id".into()));
