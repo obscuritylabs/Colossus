@@ -1029,8 +1029,10 @@ A reconstruction is complete only when all applicable checks pass:
   per-keystroke state effects, and loopback-live Responses/compatible streamed tool loops
   pass CLI, REPL, worker, ANSI-safety, continuation, and credential non-disclosure checks.
 - [x] Telemetry derives correct duration and counts from persisted event timestamps.
-- [ ] Credentials remain references until adapter execution and never appear in model or
-  user-visible diagnostic payloads.
+- [x] Provider, embedding/Chroma, MCP, integration, pack, and signed-bundle adapters keep
+  environment credentials as references through policy and resolve them only inside
+  permit-bearing execution; adversarial provider echo acceptance proves raw values are
+  removed before tool continuation, session history, telemetry, audit, stdout, or stderr.
 - [x] Skills cannot gain executable privilege; packs cannot activate before verification.
 - [x] Audit-chain verification detects tampering.
 - [x] Journal concurrency, encryption/key rotation, tail truncation, signed checkpoints,

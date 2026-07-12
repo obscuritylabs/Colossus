@@ -279,9 +279,9 @@ data: [DONE]
 fn responses_server() -> (String, thread::JoinHandle<Vec<String>>) {
     let tool_call = r#"data: {"type":"response.created","response":{"id":"resp-tool"}}
 
-data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-r","name":"echo","arguments":"{\"text\":\"responses-tool\"}"}}
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-r","name":"echo","arguments":"{\"text\":\"responses-tool terminal-secret\"}"}}
 
-data: {"type":"response.completed","response":{"id":"resp-tool","status":"completed","output":[{"type":"function_call","call_id":"call-r","name":"echo","arguments":"{\"text\":\"responses-tool\"}"}],"usage":{"input_tokens":9,"output_tokens":1,"total_tokens":10}}}
+data: {"type":"response.completed","response":{"id":"resp-tool","status":"completed","output":[{"type":"function_call","call_id":"call-r","name":"echo","arguments":"{\"text\":\"responses-tool terminal-secret\"}"}],"usage":{"input_tokens":9,"output_tokens":1,"total_tokens":10}}}
 
 data: [DONE]
 
@@ -291,6 +291,8 @@ data: [DONE]
 data: {"type":"response.output_text.delta","delta":"responses-"}
 
 data: {"type":"response.output_text.delta","delta":"connected"}
+
+data: {"type":"response.output_text.delta","delta":" terminal-secret"}
 
 data: {"type":"response.completed","response":{"id":"resp-final","status":"completed","output":[],"usage":{"input_tokens":12,"output_tokens":2,"total_tokens":14}}}
 
@@ -648,12 +650,15 @@ sandbox:
         terminal.contains("[tool] complete echo status=ok"),
         "{terminal}"
     );
-    assert!(terminal.contains("responses-connected"), "{terminal}");
+    assert!(
+        terminal.contains("responses-connected [REDACTED]"),
+        "{terminal}"
+    );
     assert!(!terminal.contains("terminal-secret"));
     assert!(!terminal.contains("\x1b["));
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["profile"], "responses");
-    assert_eq!(result["output"], "responses-connected");
+    assert_eq!(result["output"], "responses-connected [REDACTED]");
     assert!(!String::from_utf8_lossy(&output.stdout).contains("terminal-secret"));
 
     let requests = server.join().expect("Responses server");
@@ -667,9 +672,41 @@ sandbox:
     assert!(requests[0].contains(r#""store":false"#));
     assert!(requests[0].contains(r#""strict":true"#));
     assert!(requests[0].contains("Use the Responses tool path and answer."));
+    let first_body = requests[0]
+        .split("\r\n\r\n")
+        .nth(1)
+        .expect("first request body");
+    assert!(!first_body.contains("terminal-secret"));
     assert!(requests[1].contains(r#""type":"function_call_output""#));
     assert!(requests[1].contains(r#""call_id":"call-r""#));
     assert!(requests[1].contains("responses-tool"));
+    let continuation_body = requests[1]
+        .split("\r\n\r\n")
+        .nth(1)
+        .expect("continuation request body");
+    assert!(!continuation_body.contains("terminal-secret"));
+    assert!(continuation_body.contains("[REDACTED]"));
+
+    let session_id = result["session_id"].as_str().expect("session id");
+    for arguments in [
+        vec!["sessions", "messages", session_id],
+        vec![
+            "telemetry",
+            "show",
+            result["run_id"].as_str().expect("run id"),
+        ],
+        vec!["audit", "show", "--limit", "200"],
+    ] {
+        let diagnostic = run(binary, &config, &arguments);
+        assert!(
+            diagnostic.status.success(),
+            "stdout={}\nstderr={}",
+            String::from_utf8_lossy(&diagnostic.stdout),
+            String::from_utf8_lossy(&diagnostic.stderr)
+        );
+        assert!(!String::from_utf8_lossy(&diagnostic.stdout).contains("terminal-secret"));
+        assert!(!String::from_utf8_lossy(&diagnostic.stderr).contains("terminal-secret"));
+    }
 }
 
 #[test]

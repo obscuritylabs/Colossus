@@ -282,6 +282,13 @@ visible text, strict object-shaped tool calls, and explicitly typed safe reasoni
 summaries enter the model event stream; raw response chunks and hidden reasoning fields
 are discarded.
 
+Loopback-live acceptance makes a configured provider echo the resolved bearer value in
+both a tool call and final streamed text. Colossus must replace it before schema
+validation and tool execution, keep it out of the next provider request body, and keep it
+out of canonical session messages, telemetry, bounded audit views, stdout, and stderr.
+The capture simultaneously verifies that the raw value appears in the Authorization
+header only after a permit reaches the adapter.
+
 Streaming does not weaken that boundary. The adapter submits one normalized item at a
 time to the gateway, the gateway enforces cumulative output limits and any post-effect
 decision before observation, and the agent journals the released item before forwarding
