@@ -214,6 +214,10 @@ phase-labeled and never resumed through the primary workflow path, even if its d
 declared idempotency. Separate-process redb tests sync an external-effect marker and then
 abort before a terminal workflow event to prove unknown primary/compensation outcomes,
 safe idempotent primary retry, unsafe replay refusal, and durable-completion continuation.
+The same suite kills parallel branch effects, linked-child creation, and an effect running
+inside the child. A parent cannot transition out of interrupted state until its interrupted
+child is recovered, and replay neither reauthorizes an already linked child nor duplicates a
+durable sibling completion.
 Subworkflow launch is a distinct `workflow.start` effect (approval-required by the
 built-in policy unless explicitly overridden). Child runs pin their own definition hash
 and immutable parent run, parent step, and call depth. A durable parent link is reused on

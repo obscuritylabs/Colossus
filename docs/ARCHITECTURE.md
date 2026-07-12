@@ -231,7 +231,11 @@ id. A process loss after a durable primary effect permits operator resume only w
 exact primary step declared idempotency. An uncertain compensation is phase-labeled and
 always remains fail-closed because ordinary run resume would otherwise return to the primary
 sequence. A durable step completion found after its matching start is resumed from the next
-root step rather than labeled unknown or executed again.
+root step rather than labeled unknown or executed again. Nested sequence replay recognizes
+already durable scoped completions without appending duplicate completion events. If both a
+parent and its linked child are interrupted, parent resume fails before changing state until
+the child is explicitly recovered; after the child completes, the parent consumes the same
+durable link without repeating `workflow.start`.
 
 Interactive work refresh is an application-layer aggregate, not terminal-owned state.
 `Runtime::work_state` reconstructs a bounded exact-session snapshot of tasks, active

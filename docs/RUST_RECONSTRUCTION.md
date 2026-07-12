@@ -103,7 +103,11 @@ obsolete Go launcher.
   refuses non-idempotent primary and all uncertain compensation replay, permits only the
   explicitly idempotent primary retry with the same key, and remains stable after another
   reopen. A separate kill immediately after durable step completion proves resume advances
-  without repeating the completed step.
+  without repeating the completed step. Parallel-branch recovery preserves scoped
+  idempotency and does not append a second completion for an already durable sibling.
+  Linked-child intent survives a kill before child queueing, while a kill inside an
+  idempotent child requires child-first recovery and then completes the parent without
+  relaunching or duplicating the child.
 - Shared factory-based conformance suites reopen the event-sourced research and extension
   repositories against the same journal. Research acceptance covers provenance, sequential
   source labels, citation integrity, terminal immutability, session filtering, and source/

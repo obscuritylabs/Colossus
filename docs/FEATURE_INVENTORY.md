@@ -1026,11 +1026,12 @@ A reconstruction is complete only when all applicable checks pass:
   the shared conformance contract; canonical memory works during index outage/rebuild.
 - [x] Research and extension adapters pass shared factory-reopen conformance for canonical
   citations, integration state, pack lifecycle, publisher trust, bounds, and reconstruction.
-- [ ] Workflow schema, trust invalidation, restart, bounded parallelism, cycles, input
+- [x] Workflow schema, trust invalidation, restart, bounded parallelism, cycles, input
   waits, explicit idempotent retries, compensation, cancellation, and unknown outcomes
   pass durable acceptance tests. Separate-process redb fault tests now cover process loss
   after synced non-idempotent/idempotent primary effects, after a synced compensation, and
-  immediately after durable step completion; nested/parallel process-kill expansion remains.
+  immediately after durable step completion, plus parallel sibling replay, linked-child
+  intent repair, and child-first nested recovery without duplicate execution.
 - [ ] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
   network escapes on each supported platform.
   Mandatory macOS/Linux arm64/x64 native tests and Windows arm64/x64 AppContainer/Job

@@ -1336,17 +1336,35 @@ impl WorkflowService {
             let events = self
                 .journal
                 .read_stream(&format!("workflow-run:{run_id}"))?;
-            let uncertain_retryable = events
+            let uncertain = events
                 .iter()
                 .rev()
                 .find(|event| event.event_type == "workflow.step.outcome_unknown.v1")
                 .map(|event| self.journal.decrypt_payload(event))
-                .transpose()?
+                .transpose()?;
+            let uncertain_retryable = uncertain
+                .as_ref()
                 .and_then(|payload| payload.get("retry_allowed").and_then(Value::as_bool));
             if uncertain_retryable == Some(false) {
                 return Err(WorkflowError::InvalidTransition(
                     "unknown non-idempotent effect cannot be retried by resume".into(),
                 ));
+            }
+            if let Some(execution_id) = uncertain.as_ref().and_then(|payload| {
+                payload
+                    .get("execution_id")
+                    .or_else(|| payload.get("step_id"))
+                    .and_then(Value::as_str)
+            }) && let Some(linked) = self.linked_child(run_id, execution_id)?
+                && self
+                    .repository
+                    .run(&linked.run_id)?
+                    .is_some_and(|child| child.status == WorkflowStatus::Interrupted)
+            {
+                return Err(WorkflowError::InvalidTransition(format!(
+                    "interrupted child workflow {} must be resumed before parent {run_id}",
+                    linked.run_id
+                )));
             }
         }
         self.append_run_event(
@@ -2339,6 +2357,11 @@ impl WorkflowService {
         semaphore: Arc<Semaphore>,
     ) -> Result<StepState, WorkflowError> {
         for step in steps {
+            let execution_id = scoped_execution_id(scope, step_id(step));
+            let already_completed = context
+                .get("executions")
+                .and_then(|executions| executions.get(&execution_id))
+                .is_some();
             match self
                 .execute_step(
                     run_id,
@@ -2353,18 +2376,19 @@ impl WorkflowService {
                 .await?
             {
                 StepState::Completed(output) => {
-                    let execution_id = scoped_execution_id(scope, step_id(step));
                     context["executions"][&execution_id] = output.clone();
                     context["steps"][step_id(step)] = output;
-                    self.append_run_event(
-                        run_id,
-                        "workflow.step.completed.v1",
-                        json!({
-                            "step_id": step_id(step),
-                            "execution_id": execution_id,
-                            "output": context["steps"][step_id(step)],
-                        }),
-                    )?;
+                    if !already_completed {
+                        self.append_run_event(
+                            run_id,
+                            "workflow.step.completed.v1",
+                            json!({
+                                "step_id": step_id(step),
+                                "execution_id": execution_id,
+                                "output": context["steps"][step_id(step)],
+                            }),
+                        )?;
+                    }
                 }
                 waiting @ StepState::Waiting { .. } => return Ok(waiting),
             }
@@ -2613,6 +2637,11 @@ steps:
     struct KillAfterDurableMarkerEffects {
         marker: PathBuf,
         fail_primary: bool,
+        pass_workflow_start: bool,
+    }
+
+    struct ReturnAfterDurableMarkerEffects {
+        marker: PathBuf,
     }
 
     struct CrashAfterEventJournal {
@@ -2689,6 +2718,9 @@ steps:
     #[async_trait]
     impl WorkflowEffectRunner for KillAfterDurableMarkerEffects {
         async fn run(&self, effect: WorkflowEffect) -> Result<serde_json::Value, WorkflowError> {
+            if self.pass_workflow_start && effect.action == "workflow.start" {
+                return Ok(json!({"authorized": "workflow.start"}));
+            }
             if self.fail_primary && !effect.compensation {
                 return Err(WorkflowError::Effect(
                     "known primary failure before compensation".into(),
@@ -2703,6 +2735,21 @@ steps:
                 .expect("write durable external-effect marker");
             marker.sync_all().expect("sync external-effect marker");
             std::process::abort();
+        }
+    }
+
+    #[async_trait]
+    impl WorkflowEffectRunner for ReturnAfterDurableMarkerEffects {
+        async fn run(&self, effect: WorkflowEffect) -> Result<serde_json::Value, WorkflowError> {
+            let mut marker = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.marker)
+                .expect("open durable external-effect marker");
+            writeln!(marker, "{}:{}", effect.action, effect.attempt)
+                .expect("write durable external-effect marker");
+            marker.sync_all().expect("sync external-effect marker");
+            Ok(json!({"authorized": effect.action}))
         }
     }
 
@@ -2723,6 +2770,81 @@ steps:
     }
 
     fn process_kill_definition(mode: &str) -> String {
+        if mode == "parallel" {
+            return r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: process-kill
+  version: 1.0.0
+  description: Durable parallel-branch process-kill recovery
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 8
+steps:
+  - type: parallel
+    id: branches
+    max_concurrency: 1
+    branches:
+      -
+        - type: emit
+          id: before
+          value: { persisted: true }
+      -
+        - type: tool
+          id: mutate
+          tool: parallel.run
+          arguments: {}
+          idempotency: parallel-key
+"#
+            .into();
+        }
+        if mode == "nested-child" {
+            return r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: process-kill
+  version: 1.0.0
+  description: Durable nested-child process-kill recovery
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - type: workflow
+    id: child-call
+    workflow: process-kill-child
+    version: 1.0.0
+    inputs: {}
+"#
+            .into();
+        }
+        if mode == "subworkflow-link" {
+            return r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: process-kill
+  version: 1.0.0
+  description: Durable linked-subworkflow process-kill recovery
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - type: workflow
+    id: child-call
+    workflow: process-kill-child
+    version: 1.0.0
+    inputs: {}
+"#
+            .into();
+        }
         if mode == "completed-step" {
             return r#"
 apiVersion: colossus.dev/v1alpha1
@@ -2799,27 +2921,80 @@ steps:
         )
     }
 
+    fn process_kill_child_definition(mode: &str) -> &'static str {
+        if mode == "nested-child" {
+            return r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: process-kill-child
+  version: 1.0.0
+  description: Durable nested effect child
+inputs: { type: object }
+outputs: { type: object }
+capabilities: [workflow.execute]
+maxConcurrency: 1
+stepBudget: 4
+steps:
+  - type: tool
+    id: nested-mutate
+    tool: nested.run
+    arguments: {}
+    idempotency: nested-key
+"#;
+        }
+        r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: process-kill-child
+  version: 1.0.0
+  description: Durable linked child
+inputs: { type: object }
+outputs: { type: object }
+capabilities: []
+maxConcurrency: 1
+stepBudget: 2
+steps:
+  - type: emit
+    id: child-result
+    value: { child: complete }
+"#
+    }
+
     async fn process_kill_child(root: &Path, marker: &Path, run_id: &str, mode: &str) {
         let durable_journal = process_kill_journal(root);
-        let journal: Arc<dyn EventJournal> = if mode == "completed-step" {
-            Arc::new(CrashAfterEventJournal {
+        let crash_event = match mode {
+            "completed-step" => Some("workflow.step.completed.v1"),
+            "subworkflow-link" => Some("workflow.subworkflow.linked.v1"),
+            _ => None,
+        };
+        let journal: Arc<dyn EventJournal> = match crash_event {
+            Some(event_type) => Arc::new(CrashAfterEventJournal {
                 inner: durable_journal,
-                event_type: "workflow.step.completed.v1",
-            })
-        } else {
-            durable_journal
+                event_type,
+            }),
+            None => durable_journal,
         };
         let repository: Arc<dyn WorkflowRepository> =
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
-        let effects: Arc<dyn WorkflowEffectRunner> = if mode == "completed-step" {
-            Arc::new(DenyWorkflowEffects)
-        } else {
-            Arc::new(KillAfterDurableMarkerEffects {
+        let effects: Arc<dyn WorkflowEffectRunner> = match mode {
+            "completed-step" => Arc::new(DenyWorkflowEffects),
+            "subworkflow-link" => Arc::new(ReturnAfterDurableMarkerEffects {
+                marker: marker.into(),
+            }),
+            _ => Arc::new(KillAfterDurableMarkerEffects {
                 marker: marker.into(),
                 fail_primary: mode == "compensation",
-            })
+                pass_workflow_start: mode == "nested-child",
+            }),
         };
         let service = WorkflowService::new(journal, repository, effects);
+        if matches!(mode, "subworkflow-link" | "nested-child") {
+            service
+                .register_definition(process_kill_child_definition(mode), "process-kill-test")
+                .expect("register process-kill child workflow");
+        }
         service
             .register_definition(&process_kill_definition(mode), "process-kill-test")
             .expect("register process-kill workflow");
@@ -3627,11 +3802,20 @@ compensation:
             return;
         }
 
-        for (mode, run_id, expected_marker, expected_step, expected_phase, retry_allowed) in [
+        for (
+            mode,
+            run_id,
+            expected_marker,
+            expected_step,
+            expected_execution,
+            expected_phase,
+            retry_allowed,
+        ) in [
             (
                 "non-idempotent",
                 "018f0000-0000-7000-8000-000000000001",
                 Some("mutation.run:1\n"),
+                "mutate",
                 "mutate",
                 "primary",
                 Some(false),
@@ -3641,6 +3825,7 @@ compensation:
                 "018f0000-0000-7000-8000-000000000002",
                 Some("mutation.run:1\n"),
                 "mutate",
+                "mutate",
                 "primary",
                 Some(true),
             ),
@@ -3648,6 +3833,7 @@ compensation:
                 "compensation",
                 "018f0000-0000-7000-8000-000000000003",
                 Some("rollback.run:2\n"),
+                "rollback",
                 "rollback",
                 "compensation",
                 Some(false),
@@ -3657,8 +3843,36 @@ compensation:
                 "018f0000-0000-7000-8000-000000000004",
                 None,
                 "durable",
+                "durable",
                 "primary",
                 None,
+            ),
+            (
+                "parallel",
+                "018f0000-0000-7000-8000-000000000005",
+                Some("parallel.run:3\n"),
+                "mutate",
+                "branches.branch[1]/mutate",
+                "primary",
+                Some(true),
+            ),
+            (
+                "subworkflow-link",
+                "018f0000-0000-7000-8000-000000000006",
+                Some("workflow.start:1\n"),
+                "child-call",
+                "child-call",
+                "primary",
+                Some(true),
+            ),
+            (
+                "nested-child",
+                "018f0000-0000-7000-8000-000000000007",
+                Some("nested.run:1\n"),
+                "child-call",
+                "child-call",
+                "primary",
+                Some(true),
             ),
         ] {
             let directory = tempdir().expect("process-kill directory");
@@ -3698,9 +3912,9 @@ compensation:
             let effects = Arc::new(RecordingEffects::default());
             let service = WorkflowService::new(Arc::clone(&journal), repository, effects.clone());
             let recovered = service.recover_interrupted().expect("recover killed run");
-            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered.len(), if mode == "nested-child" { 2 } else { 1 });
             assert_eq!(
-                recovered[0].status,
+                service.get_run(run_id).expect("recovered parent").status,
                 colossus_contracts::WorkflowStatus::Interrupted
             );
             let events = journal
@@ -3716,11 +3930,15 @@ compensation:
                     .decrypt_payload(unknown[0])
                     .expect("unknown-outcome payload");
                 assert_eq!(unknown["step_id"], expected_step);
-                assert_eq!(unknown["execution_id"], expected_step);
+                assert_eq!(unknown["execution_id"], expected_execution);
                 assert_eq!(unknown["phase"], expected_phase);
                 assert_eq!(
                     unknown["attempt"],
-                    if mode == "compensation" { 2 } else { 1 }
+                    match mode {
+                        "compensation" => 2,
+                        "parallel" => 3,
+                        _ => 1,
+                    }
                 );
                 assert_eq!(unknown["retry_allowed"], retry_allowed);
             } else {
@@ -3740,7 +3958,7 @@ compensation:
                     .is_empty()
             );
 
-            if retry_allowed == Some(true) {
+            if mode == "idempotent" {
                 let completed = service.resume_run(run_id).await.expect("safe retry");
                 assert_eq!(
                     completed.status,
@@ -3754,7 +3972,152 @@ compensation:
                     calls[0].idempotency.as_deref(),
                     Some(expected_idempotency.as_str())
                 );
-            } else if retry_allowed.is_none() {
+            } else if mode == "parallel" {
+                let completed = service
+                    .resume_run(run_id)
+                    .await
+                    .expect("safe scoped parallel retry");
+                assert_eq!(
+                    completed.status,
+                    colossus_contracts::WorkflowStatus::Completed
+                );
+                let calls = effects.calls();
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].action, "parallel.run");
+                assert_eq!(calls[0].step_id, expected_execution);
+                assert_eq!(calls[0].attempt, 5);
+                let expected_idempotency = format!("parallel-key:{run_id}:{expected_execution}");
+                assert_eq!(
+                    calls[0].idempotency.as_deref(),
+                    Some(expected_idempotency.as_str())
+                );
+                let events = journal
+                    .read_stream(&format!("workflow-run:{run_id}"))
+                    .expect("parallel events after resume");
+                let prior_completion_count = events
+                    .iter()
+                    .filter(|event| event.event_type == "workflow.step.completed.v1")
+                    .map(|event| journal.decrypt_payload(event).expect("completion payload"))
+                    .filter(|payload| {
+                        payload
+                            .get("execution_id")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("branches.branch[0]/before")
+                    })
+                    .count();
+                assert_eq!(prior_completion_count, 1);
+            } else if mode == "subworkflow-link" {
+                let before_resume = journal
+                    .read_stream(&format!("workflow-run:{run_id}"))
+                    .expect("linked parent events");
+                let link = before_resume
+                    .iter()
+                    .find(|event| event.event_type == "workflow.subworkflow.linked.v1")
+                    .expect("durable child link");
+                let child_run_id =
+                    journal.decrypt_payload(link).expect("child link payload")["child_run_id"]
+                        .as_str()
+                        .expect("child run id")
+                        .to_owned();
+                let completed = service
+                    .resume_run(run_id)
+                    .await
+                    .expect("resume linked child without relaunch");
+                assert_eq!(
+                    completed.status,
+                    colossus_contracts::WorkflowStatus::Completed
+                );
+                assert!(effects.calls().is_empty());
+                assert_eq!(service.list_runs(10).expect("parent and child").len(), 2);
+                assert_eq!(
+                    service
+                        .get_run(&child_run_id)
+                        .expect("recreated child")
+                        .status,
+                    colossus_contracts::WorkflowStatus::Completed
+                );
+                assert_eq!(
+                    completed.outputs.as_ref().expect("parent outputs")["child-call"]["run_id"],
+                    child_run_id
+                );
+            } else if mode == "nested-child" {
+                let parent_events = journal
+                    .read_stream(&format!("workflow-run:{run_id}"))
+                    .expect("nested parent events");
+                let link = parent_events
+                    .iter()
+                    .find(|event| event.event_type == "workflow.subworkflow.linked.v1")
+                    .expect("nested child link");
+                let child_run_id = journal
+                    .decrypt_payload(link)
+                    .expect("nested child link payload")["child_run_id"]
+                    .as_str()
+                    .expect("nested child run id")
+                    .to_owned();
+                assert_eq!(
+                    service
+                        .get_run(&child_run_id)
+                        .expect("interrupted child")
+                        .status,
+                    colossus_contracts::WorkflowStatus::Interrupted
+                );
+                let child_events = journal
+                    .read_stream(&format!("workflow-run:{child_run_id}"))
+                    .expect("nested child events");
+                let child_unknown = child_events
+                    .iter()
+                    .find(|event| event.event_type == "workflow.step.outcome_unknown.v1")
+                    .expect("nested child unknown outcome");
+                let child_unknown = journal
+                    .decrypt_payload(child_unknown)
+                    .expect("nested child unknown payload");
+                assert_eq!(child_unknown["step_id"], "nested-mutate");
+                assert_eq!(child_unknown["execution_id"], "nested-mutate");
+                assert_eq!(child_unknown["attempt"], 1);
+                assert_eq!(child_unknown["retry_allowed"], true);
+
+                let premature_parent = service
+                    .resume_run(run_id)
+                    .await
+                    .expect_err("parent must not fail or advance before child recovery");
+                assert!(premature_parent.to_string().contains(&child_run_id));
+                assert!(
+                    premature_parent
+                        .to_string()
+                        .contains("resumed before parent")
+                );
+                assert_eq!(
+                    service
+                        .get_run(run_id)
+                        .expect("still interrupted parent")
+                        .status,
+                    colossus_contracts::WorkflowStatus::Interrupted
+                );
+                let child = service
+                    .resume_run(&child_run_id)
+                    .await
+                    .expect("resume idempotent nested child");
+                assert_eq!(child.status, colossus_contracts::WorkflowStatus::Completed);
+                let calls = effects.calls();
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].action, "nested.run");
+                assert_eq!(calls[0].attempt, 2);
+                let expected_idempotency = format!("nested-key:{child_run_id}:nested-mutate");
+                assert_eq!(
+                    calls[0].idempotency.as_deref(),
+                    Some(expected_idempotency.as_str())
+                );
+                let parent = service
+                    .resume_run(run_id)
+                    .await
+                    .expect("resume parent after child");
+                assert_eq!(parent.status, colossus_contracts::WorkflowStatus::Completed);
+                assert_eq!(
+                    parent.outputs.as_ref().expect("nested parent outputs")["child-call"]["run_id"],
+                    child_run_id
+                );
+                assert_eq!(effects.calls().len(), 1);
+            } else if mode == "completed-step" {
                 let completed = service
                     .resume_run(run_id)
                     .await
@@ -3780,7 +4143,7 @@ compensation:
                 assert!(effects.calls().is_empty());
             }
             journal.verify().expect("verify recovered workflow journal");
-            let expected_status = if retry_allowed == Some(false) {
+            let expected_status = if matches!(mode, "non-idempotent" | "compensation") {
                 colossus_contracts::WorkflowStatus::Interrupted
             } else {
                 colossus_contracts::WorkflowStatus::Completed
@@ -3799,6 +4162,15 @@ compensation:
                     .status,
                 expected_status
             );
+            if matches!(mode, "subworkflow-link" | "nested-child") {
+                assert_eq!(
+                    repository
+                        .runs(10)
+                        .expect("reopened parent and child")
+                        .len(),
+                    2
+                );
+            }
         }
     }
 
