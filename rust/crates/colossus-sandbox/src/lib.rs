@@ -68,10 +68,15 @@ const MAX_JOB_BYTES: usize = 1024 * 1024;
 const MAX_PROXY_HEADER_BYTES: usize = 16 * 1024;
 const MAX_TLS_RECORD_BYTES: usize = 18 * 1024;
 const MAX_TLS_CLIENT_HELLO_BYTES: usize = 64 * 1024;
+#[cfg(target_os = "windows")]
+const MAX_WINDOWS_ACL_TARGETS: usize = 100_000;
+#[cfg(target_os = "windows")]
+const WINDOWS_REPARSE_POINT_ATTRIBUTE: u32 = 0x400;
 const OCI_CLEANUP_RESERVE_MS: u64 = 2_000;
 const OCI_NETWORK_CLEANUP_RESERVE_MS: u64 = 5_000;
 const OCI_CONTROL_COMMAND_TIMEOUT_MS: u64 = 1_500;
 const OCI_DNS_RESOLUTION_TIMEOUT_MS: u64 = 3_000;
+const MAX_OCI_CONTROL_DIAGNOSTIC_BYTES: usize = 4 * 1024;
 
 fn adapter_failure(error: impl std::fmt::Display) -> ExecutionError {
     ExecutionError::Failed(error.to_string())
@@ -1721,6 +1726,66 @@ impl WindowsTemporaryGuard {
 }
 
 #[cfg(target_os = "windows")]
+fn collect_windows_acl_targets(
+    root: &Path,
+    mask: u32,
+    targets: &mut BTreeMap<PathBuf, u32>,
+) -> Result<(), SandboxHelperError> {
+    use std::os::windows::fs::MetadataExt as _;
+
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| SandboxHelperError::Setup(format!("grant target: {error}")))?;
+        if metadata.file_type().is_symlink()
+            || metadata.file_attributes() & WINDOWS_REPARSE_POINT_ATTRIBUTE != 0
+        {
+            return Err(SandboxHelperError::Setup(format!(
+                "Windows filesystem grant contains a reparse point: {}",
+                path.display()
+            )));
+        }
+        let canonical = fs::canonicalize(&path)
+            .map_err(|error| SandboxHelperError::Setup(format!("grant target: {error}")))?;
+        if !canonical.starts_with(root) {
+            return Err(SandboxHelperError::Setup(format!(
+                "Windows filesystem grant escaped its canonical root: {}",
+                canonical.display()
+            )));
+        }
+        if !targets.contains_key(&canonical) && targets.len() >= MAX_WINDOWS_ACL_TARGETS {
+            return Err(SandboxHelperError::Setup(format!(
+                "Windows filesystem grants exceed {MAX_WINDOWS_ACL_TARGETS} ACL targets"
+            )));
+        }
+        targets
+            .entry(canonical)
+            .and_modify(|combined| *combined |= mask)
+            .or_insert(mask);
+        if metadata.is_dir() {
+            let entries = fs::read_dir(&path).map_err(|error| {
+                SandboxHelperError::Setup(format!("enumerate grant target: {error}"))
+            })?;
+            for entry in entries {
+                pending.push(
+                    entry
+                        .map_err(|error| {
+                            SandboxHelperError::Setup(format!("enumerate grant target: {error}"))
+                        })?
+                        .path(),
+                );
+            }
+        } else if !metadata.is_file() {
+            return Err(SandboxHelperError::Setup(format!(
+                "Windows filesystem grant is not a regular file or directory: {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 impl Drop for WindowsProfileGuard {
     fn drop(&mut self) {
         if let Some(profile) = self.0.take() {
@@ -1795,7 +1860,11 @@ fn supervise_windows_job(
             .and_modify(|combined| *combined |= mask)
             .or_insert(mask);
     }
-    for (path, mask) in grants {
+    let mut acl_targets = BTreeMap::<PathBuf, u32>::new();
+    for (root, mask) in grants {
+        collect_windows_acl_targets(&root, mask, &mut acl_targets)?;
+    }
+    for (path, mask) in acl_targets {
         let metadata = fs::metadata(&path)
             .map_err(|error| SandboxHelperError::Setup(format!("grant target: {error}")))?;
         let resource = if metadata.is_dir() {
@@ -2444,18 +2513,27 @@ fn oci_resource_names(job_id: &str) -> OciResourceNames {
     }
 }
 
-fn bounded_control_command(mut command: Command) -> Option<(std::process::ExitStatus, Vec<u8>)> {
+fn bounded_control_command(
+    mut command: Command,
+) -> Option<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     let mut child = command.spawn().ok()?;
     let deadline = Instant::now() + Duration::from_millis(OCI_CONTROL_COMMAND_TIMEOUT_MS);
     loop {
         if let Some(status) = child.try_wait().ok()? {
             let mut stdout = Vec::new();
             child.stdout.take()?.read_to_end(&mut stdout).ok()?;
-            return Some((status, stdout));
+            let mut stderr = Vec::new();
+            child
+                .stderr
+                .take()?
+                .take(u64::try_from(MAX_OCI_CONTROL_DIAGNOSTIC_BYTES).unwrap_or(u64::MAX))
+                .read_to_end(&mut stderr)
+                .ok()?;
+            return Some((status, stdout, stderr));
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -2478,10 +2556,17 @@ fn run_oci_control(
         .envs(environment.iter().copied())
         .args(arguments);
     match bounded_control_command(command) {
-        Some((status, stdout)) if status.success() => Ok(stdout),
-        Some((status, _)) => Err(SandboxHelperError::Setup(format!(
-            "failed to {operation}: runtime exited with {status}"
-        ))),
+        Some((status, stdout, _)) if status.success() => Ok(stdout),
+        Some((status, _, stderr)) => {
+            let diagnostic = String::from_utf8_lossy(&stderr)
+                .chars()
+                .filter(|character| !character.is_control() || character.is_ascii_whitespace())
+                .collect::<String>();
+            Err(SandboxHelperError::Setup(format!(
+                "failed to {operation}: runtime exited with {status}: {}",
+                diagnostic.trim()
+            )))
+        }
         None => Err(SandboxHelperError::Setup(format!(
             "failed to {operation}: runtime command timed out"
         ))),
@@ -2516,7 +2601,7 @@ fn oci_resources_absent(runtime: &Path, names: &OciResourceNames) -> bool {
             "--format",
             "{{.ID}}",
         ]);
-        bounded_control_command(list).is_some_and(|(status, stdout)| {
+        bounded_control_command(list).is_some_and(|(status, stdout, _)| {
             status.success() && stdout.iter().all(u8::is_ascii_whitespace)
         })
     });
@@ -2532,7 +2617,7 @@ fn oci_resources_absent(runtime: &Path, names: &OciResourceNames) -> bool {
                 "--format",
                 "{{.Name}}",
             ]);
-            bounded_control_command(list).is_some_and(|(status, stdout)| {
+            bounded_control_command(list).is_some_and(|(status, stdout, _)| {
                 status.success() && stdout.iter().all(u8::is_ascii_whitespace)
             })
         });

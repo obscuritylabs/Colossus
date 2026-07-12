@@ -196,7 +196,9 @@ its force-removal semantics. Both runtimes execute the same live acceptance suit
 
 The `windows_job` backend never relies on a Job Object alone. A unique AppContainer profile
 is created for each authenticated helper job, canonical grant roots receive package-SID
-ACLs, and the child starts with no network capability. The Job Object, AppContainer
+ACLs, and a bounded preflight rejects reparse points before applying the same job SID to
+existing descendants so directory inheritance cannot omit pre-existing files. The child
+starts with no network capability. The Job Object, AppContainer
 security capabilities, and exact inherited standard-I/O handle list are installed
 atomically at process creation, eliminating a create-then-assign descendant race. Closing
 the helper or Job handle terminates the whole tree. UI and clipboard access, desktop

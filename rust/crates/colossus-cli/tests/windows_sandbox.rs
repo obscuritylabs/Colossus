@@ -230,7 +230,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     );
     let allowed_read = json(&allowed_read);
     assert_eq!(allowed_read["backend"], "windows_job");
-    assert_eq!(allowed_read["success"], true);
+    assert_eq!(allowed_read["success"], true, "{allowed_read}");
     assert!(
         decoded(&allowed_read, "stdout_base64")
             .windows(b"allowed-content".len())
