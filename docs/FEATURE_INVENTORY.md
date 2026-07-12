@@ -991,8 +991,10 @@ A reconstruction is complete only when all applicable checks pass:
   tool turns from `provider.failed` empty output and three-attempt
   `provider.invalid_tool_arguments` recovery exhaustion; only the turn-budget path
   records `run.max_turns.v1`.
-- [ ] Filesystem escapes, shell wrappers, unknown tool arguments, and deterministic
-  policy denies stop before execution.
+- [x] Loopback-live tool rejection proves filesystem traversal, shell wrappers, and
+  unknown schema fields produce no tool-call effect stream, while deterministic policy
+  denial produces an audited denied effect with no `effect.started`; no attempted marker
+  file is created, including under `full-access`.
 - [x] Every approval mode preserves allowed, deterministic-denied, and approval-required
   tool semantics in loopback-live agent acceptance; denied writes never reach the
   filesystem, interactive modes require explicit approval, and `full-access` cannot
