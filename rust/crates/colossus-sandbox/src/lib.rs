@@ -917,6 +917,22 @@ fn oci_runtime_kind(runtime: &Path) -> Option<OciRuntimeKind> {
     }
 }
 
+#[cfg(unix)]
+fn oci_mount_identity(cwd: &Path) -> Result<(u32, u32), SandboxHelperError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata =
+        fs::metadata(cwd).map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
+    Ok((metadata.uid(), metadata.gid()))
+}
+
+#[cfg(not(unix))]
+fn oci_mount_identity(_cwd: &Path) -> Result<(u32, u32), SandboxHelperError> {
+    Err(SandboxHelperError::Setup(
+        "OCI execution is unavailable on this platform".into(),
+    ))
+}
+
 fn oci_remove_arguments(runtime: &Path, name: &str) -> Option<Vec<String>> {
     let kind = oci_runtime_kind(runtime)?;
     let mut arguments = vec!["container".into(), "rm".into(), "--force".into()];
@@ -2181,7 +2197,7 @@ fn oci_command(
         .oci_runtime
         .as_ref()
         .ok_or_else(|| SandboxHelperError::Setup("OCI runtime is not configured".into()))?;
-    oci_runtime_kind(runtime).ok_or_else(|| {
+    let runtime_kind = oci_runtime_kind(runtime).ok_or_else(|| {
         SandboxHelperError::Setup("OCI runtime must be the Docker or Podman executable".into())
     })?;
     let image = job
@@ -2195,6 +2211,11 @@ fn oci_command(
     }
     let mut command = Command::new(runtime);
     command.env_clear().args(["run", "--rm", "--pull=never"]);
+    let (uid, gid) = oci_mount_identity(&job.process.cwd)?;
+    if runtime_kind == OciRuntimeKind::Podman {
+        command.arg("--userns=keep-id");
+    }
+    command.arg("--user").arg(format!("{uid}:{gid}"));
     if proxy_address.is_some() {
         command
             .arg("--network")
@@ -3970,6 +3991,8 @@ mod tests {
         assert!(args.contains(&"--pull=never".into()));
         assert!(args.contains(&"--read-only".into()));
         assert!(args.contains(&"--cap-drop=ALL".into()));
+        assert!(args.contains(&"--user".into()));
+        assert!(!args.contains(&"--userns=keep-id".into()));
         assert!(args.contains(&"--pids-limit=2".into()));
         assert!(args.contains(&format!("--memory={}", 64 * 1024 * 1024)));
         assert!(!host_process_limits_apply("oci"));
@@ -4001,6 +4024,14 @@ mod tests {
             ["container", "rm", "--force", "--time", "0", "job"]
         );
         assert!(oci_remove_arguments(PathBuf::from("/usr/bin/unknown").as_path(), "job").is_none());
+
+        job.oci_runtime = Some(PathBuf::from("/usr/bin/podman"));
+        let podman = oci_command(&job, None).expect("Podman command");
+        assert!(
+            podman
+                .get_args()
+                .any(|argument| argument == "--userns=keep-id")
+        );
 
         job.obligations
             .network_destinations

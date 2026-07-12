@@ -529,6 +529,9 @@ impl PackService {
         serde_json::to_writer_pretty(&mut manifest_file, &manifest)?;
         manifest_file.write_all(b"\n")?;
         manifest_file.sync_all()?;
+        // Windows will not rename a directory while a file inside it is still open.
+        // Close the durable manifest before verification and atomic publication.
+        drop(manifest_file);
         let verification = self.verify_bundle(temporary.path())?;
         fs::rename(temporary.path(), destination)?;
         Ok(BundleMaterialization {

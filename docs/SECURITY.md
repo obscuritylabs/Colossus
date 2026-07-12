@@ -164,7 +164,10 @@ all capabilities dropped, `no-new-privileges`, bounded PIDs/memory, and only exp
 bind mounts and environment names. The target starts through a fixed `env -i` bootstrap,
 so image-defined environment variables do not cross into the executable. Docker/Podman
 enforces the workload PID and memory limits; the trusted local container-control process
-is not measured as though it were the workload. OCI execution uses `--pull=never`; images
+is not measured as though it were the workload. The container process uses the owner UID
+and GID of its authorized working directory; rootless Podman additionally uses `keep-id`,
+so writable grants do not require container root or relaxed host permissions. OCI
+execution uses `--pull=never`; images
 must be preloaded and referenced by a complete immutable SHA-256 digest so the
 Docker/Podman daemon cannot perform an unapproved registry request.
 Networked OCI execution additionally requires a preloaded immutable Colossus proxy image.

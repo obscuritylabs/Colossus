@@ -27,6 +27,8 @@ use reedline::{
     ReedlineEvent, Signal, StyledText, default_emacs_keybindings,
 };
 use serde_json::{Value, json};
+#[cfg(windows)]
+use std::fmt;
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -67,6 +69,28 @@ enum ApprovalMode {
 }
 
 const REPL_HISTORY_CAPACITY: usize = 1_000;
+#[cfg(windows)]
+const WINDOWS_MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+#[cfg(windows)]
+struct WindowsMainError(String);
+
+#[cfg(windows)]
+impl fmt::Debug for WindowsMainError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+#[cfg(windows)]
+impl fmt::Display for WindowsMainError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+#[cfg(windows)]
+impl Error for WindowsMainError {}
 
 impl ApprovalMode {
     const fn as_str(self) -> &'static str {
@@ -4454,8 +4478,27 @@ async fn choose_worker_session(
     Ok(Some(choice.into()))
 }
 
+#[cfg(not(windows))]
+fn main() -> Result<(), Box<dyn Error>> {
+    runtime_main()
+}
+
+#[cfg(windows)]
+fn main() -> Result<(), Box<dyn Error>> {
+    // MSVC executables reserve a smaller main-thread stack than the other supported
+    // platforms. Debug runtime composition can exceed that reserve before a command is
+    // dispatched, so keep the actual async entrypoint on one explicitly bounded thread.
+    let outcome = std::thread::Builder::new()
+        .name("colossus-main".into())
+        .stack_size(WINDOWS_MAIN_STACK_BYTES)
+        .spawn(|| runtime_main().map_err(|error| format!("{error:?}")))?
+        .join()
+        .map_err(|_| WindowsMainError("Colossus main thread panicked".into()))?;
+    outcome.map_err(|error| Box::new(WindowsMainError(error)) as Box<dyn Error>)
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn runtime_main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     if matches!(cli.command, Command::SandboxHelper) {
         colossus_sandbox::run_helper_stdio()?;
