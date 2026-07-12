@@ -1092,7 +1092,7 @@ impl EffectExecutor for SandboxProcessExecutor {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         #[cfg(target_os = "windows")]
-        for name in ["SystemRoot", "WINDIR"] {
+        for name in ["SystemRoot", "WINDIR", "LOCALAPPDATA"] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }
@@ -1763,6 +1763,12 @@ fn supervise_windows_job(
         .map_err(|_| SandboxHelperError::Setup("Windows system root is unavailable".into()))?;
     let canonical_system_root = fs::canonicalize(&system_root)
         .map_err(|error| SandboxHelperError::Setup(format!("Windows system root: {error}")))?;
+    let local_app_data = std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
+        SandboxHelperError::Setup("Windows local app-data root is unavailable".into())
+    })?;
+    let local_app_data = fs::canonicalize(local_app_data).map_err(|error| {
+        SandboxHelperError::Setup(format!("Windows local app-data root: {error}"))
+    })?;
 
     let mut grants = BTreeMap::<PathBuf, u32>::new();
     for grant in &job.obligations.filesystem {
@@ -1815,6 +1821,7 @@ fn supervise_windows_job(
         "comspec",
         "path",
         "pathext",
+        "localappdata",
         "temp",
         "tmp",
         "http_proxy",
@@ -1849,6 +1856,7 @@ fn supervise_windows_job(
             .to_string(),
     );
     environment.insert("PATHEXT".into(), ".COM;.EXE;.BAT;.CMD".into());
+    environment.insert("LOCALAPPDATA".into(), local_app_data.display().to_string());
     environment.insert("TEMP".into(), temporary.path().display().to_string());
     environment.insert("TMP".into(), temporary.path().display().to_string());
     if let Some(port) = job.proxy_port {
@@ -2182,7 +2190,7 @@ fn oci_proxy_run_arguments(
         .oci_runtime
         .as_ref()
         .ok_or_else(|| SandboxHelperError::Setup("OCI runtime is not configured".into()))?;
-    let runtime_kind = oci_runtime_kind(runtime).ok_or_else(|| {
+    oci_runtime_kind(runtime).ok_or_else(|| {
         SandboxHelperError::Setup("OCI runtime must be the Docker or Podman executable".into())
     })?;
     let mut arguments = vec![
@@ -2191,14 +2199,6 @@ fn oci_proxy_run_arguments(
         "--rm".into(),
         "--pull=never".into(),
     ];
-    if runtime_kind == OciRuntimeKind::Podman {
-        let (uid, gid) = oci_mount_identity(&job.process.cwd)?;
-        arguments.extend([
-            "--userns=keep-id".into(),
-            "--user".into(),
-            format!("{uid}:{gid}"),
-        ]);
-    }
     arguments.extend([
         "--network".into(),
         names.internal_network.clone(),
@@ -4164,6 +4164,7 @@ mod tests {
         let docker_proxy =
             oci_proxy_run_arguments(&job, &names, &proxy_image).expect("Docker proxy arguments");
         assert!(!docker_proxy.contains(&"--userns=keep-id".into()));
+        assert!(!docker_proxy.contains(&"--user".into()));
 
         job.oci_runtime = Some(PathBuf::from("/usr/bin/podman"));
         let podman = oci_command(&job, None).expect("Podman command");
@@ -4174,8 +4175,8 @@ mod tests {
         );
         let podman_proxy =
             oci_proxy_run_arguments(&job, &names, &proxy_image).expect("Podman proxy arguments");
-        assert!(podman_proxy.contains(&"--userns=keep-id".into()));
-        assert!(podman_proxy.contains(&"--user".into()));
+        assert!(!podman_proxy.contains(&"--userns=keep-id".into()));
+        assert!(!podman_proxy.contains(&"--user".into()));
 
         job.obligations
             .network_destinations

@@ -154,7 +154,7 @@ on native arm64/x64 runners with wrong-key and replay-resistant authentication. 
 process isolation uses an ephemeral AppContainer package identity plus a Job Object that
 is attached in the same `STARTUPINFOEX` process-creation operation. The AppContainer has
 no network capabilities, receives ACLs only for canonical policy roots, and receives only
-declared environment values plus fixed Windows loader/temp variables. The Job Object owns
+declared environment values plus fixed Windows loader/profile/temp variables. The Job Object owns
 the descendant tree and applies aggregate process and memory ceilings. Broker execution
 remains available only through the existing explicit downgrade obligation and is not
 represented as sandbox isolation.
@@ -166,8 +166,10 @@ so image-defined environment variables do not cross into the executable. Docker/
 enforces the workload PID and memory limits; the trusted local container-control process
 is not measured as though it were the workload. The container process uses the owner UID
 and GID of its authorized working directory; rootless Podman additionally uses `keep-id`,
-so writable grants do not require container root or relaxed host permissions. OCI
-execution uses `--pull=never`; images
+so writable grants do not require container root or relaxed host permissions. The proxy
+sidecar has no host bind mounts and retains its scratch image's fixed non-root user instead
+of inheriting the workload's host-filesystem identity mapping. OCI execution uses
+`--pull=never`; images
 must be preloaded and referenced by a complete immutable SHA-256 digest so the
 Docker/Podman daemon cannot perform an unapproved registry request.
 Networked OCI execution additionally requires a preloaded immutable Colossus proxy image.
