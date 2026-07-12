@@ -4,6 +4,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use std::{
+    ffi::OsStr,
     fs,
     io::{Read as _, Write as _},
     net::TcpListener,
@@ -17,7 +18,11 @@ use tempfile::tempdir;
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
 
-fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
+fn run<I, S>(binary: &Path, config: &Path, arguments: I) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     Command::new(binary)
         .arg("--config")
         .arg(config)
@@ -141,20 +146,20 @@ fn process<'a>(
     cwd: &'a Path,
     environment: &[(&'a str, &'a str)],
     arguments: &'a [&'a str],
-) -> Vec<&'a str> {
+) -> Vec<String> {
     let mut command = vec![
-        "process",
-        "run",
-        executable.to_str().expect("executable path"),
-        "--cwd",
-        cwd.to_str().expect("cwd path"),
+        "process".into(),
+        "run".into(),
+        executable.to_string_lossy().into_owned(),
+        "--cwd".into(),
+        cwd.to_string_lossy().into_owned(),
     ];
     for (name, value) in environment {
-        command.extend(["--env", *name, *value]);
+        command.extend(["--env".into(), format!("{name}={value}")]);
     }
     if !arguments.is_empty() {
-        command.push("--");
-        command.extend_from_slice(arguments);
+        command.push("--".into());
+        command.extend(arguments.iter().map(|argument| (*argument).into()));
     }
     command
 }

@@ -2021,26 +2021,10 @@ impl OciNetworkResources {
         };
         let encoded = BASE64.encode(serde_json::to_vec(&bootstrap)?);
         let proxy_environment = [(OCI_PROXY_CONFIG_VARIABLE, encoded.as_str())];
+        let proxy_arguments = oci_proxy_run_arguments(job, &resources.names, proxy_image)?;
         run_oci_control(
             runtime,
-            &[
-                "run".into(),
-                "--detach".into(),
-                "--rm".into(),
-                "--pull=never".into(),
-                "--network".into(),
-                resources.names.internal_network.clone(),
-                "--read-only".into(),
-                "--cap-drop=ALL".into(),
-                "--security-opt=no-new-privileges".into(),
-                "--pids-limit=16".into(),
-                "--memory=67108864".into(),
-                "--name".into(),
-                resources.names.proxy.clone(),
-                "--env".into(),
-                OCI_PROXY_CONFIG_VARIABLE.into(),
-                proxy_image.clone(),
-            ],
+            &proxy_arguments,
             &proxy_environment,
             "start the OCI allowlist proxy",
         )?;
@@ -2102,6 +2086,49 @@ impl OciNetworkResources {
             self.armed = false;
         }
     }
+}
+
+fn oci_proxy_run_arguments(
+    job: &SandboxJob,
+    names: &OciResourceNames,
+    proxy_image: &str,
+) -> Result<Vec<String>, SandboxHelperError> {
+    let runtime = job
+        .oci_runtime
+        .as_ref()
+        .ok_or_else(|| SandboxHelperError::Setup("OCI runtime is not configured".into()))?;
+    let runtime_kind = oci_runtime_kind(runtime).ok_or_else(|| {
+        SandboxHelperError::Setup("OCI runtime must be the Docker or Podman executable".into())
+    })?;
+    let mut arguments = vec![
+        "run".into(),
+        "--detach".into(),
+        "--rm".into(),
+        "--pull=never".into(),
+    ];
+    if runtime_kind == OciRuntimeKind::Podman {
+        let (uid, gid) = oci_mount_identity(&job.process.cwd)?;
+        arguments.extend([
+            "--userns=keep-id".into(),
+            "--user".into(),
+            format!("{uid}:{gid}"),
+        ]);
+    }
+    arguments.extend([
+        "--network".into(),
+        names.internal_network.clone(),
+        "--read-only".into(),
+        "--cap-drop=ALL".into(),
+        "--security-opt=no-new-privileges".into(),
+        "--pids-limit=16".into(),
+        "--memory=67108864".into(),
+        "--name".into(),
+        names.proxy.clone(),
+        "--env".into(),
+        OCI_PROXY_CONFIG_VARIABLE.into(),
+        proxy_image.into(),
+    ]);
+    Ok(arguments)
 }
 
 impl Drop for OciNetworkResources {
@@ -3676,8 +3703,9 @@ mod tests {
     use super::{
         AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
         atomic_create, atomic_write, authority, host_process_limits_apply, non_public_ip,
-        oci_command, oci_remove_arguments, proposed_write_bytes, redact_proxy_credential,
-        resolve_oci_origins, tls_server_name, validate_process_spec,
+        oci_command, oci_proxy_run_arguments, oci_remove_arguments, oci_resource_names,
+        proposed_write_bytes, redact_proxy_credential, resolve_oci_origins, tls_server_name,
+        validate_process_spec,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::{native_helper_diagnostics, native_target_pid};
@@ -4025,6 +4053,12 @@ mod tests {
         );
         assert!(oci_remove_arguments(PathBuf::from("/usr/bin/unknown").as_path(), "job").is_none());
 
+        let names = oci_resource_names(&job.job_id);
+        let proxy_image = format!("sha256:{}", "b".repeat(64));
+        let docker_proxy =
+            oci_proxy_run_arguments(&job, &names, &proxy_image).expect("Docker proxy arguments");
+        assert!(!docker_proxy.contains(&"--userns=keep-id".into()));
+
         job.oci_runtime = Some(PathBuf::from("/usr/bin/podman"));
         let podman = oci_command(&job, None).expect("Podman command");
         assert!(
@@ -4032,6 +4066,10 @@ mod tests {
                 .get_args()
                 .any(|argument| argument == "--userns=keep-id")
         );
+        let podman_proxy =
+            oci_proxy_run_arguments(&job, &names, &proxy_image).expect("Podman proxy arguments");
+        assert!(podman_proxy.contains(&"--userns=keep-id".into()));
+        assert!(podman_proxy.contains(&"--user".into()));
 
         job.obligations
             .network_destinations
