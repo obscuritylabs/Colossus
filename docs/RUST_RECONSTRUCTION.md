@@ -80,10 +80,12 @@ obsolete Go launcher.
   proxy credentials, unlisted origins, raw-loopback bypass, WFP cleanup, and credential
   redaction. Networked effects fail closed if the package-scoped WFP or loopback setup is
   unavailable.
-- Live Docker acceptance for bind mounts, immutable/preloaded workload and proxy images,
+- Live Docker and Podman acceptance for bind mounts, immutable/preloaded workload and
+  proxy images,
   environment clearing, read-only roots, proxy-only networking, raw-egress denial,
-  timeouts, cancellation cleanup, and audited unknown outcomes. The same suite is wired
-  into Linux CI for Podman revalidation. Live OPA acceptance covers readiness,
+  timeouts, cancellation cleanup, and audited unknown outcomes. The structured-result
+  suite passed locally on Podman 5.8.5 arm64 and remains wired into Linux CI. Live OPA
+  acceptance covers readiness,
   allow/deny, approval proof
   re-evaluation, post-effect denial, invalid decisions, outages, decision-log warnings,
   pinned CA trust, and mutual TLS client identity.
@@ -326,8 +328,8 @@ obligations to be present in the YAML configuration.
 This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
 cutover. The following planned work remains:
 
-- Podman revalidation of the new proxy-only network path and the first green native
-  Windows authenticated allowlist-proxy matrix. Native macOS/Linux isolation, Windows
+- The first green remote Podman proxy-only and native Windows authenticated
+  allowlist-proxy matrices. Native macOS/Linux isolation, Windows
   AppContainer/Job Object filesystem plus authenticated WFP proxy-only network isolation,
   live Docker execution/recovery, OCI
   command and allowlist-proxy hardening, the native allowlist proxy, authenticated

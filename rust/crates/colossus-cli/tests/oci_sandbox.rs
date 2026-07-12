@@ -27,6 +27,20 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
         .expect("run colossus")
 }
 
+fn process_result(output: Output, context: &str) -> Value {
+    assert!(
+        output.status.success(),
+        "{context}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "{context} returned invalid JSON ({error}): {}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    })
+}
+
 fn containers(runtime: &Path) -> Vec<String> {
     let output = Command::new(runtime)
         .args([
@@ -166,12 +180,8 @@ sandbox:
             "printf ok > result.txt && cat result.txt",
         ],
     );
-    assert!(
-        write.status.success(),
-        "{}",
-        String::from_utf8_lossy(&write.stderr)
-    );
-    let write: Value = serde_json::from_slice(&write.stdout).expect("write result");
+    let write = process_result(write, "mounted write");
+    assert_eq!(write["success"], true, "mounted write failed: {write}");
     assert_eq!(
         BASE64
             .decode(write["stdout_base64"].as_str().expect("stdout"))
@@ -196,13 +206,11 @@ sandbox:
             "SAFE=yes",
         ],
     );
-    assert!(
-        environment.status.success(),
-        "{}",
-        String::from_utf8_lossy(&environment.stderr)
+    let environment = process_result(environment, "environment filtering");
+    assert_eq!(
+        environment["success"], true,
+        "environment command failed: {environment}"
     );
-    let environment: Value =
-        serde_json::from_slice(&environment.stdout).expect("environment result");
     assert_eq!(
         BASE64
             .decode(
@@ -228,9 +236,10 @@ sandbox:
             "printf escaped > /etc/colossus-escape",
         ],
     );
-    assert!(
-        !root_write.status.success(),
-        "read-only container root unexpectedly accepted a write"
+    let root_write = process_result(root_write, "read-only root write");
+    assert_eq!(
+        root_write["success"], false,
+        "read-only container root unexpectedly accepted a write: {root_write}"
     );
 
     let network = run(
@@ -239,17 +248,18 @@ sandbox:
         &[
             "process",
             "run",
-            "/bin/sh",
+            "/usr/local/bin/python3",
             "--cwd",
             allowed.to_str().expect("allowed path"),
             "--",
             "-c",
-            "/usr/local/bin/python3 -c \"import socket; socket.create_connection(('1.1.1.1', 53), 0.5)\"",
+            "import socket; socket.create_connection(('1.1.1.1', 53), 0.5)",
         ],
     );
-    assert!(
-        !network.status.success(),
-        "network-none container unexpectedly connected"
+    let network = process_result(network, "network-none connection");
+    assert_eq!(
+        network["success"], false,
+        "network-none container unexpectedly connected: {network}"
     );
 
     let network_config = directory.path().join("network-config.yaml");
@@ -278,10 +288,20 @@ sandbox:
             "import urllib.request; print(urllib.request.urlopen('http://example.com', timeout=4).status)",
         ],
     );
-    assert!(
-        allowed_network.status.success(),
-        "approved OCI proxy request failed: {}",
-        String::from_utf8_lossy(&allowed_network.stderr)
+    let allowed_network = process_result(allowed_network, "approved HTTP proxy request");
+    assert_eq!(
+        allowed_network["success"], true,
+        "approved OCI proxy request failed: {allowed_network}"
+    );
+    assert_eq!(
+        BASE64
+            .decode(
+                allowed_network["stdout_base64"]
+                    .as_str()
+                    .expect("HTTP stdout")
+            )
+            .expect("HTTP base64"),
+        b"200\n"
     );
     let allowed_tls = run(
         binary,
@@ -297,10 +317,16 @@ sandbox:
             "import urllib.request; print(urllib.request.urlopen('https://example.com', timeout=4).status)",
         ],
     );
-    assert!(
-        allowed_tls.status.success(),
-        "approved OCI TLS proxy request failed: {}",
-        String::from_utf8_lossy(&allowed_tls.stderr)
+    let allowed_tls = process_result(allowed_tls, "approved HTTPS proxy request");
+    assert_eq!(
+        allowed_tls["success"], true,
+        "approved OCI TLS proxy request failed: {allowed_tls}"
+    );
+    assert_eq!(
+        BASE64
+            .decode(allowed_tls["stdout_base64"].as_str().expect("HTTPS stdout"))
+            .expect("HTTPS base64"),
+        b"200\n"
     );
     let denied_network = run(
         binary,
@@ -316,9 +342,10 @@ sandbox:
             "import urllib.request; urllib.request.urlopen('http://example.org', timeout=2)",
         ],
     );
-    assert!(
-        !denied_network.status.success(),
-        "unapproved OCI proxy destination unexpectedly succeeded"
+    let denied_network = process_result(denied_network, "unapproved proxy destination");
+    assert_eq!(
+        denied_network["success"], false,
+        "unapproved OCI proxy destination unexpectedly succeeded: {denied_network}"
     );
     let bypass = run(
         binary,
@@ -334,9 +361,10 @@ sandbox:
             "import socket; socket.create_connection(('1.1.1.1', 53), 0.5)",
         ],
     );
-    assert!(
-        !bypass.status.success(),
-        "networked OCI workload bypassed its internal proxy-only network"
+    let bypass = process_result(bypass, "raw OCI network bypass");
+    assert_eq!(
+        bypass["success"], false,
+        "networked OCI workload bypassed its internal proxy-only network: {bypass}"
     );
     assert_eq!(containers(&runtime), before, "OCI proxy container leaked");
     assert_eq!(
