@@ -112,6 +112,13 @@ and replaced by its bounded hash descriptor. The same suite exercises decision r
 approval re-evaluation, invalid responses, outages, readiness and decision-log warnings,
 post-effect denial, and pinned-CA mutual TLS.
 
+Built-in policy cannot disable post-effect authorization for filesystem reads, network
+responses, remote-provider output, subprocess output, or memory retrieval. Category-level
+conformance and concrete adapter tests execute private output into quarantine, deny the
+post-effect decision, and verify that no caller output, completion event, error text, or
+audit payload contains the denied bytes. Streaming denial is latched before any released
+observer is called, even if an adapter attempts to continue after the first rejection.
+
 Subprocesses never use a shell. The parent sends a signed, expiring, one-use job document
 to a hidden helper over stdin. The signature binds the executable, literal arguments,
 working directory, environment, policy decision, permit nonce, obligations, and request

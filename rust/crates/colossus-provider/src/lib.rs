@@ -1955,12 +1955,12 @@ fn non_public_ip(ip: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use colossus_contracts::{DecisionOutcome, ProviderEvent};
+    use colossus_contracts::{DecisionOutcome, EffectPhase, PolicyDecision, ProviderEvent};
     use colossus_policy::{
         BuiltInPolicy, DenyApproval, EffectGateway, ExecutionError, GatewayError,
         ReleasedEffectObserver, ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
     };
-    use colossus_ports::EventJournal;
+    use colossus_ports::{EventJournal, PolicyDecisionPoint};
     use colossus_testkit::InMemoryEventJournal;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
@@ -1970,6 +1970,27 @@ mod tests {
 
     struct CountingCredentialResolver {
         calls: AtomicUsize,
+    }
+
+    struct ProviderPostDenyPolicy(BuiltInPolicy);
+
+    #[async_trait]
+    impl PolicyDecisionPoint for ProviderPostDenyPolicy {
+        async fn decide(
+            &self,
+            request: &EffectRequest,
+        ) -> Result<PolicyDecision, colossus_ports::PolicyError> {
+            let mut decision = self.0.decide(request).await?;
+            if request.phase == EffectPhase::PostEffect {
+                decision.outcome = DecisionOutcome::Deny;
+                decision.reason = "provider content denied by post-effect policy".into();
+            }
+            Ok(decision)
+        }
+
+        async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
+            self.0.doctor().await
+        }
     }
 
     impl CountingCredentialResolver {
@@ -2443,6 +2464,65 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(event_types.contains(&"effect.release_requested.v1".into()));
         assert!(event_types.contains(&"effect.completed.v1".into()));
+    }
+
+    #[tokio::test]
+    async fn actual_provider_content_denied_post_effect_never_reaches_the_caller() {
+        let secret = "provider-private-content";
+        let (base_url, server) = one_response_server(json!({
+            "id": "response-private",
+            "choices": [{"message": {"role": "assistant", "content": secret}}]
+        }))
+        .await;
+        let profile = ProviderProfile::new(
+            "local",
+            ProviderKind::OpenAiCompatible,
+            "unit-model",
+            Some(base_url),
+            None,
+            5_000,
+        )
+        .expect("profile");
+        let origin = profile
+            .network_origin()
+            .expect("origin")
+            .expect("network provider origin");
+        let executor = ProviderExecutor::new(profile.clone());
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+            .with_network_destination(origin)
+            .with_post_effect(true);
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(ProviderPostDenyPolicy(policy)),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["provider.call".into()]),
+            [12_u8; 32],
+        );
+        let error = gateway
+            .execute(provider_request(&profile), &executor)
+            .await
+            .expect_err("post-effect provider denial");
+        assert!(matches!(error, GatewayError::Denied(_)));
+        assert!(!error.to_string().contains(secret));
+        let request = server.await.expect("server task");
+        assert!(request.contains("POST /v1/chat/completions HTTP/1.1"));
+
+        let events = journal.read_global(1, 50).expect("journal events");
+        let event_types = events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"effect.started.v1"));
+        assert!(event_types.contains(&"effect.release_requested.v1"));
+        assert!(event_types.contains(&"effect.release_denied.v1"));
+        assert!(!event_types.contains(&"effect.completed.v1"));
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("event evidence")
+                .contains(secret)
+        );
     }
 
     #[tokio::test]

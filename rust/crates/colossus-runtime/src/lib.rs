@@ -9576,27 +9576,27 @@ mod tests {
         ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
         GatewayMemoryRetriever, GatewayToolExecutor, GatewayWorkflowEffects,
         InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor,
-        MemoryEmbeddingConfig, PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
-        PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
-        ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig, SkillEffectExecutor,
-        SkillOperation, SkillScaffoldResult, TraceToolExecutor, WorkEffectExecutor,
-        goal_objective_from_plan, recover_interrupted_subagents, recover_unknown_effects,
-        terminal_actor,
+        MemoryEmbeddingConfig, MemoryOperation, PackProcessDeclaration, PackProcessExecutor,
+        PackToolEffectInput, PresentationEffectExecutor, PresentationOperation,
+        ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig,
+        SkillEffectExecutor, SkillOperation, SkillScaffoldResult, TraceToolExecutor,
+        WorkEffectExecutor, goal_objective_from_plan, recover_interrupted_subagents,
+        recover_unknown_effects, terminal_actor,
     };
     use colossus_contracts::{
-        Actor, ActorType, CredentialReference, DecisionOutcome, EffectRequest, EventClassification,
-        ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus, ModelMessage,
-        ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep, ProviderEvent,
-        ProviderRoute, ProviderTurn, QuarantinedEffectResult, ReplPreferences, SubagentStatus,
-        TaskStatus, ToolCall,
+        Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
+        EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope,
+        MemoryStatus, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord,
+        PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ProviderRoute, ProviderTurn,
+        QuarantinedEffectResult, ReplPreferences, SubagentStatus, TaskStatus, ToolCall,
     };
     use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
     use colossus_policy::{
         BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request,
     };
     use colossus_ports::{
-        EventJournal, ExternalWorkQueue, ModelProvider, ModelProviderError, PresentationRepository,
-        ProjectionStore, SkillRepository, ToolExecutor,
+        EventJournal, ExternalWorkQueue, ModelProvider, ModelProviderError, PolicyDecisionPoint,
+        PresentationRepository, ProjectionStore, SkillRepository, ToolExecutor,
     };
     use colossus_presentation::EventSourcedPresentationRepository;
     use colossus_provider::ProviderKind;
@@ -9619,6 +9619,29 @@ mod tests {
     }
 
     struct SecretEchoProcess;
+
+    struct PrivateOutputProcess;
+
+    struct RuntimePostDenyPolicy(BuiltInPolicy);
+
+    #[async_trait::async_trait]
+    impl PolicyDecisionPoint for RuntimePostDenyPolicy {
+        async fn decide(
+            &self,
+            request: &EffectRequest,
+        ) -> Result<PolicyDecision, colossus_ports::PolicyError> {
+            let mut decision = self.0.decide(request).await?;
+            if request.phase == EffectPhase::PostEffect {
+                decision.outcome = DecisionOutcome::Deny;
+                decision.reason = "runtime content denied by post-effect policy".into();
+            }
+            Ok(decision)
+        }
+
+        async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
+            self.0.doctor().await
+        }
+    }
 
     struct UnusedToolExecutor;
 
@@ -9840,6 +9863,29 @@ mod tests {
                     "stderr_base64": BASE64.encode([]),
                     "exit_code": 0,
                     "truncated": false
+                }))
+                .map_err(|error| colossus_policy::ExecutionError::Failed(error.to_string()))?,
+                effect_succeeded: true,
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl colossus_policy::EffectExecutor for PrivateOutputProcess {
+        async fn execute(
+            &self,
+            _request: &EffectRequest,
+            _permit: colossus_policy::ExecutionPermit,
+        ) -> Result<QuarantinedEffectResult, colossus_policy::ExecutionError> {
+            use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+            Ok(QuarantinedEffectResult {
+                media_type: "application/json".into(),
+                bytes: serde_json::to_vec(&json!({
+                    "stdout_base64": BASE64.encode("process-private-content"),
+                    "stderr_base64": BASE64.encode([]),
+                    "exit_code": 0,
+                    "output_truncated": false,
                 }))
                 .map_err(|error| colossus_policy::ExecutionError::Failed(error.to_string()))?,
                 effect_succeeded: true,
@@ -11047,6 +11093,170 @@ surprise: true
                 .expect("events")
                 .iter()
                 .any(|event| event.event_type == "effect.release_requested.v1")
+        );
+    }
+
+    #[tokio::test]
+    async fn subprocess_content_denied_post_effect_never_reaches_the_tool_caller() {
+        let secret = "process-private-content";
+        let workspace = tempdir().expect("workspace");
+        let executable = std::env::current_exe()
+            .expect("current executable")
+            .canonicalize()
+            .expect("canonical executable");
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("shell.run", DecisionOutcome::Allow)
+            .with_sandbox("native", "post-deny-process", false)
+            .with_filesystem_root(executable.display().to_string(), "execute")
+            .with_filesystem_read_root(workspace.path().display().to_string())
+            .with_post_effect(true);
+        let gateway = Arc::new(EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(RuntimePostDenyPolicy(policy)),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["shell.run".into()]),
+            [54_u8; 32],
+        ));
+        let executor = GatewayToolExecutor {
+            gateway,
+            filesystem: Arc::new(colossus_sandbox::FilesystemExecutor::new()),
+            process: Some(Arc::new(PrivateOutputProcess)),
+            http: Arc::new(colossus_sandbox::HttpExecutor::new()),
+            work: None,
+            memory: None,
+            skills: None,
+            pack_processes: None,
+            integrations: None,
+            mcp: None,
+            workspace: workspace.path().to_path_buf(),
+            repository_id: "repo-test".into(),
+            executables: vec![executable.clone()],
+        };
+        let error = executor
+            .execute(
+                ToolCall {
+                    call_id: "process-post-deny".into(),
+                    name: "shell.run".into(),
+                    arguments: json!({
+                        "argv": [executable.display().to_string()],
+                        "cwd": ".",
+                    }),
+                },
+                ExecutionContext {
+                    correlation_id: "process-post-deny".into(),
+                    run_id: Some("process-post-deny".into()),
+                    ..ExecutionContext::default()
+                },
+            )
+            .await
+            .expect_err("subprocess post-effect denial");
+        assert!(matches!(error, colossus_ports::ToolError::Denied(_)));
+        assert!(error.to_string().contains("post-effect release denied"));
+        assert!(!error.to_string().contains(secret));
+
+        let events = journal.read_global(1, 30).expect("effect events");
+        let event_types = events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"effect.started.v1"));
+        assert!(event_types.contains(&"effect.release_requested.v1"));
+        assert!(event_types.contains(&"effect.release_denied.v1"));
+        assert!(!event_types.contains(&"effect.completed.v1"));
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("effect evidence")
+                .contains(secret)
+        );
+    }
+
+    #[tokio::test]
+    async fn actual_memory_content_denied_post_effect_never_reaches_the_caller() {
+        let secret = "memory-private-content";
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+            colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+        );
+        let repository: Arc<dyn colossus_ports::MemoryRepository> = Arc::new(
+            colossus_memory::EventSourcedMemoryRepository::new(Arc::clone(&journal)),
+        );
+        let service = Arc::new(
+            colossus_memory::MemoryService::new(
+                Arc::clone(&journal),
+                repository,
+                external_work_queue(Arc::clone(&journal)),
+                Arc::new(colossus_memory::UnavailableMemoryIndex::new(
+                    "post-deny fixture index",
+                )),
+                sessions,
+            )
+            .expect("memory service"),
+        );
+        let record = service
+            .create(
+                MemoryScope::Global,
+                "fact",
+                1.0,
+                secret,
+                "post-deny fixture",
+                None,
+                Actor {
+                    actor_type: ActorType::System,
+                    id: "memory-fixture".into(),
+                },
+            )
+            .await
+            .expect("memory fixture");
+        let baseline = journal
+            .read_global(1, 100)
+            .expect("baseline events")
+            .last()
+            .map_or(0, |event| event.global_sequence);
+        let executor = MemoryEffectExecutor {
+            service,
+            repository_id: "repo-test".into(),
+        };
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("memory.read", DecisionOutcome::Allow)
+            .with_post_effect(true);
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(RuntimePostDenyPolicy(policy)),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["memory.read".into()]),
+            [53_u8; 32],
+        );
+        let mut request = effect_request(
+            terminal_actor(),
+            "memory.read",
+            record.id.clone(),
+            serde_json::to_value(MemoryOperation::Read { id: record.id })
+                .expect("memory operation"),
+        );
+        request.capabilities = vec!["memory.read".into()];
+        let error = gateway
+            .execute(request, &executor)
+            .await
+            .expect_err("memory post-effect denial");
+        assert!(error.to_string().contains("post-effect release denied"));
+        assert!(!error.to_string().contains(secret));
+
+        let events = journal
+            .read_global(baseline.saturating_add(1), 30)
+            .expect("effect events");
+        let event_types = events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"effect.started.v1"));
+        assert!(event_types.contains(&"effect.release_requested.v1"));
+        assert!(event_types.contains(&"effect.release_denied.v1"));
+        assert!(!event_types.contains(&"effect.completed.v1"));
+        assert!(
+            !serde_json::to_string(&events)
+                .expect("effect evidence")
+                .contains(secret)
         );
     }
 

@@ -3417,13 +3417,15 @@ mod tests {
         validate_process_spec,
     };
     use base64::Engine as _;
-    use colossus_contracts::{DecisionOutcome, PolicyObligations};
+    use colossus_contracts::{
+        DecisionOutcome, EffectPhase, EffectRequest, PolicyDecision, PolicyObligations,
+    };
     use colossus_policy::{
         BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request, system_actor,
     };
-    use colossus_ports::EventJournal;
+    use colossus_ports::{EventJournal, PolicyDecisionPoint};
     use colossus_testkit::InMemoryEventJournal;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::{
         collections::BTreeMap,
         net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -3435,6 +3437,27 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
     };
+
+    struct AdapterPostDenyPolicy(BuiltInPolicy);
+
+    #[async_trait::async_trait]
+    impl PolicyDecisionPoint for AdapterPostDenyPolicy {
+        async fn decide(
+            &self,
+            request: &EffectRequest,
+        ) -> Result<PolicyDecision, colossus_ports::PolicyError> {
+            let mut decision = self.0.decide(request).await?;
+            if request.phase == EffectPhase::PostEffect {
+                decision.outcome = DecisionOutcome::Deny;
+                decision.reason = "adapter content denied by post-effect policy".into();
+            }
+            Ok(decision)
+        }
+
+        async fn doctor(&self) -> Result<Value, colossus_ports::PolicyError> {
+            self.0.doctor().await
+        }
+    }
 
     #[test]
     fn atomic_write_replaces_content_without_following_leaf_symlinks() {
@@ -3729,6 +3752,111 @@ mod tests {
         assert!(command.get_envs().any(|(name, value)| {
             name == "HTTPS_PROXY" && value.is_some_and(|value| value == "http://10.88.0.2:18080")
         }));
+    }
+
+    #[tokio::test]
+    async fn filesystem_and_http_content_denied_post_effect_never_reaches_the_caller() {
+        let directory = tempdir().expect("directory");
+        let file_secret = "filesystem-private-content";
+        let file = directory.path().join("private.txt");
+        std::fs::write(&file, file_secret).expect("file fixture");
+        let file_journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let file_policy = BuiltInPolicy::offline_default()
+            .with_action("filesystem.read", DecisionOutcome::Allow)
+            .with_filesystem_read_root(directory.path().display().to_string())
+            .with_post_effect(true);
+        let file_gateway = EffectGateway::new(
+            Arc::clone(&file_journal),
+            Arc::new(AdapterPostDenyPolicy(file_policy)),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["filesystem.read".into()]),
+            [51_u8; 32],
+        );
+        let mut file_request = effect_request(
+            system_actor("filesystem-post-deny"),
+            "filesystem.read",
+            file.display().to_string(),
+            json!({}),
+        );
+        file_request.capabilities = vec!["filesystem.read".into()];
+        let file_error = file_gateway
+            .execute(file_request, &FilesystemExecutor::new())
+            .await
+            .expect_err("filesystem post-effect denial");
+        assert!(
+            file_error
+                .to_string()
+                .contains("post-effect release denied")
+        );
+        assert!(!file_error.to_string().contains(file_secret));
+        let file_events = file_journal.read_global(1, 30).expect("file events");
+        assert!(
+            file_events
+                .iter()
+                .any(|event| event.event_type == "effect.release_denied.v1")
+        );
+        assert!(
+            file_events
+                .iter()
+                .all(|event| event.event_type != "effect.completed.v1")
+        );
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
+        let address = listener.local_addr().expect("address");
+        let http_secret = "network-private-content";
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).await.expect("read");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{http_secret}",
+                http_secret.len()
+            );
+            stream.write_all(response.as_bytes()).await.expect("write");
+        });
+        let origin = format!("http://{address}");
+        let url = format!("{origin}/private");
+        let http_journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let http_policy = BuiltInPolicy::offline_default()
+            .with_action("network.http", DecisionOutcome::Allow)
+            .with_network_destination(&origin)
+            .with_post_effect(true);
+        let http_gateway = EffectGateway::new(
+            Arc::clone(&http_journal),
+            Arc::new(AdapterPostDenyPolicy(http_policy)),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["network.http".into()]),
+            [52_u8; 32],
+        );
+        let mut http_request = effect_request(
+            system_actor("http-post-deny"),
+            "network.http",
+            url,
+            json!({"method": "GET", "headers": {}}),
+        );
+        http_request.capabilities = vec!["network.http".into()];
+        let http_error = http_gateway
+            .execute(http_request, &HttpExecutor::new())
+            .await
+            .expect_err("HTTP post-effect denial");
+        assert!(
+            http_error
+                .to_string()
+                .contains("post-effect release denied")
+        );
+        assert!(!http_error.to_string().contains(http_secret));
+        let http_events = http_journal.read_global(1, 30).expect("HTTP events");
+        assert!(
+            http_events
+                .iter()
+                .any(|event| event.event_type == "effect.release_denied.v1")
+        );
+        assert!(
+            http_events
+                .iter()
+                .all(|event| event.event_type != "effect.completed.v1")
+        );
+        server.await.expect("server");
     }
 
     #[cfg(unix)]

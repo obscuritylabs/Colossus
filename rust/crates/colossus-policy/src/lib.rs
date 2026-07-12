@@ -1449,6 +1449,10 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             .unwrap_or_else(|| self.obligations.clone());
         if request.action.starts_with("filesystem.")
             || is_process_action(&request.action)
+            || matches!(
+                request.action.as_str(),
+                "provider.openai.responses" | "provider.openai.chat" | "provider.models"
+            )
             || request.action.starts_with("task.")
             || request.action.starts_with("decision.")
             || request.action.starts_with("plan.")
@@ -1983,21 +1987,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_disclosures_always_require_post_effect_release() {
-        let policy = BuiltInPolicy::offline_default()
-            .with_action("memory.search", DecisionOutcome::Allow)
-            .with_post_effect(false);
-        let decision = policy
-            .decide(&effect_request(
-                system_actor("memory-test"),
-                "memory.search",
-                "session:one",
-                serde_json::json!({"query": "rust"}),
-            ))
-            .await
-            .expect("decision");
-        assert_eq!(decision.outcome, DecisionOutcome::Allow);
-        assert!(decision.obligations.require_post_effect);
+    async fn sensitive_disclosures_always_require_post_effect_release() {
+        let actions = [
+            "filesystem.read",
+            "network.http",
+            "provider.openai.responses",
+            "process.spawn",
+            "memory.search",
+        ];
+        let mut policy = BuiltInPolicy::offline_default().with_post_effect(false);
+        for action in actions {
+            policy = policy.with_action(action, DecisionOutcome::Allow);
+        }
+        for action in actions {
+            let decision = policy
+                .decide(&effect_request(
+                    system_actor(format!("{action}-test")),
+                    action,
+                    "test:resource",
+                    serde_json::json!({"query": "rust"}),
+                ))
+                .await
+                .expect(action);
+            assert_eq!(decision.outcome, DecisionOutcome::Allow, "{action}");
+            assert!(decision.obligations.require_post_effect, "{action}");
+        }
     }
 
     #[tokio::test]
@@ -2327,6 +2341,178 @@ mod tests {
 
         async fn doctor(&self) -> Result<serde_json::Value, colossus_ports::PolicyError> {
             Ok(serde_json::json!({"ready":true}))
+        }
+    }
+
+    #[derive(Clone)]
+    struct CategoryPostDenyPolicy {
+        filesystem: Vec<colossus_contracts::FilesystemGrant>,
+        network_destinations: Vec<String>,
+    }
+
+    #[async_trait]
+    impl colossus_ports::PolicyDecisionPoint for CategoryPostDenyPolicy {
+        async fn decide(
+            &self,
+            request: &colossus_contracts::EffectRequest,
+        ) -> Result<colossus_contracts::PolicyDecision, colossus_ports::PolicyError> {
+            let mut obligations = super::default_obligations();
+            obligations.sandbox_backend = "native".into();
+            obligations.sandbox_profile = "post-deny-conformance".into();
+            obligations.filesystem = self.filesystem.clone();
+            obligations.network_destinations = self.network_destinations.clone();
+            obligations.require_post_effect = true;
+            Ok(colossus_contracts::PolicyDecision {
+                decision_id: uuid::Uuid::now_v7().to_string(),
+                policy_revision: "post-deny-conformance-v1".into(),
+                outcome: if request.phase == colossus_contracts::EffectPhase::PostEffect {
+                    DecisionOutcome::Deny
+                } else {
+                    DecisionOutcome::Allow
+                },
+                reason: "post-effect conformance decision".into(),
+                obligations,
+            })
+        }
+
+        async fn doctor(&self) -> Result<serde_json::Value, colossus_ports::PolicyError> {
+            Ok(serde_json::json!({"ready": true}))
+        }
+    }
+
+    struct SecretExecutor {
+        calls: AtomicUsize,
+        secret: String,
+    }
+
+    #[async_trait]
+    impl EffectExecutor for SecretExecutor {
+        async fn execute(
+            &self,
+            _request: &colossus_contracts::EffectRequest,
+            _permit: ExecutionPermit,
+        ) -> Result<QuarantinedEffectResult, ExecutionError> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            Ok(QuarantinedEffectResult {
+                media_type: "text/plain".into(),
+                bytes: self.secret.as_bytes().to_vec(),
+                effect_succeeded: true,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn every_sensitive_output_category_denies_after_execution_before_actor_release() {
+        let directory = tempfile::tempdir().expect("directory");
+        let file = directory.path().join("private.txt");
+        std::fs::write(&file, "filesystem-private-content").expect("file fixture");
+        let executable = std::env::current_exe()
+            .expect("current executable")
+            .canonicalize()
+            .expect("canonical executable");
+        let origin = "https://example.test";
+        let policy = CategoryPostDenyPolicy {
+            filesystem: vec![
+                colossus_contracts::FilesystemGrant {
+                    root: directory.path().display().to_string(),
+                    mode: "read".into(),
+                },
+                colossus_contracts::FilesystemGrant {
+                    root: executable.display().to_string(),
+                    mode: "execute".into(),
+                },
+            ],
+            network_destinations: vec![origin.into()],
+        };
+        let requests = [
+            effect_request(
+                system_actor("filesystem-post-deny"),
+                "filesystem.read",
+                file.display().to_string(),
+                serde_json::json!({}),
+            ),
+            effect_request(
+                system_actor("network-post-deny"),
+                "network.http",
+                format!("{origin}/private"),
+                serde_json::json!({"method": "GET"}),
+            ),
+            effect_request(
+                system_actor("provider-post-deny"),
+                "provider.openai.responses",
+                format!("{origin}/v1/responses"),
+                serde_json::json!({"prompt": "private"}),
+            ),
+            effect_request(
+                system_actor("process-post-deny"),
+                "process.spawn",
+                executable.display().to_string(),
+                serde_json::json!({
+                    "cwd": directory.path(),
+                    "environment": {},
+                }),
+            ),
+            effect_request(
+                system_actor("memory-post-deny"),
+                "memory.search",
+                "session:test",
+                serde_json::json!({"query": "private"}),
+            ),
+        ];
+
+        for request in requests {
+            let action = request.action.clone();
+            let secret = format!("{action}-private-content");
+            let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+            let gateway = EffectGateway::new(
+                Arc::clone(&journal),
+                Arc::new(policy.clone()),
+                Arc::new(AllowApproval {
+                    approved_by: "operator".into(),
+                }),
+                SafetyKernel::new([]),
+                [33_u8; 32],
+            );
+            let executor = SecretExecutor {
+                calls: AtomicUsize::new(0),
+                secret: secret.clone(),
+            };
+            let error = gateway
+                .execute(request, &executor)
+                .await
+                .expect_err(&action);
+            assert!(
+                matches!(error, GatewayError::Denied(_)),
+                "{action}: {error}"
+            );
+            assert_eq!(executor.calls.load(Ordering::Acquire), 1, "{action}");
+            assert!(!error.to_string().contains(&secret), "{action}");
+
+            let events = journal.read_global(1, 30).expect(&action);
+            let event_types = events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>();
+            assert!(event_types.contains(&"effect.started.v1"), "{action}");
+            assert!(
+                event_types.contains(&"effect.release_requested.v1"),
+                "{action}"
+            );
+            assert!(
+                event_types.contains(&"effect.release_denied.v1"),
+                "{action}"
+            );
+            assert!(!event_types.contains(&"effect.completed.v1"), "{action}");
+            assert!(
+                !event_types.contains(&"effect.chunk_released.v1"),
+                "{action}"
+            );
+            assert!(
+                !serde_json::to_string(&events)
+                    .expect("event evidence")
+                    .contains(&secret),
+                "{action}"
+            );
         }
     }
 

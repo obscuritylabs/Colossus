@@ -1046,8 +1046,11 @@ A reconstruction is complete only when all applicable checks pass:
   content and credential-reference disclosure with hard-secret hashing, pinned-CA mTLS,
   bundle revision, strict invalid responses, outage/readiness, and decision-log warnings;
   gateway tests additionally prove oversized input is audited and fails closed.
-- [ ] Two-phase file, network, provider, subprocess, and memory tests prove denied content
-  never reaches the requester.
+- [x] Built-in policy forces two-phase release for file, network, remote-provider,
+  subprocess, and memory disclosures even when the global option is disabled. Shared
+  category conformance plus real filesystem, loopback HTTP, provider-normalization,
+  subprocess-tool, and canonical-memory adapter tests prove post-denied bytes never reach
+  the caller, errors, completion events, or audit evidence.
 - [ ] In-memory and embedded journals/repositories plus Tantivy and Chroma indexes pass
   the shared conformance contract; canonical memory works during index outage/rebuild.
 - [x] Research and extension adapters pass shared factory-reopen conformance for canonical
