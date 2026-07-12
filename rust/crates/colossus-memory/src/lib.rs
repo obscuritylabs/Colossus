@@ -1318,7 +1318,10 @@ mod tests {
     };
     use colossus_projection::JournalExternalWorkQueue;
     use colossus_session::EventSourcedSessionRepository;
-    use colossus_testkit::{InMemoryEventJournal, InMemoryProjectionStore};
+    use colossus_testkit::{
+        InMemoryEventJournal, InMemoryProjectionStore, assert_memory_index_conformance,
+        assert_memory_repository_conformance,
+    };
     use serde_json::json;
     use std::sync::{
         Arc,
@@ -1353,6 +1356,21 @@ mod tests {
             expires_at: None,
             superseded_by: None,
         }
+    }
+
+    #[test]
+    fn event_sourced_memory_repository_passes_shared_conformance() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        assert_memory_repository_conformance(|| {
+            Box::new(EventSourcedMemoryRepository::new(Arc::clone(&journal)))
+        });
+    }
+
+    #[tokio::test]
+    async fn tantivy_index_passes_shared_conformance() {
+        let directory = tempdir().expect("tempdir");
+        let index = TantivyMemoryIndex::open(directory.path()).expect("index");
+        assert_memory_index_conformance(&index).await;
     }
 
     #[test]
@@ -1836,7 +1854,7 @@ mod tests {
         let queue = work_queue(Arc::clone(&journal));
         let service =
             MemoryService::new(journal, repository, queue, index, sessions).expect("service");
-        service
+        let record = service
             .create(
                 MemoryScope::Global,
                 "fact",
@@ -1854,6 +1872,13 @@ mod tests {
         assert_eq!(
             service.index_status().await.expect("lag status")["ready"],
             false
+        );
+        assert_eq!(
+            service
+                .search("canonical event", None, None, 8)
+                .await
+                .expect("canonical fallback during failed rebuild"),
+            vec![record]
         );
         fixture.fail_rebuild.store(false, Ordering::Release);
         service.sync_index().await.expect("full replay");

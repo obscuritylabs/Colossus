@@ -1436,7 +1436,15 @@ fn user_actor() -> Actor {
 mod tests {
     use super::*;
     use colossus_session::EventSourcedSessionRepository;
-    use colossus_testkit::InMemoryEventJournal;
+    use colossus_testkit::{InMemoryEventJournal, assert_work_repository_conformance};
+
+    #[test]
+    fn event_sourced_work_repository_passes_shared_conformance() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        assert_work_repository_conformance(|| {
+            Box::new(EventSourcedWorkRepository::new(Arc::clone(&journal)))
+        });
+    }
 
     fn fixture() -> (Arc<dyn EventJournal>, Arc<dyn WorkRepository>, WorkService) {
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());

@@ -1,16 +1,20 @@
 //! Shared adapter conformance fixtures.
 
 use colossus_contracts::{
-    Actor, ActorType, AuditEvidence, EncryptedPayload, EventDisplayMode, EventEnvelope,
-    IntegrationAuth, IntegrationConnection, IntegrationKind, IntegrationOperation,
-    IntegrationStatus, NewEvent, PackInstallation, PackManifest, PackStatus, ProjectionBatch,
+    Actor, ActorType, AuditEvidence, DecisionPriority, DecisionSource, DecisionStatus,
+    EncryptedPayload, EventDisplayMode, EventEnvelope, GoalRecord, GoalStatus, IntegrationAuth,
+    IntegrationConnection, IntegrationKind, IntegrationOperation, IntegrationStatus, KeyDecision,
+    MemoryRecord, MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole, NewEvent,
+    PackInstallation, PackManifest, PackStatus, PlanRecord, PlanStatus, PlanStep, ProjectionBatch,
     ProjectionMutation, ProjectionWorkItem, PublisherTrust, ReplPreferences, ResearchClaim,
     ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus,
-    SignedCheckpoint, StreamDisplayMode, ThemeName, ToolSpec, TranscriptDensity,
+    SignedCheckpoint, StreamDisplayMode, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
+    ThemeName, ToolSpec, TranscriptDensity, WorkflowDefinition, WorkflowMetadata, WorkflowStep,
 };
 use colossus_ports::{
-    AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, PresentationRepository,
-    ProjectionStore, ResearchRepository, StoreError, VerificationReport,
+    AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, MemoryIndex,
+    MemoryRepository, PresentationRepository, ProjectionStore, ResearchRepository,
+    SessionRepository, StoreError, VerificationReport, WorkRepository, WorkflowRepository,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -459,6 +463,459 @@ pub fn assert_external_work_queue_conformance(
             .expect("batch acknowledge"),
         2
     );
+}
+
+/// Shared creation, append-only ordering, validation, and reconstruction checks for
+/// every canonical session repository adapter.
+pub fn assert_session_repository_conformance<F>(factory: F)
+where
+    F: Fn() -> Box<dyn SessionRepository>,
+{
+    let repository = factory();
+    assert!(
+        repository
+            .get_session("session-conformance")
+            .expect("missing session")
+            .is_none()
+    );
+    let actor = conformance_actor("session-user");
+    let created = repository
+        .create_session(
+            "session-conformance",
+            Some("Conformance session"),
+            actor.clone(),
+        )
+        .expect("create session");
+    assert_eq!(created.message_count, 0);
+    assert!(
+        repository
+            .create_session("session-conformance", Some("duplicate"), actor.clone())
+            .is_err()
+    );
+    for (role, content) in [
+        (ModelMessageRole::User, "Persist this Rust context."),
+        (ModelMessageRole::Assistant, "Context persisted."),
+    ] {
+        repository
+            .append_message(
+                "session-conformance",
+                "run-conformance",
+                ModelMessage {
+                    role,
+                    content: content.into(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                actor.clone(),
+            )
+            .expect("append message");
+    }
+    let reopened = factory();
+    let messages = reopened
+        .list_messages("session-conformance")
+        .expect("reconstructed messages");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].sequence, 1);
+    assert_eq!(messages[1].sequence, 2);
+    let summary = reopened
+        .get_session("session-conformance")
+        .expect("session")
+        .expect("reconstructed session");
+    assert_eq!(summary.message_count, 2);
+    assert_eq!(summary.last_run_id.as_deref(), Some("run-conformance"));
+    assert_eq!(
+        summary.last_user_preview.as_deref(),
+        Some("Persist this Rust context.")
+    );
+    assert_eq!(
+        reopened.list_sessions(10).expect("session list")[0].id,
+        "session-conformance"
+    );
+    assert!(
+        reopened
+            .append_message(
+                "missing-session",
+                "run-conformance",
+                ModelMessage {
+                    role: ModelMessageRole::User,
+                    content: "invalid".into(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                actor,
+            )
+            .is_err()
+    );
+}
+
+/// Shared lifecycle, filtering, immutable-identity, and reconstruction checks for every
+/// canonical work repository adapter.
+pub fn assert_work_repository_conformance<F>(factory: F)
+where
+    F: Fn() -> Box<dyn WorkRepository>,
+{
+    const AT: &str = "2026-07-12T00:00:00Z";
+    const LATER: &str = "2026-07-12T00:01:00Z";
+    let actor = conformance_actor("work-user");
+    let repository = factory();
+
+    let task = TaskRecord {
+        id: "task-conformance".into(),
+        session_id: "session-conformance".into(),
+        title: "Prove repository behavior".into(),
+        description: "Shared adapter contract".into(),
+        status: TaskStatus::Pending,
+        created_at: AT.into(),
+        updated_at: AT.into(),
+    };
+    repository
+        .create_task(task.clone(), actor.clone())
+        .expect("create task");
+    assert!(repository.create_task(task.clone(), actor.clone()).is_err());
+    let mut updated_task = task.clone();
+    updated_task.status = TaskStatus::InProgress;
+    updated_task.updated_at = LATER.into();
+    repository
+        .update_task(updated_task.clone(), actor.clone())
+        .expect("update task");
+
+    let decision = KeyDecision {
+        id: "decision-conformance".into(),
+        session_id: "session-conformance".into(),
+        goal_id: None,
+        plan_id: None,
+        source: DecisionSource::User,
+        status: DecisionStatus::Active,
+        priority: DecisionPriority::Critical,
+        title: "Rust cutover".into(),
+        decision: "Use canonical Rust repositories.".into(),
+        intent: "Complete the transition.".into(),
+        applies_when: "Persisting state.".into(),
+        rationale: "One auditable runtime.".into(),
+        source_excerpt: "Transition to Rust.".into(),
+        supersedes: None,
+        created_at: AT.into(),
+        updated_at: AT.into(),
+    };
+    repository
+        .create_decision(decision.clone(), actor.clone())
+        .expect("create decision");
+    let archived = repository
+        .archive_decision(&decision.id, actor.clone())
+        .expect("archive decision");
+    assert_eq!(archived.status, DecisionStatus::Archived);
+
+    let plan = PlanRecord {
+        id: "plan-conformance".into(),
+        session_id: "session-conformance".into(),
+        prompt: "Complete the Rust transition.".into(),
+        status: PlanStatus::Draft,
+        content: "Execute the shared contract.".into(),
+        steps: vec![PlanStep {
+            index: 1,
+            title: "Verify".into(),
+            detail: "Run conformance.".into(),
+            requires_mutation: false,
+        }],
+        created_at: AT.into(),
+        updated_at: AT.into(),
+        approved_at: None,
+        executed_run_id: None,
+    };
+    repository
+        .create_plan(plan.clone(), actor.clone())
+        .expect("create plan");
+    let mut approved = plan.clone();
+    approved.status = PlanStatus::Approved;
+    approved.updated_at = LATER.into();
+    approved.approved_at = Some(LATER.into());
+    repository
+        .update_plan(approved.clone(), actor.clone())
+        .expect("approve plan");
+
+    let goal = GoalRecord {
+        id: "goal-conformance".into(),
+        session_id: "session-conformance".into(),
+        objective: "Finish the conformance milestone.".into(),
+        source_plan_id: None,
+        status: GoalStatus::Active,
+        summary: String::new(),
+        blocked_reason: String::new(),
+        iteration_budget: 3,
+        iterations_completed: 0,
+        created_at: AT.into(),
+        updated_at: AT.into(),
+    };
+    repository
+        .create_goal(goal.clone(), actor.clone())
+        .expect("create goal");
+    let mut completed_goal = goal.clone();
+    completed_goal.status = GoalStatus::Complete;
+    completed_goal.summary = "Conformance verified.".into();
+    completed_goal.updated_at = LATER.into();
+    repository
+        .update_goal(completed_goal.clone(), actor.clone())
+        .expect("complete goal");
+
+    let job = SubagentJob {
+        id: "agent-conformance".into(),
+        session_id: "session-conformance".into(),
+        parent_run_id: "run-conformance".into(),
+        parent_call_id: "call-conformance".into(),
+        task: "Verify one bounded adapter.".into(),
+        role: "subagent_default".into(),
+        status: SubagentStatus::Queued,
+        child_session_id: "child-session-conformance".into(),
+        child_run_id: None,
+        final_output: String::new(),
+        error: String::new(),
+        created_at: AT.into(),
+        updated_at: AT.into(),
+        started_at: None,
+        completed_at: None,
+    };
+    repository
+        .create_subagent(job.clone(), actor.clone())
+        .expect("create subagent");
+    let mut running = job.clone();
+    running.status = SubagentStatus::Running;
+    running.started_at = Some(LATER.into());
+    running.updated_at = LATER.into();
+    repository
+        .update_subagent(running.clone(), actor)
+        .expect("start subagent");
+
+    let reopened = factory();
+    assert_eq!(
+        reopened.get_task(&task.id).expect("task"),
+        Some(updated_task)
+    );
+    assert_eq!(
+        reopened.get_decision(&decision.id).expect("decision"),
+        Some(archived)
+    );
+    assert_eq!(reopened.get_plan(&plan.id).expect("plan"), Some(approved));
+    assert_eq!(
+        reopened.get_goal(&goal.id).expect("goal"),
+        Some(completed_goal)
+    );
+    assert_eq!(
+        reopened.get_subagent(&job.id).expect("subagent"),
+        Some(running)
+    );
+    assert_eq!(
+        reopened
+            .list_tasks(
+                Some("session-conformance"),
+                Some(TaskStatus::InProgress),
+                10
+            )
+            .expect("tasks")
+            .len(),
+        1
+    );
+    assert_eq!(
+        reopened
+            .list_decisions(
+                Some("session-conformance"),
+                Some(DecisionStatus::Archived),
+                10
+            )
+            .expect("decisions")
+            .len(),
+        1
+    );
+}
+
+/// Shared canonical lifecycle, atomic supersession, filtering, and reconstruction checks
+/// for every memory repository adapter.
+pub fn assert_memory_repository_conformance<F>(factory: F)
+where
+    F: Fn() -> Box<dyn MemoryRepository>,
+{
+    const AT: &str = "2026-07-12T00:00:00Z";
+    const LATER: &str = "2026-07-12T00:01:00Z";
+    let actor = conformance_actor("memory-user");
+    let repository = factory();
+    let record = MemoryRecord {
+        id: "memory-conformance".into(),
+        scope: MemoryScope::Global,
+        kind: "fact".into(),
+        confidence: 0.9,
+        source: "user".into(),
+        status: MemoryStatus::Active,
+        text: "Rust owns canonical state.".into(),
+        rationale: "Shared repository contract.".into(),
+        created_at: AT.into(),
+        updated_at: AT.into(),
+        expires_at: None,
+        superseded_by: None,
+    };
+    repository
+        .create(record.clone(), actor.clone())
+        .expect("create memory");
+    assert!(repository.create(record.clone(), actor.clone()).is_err());
+    let mut updated = record.clone();
+    updated.text = "Rust owns canonical auditable state.".into();
+    updated.updated_at = LATER.into();
+    repository
+        .update(updated.clone(), actor.clone())
+        .expect("update memory");
+    let replacement = MemoryRecord {
+        id: "memory-replacement".into(),
+        text: "Rust owns canonical event-sourced state.".into(),
+        superseded_by: None,
+        ..updated.clone()
+    };
+    let (old, replacement) = repository
+        .supersede(&record.id, replacement, actor.clone())
+        .expect("supersede memory");
+    assert_eq!(old.status, MemoryStatus::Superseded);
+    assert_eq!(old.superseded_by.as_deref(), Some(replacement.id.as_str()));
+    assert_eq!(replacement.status, MemoryStatus::Active);
+
+    let archived_seed = MemoryRecord {
+        id: "memory-archive".into(),
+        text: "Archive this canonical record.".into(),
+        ..record
+    };
+    repository
+        .create(archived_seed.clone(), actor.clone())
+        .expect("create archived seed");
+    let archived = repository
+        .archive(&archived_seed.id, actor)
+        .expect("archive memory");
+    assert_eq!(archived.status, MemoryStatus::Archived);
+
+    let reopened = factory();
+    assert_eq!(reopened.get_memory(&old.id).expect("old memory"), Some(old));
+    assert_eq!(
+        reopened
+            .get_memory(&replacement.id)
+            .expect("replacement memory"),
+        Some(replacement.clone())
+    );
+    assert_eq!(
+        reopened.get_memory(&archived.id).expect("archived memory"),
+        Some(archived)
+    );
+    assert_eq!(
+        reopened.list_active(10).expect("active memories"),
+        vec![replacement]
+    );
+    assert_eq!(
+        reopened
+            .list_memories(Some(MemoryStatus::Superseded), 10)
+            .expect("superseded memories")
+            .len(),
+        1
+    );
+}
+
+/// Shared definition idempotency, trust invalidation, and reconstruction checks for every
+/// workflow repository adapter.
+pub fn assert_workflow_repository_conformance<F>(factory: F)
+where
+    F: Fn() -> Box<dyn WorkflowRepository>,
+{
+    let repository = factory();
+    let definition = WorkflowDefinition {
+        api_version: "colossus.dev/v1alpha1".into(),
+        kind: "Workflow".into(),
+        metadata: WorkflowMetadata {
+            name: "conformance".into(),
+            version: "1.0.0".into(),
+            description: "Shared workflow repository contract.".into(),
+        },
+        inputs: serde_json::json!({"type": "object"}),
+        outputs: serde_json::json!({"type": "object"}),
+        capabilities: Vec::new(),
+        max_concurrency: 1,
+        step_budget: 2,
+        steps: vec![WorkflowStep::Emit {
+            id: "emit".into(),
+            value: serde_json::json!({"ok": true}),
+        }],
+        compensation: Vec::new(),
+    };
+    repository
+        .register(&definition, "hash-one", "repository:test")
+        .expect("register definition");
+    repository
+        .register(&definition, "hash-one", "repository:test")
+        .expect("idempotent registration");
+    assert_eq!(
+        repository
+            .definition("conformance", "1.0.0")
+            .expect("definition"),
+        Some((definition.clone(), "hash-one".into()))
+    );
+    repository
+        .register(&definition, "hash-two", "repository:test-changed")
+        .expect("definition change");
+    let reopened = factory();
+    assert_eq!(
+        reopened
+            .definition("conformance", "1.0.0")
+            .expect("reconstructed definition"),
+        Some((definition, "hash-two".into()))
+    );
+    assert!(reopened.run("missing-run").expect("missing run").is_none());
+    assert!(reopened.runs(10).expect("empty runs").is_empty());
+}
+
+/// Shared position, event-id idempotency, candidate, status, removal, and rebuild checks
+/// for every disposable memory index adapter.
+pub async fn assert_memory_index_conformance(index: &dyn MemoryIndex) {
+    assert_eq!(index.position().expect("initial index position"), 0);
+    index.set_position(17).await.expect("set index position");
+    assert_eq!(index.position().expect("index position"), 17);
+    index
+        .upsert(
+            "event-conformance-1",
+            "memory-1",
+            "Rust audit journal",
+            &serde_json::json!({"scope": "global"}),
+            None,
+        )
+        .await
+        .expect("index upsert");
+    index
+        .upsert(
+            "event-conformance-1",
+            "memory-1",
+            "duplicate event must be idempotent",
+            &serde_json::json!({"scope": "global"}),
+            None,
+        )
+        .await
+        .expect("idempotent index upsert");
+    let candidates = index
+        .search("audit journal", 4)
+        .await
+        .expect("index search");
+    assert!(
+        candidates
+            .iter()
+            .any(|(id, score)| id == "memory-1" && score.is_finite())
+    );
+    assert!(index.status().await.expect("index status").is_object());
+    index
+        .remove("event-conformance-2", "memory-1")
+        .await
+        .expect("index remove");
+    index
+        .remove("event-conformance-2", "memory-1")
+        .await
+        .expect("idempotent index remove");
+    index
+        .rebuild(&[(
+            "memory-2".into(),
+            "durable workflow".into(),
+            serde_json::json!({"scope": "global"}),
+        )])
+        .await
+        .expect("index rebuild");
 }
 
 /// Assert the common stable-kind and idempotent-delivery contract for an audit sink.
@@ -940,4 +1397,42 @@ where
             .len(),
         1
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        InMemoryEventJournal, InMemoryProjectionStore, assert_journal_conformance,
+        assert_projection_store_conformance,
+    };
+    use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
+
+    fn event(expected_stream_version: u64, value: u64) -> NewEvent {
+        NewEvent {
+            event_version: 1,
+            stream_id: "in-memory-conformance".into(),
+            expected_stream_version,
+            classification: EventClassification::Domain,
+            event_type: "conformance.recorded.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::System,
+                id: "conformance".into(),
+            },
+            context: ExecutionContext {
+                correlation_id: "in-memory-conformance".into(),
+                ..ExecutionContext::default()
+            },
+            payload: serde_json::json!({"value": value}),
+        }
+    }
+
+    #[test]
+    fn in_memory_journal_passes_shared_conformance() {
+        assert_journal_conformance(&InMemoryEventJournal::default(), event(0, 1), event(0, 2));
+    }
+
+    #[test]
+    fn in_memory_projection_store_passes_shared_conformance() {
+        assert_projection_store_conformance(&InMemoryProjectionStore::default());
+    }
 }

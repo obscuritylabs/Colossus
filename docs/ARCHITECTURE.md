@@ -121,6 +121,12 @@ workspace path and the session identity from the execution context. Targeted acc
 checked against the canonical record after authorization, and list limits are applied
 after scope filtering.
 
+Adapter compatibility is executable rather than documentary. One shared testkit contract
+runs against in-memory and encrypted-redb journal/projection stores, factory-reopened
+session/work/memory/workflow repositories on both journals, and Tantivy/Chroma indexes.
+Canonical memory fallback remains available when every index is offline or a destructive
+rebuild fails, and the recovered index later replays the complete journal.
+
 When configured, `colossus-memory-chroma` adds an optional semantic candidate projection
 alongside the offline Tantivy lexical default. It uses Chroma's v2 collection API with
 caller-generated embeddings and

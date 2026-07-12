@@ -1234,7 +1234,7 @@ mod tests {
     use colossus_contracts::DecisionOutcome;
     use colossus_policy::{BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel};
     use colossus_ports::{EmbeddingProvider, EventJournal, MemoryIndex};
-    use colossus_testkit::InMemoryEventJournal;
+    use colossus_testkit::{InMemoryEventJournal, assert_memory_index_conformance};
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -1347,6 +1347,20 @@ mod tests {
             requests
                 .iter()
                 .any(|request| request.starts_with("DELETE "))
+        );
+        fixture.task.abort();
+    }
+
+    #[tokio::test]
+    async fn chroma_index_passes_shared_conformance() {
+        let fixture = ChromaFixture::start().await;
+        let (index, journal) = fixture.index(true).expect("index");
+        assert_memory_index_conformance(&index).await;
+        let events = journal.read_global(1, 1_000).expect("events");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "effect.requested.v1")
         );
         fixture.task.abort();
     }

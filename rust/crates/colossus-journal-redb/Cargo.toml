@@ -23,8 +23,12 @@ time.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+colossus-memory.workspace = true
 colossus-projection.workspace = true
+colossus-session.workspace = true
 colossus-testkit.workspace = true
+colossus-work.workspace = true
+colossus-workflow.workspace = true
 tempfile.workspace = true
 
 [lints]

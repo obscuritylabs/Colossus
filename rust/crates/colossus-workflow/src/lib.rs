@@ -2473,7 +2473,7 @@ mod tests {
     use colossus_ports::{
         EventJournal, KeyProvider, StoreError, VerificationReport, WorkflowRepository,
     };
-    use colossus_testkit::InMemoryEventJournal;
+    use colossus_testkit::{InMemoryEventJournal, assert_workflow_repository_conformance};
     use serde_json::json;
     use std::{
         collections::BTreeMap,
@@ -2507,6 +2507,14 @@ steps:
     id: result
     value: { ok: true }
 "#;
+
+    #[test]
+    fn event_sourced_workflow_repository_passes_shared_conformance() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        assert_workflow_repository_conformance(|| {
+            Box::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)))
+        });
+    }
 
     const WAITING: &str = r#"
 apiVersion: colossus.dev/v1alpha1

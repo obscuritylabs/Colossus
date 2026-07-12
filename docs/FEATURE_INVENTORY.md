@@ -1051,8 +1051,11 @@ A reconstruction is complete only when all applicable checks pass:
   category conformance plus real filesystem, loopback HTTP, provider-normalization,
   subprocess-tool, and canonical-memory adapter tests prove post-denied bytes never reach
   the caller, errors, completion events, or audit evidence.
-- [ ] In-memory and embedded journals/repositories plus Tantivy and Chroma indexes pass
-  the shared conformance contract; canonical memory works during index outage/rebuild.
+- [x] Shared conformance covers journal/projection semantics; session, work, memory, and
+  workflow repository lifecycle/reconstruction over both in-memory and encrypted redb;
+  and position, idempotency, search, status, removal, and rebuild behavior for Tantivy and
+  permit-bound Chroma. Canonical fallback retrieval remains usable during index outage and
+  after a destructive rebuild failure until full replay recovers the index.
 - [x] Research and extension adapters pass shared factory-reopen conformance for canonical
   citations, integration state, pack lifecycle, publisher trust, bounds, and reconstruction.
 - [x] Workflow schema, trust invalidation, restart, bounded parallelism, cycles, input

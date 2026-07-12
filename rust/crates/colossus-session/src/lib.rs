@@ -327,13 +327,21 @@ fn preview(text: &str) -> String {
 mod tests {
     use super::*;
     use colossus_contracts::{ActorType, ModelToolCall};
-    use colossus_testkit::InMemoryEventJournal;
+    use colossus_testkit::{InMemoryEventJournal, assert_session_repository_conformance};
 
     fn actor() -> Actor {
         Actor {
             actor_type: ActorType::User,
             id: "test".into(),
         }
+    }
+
+    #[test]
+    fn event_sourced_session_repository_passes_shared_conformance() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        assert_session_repository_conformance(|| {
+            Box::new(EventSourcedSessionRepository::new(Arc::clone(&journal)))
+        });
     }
 
     fn message(role: ModelMessageRole, content: &str) -> ModelMessage {

@@ -1235,14 +1235,20 @@ mod tests {
         RedbWriterLease, STREAM_VERSIONS, StaticKeyProvider, adapter_error,
     };
     use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
+    use colossus_memory::EventSourcedMemoryRepository;
     use colossus_ports::{
         EventJournal, ExternalWorkQueue, KeyProvider, ProjectionStore, StoreError,
     };
     use colossus_projection::{JournalExternalWorkQueue, ProjectionWorker, default_handlers};
+    use colossus_session::EventSourcedSessionRepository;
     use colossus_testkit::{
         assert_external_work_queue_conformance, assert_journal_conformance,
-        assert_projection_store_conformance,
+        assert_memory_repository_conformance, assert_projection_store_conformance,
+        assert_session_repository_conformance, assert_work_repository_conformance,
+        assert_workflow_repository_conformance,
     };
+    use colossus_work::EventSourcedWorkRepository;
+    use colossus_workflow::EventSourcedWorkflowRepository;
     use redb::{Database, ReadableDatabase};
     use serde_json::json;
     use std::{process::Command, sync::Arc, thread};
@@ -1560,6 +1566,40 @@ mod tests {
             event("external-one", 0, 1),
             event("external-two", 0, 2),
         );
+    }
+
+    #[test]
+    fn canonical_repositories_pass_shared_conformance_over_encrypted_redb() {
+        let directory = tempdir().expect("tempdir");
+        let session_journal: Arc<dyn EventJournal> =
+            Arc::new(journal(&directory.path().join("session.redb")));
+        assert_session_repository_conformance(|| {
+            Box::new(EventSourcedSessionRepository::new(Arc::clone(
+                &session_journal,
+            )))
+        });
+
+        let work_journal: Arc<dyn EventJournal> =
+            Arc::new(journal(&directory.path().join("work.redb")));
+        assert_work_repository_conformance(|| {
+            Box::new(EventSourcedWorkRepository::new(Arc::clone(&work_journal)))
+        });
+
+        let memory_journal: Arc<dyn EventJournal> =
+            Arc::new(journal(&directory.path().join("memory.redb")));
+        assert_memory_repository_conformance(|| {
+            Box::new(EventSourcedMemoryRepository::new(Arc::clone(
+                &memory_journal,
+            )))
+        });
+
+        let workflow_journal: Arc<dyn EventJournal> =
+            Arc::new(journal(&directory.path().join("workflow.redb")));
+        assert_workflow_repository_conformance(|| {
+            Box::new(EventSourcedWorkflowRepository::new(Arc::clone(
+                &workflow_journal,
+            )))
+        });
     }
 
     #[test]
