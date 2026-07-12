@@ -1668,8 +1668,9 @@ mod tests {
         Actor, ActorType, ProviderEvent, ProviderUsage, RunEvent, RunEventEnvelope, RunPhase,
         ToolCall, ToolResult, WorkStateSnapshot,
     };
-    use colossus_ports::{EventJournal, PresentationRepository};
+    use colossus_ports::{EventJournal, PresentationRepository, ToolRegistry};
     use colossus_testkit::{InMemoryEventJournal, assert_presentation_repository_conformance};
+    use colossus_tools::{StaticToolRegistry, builtin_names};
     use std::{fs, sync::Arc};
     use tempfile::tempdir;
 
@@ -1915,6 +1916,144 @@ mod tests {
             .expect("phase")
             .expect("activity remains visible");
         assert!(phase.contains("waiting_for_model model-x elapsed=3.50s"));
+    }
+
+    #[test]
+    fn every_run_event_variant_and_builtin_tool_has_compact_and_verbose_semantics() {
+        let provider_events = [
+            (
+                ProviderEvent::ModelDelta {
+                    text: "delta".into(),
+                },
+                false,
+            ),
+            (
+                ProviderEvent::ReasoningSummary {
+                    summary: "safe summary".into(),
+                },
+                true,
+            ),
+            (
+                ProviderEvent::ToolCallRequested {
+                    call_id: "provider-call".into(),
+                    name: "echo".into(),
+                    arguments: serde_json::json!({"text": "hello"}),
+                },
+                false,
+            ),
+            (
+                ProviderEvent::FinalOutput {
+                    text: "final".into(),
+                },
+                false,
+            ),
+            (
+                ProviderEvent::Usage {
+                    usage: ProviderUsage {
+                        input_tokens: 4,
+                        output_tokens: 2,
+                        total_tokens: 6,
+                        cached_input_tokens: None,
+                        reasoning_tokens: None,
+                    },
+                },
+                false,
+            ),
+        ];
+        for mode in [EventDisplayMode::Compact, EventDisplayMode::Verbose] {
+            let renderer = SemanticRenderer::new(ReplPreferences {
+                events_mode: mode,
+                show_reasoning: true,
+                transcript_density: TranscriptDensity::Compact,
+                ..ReplPreferences::default()
+            });
+            for (event, compact_visible) in &provider_events {
+                let rendered = renderer
+                    .run_event(&RunEvent::Provider {
+                        event: event.clone(),
+                    })
+                    .expect("provider event");
+                let visible = *compact_visible
+                    || mode == EventDisplayMode::Verbose
+                        && matches!(event, ProviderEvent::Usage { .. });
+                assert_eq!(rendered.is_some(), visible, "{mode:?}: {event:?}");
+                assert!(
+                    rendered
+                        .as_deref()
+                        .is_none_or(|value| !value.contains("\x1b["))
+                );
+            }
+
+            for phase in [
+                RunPhase::Preparing,
+                RunPhase::WaitingForModel,
+                RunPhase::Responding,
+                RunPhase::Completed,
+            ] {
+                assert!(
+                    renderer
+                        .run_event(&RunEvent::Phase {
+                            phase,
+                            turn: Some(1),
+                            action: Some("acceptance".into()),
+                            elapsed_seconds: 0.25,
+                        })
+                        .expect("phase")
+                        .is_some(),
+                    "{mode:?}: {phase:?}"
+                );
+            }
+            assert!(
+                renderer
+                    .run_event(&RunEvent::Error {
+                        code: "acceptance_error".into(),
+                        message: "bounded safe message".into(),
+                        recoverable: true,
+                        turn: Some(1),
+                        elapsed_seconds: 0.5,
+                    })
+                    .expect("error")
+                    .is_some()
+            );
+
+            let registry = StaticToolRegistry::builtins(&builtin_names()).expect("catalog");
+            let specs = registry.list_specs();
+            assert!(specs.len() >= 50, "built-in catalog unexpectedly shrank");
+            for spec in specs {
+                let call_id = format!("call-{}", spec.name);
+                let started = renderer
+                    .run_event(&RunEvent::ToolStarted {
+                        turn: 1,
+                        call: ToolCall {
+                            call_id: call_id.clone(),
+                            name: spec.name.clone(),
+                            arguments: serde_json::json!({"name": &spec.name, "status": "start"}),
+                        },
+                        elapsed_seconds: 0.75,
+                    })
+                    .expect("tool start")
+                    .expect("visible tool start");
+                let completed = renderer
+                    .run_event(&RunEvent::ToolCompleted {
+                        turn: 1,
+                        result: ToolResult {
+                            call_id,
+                            name: spec.name.clone(),
+                            output: serde_json::json!({"name": &spec.name, "status": "ok"})
+                                .to_string(),
+                            exit_code: 0,
+                        },
+                        duration_seconds: 0.25,
+                        elapsed_seconds: 1.0,
+                    })
+                    .expect("tool completion")
+                    .expect("visible tool completion");
+                for rendered in [started, completed] {
+                    assert!(rendered.contains(&spec.name), "{mode:?}: {rendered}");
+                    assert!(!rendered.contains("\x1b["), "{mode:?}: {rendered}");
+                }
+            }
+        }
     }
 
     #[test]

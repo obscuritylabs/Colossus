@@ -997,7 +997,8 @@ A reconstruction is complete only when all applicable checks pass:
   cancelled or resumed after interruption.
 - [x] Research records planned queries, lane decisions, source labels, worker progress,
   citations, synthesis choice, and limitations.
-- [ ] Compact and verbose renderers cover every event type and every tool family.
+- [x] Compact and verbose renderers cover every normalized run/provider event variant and
+  every built-in tool in the strict catalog, including redirected ANSI-free acceptance.
 - [x] Embedded and worker REPL history has bounded hydration, encrypted permit-bound
   persistence, restart parity, consecutive deduplication, and redacted audit envelopes.
 - [x] Built-in theme palettes cover prompt, assistant, semantic event, and activity-frame

@@ -97,6 +97,16 @@ impl ToolRegistry for StaticToolRegistry {
     }
 }
 
+/// Return every supported built-in tool name in deterministic order.
+pub fn builtin_names() -> Vec<String> {
+    let mut names = builtin_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 /// Convert application specs to provider-neutral definitions.
 pub fn model_definitions(registry: &dyn ToolRegistry) -> Vec<ModelToolDefinition> {
     registry
