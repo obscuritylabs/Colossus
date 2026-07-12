@@ -9,3 +9,4 @@ dist/
 rust/target/
 .colossus/config.yaml
 .colossus/*.redb*
+.colossus/*memory-index/
