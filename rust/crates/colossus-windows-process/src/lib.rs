@@ -48,6 +48,8 @@ pub struct SandboxedChild {
     #[cfg(windows)]
     job: windows_impl::OwnedHandle,
     #[cfg(windows)]
+    completion_port: windows_impl::OwnedHandle,
+    #[cfg(windows)]
     _network: Option<windows_impl::NetworkGuard>,
 }
 
@@ -113,7 +115,7 @@ impl SandboxedChild {
     ) -> Result<Option<ResourceLimitViolation>, WindowsProcessError> {
         #[cfg(windows)]
         {
-            windows_impl::resource_limit_violation(&self.job)
+            windows_impl::resource_limit_violation(&self.job, &self.completion_port)
         }
         #[cfg(not(windows))]
         {
@@ -183,7 +185,8 @@ mod windows_impl {
     use windows_sys::Win32::{
         Foundation::{
             CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError, HANDLE, HANDLE_FLAG_INHERIT,
-            HLOCAL, LocalFree, SetHandleInformation, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+            HLOCAL, INVALID_HANDLE_VALUE, LocalFree, SetHandleInformation, WAIT_FAILED,
+            WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
         NetworkManagement::WindowsFilteringPlatform::{
             FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0,
@@ -200,20 +203,26 @@ mod windows_impl {
             SECURITY_CAPABILITIES, SID,
         },
         System::{
+            IO::{CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED},
             JobObjects::{
                 CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_JOB_MEMORY,
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_DESKTOP,
                 JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
                 JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
                 JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
-                JOB_OBJECT_UILIMIT_WRITECLIPBOARD, JOBOBJECT_BASIC_UI_RESTRICTIONS,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOBOBJECT_LIMIT_VIOLATION_INFORMATION_2,
-                JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation,
-                JobObjectLimitViolationInformation2, QueryInformationJobObject,
-                SetInformationJobObject, TerminateJobObject,
+                JOB_OBJECT_UILIMIT_WRITECLIPBOARD, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
+                JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOBOBJECT_LIMIT_VIOLATION_INFORMATION_2,
+                JobObjectAssociateCompletionPortInformation, JobObjectBasicUIRestrictions,
+                JobObjectExtendedLimitInformation, JobObjectLimitViolationInformation2,
+                QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
             },
             Pipes::CreatePipe,
             Rpc::RPC_C_AUTHN_DEFAULT,
+            SystemServices::{
+                JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT, JOB_OBJECT_MSG_JOB_MEMORY_LIMIT,
+                JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT,
+            },
             Threading::{
                 CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
                 EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
@@ -597,6 +606,27 @@ mod windows_impl {
             unsafe { CreateJobObjectW(null(), null()) },
             "CreateJobObjectW",
         )?;
+        let completion_port = OwnedHandle::new(
+            unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, null_mut(), 0, 1) },
+            "CreateIoCompletionPort",
+        )?;
+        let completion = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+            CompletionKey: job.raw(),
+            CompletionPort: completion_port.raw(),
+        };
+        // SAFETY: completion references live handles and has the documented structure layout.
+        if unsafe {
+            SetInformationJobObject(
+                job.raw(),
+                JobObjectAssociateCompletionPortInformation,
+                (&raw const completion).cast(),
+                u32::try_from(size_of::<JOBOBJECT_ASSOCIATE_COMPLETION_PORT>())
+                    .expect("structure size fits u32"),
+            )
+        } == 0
+        {
+            return Err(last_error("SetInformationJobObject(completion port)"));
+        }
         // SAFETY: limits has the exact structure required by this information class.
         if unsafe {
             SetInformationJobObject(
@@ -734,6 +764,7 @@ mod windows_impl {
             stderr: Some(parent_stderr.into_file()),
             process,
             job,
+            completion_port,
             _network: network,
         })
     }
@@ -773,7 +804,51 @@ mod windows_impl {
 
     pub(super) fn resource_limit_violation(
         job: &OwnedHandle,
+        completion_port: &OwnedHandle,
     ) -> Result<Option<ResourceLimitViolation>, WindowsProcessError> {
+        let mut observed = None;
+        loop {
+            let mut message = 0_u32;
+            let mut key = 0_usize;
+            let mut overlapped: *mut OVERLAPPED = null_mut();
+            // SAFETY: all output pointers are valid and the zero timeout makes this nonblocking.
+            let status = unsafe {
+                GetQueuedCompletionStatus(
+                    completion_port.raw(),
+                    &mut message,
+                    &mut key,
+                    &mut overlapped,
+                    0,
+                )
+            };
+            if status == 0 {
+                // SAFETY: GetLastError immediately follows the failed Win32 call.
+                let error = unsafe { GetLastError() };
+                if error == WAIT_TIMEOUT {
+                    break;
+                }
+                return Err(code_error("GetQueuedCompletionStatus", error));
+            }
+            if key != job.raw() as usize {
+                return Err(WindowsProcessError::Invalid(
+                    "Job Object completion key did not match its job".into(),
+                ));
+            }
+            match message {
+                JOB_OBJECT_MSG_JOB_MEMORY_LIMIT | JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT => {
+                    observed = Some(ResourceLimitViolation::Memory);
+                }
+                JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT
+                    if observed != Some(ResourceLimitViolation::Memory) =>
+                {
+                    observed = Some(ResourceLimitViolation::ProcessCount);
+                }
+                _ => {}
+            }
+        }
+        if observed.is_some() {
+            return Ok(observed);
+        }
         // SAFETY: zero is the documented initial state for this query structure.
         let mut information: JOBOBJECT_LIMIT_VIOLATION_INFORMATION_2 = unsafe { zeroed() };
         // SAFETY: job is live and information is a correctly sized writable buffer.
