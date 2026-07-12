@@ -1053,7 +1053,8 @@ A reconstruction is complete only when all applicable checks pass:
   vulnerability policy, and macOS/Linux/Windows arm64/x64 release smoke tests pass.
   The six-target native runner/build/execute/package matrix is implemented; this remains
   open until one remote run is green for every target.
-- [ ] Strict configuration rejects unknown fields and safely redacts displayed secrets.
+- [x] Strict configuration rejects unknown fields, preserves only credential/key references
+  in `config show`, and proves raw unknown secret fields never appear in CLI diagnostics.
 - [ ] Unit, integration, boundary, security, type, lint, and packaging checks pass.
 
 ## 24. Explicitly Deferred Product Decisions
