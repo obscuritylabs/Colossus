@@ -164,10 +164,12 @@ the policy-approved origin/address sets. The direct HTTP adapter applies the sam
 origin and DNS-address constraints and keeps the bounded response in gateway quarantine
 until post-effect policy allows release. Windows `windows_job` execution uses an ephemeral
 AppContainer identity for filesystem and default-deny network isolation plus an atomically
-attached Job Object for descendant ownership and hard process/memory limits. Network-free
-execution is supported; policy decisions that request Windows network destinations fail
-closed until an authenticated AppContainer proxy transport is accepted. Windows OCI path
-mapping stays disabled until its live platform suite passes.
+attached Job Object for descendant ownership and hard process/memory limits. Networked
+jobs receive a per-permit authenticated loopback proxy. Package-SID-scoped dynamic WFP
+filters permit only the proxy's exact `127.0.0.1` TCP port and hard-block every other
+IPv4/IPv6 connection; the parent proxy then applies the same exact-origin checks used by
+the Unix native path. Setup failure blocks process creation. Windows OCI path mapping
+stays disabled until its live platform suite passes.
 
 The strict Rust tool catalog implements the complete required offline surface. Repository
 mapping/search, context reads and mutations, exact patching, and trace export use private

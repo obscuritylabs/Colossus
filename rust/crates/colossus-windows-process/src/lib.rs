@@ -27,6 +27,10 @@ pub struct SpawnRequest {
     pub max_processes: u32,
     /// Aggregate committed-memory ceiling for the Job Object.
     pub max_memory_bytes: u64,
+    /// Parent proxy port that is the only permitted network destination.
+    pub proxy_port: Option<u16>,
+    /// Unique WFP dynamic-session identity paired with `proxy_port`.
+    pub network_filter_id: Option<u128>,
 }
 
 /// A process and its atomically attached Job Object.
@@ -43,6 +47,8 @@ pub struct SandboxedChild {
     process: windows_impl::OwnedHandle,
     #[cfg(windows)]
     job: windows_impl::OwnedHandle,
+    #[cfg(windows)]
+    _network: Option<windows_impl::NetworkGuard>,
 }
 
 /// Hard Job Object limit observed during execution.
@@ -139,6 +145,9 @@ fn validate_request(request: &SpawnRequest) -> Result<(), WindowsProcessError> {
         || request.appcontainer_sid.contains('\0')
         || request.max_processes == 0
         || request.max_memory_bytes == 0
+        || request.proxy_port.is_some() != request.network_filter_id.is_some()
+        || request.proxy_port == Some(0)
+        || request.network_filter_id == Some(0)
     {
         return Err(WindowsProcessError::Invalid(
             "SID and resource limits must be present".into(),
@@ -176,8 +185,19 @@ mod windows_impl {
             CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError, HANDLE, HANDLE_FLAG_INHERIT,
             HLOCAL, LocalFree, SetHandleInformation, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
+        NetworkManagement::WindowsFilteringPlatform::{
+            FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0,
+            FWP_MATCH_EQUAL, FWP_SID, FWP_UINT8, FWP_UINT16, FWP_UINT64, FWP_V4_ADDR_AND_MASK,
+            FWP_V4_ADDR_MASK, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
+            FWPM_CONDITION_ALE_PACKAGE_ID, FWPM_CONDITION_IP_PROTOCOL,
+            FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_DISPLAY_DATA0,
+            FWPM_FILTER_CONDITION0, FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+            FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_SESSION_FLAG_DYNAMIC, FWPM_SESSION0,
+            FWPM_SUBLAYER0, FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmSubLayerAdd0,
+        },
         Security::{
-            Authorization::ConvertStringSidToSidW, PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
+            Authorization::ConvertStringSidToSidW, PSID, SECURITY_ATTRIBUTES,
+            SECURITY_CAPABILITIES, SID,
         },
         System::{
             JobObjects::{
@@ -193,6 +213,7 @@ mod windows_impl {
                 SetInformationJobObject, TerminateJobObject,
             },
             Pipes::CreatePipe,
+            Rpc::RPC_C_AUTHN_DEFAULT,
             Threading::{
                 CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
                 EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
@@ -203,6 +224,7 @@ mod windows_impl {
             },
         },
     };
+    use windows_sys::core::GUID;
 
     pub(super) struct OwnedHandle(HANDLE);
 
@@ -234,6 +256,202 @@ mod windows_impl {
                 CloseHandle(self.0);
             }
         }
+    }
+
+    pub(super) struct NetworkGuard(HANDLE);
+
+    impl NetworkGuard {
+        fn install(
+            appcontainer_sid: PSID,
+            proxy_port: u16,
+            identity: u128,
+        ) -> Result<Self, WindowsProcessError> {
+            let session_name = wide(OsStr::new("Colossus AppContainer proxy-only session"));
+            // SAFETY: zero is the documented initial state for an FWPM session.
+            let mut session: FWPM_SESSION0 = unsafe { zeroed() };
+            session.sessionKey = derived_guid(identity, 0x10);
+            session.displayData = FWPM_DISPLAY_DATA0 {
+                name: session_name.as_ptr().cast_mut(),
+                description: null_mut(),
+            };
+            session.flags = FWPM_SESSION_FLAG_DYNAMIC;
+            session.txnWaitTimeoutInMSec = 5_000;
+            let mut engine = null_mut();
+            // SAFETY: all optional pointers are null and engine is a valid output pointer.
+            let result = unsafe {
+                FwpmEngineOpen0(
+                    null(),
+                    RPC_C_AUTHN_DEFAULT as u32,
+                    null(),
+                    &raw const session,
+                    &raw mut engine,
+                )
+            };
+            if result != 0 {
+                return Err(code_error("FwpmEngineOpen0", result));
+            }
+            let guard = Self(engine);
+            guard.configure(appcontainer_sid, proxy_port, identity)?;
+            Ok(guard)
+        }
+
+        fn configure(
+            &self,
+            appcontainer_sid: PSID,
+            proxy_port: u16,
+            identity: u128,
+        ) -> Result<(), WindowsProcessError> {
+            let sublayer_name = wide(OsStr::new("Colossus AppContainer proxy-only filters"));
+            let sublayer_key = derived_guid(identity, 0x20);
+            // SAFETY: zero is the documented initial state for an FWPM sublayer.
+            let mut sublayer: FWPM_SUBLAYER0 = unsafe { zeroed() };
+            sublayer.subLayerKey = sublayer_key;
+            sublayer.displayData = FWPM_DISPLAY_DATA0 {
+                name: sublayer_name.as_ptr().cast_mut(),
+                description: null_mut(),
+            };
+            sublayer.weight = u16::MAX;
+            // SAFETY: the engine is live and WFP copies the supplied sublayer structure.
+            let result = unsafe { FwpmSubLayerAdd0(self.0, &raw const sublayer, null_mut()) };
+            if result != 0 {
+                return Err(code_error("FwpmSubLayerAdd0", result));
+            }
+
+            let package = package_condition(appcontainer_sid);
+            let protocol = FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_PROTOCOL,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_UINT8,
+                    Anonymous: FWP_CONDITION_VALUE0_0 { uint8: 6 },
+                },
+            };
+            let mut loopback = FWP_V4_ADDR_AND_MASK {
+                addr: u32::from_be_bytes([127, 0, 0, 1]),
+                mask: u32::MAX,
+            };
+            let address = FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_V4_ADDR_MASK,
+                    Anonymous: FWP_CONDITION_VALUE0_0 {
+                        v4AddrMask: &raw mut loopback,
+                    },
+                },
+            };
+            let port = FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_REMOTE_PORT,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_UINT16,
+                    Anonymous: FWP_CONDITION_VALUE0_0 { uint16: proxy_port },
+                },
+            };
+            add_filter(
+                self.0,
+                derived_guid(identity, 0x31),
+                "Colossus allow authenticated proxy",
+                FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                sublayer_key,
+                &mut [package, protocol, address, port],
+                FWP_ACTION_PERMIT,
+                15,
+            )?;
+            add_filter(
+                self.0,
+                derived_guid(identity, 0x32),
+                "Colossus block other IPv4",
+                FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                sublayer_key,
+                &mut [package_condition(appcontainer_sid)],
+                FWP_ACTION_BLOCK,
+                1,
+            )?;
+            add_filter(
+                self.0,
+                derived_guid(identity, 0x33),
+                "Colossus block IPv6",
+                FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+                sublayer_key,
+                &mut [package_condition(appcontainer_sid)],
+                FWP_ACTION_BLOCK,
+                1,
+            )
+        }
+    }
+
+    impl Drop for NetworkGuard {
+        fn drop(&mut self) {
+            // SAFETY: the dynamic WFP engine handle is uniquely owned by this guard. Closing it
+            // atomically removes the sublayer and every per-job filter.
+            unsafe {
+                FwpmEngineClose0(self.0);
+            }
+        }
+    }
+
+    fn package_condition(appcontainer_sid: PSID) -> FWPM_FILTER_CONDITION0 {
+        FWPM_FILTER_CONDITION0 {
+            fieldKey: FWPM_CONDITION_ALE_PACKAGE_ID,
+            matchType: FWP_MATCH_EQUAL,
+            conditionValue: FWP_CONDITION_VALUE0 {
+                r#type: FWP_SID,
+                Anonymous: FWP_CONDITION_VALUE0_0 {
+                    sid: appcontainer_sid.cast::<SID>(),
+                },
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_filter(
+        engine: HANDLE,
+        filter_key: GUID,
+        name: &str,
+        layer_key: GUID,
+        sublayer_key: GUID,
+        conditions: &mut [FWPM_FILTER_CONDITION0],
+        action_type: u32,
+        weight_value: u64,
+    ) -> Result<(), WindowsProcessError> {
+        let name = wide(OsStr::new(name));
+        let mut weight_value = weight_value;
+        // SAFETY: zero is the documented initial state for an FWPM filter.
+        let mut filter: FWPM_FILTER0 = unsafe { zeroed() };
+        filter.filterKey = filter_key;
+        filter.displayData = FWPM_DISPLAY_DATA0 {
+            name: name.as_ptr().cast_mut(),
+            description: null_mut(),
+        };
+        filter.layerKey = layer_key;
+        filter.subLayerKey = sublayer_key;
+        filter.weight = FWP_VALUE0 {
+            r#type: FWP_UINT64,
+            Anonymous: FWP_VALUE0_0 {
+                uint64: &raw mut weight_value,
+            },
+        };
+        filter.numFilterConditions = u32::try_from(conditions.len())
+            .map_err(|_| WindowsProcessError::Invalid("too many WFP conditions".into()))?;
+        filter.filterCondition = conditions.as_mut_ptr();
+        filter.action = FWPM_ACTION0 {
+            r#type: action_type,
+            ..FWPM_ACTION0::default()
+        };
+        let mut filter_id = 0_u64;
+        // SAFETY: every pointer in filter remains live for the call and WFP copies the object.
+        let result =
+            unsafe { FwpmFilterAdd0(engine, &raw const filter, null_mut(), &mut filter_id) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(code_error("FwpmFilterAdd0", result))
+        }
+    }
+
+    fn derived_guid(identity: u128, discriminator: u128) -> GUID {
+        GUID::from_u128(identity ^ (0x9d9a_7f44_5183_4f45_8f39_0000_0000_0000 | discriminator))
     }
 
     struct LocalSid(PSID);
@@ -356,6 +574,15 @@ mod windows_impl {
             return Err(last_error("ConvertStringSidToSidW"));
         }
         let sid = LocalSid(sid);
+        let network = match (request.proxy_port, request.network_filter_id) {
+            (Some(port), Some(identity)) => Some(NetworkGuard::install(sid.0, port, identity)?),
+            (None, None) => None,
+            _ => {
+                return Err(WindowsProcessError::Invalid(
+                    "proxy port and network filter identity must be paired".into(),
+                ));
+            }
+        };
 
         // SAFETY: zero is the documented initial state for these Win32 structures.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
@@ -507,6 +734,7 @@ mod windows_impl {
             stderr: Some(parent_stderr.into_file()),
             process,
             job,
+            _network: network,
         })
     }
 
@@ -652,6 +880,13 @@ mod windows_impl {
             source: std::io::Error::last_os_error(),
         }
     }
+
+    fn code_error(operation: &'static str, code: u32) -> WindowsProcessError {
+        WindowsProcessError::Win32 {
+            operation,
+            source: std::io::Error::from_raw_os_error(i32::from_ne_bytes(code.to_ne_bytes())),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -661,7 +896,7 @@ mod tests {
 
     #[test]
     fn rejects_relative_and_unbounded_launch_contracts_before_platform_dispatch() {
-        let request = SpawnRequest {
+        let mut request = SpawnRequest {
             executable: PathBuf::from("relative.exe"),
             arguments: Vec::new(),
             cwd: PathBuf::from("."),
@@ -669,7 +904,16 @@ mod tests {
             appcontainer_sid: "S-1-15-2-1".into(),
             max_processes: 1,
             max_memory_bytes: 1024,
+            proxy_port: None,
+            network_filter_id: None,
         };
+        assert!(matches!(
+            spawn(&request),
+            Err(WindowsProcessError::Invalid(_))
+        ));
+        request.executable = PathBuf::from("/absolute.exe");
+        request.cwd = PathBuf::from("/");
+        request.proxy_port = Some(42);
         assert!(matches!(
             spawn(&request),
             Err(WindowsProcessError::Invalid(_))

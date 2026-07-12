@@ -1,5 +1,5 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! End-to-end configured MCP discovery, invocation, redaction, and research tests.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use serde_json::Value;
 use std::{fs, path::Path, process::Command};

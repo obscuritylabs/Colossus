@@ -1,5 +1,5 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Native helper integration and escape tests.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;

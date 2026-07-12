@@ -32,7 +32,7 @@ uuid.workspace = true
 nono.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-rappct.workspace = true
+rappct = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
 colossus-ports.workspace = true

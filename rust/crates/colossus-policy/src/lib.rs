@@ -312,18 +312,13 @@ impl SafetyKernel {
                     .into(),
             ));
         }
-        if obligations.sandbox_backend == "windows_job" && is_process_action(&request.action) {
-            if !cfg!(target_os = "windows") {
-                return Err(GatewayError::Safety(
-                    "windows_job process execution is available only on Windows".into(),
-                ));
-            }
-            if !obligations.network_destinations.is_empty() {
-                return Err(GatewayError::Safety(
-                    "windows_job supports default-deny networking only; configured network destinations require a future authenticated proxy transport"
-                        .into(),
-                ));
-            }
+        if obligations.sandbox_backend == "windows_job"
+            && is_process_action(&request.action)
+            && !cfg!(target_os = "windows")
+        {
+            return Err(GatewayError::Safety(
+                "windows_job process execution is available only on Windows".into(),
+            ));
         }
         if cfg!(target_os = "windows")
             && obligations.sandbox_backend == "oci"

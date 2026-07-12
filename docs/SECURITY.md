@@ -169,9 +169,16 @@ the helper or Job handle terminates the whole tree. UI and clipboard access, des
 switching, global atoms, and system-parameter mutation are also Job-restricted. The
 profile is deleted after confirmed termination; an interrupted helper can leave only an
 unreferenced unique profile/ACL identity while Job-handle close still terminates processes.
-Windows network-free execution is supported. Any non-empty network-destination obligation
-fails before launch until a production AppContainer proxy transport is available; there
-is no loopback exemption or broker fallback. Windows OCI path mapping remains disabled.
+Windows network-free execution is supported. Networked jobs receive only an authenticated
+per-permit loopback proxy URL. A temporary package-scoped loopback exemption is wrapped by
+dynamic WFP filters that permit that AppContainer SID to reach only the proxy's exact TCP
+port on `127.0.0.1` and hard-block all other IPv4/IPv6 connects. The parent proxy still
+enforces canonical exact-origin destinations and strips its authorization header before
+forwarding; captured output redacts both raw and Basic-encoded credentials. Filter or
+loopback-exemption setup failure blocks launch, and there is no broker downgrade. Dynamic
+filters disappear when the helper closes its WFP session; an interrupted helper can leave
+only an exemption for the job's otherwise orphaned unique package SID. Windows OCI path
+mapping remains disabled.
 The plain broker is available only when configuration and the policy decision both
 explicitly authorize a downgrade.
 

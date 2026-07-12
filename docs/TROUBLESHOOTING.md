@@ -28,9 +28,10 @@ Rust YAML denies unknown fields. Compare exact camelCase/snake_case names with
 - Git tools without exactly one executable named `git` or `git.exe`;
 - `shell.run` without an exact executable;
 - OCI images without immutable SHA-256 digests;
-- Windows `windows_job` with network destinations; network-free AppContainer/Job Object
-  effects are supported, while destination grants fail closed pending an authenticated
-  proxy transport.
+- Windows `windows_job` network effects when the host cannot create a temporary
+  AppContainer loopback exemption or package-scoped dynamic WFP filters. Colossus fails
+  closed before launch; run `sandbox doctor` and use a host identity permitted to manage
+  the Windows filtering engine.
 
 ## Echo Works But The Model Does Not
 

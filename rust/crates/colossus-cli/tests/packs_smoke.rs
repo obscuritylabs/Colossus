@@ -1,5 +1,5 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Credential-free end-to-end pack lifecycle and effect-audit smoke test.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{BundleFileEntry, BundleManifest, PackSignature};

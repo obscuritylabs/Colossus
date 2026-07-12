@@ -5,6 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use std::{
     fs,
+    io::{Read as _, Write as _},
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -297,7 +298,9 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     listener.set_nonblocking(true).expect("nonblocking");
-    let url = format!("http://{}/", listener.local_addr().expect("address"));
+    let address = listener.local_addr().expect("address");
+    let origin = format!("http://{address}");
+    let url = format!("{origin}/allowed");
     let raw_network = run(
         binary,
         &config,
@@ -324,18 +327,171 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         2,
         268_435_456,
         5_000,
-        std::slice::from_ref(&url),
+        std::slice::from_ref(&origin),
     );
-    let unsupported_network = run(
+    listener.set_nonblocking(false).expect("blocking listener");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("proxy upstream connection");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).expect("read proxy request");
+            assert!(count > 0);
+            request.extend_from_slice(&buffer[..count]);
+        }
+        let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
+        assert!(request.starts_with("get /allowed http/1.1\r\n"));
+        assert!(!request.contains("proxy-authorization:"));
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\nallowed-network",
+            )
+            .expect("write proxy response");
+    });
+    let allowed_network = run(
         binary,
         &config,
-        &process(&tools.curl, &allowed, &[], &["--max-time", "1", &url]),
+        &process(
+            &tools.curl,
+            &allowed,
+            &[],
+            &[
+                "--silent",
+                "--show-error",
+                "--fail-with-body",
+                "--max-time",
+                "5",
+                &url,
+            ],
+        ),
     );
-    assert!(!unsupported_network.status.success());
     assert!(
-        String::from_utf8_lossy(&unsupported_network.stderr)
-            .contains("supports default-deny networking only")
+        allowed_network.status.success(),
+        "{}",
+        String::from_utf8_lossy(&allowed_network.stderr)
     );
+    let allowed_network = json(&allowed_network);
+    assert_eq!(allowed_network["success"], true);
+    assert_eq!(
+        decoded(&allowed_network, "stdout_base64"),
+        b"allowed-network"
+    );
+    server.join().expect("proxy upstream server");
+
+    let environment = run(
+        binary,
+        &config,
+        &process(
+            &tools.cmd,
+            &allowed,
+            &[],
+            &["/D", "/S", "/C", "set HTTP_PROXY"],
+        ),
+    );
+    assert!(environment.status.success());
+    let environment = decoded(&json(&environment), "stdout_base64");
+    let environment = String::from_utf8_lossy(&environment);
+    assert!(environment.contains("http://colossus:[REDACTED]@127.0.0.1:"));
+
+    let bypass = TcpListener::bind("127.0.0.1:0").expect("bypass listener");
+    bypass.set_nonblocking(true).expect("bypass nonblocking");
+    let bypass_origin = format!("http://{}", bypass.local_addr().expect("bypass address"));
+    write_config(
+        &config,
+        &root,
+        &allowed,
+        &workflows,
+        &tools,
+        2,
+        268_435_456,
+        5_000,
+        std::slice::from_ref(&bypass_origin),
+    );
+    let direct_bypass = run(
+        binary,
+        &config,
+        &process(
+            &tools.curl,
+            &allowed,
+            &[],
+            &[
+                "--silent",
+                "--show-error",
+                "--noproxy",
+                "*",
+                "--max-time",
+                "1",
+                &bypass_origin,
+            ],
+        ),
+    );
+    assert!(direct_bypass.status.success());
+    assert_eq!(json(&direct_bypass)["success"], false);
+    assert!(matches!(
+        bypass.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
+
+    let wrong_auth = run(
+        binary,
+        &config,
+        &process(
+            &tools.curl,
+            &allowed,
+            &[],
+            &[
+                "--silent",
+                "--show-error",
+                "--fail-with-body",
+                "--proxy-user",
+                "colossus:wrong",
+                "--max-time",
+                "2",
+                &bypass_origin,
+            ],
+        ),
+    );
+    assert!(wrong_auth.status.success());
+    assert_eq!(json(&wrong_auth)["success"], false);
+    assert!(matches!(
+        bypass.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
+
+    let unlisted = TcpListener::bind("127.0.0.1:0").expect("unlisted listener");
+    unlisted
+        .set_nonblocking(true)
+        .expect("unlisted nonblocking");
+    let unlisted_url = format!(
+        "http://{}",
+        unlisted.local_addr().expect("unlisted address")
+    );
+    let unlisted_request = run(
+        binary,
+        &config,
+        &process(
+            &tools.curl,
+            &allowed,
+            &[],
+            &[
+                "--silent",
+                "--show-error",
+                "--fail-with-body",
+                "--max-time",
+                "2",
+                &unlisted_url,
+            ],
+        ),
+    );
+    assert!(unlisted_request.status.success());
+    assert_eq!(json(&unlisted_request)["success"], false);
+    assert!(matches!(
+        unlisted.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
 
     write_config(
         &config,

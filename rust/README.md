@@ -8,9 +8,10 @@ The initial alpha implements the contracts, encrypted redb journal, exclusive wr
 lease, restartable redb projections and projected repositories, policy gateway, durable
 workflow core, and permit-bound filesystem/process/HTTP/provider adapters. macOS and
 Linux use a one-shot authenticated Seatbelt/Landlock helper. Windows process execution
-uses a per-job AppContainer plus an atomically attached Job Object for network-free
-process effects. Network destinations remain fail-closed until an authenticated Windows
-proxy transport is accepted; Windows OCI path mapping is still disabled.
+uses a per-job AppContainer plus an atomically attached Job Object. Networked Windows
+effects receive a secret-bearing authenticated HTTP proxy URL and per-job dynamic WFP
+filters that hard-block every other IPv4/IPv6 connection by package SID. Windows OCI path
+mapping is still disabled.
 
 The default fresh configuration routes `primary` to the credential-free echo profile,
 so the full one-shot agent path is available offline:
@@ -387,8 +388,10 @@ filesystem traversal, environment, descendant, process-count, memory, timeout, p
 and raw-egress boundaries. Windows `windows_job` execution uses a per-effect AppContainer
 identity for policy-root filesystem and default-deny network isolation plus an atomically
 attached Job Object for descendant, timeout, process-count, and aggregate-memory limits.
-Native x64 and arm64 CI exercises those boundaries. Non-empty Windows network grants fail
-closed until an authenticated AppContainer proxy transport exists.
+Native x64 and arm64 CI exercises those boundaries, authenticated exact-origin forwarding,
+missing/wrong proxy credentials, unlisted origins, raw loopback bypass, WFP cleanup, and
+proxy-credential redaction. Networked Windows jobs fail closed if dynamic WFP filter or
+loopback-exemption setup is unavailable.
 
 ```sh
 cargo fmt --all -- --check

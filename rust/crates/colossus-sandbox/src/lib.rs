@@ -52,6 +52,7 @@ use colossus_windows_process::{ResourceLimitViolation, SpawnRequest as WindowsSp
 use rappct::{
     AppContainerProfile,
     acl::{self, AccessMask, ResourcePath},
+    net::LoopbackExemptionGuard,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -139,7 +140,7 @@ pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
     #[cfg(target_os = "windows")]
     let (native_supported, native_details) = (
         true,
-        "AppContainer filesystem/default-deny network isolation with atomically attached Job Object"
+        "AppContainer filesystem and authenticated WFP proxy-only network isolation with atomically attached Job Object"
             .to_owned(),
     );
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -977,10 +978,31 @@ impl EffectExecutor for SandboxProcessExecutor {
                 "networked OCI process execution requires at least {MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS}ms"
             )));
         }
+        let proxy_credential = if permit.obligations().network_destinations.is_empty()
+            || permit.obligations().sandbox_backend == "oci"
+        {
+            None
+        } else {
+            let mut mac = HmacSha256::new_from_slice(&self.job_key).map_err(adapter_failure)?;
+            mac.update(b"colossus-process-proxy-v1\0");
+            mac.update(permit.request_hash().as_bytes());
+            mac.update(b"\0");
+            mac.update(permit.nonce().as_bytes());
+            Some(hex::encode(mac.finalize().into_bytes()))
+        };
         let proxy = if permit.obligations().network_destinations.is_empty() {
             None
-        } else if permit.obligations().sandbox_backend == "native" {
-            Some(AllowlistProxy::start(permit.obligations().network_destinations.clone()).await?)
+        } else if matches!(
+            permit.obligations().sandbox_backend.as_str(),
+            "native" | "windows_job"
+        ) {
+            Some(
+                AllowlistProxy::start_authenticated(
+                    permit.obligations().network_destinations.clone(),
+                    proxy_credential.as_deref().expect("credential is present"),
+                )
+                .await?,
+            )
         } else if permit.obligations().sandbox_backend == "oci" {
             if self.config.oci_proxy_image.is_none() {
                 return Err(adapter_failure(
@@ -1024,6 +1046,7 @@ impl EffectExecutor for SandboxProcessExecutor {
             obligations: job_obligations,
             timeout_ms: helper_budget,
             proxy_port: proxy.as_ref().map(AllowlistProxy::port),
+            proxy_credential,
             oci_runtime: self.config.oci_runtime.clone(),
             oci_image: self.config.oci_image.clone(),
             oci_proxy_image: self.config.oci_proxy_image.clone(),
@@ -1300,6 +1323,7 @@ struct SandboxJob {
     obligations: PolicyObligations,
     timeout_ms: u64,
     proxy_port: Option<u16>,
+    proxy_credential: Option<String>,
     oci_runtime: Option<PathBuf>,
     oci_image: Option<String>,
     oci_proxy_image: Option<String>,
@@ -1336,6 +1360,15 @@ impl SignedSandboxJob {
             || self.job.request_hash.is_empty()
             || self.job.decision_id.is_empty()
             || self.job.permit_nonce.is_empty()
+            || self.job.proxy_port.is_some() != self.job.proxy_credential.is_some()
+            || self
+                .job
+                .proxy_credential
+                .as_ref()
+                .is_some_and(|credential| {
+                    credential.len() != 64
+                        || !credential.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
         {
             return Err(SandboxHelperError::InvalidJob(
                 "required authenticated job field is absent".into(),
@@ -1555,9 +1588,10 @@ fn supervise_windows_job(
     job: &SandboxJob,
     backend: String,
 ) -> Result<SandboxJobResult, SandboxHelperError> {
-    if !job.obligations.network_destinations.is_empty() || job.proxy_port.is_some() {
+    let networked = !job.obligations.network_destinations.is_empty();
+    if networked != job.proxy_port.is_some() || networked != job.proxy_credential.is_some() {
         return Err(SandboxHelperError::Setup(
-            "windows_job currently supports default-deny networking only".into(),
+            "windows_job network destinations require a paired authenticated proxy".into(),
         ));
     }
     let profile_name = format!("colossus.sandbox.{}", job.job_id.replace('-', ""));
@@ -1642,6 +1676,10 @@ fn supervise_windows_job(
         "pathext",
         "temp",
         "tmp",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
     ] {
         if environment
             .keys()
@@ -1672,6 +1710,21 @@ fn supervise_windows_job(
     environment.insert("PATHEXT".into(), ".COM;.EXE;.BAT;.CMD".into());
     environment.insert("TEMP".into(), temporary.display().to_string());
     environment.insert("TMP".into(), temporary.display().to_string());
+    if let Some(port) = job.proxy_port {
+        let proxy = authenticated_proxy_url(port, job.proxy_credential.as_deref());
+        environment.insert("HTTP_PROXY".into(), proxy.clone());
+        environment.insert("HTTPS_PROXY".into(), proxy.clone());
+        environment.insert("ALL_PROXY".into(), proxy);
+        environment.insert("NO_PROXY".into(), String::new());
+    }
+
+    let loopback = if networked {
+        Some(LoopbackExemptionGuard::new(package).map_err(|error| {
+            SandboxHelperError::Setup(format!("AppContainer loopback exemption: {error}"))
+        })?)
+    } else {
+        None
+    };
 
     let executable = fs::canonicalize(&job.executable)
         .map_err(|error| SandboxHelperError::Setup(format!("executable: {error}")))?;
@@ -1685,6 +1738,15 @@ fn supervise_windows_job(
         appcontainer_sid: package.as_string().into(),
         max_processes: job.obligations.max_processes,
         max_memory_bytes: job.obligations.max_memory_bytes,
+        proxy_port: job.proxy_port,
+        network_filter_id: job
+            .proxy_port
+            .map(|_| {
+                Uuid::parse_str(&job.job_id)
+                    .map(|id| id.as_u128())
+                    .map_err(|error| SandboxHelperError::Setup(error.to_string()))
+            })
+            .transpose()?,
     };
     let mut child = colossus_windows_process::spawn(&request)
         .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
@@ -1753,6 +1815,8 @@ fn supervise_windows_job(
     let state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let stdout = redact_proxy_credential(&state.stdout, job.proxy_credential.as_deref());
+    let stderr = redact_proxy_credential(&state.stderr, job.proxy_credential.as_deref());
     let result = SandboxJobResult {
         backend,
         exit_code: Some(i32::from_ne_bytes(exit_code.to_ne_bytes())),
@@ -1760,11 +1824,12 @@ fn supervise_windows_job(
         timed_out,
         resource_limit_exceeded,
         output_truncated: state.truncated,
-        stdout_base64: BASE64.encode(&state.stdout),
-        stderr_base64: BASE64.encode(&state.stderr),
+        stdout_base64: BASE64.encode(stdout),
+        stderr_base64: BASE64.encode(stderr),
     };
     drop(state);
     drop(child);
+    drop(loopback);
     profile.remove()?;
     Ok(result)
 }
@@ -2413,13 +2478,37 @@ fn configure_command(command: &mut Command, job: &SandboxJob) {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(port) = job.proxy_port {
-        let proxy = format!("http://127.0.0.1:{port}");
+        let proxy = authenticated_proxy_url(port, job.proxy_credential.as_deref());
         command
             .env("HTTP_PROXY", &proxy)
             .env("HTTPS_PROXY", &proxy)
             .env("ALL_PROXY", &proxy)
             .env("NO_PROXY", "");
     }
+}
+
+fn authenticated_proxy_url(port: u16, credential: Option<&str>) -> String {
+    credential.map_or_else(
+        || format!("http://127.0.0.1:{port}"),
+        |credential| format!("http://colossus:{credential}@127.0.0.1:{port}"),
+    )
+}
+
+fn redact_proxy_credential(bytes: &[u8], credential: Option<&str>) -> Vec<u8> {
+    let Some(credential) = credential else {
+        return bytes.to_vec();
+    };
+    let basic = BASE64.encode(format!("colossus:{credential}"));
+    let mut redacted = bytes.to_vec();
+    for secret in [credential.as_bytes(), basic.as_bytes()] {
+        while let Some(offset) = redacted
+            .windows(secret.len())
+            .position(|window| window == secret)
+        {
+            redacted.splice(offset..offset + secret.len(), b"[REDACTED]".iter().copied());
+        }
+    }
+    redacted
 }
 
 #[derive(Default)]
@@ -2539,6 +2628,8 @@ fn supervise(
     let state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let stdout = redact_proxy_credential(&state.stdout, job.proxy_credential.as_deref());
+    let stderr = redact_proxy_credential(&state.stderr, job.proxy_credential.as_deref());
     Ok(SandboxJobResult {
         backend,
         exit_code: status.code(),
@@ -2546,8 +2637,8 @@ fn supervise(
         timed_out,
         resource_limit_exceeded,
         output_truncated: state.truncated,
-        stdout_base64: BASE64.encode(&state.stdout),
-        stderr_base64: BASE64.encode(&state.stderr),
+        stdout_base64: BASE64.encode(stdout),
+        stderr_base64: BASE64.encode(stderr),
     })
 }
 
@@ -2858,7 +2949,7 @@ pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
             let _permit = permit;
             match tokio::time::timeout(
                 connection_timeout,
-                proxy_connection(stream, allowed.as_slice(), resolved.as_ref()),
+                proxy_connection(stream, allowed.as_slice(), resolved.as_ref(), None),
             )
             .await
             {
@@ -2871,13 +2962,30 @@ pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
 }
 
 impl AllowlistProxy {
+    #[cfg(test)]
     async fn start(origins: Vec<String>) -> Result<Self, ExecutionError> {
+        Self::start_with_authorization(origins, None).await
+    }
+
+    async fn start_authenticated(
+        origins: Vec<String>,
+        credential: &str,
+    ) -> Result<Self, ExecutionError> {
+        let authorization = format!("Basic {}", BASE64.encode(format!("colossus:{credential}")));
+        Self::start_with_authorization(origins, Some(authorization)).await
+    }
+
+    async fn start_with_authorization(
+        origins: Vec<String>,
+        authorization: Option<String>,
+    ) -> Result<Self, ExecutionError> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .map_err(adapter_failure)?;
         let address = listener.local_addr().map_err(adapter_failure)?;
         let allowed = Arc::new(origins);
         let resolved = Arc::new(BTreeMap::new());
+        let authorization = Arc::new(authorization);
         let (shutdown, mut shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
             loop {
@@ -2887,11 +2995,13 @@ impl AllowlistProxy {
                         let Ok((stream, _)) = accepted else { break };
                         let allowed = Arc::clone(&allowed);
                         let resolved = Arc::clone(&resolved);
+                        let authorization = Arc::clone(&authorization);
                         tokio::spawn(async move {
                             let _ = proxy_connection(
                                 stream,
                                 allowed.as_slice(),
                                 resolved.as_ref(),
+                                authorization.as_deref(),
                             )
                             .await;
                         });
@@ -2924,6 +3034,7 @@ async fn proxy_connection(
     mut client: TcpStream,
     allowed_origins: &[String],
     resolved_origins: &BTreeMap<String, Vec<SocketAddr>>,
+    required_authorization: Option<&str>,
 ) -> Result<(), ExecutionError> {
     let mut header = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -2946,6 +3057,17 @@ async fn proxy_connection(
         .lines()
         .next()
         .ok_or_else(|| adapter_failure("proxy request line is absent"))?;
+    if let Some(required_authorization) = required_authorization
+        && single_header_value(text, "proxy-authorization")? != Some(required_authorization)
+    {
+        client
+            .write_all(
+                b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"colossus\"\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .map_err(adapter_failure)?;
+        return Ok(());
+    }
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let target = parts.next().unwrap_or_default();
@@ -3289,10 +3411,12 @@ fn canonical_origin(scheme: &str, host: &str, port: u16) -> Result<String, Execu
 #[cfg(test)]
 mod tests {
     use super::{
-        AllowlistProxy, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
+        AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
         atomic_create, atomic_write, authority, non_public_ip, oci_command, oci_remove_arguments,
-        proposed_write_bytes, resolve_oci_origins, tls_server_name, validate_process_spec,
+        proposed_write_bytes, redact_proxy_credential, resolve_oci_origins, tls_server_name,
+        validate_process_spec,
     };
+    use base64::Engine as _;
     use colossus_contracts::{DecisionOutcome, PolicyObligations};
     use colossus_policy::{
         BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request, system_actor,
@@ -3341,6 +3465,29 @@ mod tests {
     }
 
     #[test]
+    fn proxy_credentials_are_redacted_from_captured_process_output() {
+        let credential = "a".repeat(64);
+        let basic = BASE64.encode(format!("colossus:{credential}"));
+        let output = format!("HTTP_PROXY=http://colossus:{credential}@127.0.0.1:42\n{basic}\n");
+        let redacted = redact_proxy_credential(output.as_bytes(), Some(&credential));
+        assert!(
+            !redacted
+                .windows(credential.len())
+                .any(|value| value == credential.as_bytes())
+        );
+        assert!(
+            !redacted
+                .windows(basic.len())
+                .any(|value| value == basic.as_bytes())
+        );
+        assert!(
+            String::from_utf8(redacted)
+                .expect("UTF-8")
+                .contains("[REDACTED]")
+        );
+    }
+
+    #[test]
     fn authenticated_helper_job_rejects_tampering_and_expiry() {
         let job = SandboxJob {
             schema_version: 1,
@@ -3362,14 +3509,24 @@ mod tests {
             obligations: PolicyObligations::default(),
             timeout_ms: 1,
             proxy_port: None,
+            proxy_credential: None,
             oci_runtime: None,
             oci_image: None,
             oci_proxy_image: None,
         };
         let key = [7_u8; 32];
-        let signed = SignedSandboxJob::sign(job, &key).expect("sign");
+        let signed = SignedSandboxJob::sign(job.clone(), &key).expect("sign");
         assert!(signed.clone().verify(&key).is_ok());
         assert!(signed.verify(&[8_u8; 32]).is_err());
+
+        let mut mismatched = job;
+        mismatched.proxy_port = Some(42);
+        assert!(
+            SignedSandboxJob::sign(mismatched, &key)
+                .expect("sign mismatched proxy")
+                .verify(&key)
+                .is_err()
+        );
     }
 
     #[test]
@@ -3497,6 +3654,7 @@ mod tests {
             obligations,
             timeout_ms: 1000,
             proxy_port: None,
+            proxy_credential: None,
             oci_runtime: Some(PathBuf::from("/usr/bin/docker")),
             oci_image: Some(format!("example@sha256:{}", "a".repeat(64))),
             oci_proxy_image: None,
@@ -3886,6 +4044,73 @@ mod tests {
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await.expect("response");
         assert!(response.starts_with(b"HTTP/1.1 403"));
+    }
+
+    #[tokio::test]
+    async fn authenticated_allowlist_proxy_rejects_missing_credentials_and_strips_valid_ones() {
+        let upstream = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
+        let address = upstream.local_addr().expect("address");
+        let origin = format!("http://{address}");
+        let credential = "a".repeat(64);
+        let proxy = AllowlistProxy::start_authenticated(vec![origin.clone()], &credential)
+            .await
+            .expect("authenticated proxy");
+
+        let mut unauthorized = TcpStream::connect(("127.0.0.1", proxy.port()))
+            .await
+            .expect("unauthorized connect");
+        unauthorized
+            .write_all(
+                format!("GET {origin}/denied HTTP/1.1\r\nHost: {address}\r\n\r\n").as_bytes(),
+            )
+            .await
+            .expect("unauthorized request");
+        let mut response = Vec::new();
+        unauthorized
+            .read_to_end(&mut response)
+            .await
+            .expect("unauthorized response");
+        assert!(response.starts_with(b"HTTP/1.1 407"));
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await.expect("authorized accept");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).await.expect("authorized read");
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            assert!(
+                !String::from_utf8_lossy(&request)
+                    .to_ascii_lowercase()
+                    .contains("proxy-authorization:")
+            );
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .expect("authorized response");
+        });
+        let authorization = format!("Basic {}", BASE64.encode(format!("colossus:{credential}")));
+        let mut authorized = TcpStream::connect(("127.0.0.1", proxy.port()))
+            .await
+            .expect("authorized connect");
+        authorized
+            .write_all(
+                format!(
+                    "GET {origin}/allowed HTTP/1.1\r\nHost: {address}\r\nProxy-Authorization: {authorization}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("authorized request");
+        let mut response = Vec::new();
+        authorized
+            .read_to_end(&mut response)
+            .await
+            .expect("authorized response");
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        server.await.expect("server");
     }
 
     #[tokio::test]

@@ -204,8 +204,10 @@ sandbox:
 ```
 
 Backends are `native`, `oci`, Windows AppContainer-backed `windows_job`, and explicitly
-downgraded `broker`. `windows_job` supports network-free effects and rejects any network
-destination until an authenticated AppContainer proxy is available. Broker mode requires
+downgraded `broker`. `windows_job` supports network-free effects and exact-origin network
+destinations through Colossus's authenticated proxy-only AppContainer transport. It
+requires permission to create the temporary loopback exemption and dynamic WFP filters;
+failure is fail-closed and never becomes broker execution. Broker mode requires
 `allowBrokerFallback: true`. OCI images must be preloaded immutable `@sha256:` references
 and use an exact Docker or Podman executable.
 Run `sandbox doctor` before enabling process effects.
