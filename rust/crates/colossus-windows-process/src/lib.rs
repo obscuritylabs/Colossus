@@ -676,7 +676,7 @@ mod windows_impl {
                 "Windows command line exceeds 32766 UTF-16 code units".into(),
             ));
         }
-        let cwd = wide(request.cwd.as_os_str());
+        let cwd = wide_process_path(&request.cwd);
         let environment = environment_block(&request.environment);
         if environment.len() > 32_767 {
             return Err(WindowsProcessError::Invalid(
@@ -858,6 +858,18 @@ mod windows_impl {
         value.encode_wide().chain(std::iter::once(0)).collect()
     }
 
+    pub(super) fn wide_process_path(value: &std::path::Path) -> Vec<u16> {
+        let encoded = value.as_os_str().encode_wide().collect::<Vec<_>>();
+        let verbatim_drive =
+            encoded.starts_with(&[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16])
+                && encoded.get(5) == Some(&(b':' as u16));
+        encoded
+            .into_iter()
+            .skip(if verbatim_drive { 4 } else { 0 })
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
     fn environment_block(environment: &std::collections::BTreeMap<String, String>) -> Vec<u16> {
         let mut entries = environment.iter().collect::<Vec<_>>();
         entries.sort_by(|left, right| {
@@ -918,5 +930,17 @@ mod tests {
             spawn(&request),
             Err(WindowsProcessError::Invalid(_))
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn create_process_current_directory_uses_drive_syntax_after_canonicalization() {
+        let encoded = super::windows_impl::wide_process_path(std::path::Path::new(
+            r"\\?\C:\workspace\allowed",
+        ));
+        assert_eq!(
+            String::from_utf16(&encoded[..encoded.len() - 1]).expect("UTF-16 path"),
+            r"C:\workspace\allowed"
+        );
     }
 }
