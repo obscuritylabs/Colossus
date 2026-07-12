@@ -1037,8 +1037,11 @@ A reconstruction is complete only when all applicable checks pass:
 - [x] Audit-chain verification detects tampering.
 - [x] Journal concurrency, encryption/key rotation, tail truncation, signed checkpoints,
   unknown effects, and read-only recovery behavior pass fault-injection tests.
-- [ ] Every effect category is rejected before adapter execution without an unexpired,
-  unused permit matching the request, decision, actor, and obligations.
+- [x] Shared gateway conformance enumerates filesystem, process, network, provider, MCP,
+  embedding, Chroma, integration, memory, domain, workflow, subagent, research, skill,
+  pack/bundle, repository, context, presentation, and audit-export effects and proves no
+  adapter start on rejection; permit tests bind request, decision, actor, obligations,
+  authentication tag, expiry, and one-use consumption.
 - [ ] OPA allow, deny, approval, full-content disclosure, hard redaction, mTLS, bundle
   revision, invalid response, outage, oversized input, and decision-log checks fail or
   proceed exactly as specified.

@@ -1791,6 +1791,160 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_effect_category_denies_before_adapter_without_a_permit() {
+        let categories = [
+            ("filesystem", "filesystem.write"),
+            ("process", "process.spawn"),
+            ("network", "network.http"),
+            ("provider", "provider.openai.responses"),
+            ("mcp", "mcp.call"),
+            ("embedding", "embedding.openai.create"),
+            ("memory_index", "memory.chroma.upsert"),
+            ("integration", "integration.call"),
+            ("memory", "memory.create"),
+            ("domain_state", "task.create"),
+            ("workflow", "workflow.execute"),
+            ("workflow_control", "workflow.start"),
+            ("subagent", "subagent.create"),
+            ("research", "research.run"),
+            ("skill", "skill.install"),
+            ("pack", "pack.install"),
+            ("bundle", "bundle.install"),
+            ("repository", "repository.read"),
+            ("context", "context.compact"),
+            ("presentation", "presentation.preferences.update"),
+            ("audit_export", "audit.export"),
+        ];
+        for (category, action) in categories {
+            let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+            let gateway = EffectGateway::new(
+                Arc::clone(&journal),
+                Arc::new(BuiltInPolicy::offline_default()),
+                Arc::new(AllowApproval {
+                    approved_by: "operator".into(),
+                }),
+                SafetyKernel::new([]),
+                [31_u8; 32],
+            );
+            let executor = CountingExecutor {
+                calls: AtomicUsize::new(0),
+            };
+            let error = gateway
+                .execute(
+                    effect_request(
+                        system_actor(format!("{category}-test")),
+                        action,
+                        format!("{category}:resource"),
+                        serde_json::json!({"category": category}),
+                    ),
+                    &executor,
+                )
+                .await
+                .expect_err(category);
+            assert!(
+                matches!(error, GatewayError::Denied(_) | GatewayError::Safety(_)),
+                "{category}: {error}"
+            );
+            assert_eq!(executor.calls.load(Ordering::Acquire), 0, "{category}");
+            let events = journal.read_global(1, 20).expect(category);
+            assert!(
+                events
+                    .iter()
+                    .all(|event| event.event_type != "effect.started.v1"),
+                "{category}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn permits_bind_every_claim_expire_authenticate_and_are_one_use() {
+        let policy = Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("echo", DecisionOutcome::Allow)
+                .with_limits(5_000, 8_192, 2, 64 * 1024 * 1024, 1),
+        );
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::clone(&policy) as Arc<dyn PolicyDecisionPoint>,
+            Arc::new(AllowApproval {
+                approved_by: "operator".into(),
+            }),
+            SafetyKernel::new([]),
+            [32_u8; 32],
+        );
+        let request = effect_request(
+            system_actor("permit-actor"),
+            "echo",
+            "echo:resource",
+            serde_json::json!({"text": "hello"}),
+        );
+        let decision = policy.decide(&request).await.expect("decision");
+        let mint = || {
+            let hash = super::sha256_hex(&super::canonical_bytes(&request).expect("request bytes"));
+            gateway
+                .mint_permit(&request, hash, &decision)
+                .expect("permit")
+        };
+
+        let request_mismatch = {
+            let mut value = request.clone();
+            value.content = serde_json::json!({"text": "changed"});
+            value
+        };
+        assert!(matches!(
+            gateway.authenticate_and_consume(&mint(), &request_mismatch, &decision),
+            Err(GatewayError::Safety(_))
+        ));
+
+        let actor_mismatch = {
+            let mut value = request.clone();
+            value.actor.id = "another-actor".into();
+            value
+        };
+        assert!(matches!(
+            gateway.authenticate_and_consume(&mint(), &actor_mismatch, &decision),
+            Err(GatewayError::Safety(_))
+        ));
+
+        let mut decision_mismatch = decision.clone();
+        decision_mismatch.decision_id = "another-decision".into();
+        assert!(matches!(
+            gateway.authenticate_and_consume(&mint(), &request, &decision_mismatch),
+            Err(GatewayError::Safety(_))
+        ));
+
+        let mut obligation_mismatch = decision.clone();
+        obligation_mismatch.obligations.max_output_bytes += 1;
+        assert!(matches!(
+            gateway.authenticate_and_consume(&mint(), &request, &obligation_mismatch),
+            Err(GatewayError::Safety(_))
+        ));
+
+        let mut expired = mint();
+        expired.expires_at_unix_ms = super::now_unix_ms() - 1;
+        assert!(matches!(
+            gateway.authenticate_and_consume(&expired, &request, &decision),
+            Err(GatewayError::Safety(_))
+        ));
+
+        let mut unauthenticated = mint();
+        unauthenticated.authentication_tag[0] ^= 0xff;
+        assert!(matches!(
+            gateway.authenticate_and_consume(&unauthenticated, &request, &decision),
+            Err(GatewayError::Safety(_))
+        ));
+
+        let permit = mint();
+        gateway
+            .authenticate_and_consume(&permit, &request, &decision)
+            .expect("first use");
+        assert!(matches!(
+            gateway.authenticate_and_consume(&permit, &request, &decision),
+            Err(GatewayError::Safety(message)) if message.contains("already been consumed")
+        ));
+    }
+
+    #[tokio::test]
     async fn deny_never_reaches_adapter() {
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
         let gateway = EffectGateway::new(

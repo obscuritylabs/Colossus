@@ -99,6 +99,13 @@ canonicalized against explicit read/write/execute roots, symlink leaves are reje
 writes, reads are bounded, and writes use a same-directory temporary file plus atomic
 rename.
 
+The permit contract is shared by every effect category rather than reimplemented by
+individual adapters. Regression tests enumerate all application effect families and
+prove rejection never produces `effect.started` or an adapter call. Separate claim tests
+alter the request, actor, decision, obligations, expiry, and authentication tag, then
+verify rejection; a correctly authenticated permit succeeds exactly once and replay is
+rejected.
+
 Subprocesses never use a shell. The parent sends a signed, expiring, one-use job document
 to a hidden helper over stdin. The signature binds the executable, literal arguments,
 working directory, environment, policy decision, permit nonce, obligations, and request
