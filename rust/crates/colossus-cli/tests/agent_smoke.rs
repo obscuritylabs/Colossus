@@ -9,6 +9,7 @@ const SIGNING_KEY: &str = "44444444444444444444444444444444444444444444444444444
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> std::process::Output {
     Command::new(binary)
+        .current_dir(config.parent().expect("config directory"))
         .arg("--config")
         .arg(config)
         .args(arguments)
@@ -24,6 +25,11 @@ fn offline_agent_run_uses_active_tools_and_persists_typed_events() {
     let directory = tempdir().expect("directory");
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
+    fs::write(
+        directory.path().join("restart-evidence.md"),
+        "Rust reconstruction records survive a redb reopen.\n",
+    )
+    .expect("research evidence");
     let state = directory.path().join("state.redb");
     let anchor = directory.path().join("anchor.json");
     let config = directory.path().join("config.yaml");
@@ -41,7 +47,7 @@ storage:
     anchor_path: {anchor}
 policy:
   kind: built_in
-  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
+  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, research.run]
   approval_actions: []
   require_post_effect: true
 workflows:
@@ -321,7 +327,7 @@ sandbox:
         fs::read_to_string(&config)
             .expect("read config")
             .replace(
-                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]",
+                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, research.run]",
                 "allow_actions: []",
             ),
     )
@@ -412,6 +418,44 @@ sandbox:
     assert_eq!(active.as_array().map(Vec::len), Some(1));
     assert_eq!(active[0]["id"], replacement_id);
 
+    let plan = run(
+        binary,
+        &config,
+        &[
+            "plans",
+            "create",
+            &session_id,
+            "Reconstruct durable state after restart",
+            "--content",
+            "Verify every canonical record through a fresh CLI process.",
+            "--step",
+            "Create records",
+            "--step",
+            "Reopen redb",
+        ],
+    );
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&plan.stdout).expect("plan JSON");
+    let plan_id = plan["id"].as_str().expect("plan id").to_owned();
+    assert_eq!(plan["status"], "draft");
+    assert_eq!(plan["steps"].as_array().map(Vec::len), Some(2));
+    let shown_plan = run(binary, &config, &["plans", "show", &plan_id]);
+    assert!(shown_plan.status.success());
+    let shown_plan: Value = serde_json::from_slice(&shown_plan.stdout).expect("shown plan JSON");
+    assert_eq!(shown_plan["id"], plan_id);
+    let plans = run(
+        binary,
+        &config,
+        &["plans", "list", "--session", &session_id],
+    );
+    let plans: Value = serde_json::from_slice(&plans.stdout).expect("plans JSON");
+    assert_eq!(plans.as_array().map(Vec::len), Some(1));
+    assert_eq!(plans[0]["id"], plan_id);
+
     let memory = run(
         binary,
         &config,
@@ -480,6 +524,10 @@ sandbox:
         superseded_memory[0]["superseded_by"],
         superseded_memory[1]["id"]
     );
+    let replacement_memory_id = superseded_memory[1]["id"]
+        .as_str()
+        .expect("replacement memory id")
+        .to_owned();
 
     let index_status = run(binary, &config, &["memories", "index", "status"]);
     assert!(index_status.status.success());
@@ -553,6 +601,7 @@ sandbox:
     assert_eq!(work["tasks"].as_array().map(Vec::len), Some(1));
     assert_eq!(work["open_task_count"], 0);
     assert_eq!(work["active_decisions"].as_array().map(Vec::len), Some(1));
+    assert_eq!(work["actionable_plans"].as_array().map(Vec::len), Some(1));
     assert_eq!(work["current_goals"].as_array().map(Vec::len), Some(1));
     assert_eq!(work["current_subagents"].as_array().map(Vec::len), Some(4));
     let drained_agents = run(binary, &config, &["agents", "drain"]);
@@ -578,6 +627,97 @@ sandbox:
             .is_some_and(Vec::is_empty)
     );
 
+    let research = run(
+        binary,
+        &config,
+        &[
+            "research",
+            "run",
+            "Rust reconstruction",
+            "--session",
+            &session_id,
+            "--depth",
+            "quick",
+            "--source",
+            "repo",
+        ],
+    );
+    assert!(
+        research.status.success(),
+        "{}",
+        String::from_utf8_lossy(&research.stderr)
+    );
+    let research: Value = serde_json::from_slice(&research.stdout).expect("research JSON");
+    assert_eq!(research["status"], "completed");
+    let research_id = research["id"].as_str().expect("research id").to_owned();
+    let shown_research = run(binary, &config, &["research", "show", &research_id]);
+    assert!(shown_research.status.success());
+    let shown_research: Value =
+        serde_json::from_slice(&shown_research.stdout).expect("shown research JSON");
+    assert_eq!(shown_research["id"], research_id);
+    let research_runs = run(
+        binary,
+        &config,
+        &["research", "list", "--session", &session_id],
+    );
+    let research_runs: Value =
+        serde_json::from_slice(&research_runs.stdout).expect("research list JSON");
+    assert_eq!(research_runs.as_array().map(Vec::len), Some(1));
+    assert_eq!(research_runs[0]["id"], research_id);
+    let research_sources = run(binary, &config, &["research", "sources", &research_id]);
+    let research_sources: Value =
+        serde_json::from_slice(&research_sources.stdout).expect("research sources JSON");
+    assert!(research_sources.as_array().is_some_and(|sources| {
+        sources
+            .iter()
+            .any(|source| source["uri"] == "restart-evidence.md")
+    }));
+
+    // Every command below opens a fresh runtime and reconstructs from the same redb journal.
+    let reconstructed_session = run(binary, &config, &["sessions", "show", &session_id]);
+    let reconstructed_session: Value =
+        serde_json::from_slice(&reconstructed_session.stdout).expect("reconstructed session JSON");
+    assert_eq!(reconstructed_session["id"], session_id);
+    let reconstructed_messages = run(binary, &config, &["sessions", "messages", &session_id]);
+    let reconstructed_messages: Value = serde_json::from_slice(&reconstructed_messages.stdout)
+        .expect("reconstructed messages JSON");
+    assert!(
+        reconstructed_messages
+            .as_array()
+            .is_some_and(|messages| !messages.is_empty())
+    );
+    for (arguments, expected_id) in [
+        (vec!["tasks", "show", task_id.as_str()], task_id.as_str()),
+        (
+            vec!["decisions", "show", replacement_id.as_str()],
+            replacement_id.as_str(),
+        ),
+        (vec!["plans", "show", plan_id.as_str()], plan_id.as_str()),
+        (
+            vec!["memories", "show", replacement_memory_id.as_str()],
+            replacement_memory_id.as_str(),
+        ),
+        (vec!["goals", "show", goal_id], goal_id),
+        (
+            vec!["agents", "show", agent_ids[0].as_str()],
+            agent_ids[0].as_str(),
+        ),
+        (
+            vec!["research", "show", research_id.as_str()],
+            research_id.as_str(),
+        ),
+    ] {
+        let reconstructed = run(binary, &config, &arguments);
+        assert!(
+            reconstructed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&reconstructed.stderr)
+        );
+        let reconstructed: Value =
+            serde_json::from_slice(&reconstructed.stdout).expect("reconstructed record JSON");
+        assert_eq!(reconstructed["id"], expected_id);
+    }
+
     let audit = run(binary, &config, &["audit", "show", "--limit", "1000"]);
     assert!(audit.status.success());
     let events: Vec<Value> = serde_json::from_slice(&audit.stdout).expect("audit JSON");
@@ -593,10 +733,13 @@ sandbox:
     assert!(event_types.contains(&"task.updated.v1"));
     assert!(event_types.contains(&"decision.created.v1"));
     assert!(event_types.contains(&"decision.superseded.v1"));
+    assert!(event_types.contains(&"plan.created.v1"));
     assert!(event_types.contains(&"memory.created.v1"));
     assert!(event_types.contains(&"memory.superseded.v1"));
     assert!(event_types.contains(&"goal.created.v1"));
     assert!(event_types.contains(&"goal.updated.v1"));
     assert!(event_types.contains(&"subagent.queued.v1"));
     assert!(event_types.contains(&"subagent.status_changed.v1"));
+    assert!(event_types.contains(&"research.run_created.v1"));
+    assert!(event_types.contains(&"research.source_added.v1"));
 }

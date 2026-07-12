@@ -999,8 +999,10 @@ A reconstruction is complete only when all applicable checks pass:
   tool semantics in loopback-live agent acceptance; denied writes never reach the
   filesystem, interactive modes require explicit approval, and `full-access` cannot
   override a deterministic deny.
-- [ ] Sessions, messages, events, tasks, decisions, memories, plans, goals, subagents,
-  and research survive restart.
+- [x] One credential-free redb lifecycle reconstructs sessions, messages, events, tasks,
+  decisions, draft plans, superseded memories, bounded goals, completed subagents,
+  offline repository research, and cited sources through fresh CLI processes, with final
+  exact-ID reads and audit-event verification for every named domain.
 - [ ] Automatic compaction is visible, preserves raw history, and has deterministic
   fallback.
 - [ ] Plan Mode cannot mutate; approved plans can execute once or enter Goal Mode.
