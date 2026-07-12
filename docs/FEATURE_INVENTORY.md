@@ -1082,11 +1082,18 @@ A reconstruction is complete only when all applicable checks pass:
   operator signatures.
 - [ ] Formatting, warnings-denied lint, workspace tests, fuzzing, dependency/license and
   vulnerability policy, and macOS/Linux/Windows arm64/x64 release smoke tests pass.
-  The six-target native runner/build/execute/package matrix is implemented; this remains
-  open until one remote run is green for every target.
+  The six-target native runner/build/execute/package matrix is implemented. A fail-closed
+  `rust-cutover-gate` now aggregates the workspace, portability, native sandbox, Windows
+  runtime, fuzz, supply-chain, release, Chroma, and live-security jobs, and a Rust contract
+  test pins its dependencies and platform matrices. This remains open until one remote run
+  makes that aggregate gate green.
 - [x] Strict configuration rejects unknown fields, preserves only credential/key references
   in `config show`, and proves raw unknown secret fields never appear in CLI diagnostics.
 - [ ] Unit, integration, boundary, security, type, lint, and packaging checks pass.
+  The complete local Rust workspace, independent fuzz harness, dependency/license,
+  vulnerability, native installer, signed-bundle, and host-native sandbox gates pass in the
+  current checkout. The first green hosted `rust-cutover-gate` remains required before this
+  cross-platform check can close.
 
 ## 24. Explicitly Deferred Product Decisions
 

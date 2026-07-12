@@ -372,6 +372,8 @@ cutover. The following planned work remains:
   Python-era operator signatures. Historical Python implementation detail remains only
   in explicitly labeled architecture/security legacy sections and the frozen branch/tag.
 - The first fully green remote native sandbox/runtime and six-target release-artifact
-  matrices.
+  matrices. CI now has one fail-closed `rust-cutover-gate` over every mandatory Rust job,
+  and repository acceptance pins that dependency set plus the supported runner/target
+  matrices so omitted platform evidence cannot silently appear green.
 
 Rust is promoted to the repository root only after those P0+P1 acceptance checks pass.

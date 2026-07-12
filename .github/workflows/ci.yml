@@ -927,3 +927,41 @@ jobs:
           COLOSSUS_OPA_BIN: /tmp/opa
           COLOSSUS_OPENSSL_BIN: /usr/bin/openssl
         run: cargo test --locked -p colossus-policy --test opa_live -- --ignored
+
+  rust-cutover-gate:
+    name: Rust P0+P1 cutover gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ always() }}
+    needs:
+      - rust
+      - rust-portability
+      - rust-native-sandbox
+      - rust-windows-runtime
+      - rust-fuzz
+      - rust-supply-chain
+      - rust-release-smoke
+      - rust-live-chroma
+      - rust-live-security
+
+    steps:
+      - name: Require every Rust acceptance matrix
+        env:
+          RUST_ACCEPTANCE_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          results = json.loads(os.environ["RUST_ACCEPTANCE_RESULTS"])
+          failed = {
+              name: details.get("result")
+              for name, details in results.items()
+              if details.get("result") != "success"
+          }
+          for name, result in sorted(failed.items()):
+              print(f"{name} acceptance did not succeed: {result}", file=sys.stderr)
+          raise SystemExit(bool(failed))
+          PY

@@ -61,6 +61,11 @@ Release evidence also includes:
 Opt-in external tests are not replaced by a skipped local test. Preserve their CI links
 with the release record.
 
+The `rust-cutover-gate` job is the required aggregate result. It runs even after a failed,
+cancelled, or skipped dependency and succeeds only when the workspace, portability, native
+sandbox, Windows runtime, fuzz, supply-chain, six-target release, Chroma, and live-security
+jobs all report success in the same workflow run.
+
 ## Offline And Signed Distribution
 
 Checksums detect corruption but do not authenticate a publisher. A trusted offline
