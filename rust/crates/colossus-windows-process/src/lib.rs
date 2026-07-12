@@ -818,7 +818,26 @@ mod windows_impl {
         ))
     }
 
-    fn windows_command_line(executable: &OsStr, arguments: &[String]) -> String {
+    pub(super) fn windows_command_line(executable: &OsStr, arguments: &[String]) -> String {
+        let cmd_command_index = std::path::Path::new(executable)
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.eq_ignore_ascii_case("cmd.exe"))
+            .then(|| {
+                arguments.iter().position(|argument| {
+                    argument.eq_ignore_ascii_case("/c") || argument.eq_ignore_ascii_case("/k")
+                })
+            })
+            .flatten()
+            .filter(|index| index + 2 == arguments.len());
+        if let Some(index) = cmd_command_index {
+            let prefix = std::iter::once(executable.to_string_lossy().into_owned())
+                .chain(arguments[..=index].iter().cloned())
+                .map(|argument| quote_argument(&argument))
+                .collect::<Vec<_>>()
+                .join(" ");
+            return format!("{prefix} \"{}\"", arguments[index + 1]);
+        }
         std::iter::once(executable.to_string_lossy().into_owned())
             .chain(arguments.iter().cloned())
             .map(|argument| quote_argument(&argument))
@@ -870,7 +889,9 @@ mod windows_impl {
             .collect()
     }
 
-    fn environment_block(environment: &std::collections::BTreeMap<String, String>) -> Vec<u16> {
+    pub(super) fn environment_block(
+        environment: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<u16> {
         let mut entries = environment.iter().collect::<Vec<_>>();
         entries.sort_by(|left, right| {
             left.0
@@ -879,11 +900,22 @@ mod windows_impl {
         });
         let mut block = Vec::new();
         for (name, value) in entries {
+            let value = process_value(value);
             block.extend(format!("{name}={value}").encode_utf16());
             block.push(0);
         }
         block.push(0);
         block
+    }
+
+    fn process_value(value: &str) -> &str {
+        value
+            .strip_prefix(r"\\?\")
+            .filter(|path| {
+                path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                    && path.as_bytes().get(1) == Some(&b':')
+            })
+            .unwrap_or(value)
     }
 
     fn last_error(operation: &'static str) -> WindowsProcessError {
@@ -941,6 +973,36 @@ mod tests {
         assert_eq!(
             String::from_utf16(&encoded[..encoded.len() - 1]).expect("UTF-16 path"),
             r"C:\workspace\allowed"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn create_process_environment_uses_drive_syntax_after_canonicalization() {
+        let block = super::windows_impl::environment_block(&BTreeMap::from([
+            ("TARGET".into(), r"\\?\C:\workspace\allowed.txt".into()),
+            ("UNC".into(), r"\\?\UNC\server\share".into()),
+        ]));
+        let decoded = String::from_utf16(&block).expect("UTF-16 environment");
+        assert!(decoded.contains("TARGET=C:\\workspace\\allowed.txt\0"));
+        assert!(decoded.contains("UNC=\\\\?\\UNC\\server\\share\0"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cmd_command_payload_uses_cmd_quote_semantics_instead_of_crt_escaping() {
+        let command = super::windows_impl::windows_command_line(
+            std::ffi::OsStr::new(r"\\?\C:\Windows\System32\cmd.exe"),
+            &[
+                "/D".into(),
+                "/S".into(),
+                "/C".into(),
+                "type \"%TARGET%\"".into(),
+            ],
+        );
+        assert_eq!(
+            command,
+            "\\\\?\\C:\\Windows\\System32\\cmd.exe /D /S /C \"type \"%TARGET%\"\""
         );
     }
 }

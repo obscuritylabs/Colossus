@@ -128,6 +128,10 @@ allowed variable names to the child. Output is bounded and base64 encoded; nonze
 audit records retain only output hashes and sizes. Process groups with explicit
 process-tree termination on Unix, and Job Objects on Windows, provide descendant
 ownership for timeout and resource-limit termination.
+When an explicitly permitted Windows executable is `cmd.exe` with `/C` or `/K`, the
+single command-string argument is encoded with `cmd.exe`'s documented quote rules rather
+than C-runtime argv escaping. The exact command string remains policy-disclosed,
+permit-bound, and audited; Colossus never introduces an implicit shell.
 
 On macOS and Linux, native execution uses two authenticated helper levels. A trusted
 outer helper stays outside filesystem confinement only to account and terminate the
