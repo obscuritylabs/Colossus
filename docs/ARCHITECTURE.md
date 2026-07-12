@@ -73,7 +73,11 @@ Plans are session-scoped canonical records with ordered typed steps and explicit
 approval, execution, and discard are append-only transitions, and an approved plan can
 be consumed by only one run. Model schemas omit the session id, `plan.approve_request`
 uses the ordinary approval-proof re-evaluation path, and `plan.show` rechecks canonical
-session ownership before releasing content.
+session ownership before releasing content. Plan Mode is a distinct application run
+scope that exposes only inspection, task-creation, and plan tools; the agent rejects
+provider calls for tools not offered in that scope before the executor can run. Direct
+approved-plan execution consumes the plan through `plan.execute` before starting the
+fixed-id agent run, so concurrent or repeated execution cannot duplicate effects.
 
 Goal Mode is a bounded loop over the ordinary `colossus-agent` service, not a second
 orchestrator or permission domain. Canonical goals record objective, session, optional

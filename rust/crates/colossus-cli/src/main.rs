@@ -533,7 +533,19 @@ enum Command {
     /// Execute one audited model turn through the configured role.
     Run {
         /// User prompt sent as the complete logical request content.
-        prompt: String,
+        prompt: Option<String>,
+        /// Create a durable plan through structurally non-mutating Plan Mode.
+        #[arg(long, conflicts_with = "execute_plan")]
+        plan: bool,
+        /// Atomically consume and execute an approved plan id.
+        #[arg(long, conflicts_with_all = ["plan", "session", "resume"])]
+        execute_plan: Option<String>,
+        /// Execute --execute-plan through bounded Goal Mode.
+        #[arg(long, requires = "execute_plan")]
+        goal: bool,
+        /// Maximum Goal Mode iterations for --execute-plan --goal.
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u16).range(1..=50))]
+        goal_max_iterations: u16,
         /// Configured model role.
         #[arg(long, default_value = "primary")]
         role: String,
@@ -2894,6 +2906,10 @@ async fn dispatch_to_worker_if_active(
         }
         Command::Run {
             prompt,
+            plan,
+            execute_plan,
+            goal,
+            goal_max_iterations,
             role,
             instructions,
             max_turns,
@@ -2902,6 +2918,48 @@ async fn dispatch_to_worker_if_active(
             skills,
             stream,
         } => {
+            if execute_plan.is_some() && *stream {
+                return Err(cli_error(
+                    "--stream is not supported with --execute-plan; inspect the returned run JSON",
+                )
+                .into());
+            }
+            if let Some(plan_id) = execute_plan {
+                let result = if *goal {
+                    let plan = client
+                        .call(WorkerOperation::PlanGet {
+                            plan_id: plan_id.clone(),
+                        })
+                        .await?;
+                    let session_id = plan
+                        .get("session_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| cli_error("approved plan has no session id"))?;
+                    client
+                        .call(WorkerOperation::GoalRun {
+                            role: role.clone(),
+                            objective: String::new(),
+                            session_id: session_id.into(),
+                            max_iterations: *goal_max_iterations,
+                            source_plan_id: Some(plan_id.clone()),
+                        })
+                        .await?
+                } else {
+                    client
+                        .call(WorkerOperation::PlanRun {
+                            role: role.clone(),
+                            plan_id: plan_id.clone(),
+                            max_turns: *max_turns,
+                        })
+                        .await?
+                };
+                client.call(WorkerOperation::Drain).await?;
+                print_json(&result)?;
+                return Ok(true);
+            }
+            let prompt = prompt
+                .as_deref()
+                .ok_or_else(|| cli_error("a prompt or --execute-plan is required"))?;
             let session_id = if *resume {
                 Some(
                     serde_json::from_value::<colossus_contracts::SessionSummary>(
@@ -2912,14 +2970,26 @@ async fn dispatch_to_worker_if_active(
             } else {
                 session.clone()
             };
-            let operation = WorkerOperation::RunModel {
-                role: role.clone(),
-                instructions: instructions.clone(),
-                prompt: prompt.clone(),
-                max_turns: *max_turns,
-                session_id,
-                explicit_skills: skills.clone(),
-                sticky_skills: Vec::new(),
+            let operation = if *plan {
+                WorkerOperation::RunPlan {
+                    role: role.clone(),
+                    instructions: instructions.clone(),
+                    prompt: prompt.into(),
+                    max_turns: *max_turns,
+                    session_id,
+                    explicit_skills: skills.clone(),
+                    sticky_skills: Vec::new(),
+                }
+            } else {
+                WorkerOperation::RunModel {
+                    role: role.clone(),
+                    instructions: instructions.clone(),
+                    prompt: prompt.into(),
+                    max_turns: *max_turns,
+                    session_id,
+                    explicit_skills: skills.clone(),
+                    sticky_skills: Vec::new(),
+                }
             };
             let result = if *stream {
                 let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
@@ -5155,6 +5225,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
         Command::Run {
             prompt,
+            plan,
+            execute_plan,
+            goal,
+            goal_max_iterations,
             role,
             instructions,
             max_turns,
@@ -5163,18 +5237,82 @@ async fn main() -> Result<(), Box<dyn Error>> {
             skills,
             stream,
         } => {
+            if execute_plan.is_some() && stream {
+                return Err(cli_error(
+                    "--stream is not supported with --execute-plan; inspect the returned run JSON",
+                )
+                .into());
+            }
+            if let Some(plan_id) = execute_plan {
+                let result = if goal {
+                    let approved = runtime
+                        .get_plan(&plan_id)?
+                        .ok_or_else(|| cli_error(format!("plan not found: {plan_id}")))?;
+                    serde_json::to_value(
+                        runtime
+                            .run_goal(
+                                &role,
+                                "",
+                                &approved.session_id,
+                                goal_max_iterations,
+                                Some(&plan_id),
+                            )
+                            .await?,
+                    )?
+                } else {
+                    serde_json::to_value(
+                        runtime
+                            .run_approved_plan(&role, &plan_id, max_turns)
+                            .await?,
+                    )?
+                };
+                runtime.drain_subagents().await?;
+                print_json(&result)?;
+                return Ok(());
+            }
+            let prompt = prompt
+                .as_deref()
+                .ok_or_else(|| cli_error("a prompt or --execute-plan is required"))?;
             let session_id = if resume {
                 Some(runtime.latest_session()?.id)
             } else {
                 session
             };
-            let result = if stream {
+            let result = if plan && stream {
+                let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
+                let result = runtime
+                    .run_plan_with_skills_stream(
+                        &role,
+                        &instructions,
+                        prompt,
+                        max_turns,
+                        session_id.as_deref(),
+                        &skills,
+                        &[],
+                        &mut observer,
+                    )
+                    .await;
+                observer.finish_line()?;
+                result?
+            } else if plan {
+                runtime
+                    .run_plan_with_skills(
+                        &role,
+                        &instructions,
+                        prompt,
+                        max_turns,
+                        session_id.as_deref(),
+                        &skills,
+                        &[],
+                    )
+                    .await?
+            } else if stream {
                 let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
                 let result = runtime
                     .run_model_with_skills_stream(
                         &role,
                         &instructions,
-                        &prompt,
+                        prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,
@@ -5189,7 +5327,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .run_model_with_skills(
                         &role,
                         &instructions,
-                        &prompt,
+                        prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,

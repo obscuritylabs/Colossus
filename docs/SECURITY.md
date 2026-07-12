@@ -334,6 +334,13 @@ re-evaluates the proof, and only then can the private work adapter append
 `plan.approved.v1`. Canonical ownership checks prevent cross-session show or approval,
 and an approved plan can transition to executed only once.
 
+Plan Mode is enforced by tool exposure, not instructions alone. Workspace writes,
+patch application, subprocesses, delegation, decision/memory mutation, approval, and
+other non-planning tools are absent from the request, and a provider-supplied call to
+any undisclosed tool is denied before tool lifecycle or adapter execution. Direct plan
+execution atomically records `plan.executed.v1` with the exact pending run id before the
+agent starts; failure does not make the plan replayable.
+
 Goal Mode does not broaden authority: every iteration uses the same provider, active
 tools, policy channel, approvals, sandbox, context preparation, and journal. Goal ids are
 runtime-injected and cannot be supplied in model arguments. The private work adapter

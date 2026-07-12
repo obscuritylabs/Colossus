@@ -164,6 +164,23 @@ pub enum WorkerOperation {
         /// REPL-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
+    /// Execute structurally read-only Plan Mode.
+    RunPlan {
+        /// Logical role.
+        role: String,
+        /// Caller instructions composed with mandatory planning constraints.
+        instructions: String,
+        /// Planning prompt.
+        prompt: String,
+        /// Optional bounded turn override.
+        max_turns: Option<u16>,
+        /// Optional exact durable session.
+        session_id: Option<String>,
+        /// Explicit declarative skills.
+        explicit_skills: Vec<String>,
+        /// REPL-sticky declarative skills.
+        sticky_skills: Vec<String>,
+    },
     /// Execute the permit-bound offline echo effect.
     Echo {
         /// Exact echo input.
@@ -397,6 +414,15 @@ pub enum WorkerOperation {
     PlanApprove {
         /// Exact plan identifier.
         plan_id: String,
+    },
+    /// Atomically consume and execute one approved plan.
+    PlanRun {
+        /// Logical model role.
+        role: String,
+        /// Exact approved plan identifier.
+        plan_id: String,
+        /// Optional bounded model-turn override.
+        max_turns: Option<u16>,
     },
     /// List canonical goals.
     GoalList {
@@ -1010,9 +1036,12 @@ impl WorkerClient {
         operation: WorkerOperation,
         observer: &mut dyn colossus_ports::RunEventObserver,
     ) -> Result<AgentRunResult, WorkerError> {
-        if !matches!(operation, WorkerOperation::RunModel { .. }) {
+        if !matches!(
+            operation,
+            WorkerOperation::RunModel { .. } | WorkerOperation::RunPlan { .. }
+        ) {
             return Err(WorkerError::Protocol(
-                "run_model requires a run_model operation".into(),
+                "run_model requires a run_model or run_plan operation".into(),
             ));
         }
         let mut stream = self.connect().await?;
@@ -1241,6 +1270,39 @@ where
             }
             Ok(false)
         }
+        WorkerOperation::RunPlan {
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            session_id,
+            explicit_skills,
+            sticky_skills,
+        } => {
+            let mut observer = IpcRunObserver {
+                stream,
+                key,
+                request_id: &request_id,
+                sequence: 0,
+            };
+            let result = runtime
+                .run_plan_with_skills_stream(
+                    &role,
+                    &instructions,
+                    &prompt,
+                    max_turns,
+                    session_id.as_deref(),
+                    &explicit_skills,
+                    &sticky_skills,
+                    &mut observer,
+                )
+                .await;
+            match result {
+                Ok(result) => observer.complete(serde_json::to_value(result)?).await?,
+                Err(error) => observer.error(error.to_string()).await?,
+            }
+            Ok(false)
+        }
         operation => {
             let shutdown = matches!(operation, WorkerOperation::Shutdown);
             let result = dispatch(runtime, operation, maintenance).await;
@@ -1278,6 +1340,7 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ProviderRoute { .. } => "provider_route",
         WorkerOperation::ToolsList => "tools_list",
         WorkerOperation::RunModel { .. } => "run_model",
+        WorkerOperation::RunPlan { .. } => "run_plan",
         WorkerOperation::Echo { .. } => "echo",
         WorkerOperation::SessionCreate { .. } => "session_create",
         WorkerOperation::SessionGet { .. } => "session_get",
@@ -1310,6 +1373,7 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::PlanGet { .. } => "plan_get",
         WorkerOperation::PlanCreate { .. } => "plan_create",
         WorkerOperation::PlanApprove { .. } => "plan_approve",
+        WorkerOperation::PlanRun { .. } => "plan_run",
         WorkerOperation::GoalList { .. } => "goal_list",
         WorkerOperation::GoalGet { .. } => "goal_get",
         WorkerOperation::GoalRun { .. } => "goal_run",
@@ -1725,6 +1789,15 @@ async fn dispatch(
         WorkerOperation::PlanApprove { plan_id } => {
             Ok(serde_json::to_value(runtime.approve_plan(&plan_id).await?)?)
         }
+        WorkerOperation::PlanRun {
+            role,
+            plan_id,
+            max_turns,
+        } => Ok(serde_json::to_value(
+            runtime
+                .run_approved_plan(&role, &plan_id, max_turns)
+                .await?,
+        )?),
         WorkerOperation::GoalList {
             session_id,
             status,
@@ -2191,9 +2264,9 @@ async fn dispatch(
         )?),
         WorkerOperation::Drain => drain_once(runtime, maintenance).await,
         WorkerOperation::Shutdown => Ok(json!({"stopping": true})),
-        WorkerOperation::RunModel { .. } => Err(WorkerError::Protocol(
-            "run_model must use the streaming dispatch path".into(),
-        )),
+        WorkerOperation::RunModel { .. } | WorkerOperation::RunPlan { .. } => Err(
+            WorkerError::Protocol("model runs must use the streaming dispatch path".into()),
+        ),
     }
 }
 

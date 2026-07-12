@@ -1007,7 +1007,10 @@ A reconstruction is complete only when all applicable checks pass:
   `context status` and `context list`, preserves all raw session messages, emits one
   immutable snapshot plus prepared-event provenance, and selects the deterministic
   fallback when model-assisted compaction is unavailable.
-- [ ] Plan Mode cannot mutate; approved plans can execute once or enter Goal Mode.
+- [x] Cross-process loopback-live CLI acceptance proves Plan Mode omits and rejects
+  workspace mutation before tool execution, creates a canonical structured draft, and
+  atomically consumes each approved plan exactly once through either a fixed-id direct
+  agent run or a plan-linked Goal Mode run.
 - [x] Goal Mode stops correctly on complete, blocked, error, or budget exhaustion.
 - [x] Subagents respect configured concurrency, cannot delegate recursively, and can be
   cancelled or resumed after interruption.

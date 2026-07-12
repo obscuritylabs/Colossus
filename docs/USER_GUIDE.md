@@ -115,9 +115,13 @@ colossus --config .colossus/config.yaml decisions list --session SESSION_ID
 colossus --config .colossus/config.yaml plans create SESSION_ID \
   "Cut a release" --step "Run gates" --step "Build archives"
 colossus --config .colossus/config.yaml --approval-mode ask plans approve PLAN_ID
+colossus --config .colossus/config.yaml run --execute-plan PLAN_ID
 
-colossus --config .colossus/config.yaml goals run \
-  "Complete the approved plan" --session SESSION_ID --max-iterations 5
+colossus --config .colossus/config.yaml run --plan --session SESSION_ID \
+  "Plan the Rust cutover without changing the workspace"
+
+colossus --config .colossus/config.yaml run --execute-plan PLAN_ID \
+  --goal --goal-max-iterations 5
 colossus --config .colossus/config.yaml goals show GOAL_ID
 
 colossus --config .colossus/config.yaml agents queue SESSION_ID \

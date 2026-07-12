@@ -1342,6 +1342,10 @@ enum WorkOperation {
     PlanApprove {
         id: String,
     },
+    PlanExecute {
+        id: String,
+        run_id: String,
+    },
     GoalCreate {
         session_id: String,
         objective: String,
@@ -1407,6 +1411,7 @@ impl WorkOperation {
             Self::PlanCreate { .. } => "plan.create",
             Self::PlanShow { .. } => "plan.show",
             Self::PlanApprove { .. } => "plan.approve_request",
+            Self::PlanExecute { .. } => "plan.execute",
             Self::GoalCreate { .. } => "goal.create",
             Self::GoalShow { .. } => "goal.show",
             Self::GoalUpdate { .. } => "goal.update",
@@ -1441,6 +1446,7 @@ impl WorkOperation {
             | Self::DecisionSupersede { id, .. }
             | Self::PlanShow { id }
             | Self::PlanApprove { id }
+            | Self::PlanExecute { id, .. }
             | Self::GoalShow { id }
             | Self::GoalUpdate { id, .. }
             | Self::GoalIteration { id }
@@ -2315,6 +2321,7 @@ impl Runtime {
             "plan.create".to_owned(),
             "plan.show".to_owned(),
             "plan.approve_request".to_owned(),
+            "plan.execute".to_owned(),
             "goal.create".to_owned(),
             "goal.show".to_owned(),
             "goal.update".to_owned(),
@@ -3547,7 +3554,9 @@ impl Runtime {
                     .ok_or_else(|| StoreError::NotFound(format!("decision {id}")))?
                     .session_id
             }
-            WorkOperation::PlanShow { id } | WorkOperation::PlanApprove { id } => {
+            WorkOperation::PlanShow { id }
+            | WorkOperation::PlanApprove { id }
+            | WorkOperation::PlanExecute { id, .. } => {
                 self.work
                     .get_plan(id)?
                     .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?
@@ -3584,6 +3593,9 @@ impl Runtime {
         match &mutation {
             WorkOperation::GoalCreate { source_plan_id, .. } => {
                 request.context.plan_id = source_plan_id.clone();
+            }
+            WorkOperation::PlanExecute { id, .. } => {
+                request.context.plan_id = Some(id.clone());
             }
             WorkOperation::GoalShow { id }
             | WorkOperation::GoalUpdate { id, .. }
@@ -4396,6 +4408,130 @@ impl Runtime {
                 session_id,
                 &active,
                 observer,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Execute structurally read-only Plan Mode with only inspection, task, and plan tools.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_plan_with_skills(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+    ) -> Result<AgentRunResult, RuntimeError> {
+        let instructions = format!(
+            "{instructions}\n\nYou are Colossus operating in Plan Mode. Inspect context and create durable tasks or a structured draft with plan.create when useful. Do not write files, apply patches, run commands, delegate work, alter decisions or memories, approve plans, or claim implementation is complete."
+        );
+        let composition = self.skill_composer.compose(
+            &instructions,
+            prompt,
+            explicit_skills,
+            sticky_skills,
+            self.skills_enabled,
+            &self.tools.list_specs(),
+        )?;
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<Vec<_>>();
+        self.agent
+            .run_plan_in_session_with_skills(
+                role,
+                &composition.instructions,
+                prompt,
+                max_turns.unwrap_or(self.agent_max_turns),
+                session_id,
+                &active,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Execute Plan Mode while forwarding policy-released provider events.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_plan_with_skills_stream(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+        observer: &mut dyn RunEventObserver,
+    ) -> Result<AgentRunResult, RuntimeError> {
+        let instructions = format!(
+            "{instructions}\n\nYou are Colossus operating in Plan Mode. Inspect context and create durable tasks or a structured draft with plan.create when useful. Do not write files, apply patches, run commands, delegate work, alter decisions or memories, approve plans, or claim implementation is complete."
+        );
+        let composition = self.skill_composer.compose(
+            &instructions,
+            prompt,
+            explicit_skills,
+            sticky_skills,
+            self.skills_enabled,
+            &self.tools.list_specs(),
+        )?;
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<Vec<_>>();
+        self.agent
+            .run_plan_in_session_with_skills_stream(
+                role,
+                &composition.instructions,
+                prompt,
+                max_turns.unwrap_or(self.agent_max_turns),
+                session_id,
+                &active,
+                observer,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Atomically consume and execute one approved plan through a normal agent run.
+    pub async fn run_approved_plan(
+        &self,
+        role: &str,
+        plan_id: &str,
+        max_turns: Option<u16>,
+    ) -> Result<AgentRunResult, RuntimeError> {
+        let plan = self
+            .work
+            .get_plan(plan_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+        if plan.status != PlanStatus::Approved {
+            return Err(RuntimeError::Config(
+                "plan execution requires one approved plan".into(),
+            ));
+        }
+        let prompt = goal_objective_from_plan(&plan);
+        let run_id = Uuid::now_v7().to_string();
+        let consumed: PlanRecord = serde_json::from_value(
+            self.execute_work_operation(WorkOperation::PlanExecute {
+                id: plan.id.clone(),
+                run_id: run_id.clone(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        self.agent
+            .run_approved_plan(
+                role,
+                "Execute the canonical approved plan using normal tools and policy. Preserve plan lineage and do not expand its scope.",
+                &prompt,
+                max_turns.unwrap_or(self.agent_max_turns),
+                &consumed.session_id,
+                &consumed.id,
+                &run_id,
             )
             .await
             .map_err(Into::into)
@@ -9001,7 +9137,9 @@ impl WorkEffectExecutor {
                     .ok_or_else(|| ExecutionError::Failed(format!("task {id} was not found")))?
                     .session_id
             }
-            WorkOperation::PlanShow { id } | WorkOperation::PlanApprove { id } => {
+            WorkOperation::PlanShow { id }
+            | WorkOperation::PlanApprove { id }
+            | WorkOperation::PlanExecute { id, .. } => {
                 self.repository
                     .get_plan(id)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?
@@ -9209,6 +9347,9 @@ impl EffectExecutor for WorkEffectExecutor {
                 }))
             }
             WorkOperation::PlanApprove { id } => work_result(self.service.approve_plan(&id, actor)),
+            WorkOperation::PlanExecute { id, run_id } => {
+                work_result(self.service.execute_plan(&id, &run_id, actor))
+            }
             WorkOperation::GoalCreate {
                 session_id,
                 objective,

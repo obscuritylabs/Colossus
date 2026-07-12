@@ -15,7 +15,7 @@ use colossus_ports::{
 };
 use colossus_tools::model_definitions;
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Instant};
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -25,6 +25,16 @@ pub const DEFAULT_MAX_TURNS: u16 = 24;
 pub const MAX_TURNS: u16 = 100;
 const TOOL_ARGUMENT_RECOVERY_LIMIT: u8 = 2;
 const INVALID_TOOL_ARGUMENTS_CODE: &str = "provider.invalid_tool_arguments";
+
+#[derive(Default)]
+struct RunScope<'a> {
+    requested_run_id: Option<&'a str>,
+    goal_id: Option<&'a str>,
+    plan_id: Option<&'a str>,
+    subagent_id: Option<&'a str>,
+    active_skills: &'a [String],
+    plan_mode: bool,
+}
 
 /// Application-loop failure with terminal states distinguishable by callers.
 #[derive(Debug, Error)]
@@ -123,10 +133,7 @@ impl AgentService {
             prompt,
             max_turns,
             requested_session_id,
-            None,
-            None,
-            None,
-            &[],
+            RunScope::default(),
             None,
         )
         .await
@@ -149,10 +156,10 @@ impl AgentService {
             prompt,
             max_turns,
             requested_session_id,
-            None,
-            None,
-            None,
-            active_skills,
+            RunScope {
+                active_skills,
+                ..RunScope::default()
+            },
             None,
         )
         .await
@@ -176,11 +183,94 @@ impl AgentService {
             prompt,
             max_turns,
             requested_session_id,
-            None,
-            None,
-            None,
-            active_skills,
+            RunScope {
+                active_skills,
+                ..RunScope::default()
+            },
             Some(observer),
+        )
+        .await
+    }
+
+    /// Execute a structurally read-only planning run with only planning tools exposed.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_plan_in_session_with_skills(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+    ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            RunScope {
+                active_skills,
+                plan_mode: true,
+                ..RunScope::default()
+            },
+            None,
+        )
+        .await
+    }
+
+    /// Execute a planning run and forward ordered policy-released events.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_plan_in_session_with_skills_stream(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        observer: &mut dyn RunEventObserver,
+    ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            RunScope {
+                active_skills,
+                plan_mode: true,
+                ..RunScope::default()
+            },
+            Some(observer),
+        )
+        .await
+    }
+
+    /// Execute one already-consumed approved plan with fixed run and plan lineage.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_approved_plan(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        session_id: &str,
+        plan_id: &str,
+        run_id: &str,
+    ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            Some(session_id),
+            RunScope {
+                requested_run_id: Some(run_id),
+                plan_id: Some(plan_id),
+                ..RunScope::default()
+            },
+            None,
         )
         .await
     }
@@ -203,10 +293,11 @@ impl AgentService {
             prompt,
             max_turns,
             Some(session_id),
-            Some(goal_id),
-            plan_id,
-            None,
-            &[],
+            RunScope {
+                goal_id: Some(goal_id),
+                plan_id,
+                ..RunScope::default()
+            },
             None,
         )
         .await
@@ -229,10 +320,10 @@ impl AgentService {
             task,
             max_turns,
             Some(child_session_id),
-            None,
-            None,
-            Some(subagent_id),
-            &[],
+            RunScope {
+                subagent_id: Some(subagent_id),
+                ..RunScope::default()
+            },
             None,
         )
         .await
@@ -246,10 +337,7 @@ impl AgentService {
         prompt: &str,
         max_turns: u16,
         requested_session_id: Option<&str>,
-        goal_id: Option<&str>,
-        plan_id: Option<&str>,
-        subagent_id: Option<&str>,
-        active_skills: &[String],
+        scope: RunScope<'_>,
         mut released_observer: Option<&mut dyn RunEventObserver>,
     ) -> Result<AgentRunResult, AgentError> {
         if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
@@ -258,7 +346,10 @@ impl AgentService {
             )));
         }
         let started = Instant::now();
-        let run_id = Uuid::now_v7().to_string();
+        let run_id = scope
+            .requested_run_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::now_v7().to_string());
         let session_id = match requested_session_id {
             Some(id) => {
                 self.sessions
@@ -285,10 +376,10 @@ impl AgentService {
             correlation_id: run_id.clone(),
             session_id: Some(session_id.clone()),
             run_id: Some(run_id.clone()),
-            goal_id: goal_id.map(str::to_owned),
-            plan_id: plan_id.map(str::to_owned),
-            subagent_id: subagent_id.map(str::to_owned),
-            skill_ids: active_skills.to_vec(),
+            goal_id: scope.goal_id.map(str::to_owned),
+            plan_id: scope.plan_id.map(str::to_owned),
+            subagent_id: scope.subagent_id.map(str::to_owned),
+            skill_ids: scope.active_skills.to_vec(),
             ..ExecutionContext::default()
         };
         let mut messages = self
@@ -315,9 +406,15 @@ impl AgentService {
         messages.push(user_message);
         let mut definitions = model_definitions(self.tools.as_ref());
         definitions.retain(|definition| {
-            (goal_id.is_some() || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
-                && (subagent_id.is_none() || definition.name != "agent.delegate")
+            (scope.goal_id.is_some()
+                || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
+                && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
+                && (!scope.plan_mode || plan_mode_tool(&definition.name))
         });
+        let offered_tools = definitions
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect::<BTreeSet<_>>();
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
         self.append(
@@ -332,7 +429,7 @@ impl AgentService {
                 "provider": route.provider,
                 "model": route.model,
                 "max_turns": max_turns,
-                "active_skills": active_skills,
+                "active_skills": scope.active_skills,
             }),
         )?;
         emit_run_event(
@@ -422,7 +519,7 @@ impl AgentService {
                     "message_count": request.messages.len(),
                     "tool_count": request.tools.len(),
                     "request_bytes": serde_json::to_vec(&request).map_or(0, |bytes| bytes.len()),
-                    "active_skills": active_skills,
+                    "active_skills": scope.active_skills,
                 }),
             )?;
             emit_run_event(
@@ -654,7 +751,14 @@ impl AgentService {
             messages.push(assistant_message);
             for call in calls {
                 let tool_started = Instant::now();
-                let validation = self.tools.validate(&call);
+                let validation = if offered_tools.contains(call.name.as_str()) {
+                    self.tools.validate(&call)
+                } else {
+                    Err(ToolError::Denied(format!(
+                        "tool {} is not available in this run mode",
+                        call.name
+                    )))
+                };
                 if validation.is_ok() {
                     self.append(
                         &stream_id,
@@ -950,6 +1054,39 @@ fn tool_error_code(error: &ToolError) -> &'static str {
         ToolError::Failed(_) => "tool.failed",
         ToolError::OutcomeUnknown(_) => "tool.outcome_unknown",
     }
+}
+
+fn plan_mode_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "echo"
+            | "filesystem.list"
+            | "filesystem.read"
+            | "filesystem.search"
+            | "git.status"
+            | "git.diff"
+            | "git.show"
+            | "repo.map"
+            | "repo.symbol_search"
+            | "repo.references"
+            | "repo.file_summary"
+            | "patch.preview"
+            | "task.create"
+            | "task.list"
+            | "decision.list"
+            | "plan.create"
+            | "plan.show"
+            | "memory.read"
+            | "memory.list"
+            | "memory.search"
+            | "agent.result"
+            | "agent.list"
+            | "tool.search"
+            | "user.ask"
+            | "context.status"
+            | "context.list"
+            | "skill.resource.read"
+    )
 }
 
 fn session_title(prompt: &str) -> String {
