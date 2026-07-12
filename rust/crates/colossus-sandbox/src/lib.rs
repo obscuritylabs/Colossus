@@ -58,6 +58,7 @@ use rappct::{
 type HmacSha256 = Hmac<Sha256>;
 
 const HELPER_KEY_VARIABLE: &str = "COLOSSUS_SANDBOX_JOB_KEY";
+const NATIVE_INNER_VARIABLE: &str = "COLOSSUS_SANDBOX_NATIVE_INNER";
 const OCI_PROXY_CONFIG_VARIABLE: &str = "COLOSSUS_OCI_PROXY_CONFIG";
 const OCI_PROXY_PORT: u16 = 18_080;
 const MAX_JOB_BYTES: usize = 1024 * 1024;
@@ -1424,7 +1425,7 @@ pub fn run_helper_stdio() -> Result<(), SandboxHelperError> {
     }
     let signed: SignedSandboxJob = serde_json::from_slice(&bytes)?;
     let job = signed.verify(&key)?;
-    let result = execute_sandbox_job(job)?;
+    let result = execute_sandbox_job(job, &key)?;
     serde_json::to_writer(std::io::stdout(), &result)?;
     Ok(())
 }
@@ -1442,7 +1443,12 @@ struct SandboxJobResult {
     stderr_base64: String,
 }
 
-fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelperError> {
+fn execute_sandbox_job(
+    job: SandboxJob,
+    key: &[u8; 32],
+) -> Result<SandboxJobResult, SandboxHelperError> {
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = key;
     let backend = job.obligations.sandbox_backend.clone();
     #[cfg(target_os = "windows")]
     if backend == "oci" {
@@ -1461,6 +1467,10 @@ fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelpe
                 "windows_job is available only on Windows".into(),
             ));
         }
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if backend == "native" && std::env::var_os(NATIVE_INNER_VARIABLE).is_none() {
+        return supervise_native_inner(&job, backend, key);
     }
     let mut oci_network = if backend == "oci" && !job.obligations.network_destinations.is_empty() {
         Some(OciNetworkResources::start(&job)?)
@@ -1501,6 +1511,34 @@ fn direct_command(job: &SandboxJob) -> Command {
     let mut command = Command::new(&job.executable);
     configure_command(&mut command, job);
     command
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn supervise_native_inner(
+    job: &SandboxJob,
+    backend: String,
+    key: &[u8; 32],
+) -> Result<SandboxJobResult, SandboxHelperError> {
+    let signed = SignedSandboxJob::sign(job.clone(), key)
+        .map_err(|error| SandboxHelperError::InvalidJob(error.to_string()))?;
+    let encoded = serde_json::to_vec(&signed)?;
+    if encoded.len() > MAX_JOB_BYTES {
+        return Err(SandboxHelperError::InvalidJob(
+            "native inner job exceeds IPC bound".into(),
+        ));
+    }
+    let executable = std::env::current_exe()
+        .map_err(|error| SandboxHelperError::Setup(format!("native helper identity: {error}")))?;
+    let mut command = Command::new(executable);
+    command
+        .arg("__sandbox-helper")
+        .env_clear()
+        .env(HELPER_KEY_VARIABLE, hex::encode(key))
+        .env(NATIVE_INNER_VARIABLE, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    supervise_native_inner_process(&mut command, job, backend, &encoded)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -2551,6 +2589,129 @@ fn capture<R: Read + Send + 'static>(
     })
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ProcessTreeUsage {
+    processes: usize,
+    memory: u64,
+    root_memory: u64,
+}
+
+impl ProcessTreeUsage {
+    fn excluding_root(self) -> Self {
+        Self {
+            processes: self.processes.saturating_sub(1),
+            memory: self.memory.saturating_sub(self.root_memory),
+            root_memory: 0,
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn supervise_native_inner_process(
+    command: &mut Command,
+    job: &SandboxJob,
+    backend: String,
+    encoded_job: &[u8],
+) -> Result<SandboxJobResult, SandboxHelperError> {
+    let mut child = command
+        .group_spawn()
+        .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+    let mut stdin = child
+        .inner()
+        .stdin
+        .take()
+        .ok_or_else(|| SandboxHelperError::Execution("native inner stdin is absent".into()))?;
+    stdin.write_all(encoded_job)?;
+    drop(stdin);
+    let stdout = child
+        .inner()
+        .stdout
+        .take()
+        .ok_or_else(|| SandboxHelperError::Execution("native inner stdout is absent".into()))?;
+    let stderr = child
+        .inner()
+        .stderr
+        .take()
+        .ok_or_else(|| SandboxHelperError::Execution("native inner stderr is absent".into()))?;
+    let output_limit = usize::try_from(job.obligations.max_output_bytes).unwrap_or(usize::MAX);
+    let state = Arc::new(Mutex::new(CaptureState {
+        remaining: output_limit.saturating_add(16 * 1024),
+        ..CaptureState::default()
+    }));
+    let stdout_handle = capture(stdout, Arc::clone(&state), CaptureStream::Stdout);
+    let stderr_handle = capture(stderr, Arc::clone(&state), CaptureStream::Stderr);
+    let started = Instant::now();
+    let timeout = Duration::from_millis(job.timeout_ms);
+    let mut system = System::new();
+    let root_pid = SystemPid::from_u32(child.id());
+    let (status, timed_out, resource_limit_exceeded) = loop {
+        if let Some(status) = child.try_wait()? {
+            let _ = child.kill();
+            break (status, false, None);
+        }
+        if started.elapsed() >= timeout {
+            terminate_process_tree(&mut system, root_pid);
+            let _ = child.kill();
+            break (child.wait()?, true, None);
+        }
+        let usage = process_tree_usage(&mut system, root_pid).excluding_root();
+        let limit = if usage.processes
+            > usize::try_from(job.obligations.max_processes).unwrap_or(usize::MAX)
+        {
+            Some("process-count")
+        } else if usage.memory > job.obligations.max_memory_bytes {
+            Some("memory")
+        } else {
+            None
+        };
+        if let Some(limit) = limit {
+            terminate_process_tree(&mut system, root_pid);
+            let _ = child.kill();
+            break (child.wait()?, false, Some(limit.into()));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    stdout_handle.join().map_err(|_| {
+        SandboxHelperError::Execution("native inner stdout capture panicked".into())
+    })??;
+    stderr_handle.join().map_err(|_| {
+        SandboxHelperError::Execution("native inner stderr capture panicked".into())
+    })??;
+    let state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let stderr = redact_proxy_credential(&state.stderr, job.proxy_credential.as_deref());
+    if timed_out || resource_limit_exceeded.is_some() {
+        return Ok(SandboxJobResult {
+            backend,
+            exit_code: status.code(),
+            success: false,
+            timed_out,
+            resource_limit_exceeded,
+            output_truncated: state.truncated,
+            stdout_base64: String::new(),
+            stderr_base64: String::new(),
+        });
+    }
+    if state.truncated {
+        return Err(SandboxHelperError::Execution(
+            "native inner result exceeds IPC bound".into(),
+        ));
+    }
+    if !status.success() {
+        return Err(SandboxHelperError::Execution(format!(
+            "native inner helper failed: {}",
+            String::from_utf8_lossy(&stderr)
+        )));
+    }
+    if stderr.iter().any(|byte| !byte.is_ascii_whitespace()) {
+        return Err(SandboxHelperError::Execution(
+            "native inner helper emitted unexpected diagnostics".into(),
+        ));
+    }
+    serde_json::from_slice(&state.stdout).map_err(SandboxHelperError::from)
+}
+
 fn supervise(
     command: &mut Command,
     job: &SandboxJob,
@@ -2604,15 +2765,16 @@ fn supervise(
             let _ = child.kill();
             break (child.wait()?, true, None);
         }
-        let (processes, memory) = process_tree_usage(&mut system, root_pid);
-        let limit =
-            if processes > usize::try_from(job.obligations.max_processes).unwrap_or(usize::MAX) {
-                Some("process-count")
-            } else if memory > job.obligations.max_memory_bytes {
-                Some("memory")
-            } else {
-                None
-            };
+        let usage = process_tree_usage(&mut system, root_pid);
+        let limit = if usage.processes
+            > usize::try_from(job.obligations.max_processes).unwrap_or(usize::MAX)
+        {
+            Some("process-count")
+        } else if usage.memory > job.obligations.max_memory_bytes {
+            Some("memory")
+        } else {
+            None
+        };
         if let Some(limit) = limit {
             let _ = child.kill();
             break (child.wait()?, false, Some(limit.into()));
@@ -2642,12 +2804,27 @@ fn supervise(
     })
 }
 
-fn process_tree_usage(system: &mut System, root: SystemPid) -> (usize, u64) {
+fn process_tree_usage(system: &mut System, root: SystemPid) -> ProcessTreeUsage {
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
         ProcessRefreshKind::nothing().with_memory(),
     );
+    let members = process_tree_members(system, root);
+    let memory = members
+        .iter()
+        .filter_map(|pid| system.process(*pid))
+        .fold(0_u64, |total, process| {
+            total.saturating_add(process.memory())
+        });
+    ProcessTreeUsage {
+        processes: members.len(),
+        memory,
+        root_memory: system.process(root).map_or(0, |process| process.memory()),
+    }
+}
+
+fn process_tree_members(system: &System, root: SystemPid) -> std::collections::HashSet<SystemPid> {
     let mut members = std::collections::HashSet::from([root]);
     loop {
         let before = members.len();
@@ -2663,13 +2840,25 @@ fn process_tree_usage(system: &mut System, root: SystemPid) -> (usize, u64) {
             break;
         }
     }
-    let memory = members
-        .iter()
-        .filter_map(|pid| system.process(*pid))
-        .fold(0_u64, |total, process| {
-            total.saturating_add(process.memory())
-        });
-    (members.len(), memory)
+    members
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn terminate_process_tree(system: &mut System, root: SystemPid) {
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let mut members = process_tree_members(system, root);
+    for pid in &members {
+        if let Some(process) = system.process(*pid) {
+            let _ = process.kill_with(sysinfo::Signal::Stop);
+        }
+    }
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    members.extend(process_tree_members(system, root));
+    for pid in members {
+        if let Some(process) = system.process(pid) {
+            let _ = process.kill_with(sysinfo::Signal::Kill);
+        }
+    }
 }
 
 /// Permit-bound HTTP adapter with exact-origin authorization, pinned DNS, no redirects,
@@ -3411,10 +3600,10 @@ fn canonical_origin(scheme: &str, host: &str, port: u16) -> Result<String, Execu
 #[cfg(test)]
 mod tests {
     use super::{
-        AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
-        atomic_create, atomic_write, authority, non_public_ip, oci_command, oci_remove_arguments,
-        proposed_write_bytes, redact_proxy_credential, resolve_oci_origins, tls_server_name,
-        validate_process_spec,
+        AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, ProcessTreeUsage, SandboxJob,
+        SignedSandboxJob, atomic_create, atomic_write, authority, non_public_ip, oci_command,
+        oci_remove_arguments, proposed_write_bytes, redact_proxy_credential, resolve_oci_origins,
+        tls_server_name, validate_process_spec,
     };
     use base64::Engine as _;
     use colossus_contracts::{
@@ -3549,6 +3738,27 @@ mod tests {
                 .expect("sign mismatched proxy")
                 .verify(&key)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn native_supervisor_excludes_only_the_trusted_inner_helper() {
+        assert_eq!(
+            ProcessTreeUsage {
+                processes: 3,
+                memory: 700,
+                root_memory: 200,
+            }
+            .excluding_root(),
+            ProcessTreeUsage {
+                processes: 2,
+                memory: 500,
+                root_memory: 0,
+            }
+        );
+        assert_eq!(
+            ProcessTreeUsage::default().excluding_root(),
+            ProcessTreeUsage::default()
         );
     }
 

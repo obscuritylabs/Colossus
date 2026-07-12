@@ -122,16 +122,22 @@ observer is called, even if an adapter attempts to continue after the first reje
 Subprocesses never use a shell. The parent sends a signed, expiring, one-use job document
 to a hidden helper over stdin. The signature binds the executable, literal arguments,
 working directory, environment, policy decision, permit nonce, obligations, and request
-hash. The helper rejects malformed, expired, or tampered jobs, starts with a cleared
-environment, and passes only explicitly allowed variable names to the child. Output is
-bounded and base64 encoded; nonzero-exit audit records retain only output hashes and
-sizes. Process groups on Unix and Job Objects on Windows provide descendant ownership
-for timeout and resource-limit termination.
+hash. Every execution helper rejects malformed, expired, or tampered jobs. The helper
+that spawns the target starts with a cleared environment and passes only explicitly
+allowed variable names to the child. Output is bounded and base64 encoded; nonzero-exit
+audit records retain only output hashes and sizes. Process groups with explicit
+process-tree termination on Unix, and Job Objects on Windows, provide descendant
+ownership for timeout and resource-limit termination.
 
-On macOS and Linux, the native helper uses the Apache-2.0 `nono` crate to apply Seatbelt
-or Landlock filesystem rules before the child starts. Birdcage was not selected because
-its published GPL-3.0-only license is incompatible with Colossus's Apache-2.0
-distribution. Network is either denied or limited to a loopback proxy;
+On macOS and Linux, native execution uses two authenticated helper levels. A trusted
+outer helper stays outside filesystem confinement only to account and terminate the
+target process tree. It passes the unchanged signed job over bounded stdin to an inner
+helper, which verifies the signature and expiry again before using the Apache-2.0 `nono`
+crate to apply Seatbelt or Landlock and spawn the target. The outer supervisor excludes
+only the inner helper itself from process and memory limits; the target never receives
+the outer helper's `/proc` visibility. Birdcage was not selected because its published
+GPL-3.0-only license is incompatible with Colossus's Apache-2.0 distribution. Network is
+either denied or limited to a loopback proxy;
 the proxy canonicalizes and exactly matches HTTP(S) origins, resolves and pins the
 destination, rejects domain names resolving to non-public addresses, strips proxy
 credentials, and bounds relay lifetime. Explicit IP-literal origins may opt into private

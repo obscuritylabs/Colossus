@@ -164,10 +164,13 @@ pack lifecycle, publisher trust, aggregate access, deterministic bounds, and res
 reconstruction. A future adapter must pass these suites without weakening its port.
 
 Filesystem, subprocess, and HTTP effects now use concrete permit-bound adapters. Exact
-subprocess specifications are authenticated to a one-shot helper, which clears the
-environment and applies the selected native or OCI isolation profile before spawning.
-Native macOS/Linux isolation uses Seatbelt/Landlock, process groups contain descendants,
-and native networked subprocesses receive only a loopback allowlist proxy. Networked OCI
+subprocess specifications are authenticated to a one-shot helper. For native macOS/Linux
+execution, a trusted outer helper monitors the process tree and passes the same signed job
+to a re-authenticated inner helper; only the inner helper clears the environment, applies
+Seatbelt/Landlock, and spawns the target. Keeping the monitor outside filesystem
+confinement lets Linux account descendants through `/proc` without granting the target
+that access. Process groups plus explicit tree termination contain descendants, and
+native networked subprocesses receive only a loopback allowlist proxy. Networked OCI
 jobs use a Colossus proxy sidecar: the workload joins an internal proxy-only network,
 the sidecar alone joins a separate egress network, and the authenticated bootstrap pins
 the policy-approved origin/address sets. The direct HTTP adapter applies the same
