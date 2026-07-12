@@ -134,10 +134,11 @@ outer helper stays outside filesystem confinement only to account and terminate 
 target process tree. It passes the unchanged signed job over bounded stdin to an inner
 helper, which verifies the signature and expiry again before using the Apache-2.0 `nono`
 crate to apply Seatbelt or Landlock and spawn the target. The outer supervisor excludes
-only the inner helper itself from process and memory limits; the target never receives
-the outer helper's `/proc` visibility. Birdcage was not selected because its published
-GPL-3.0-only license is incompatible with Colossus's Apache-2.0 distribution. Network is
-either denied or limited to a loopback proxy;
+helper setup processes from policy accounting by waiting for a strict target-PID
+announcement, then measures the target and its descendants directly. The target never
+receives the outer helper's `/proc` visibility. Birdcage was not selected because its
+published GPL-3.0-only license is incompatible with Colossus's Apache-2.0 distribution.
+Network is either denied or limited to a loopback proxy;
 the proxy canonicalizes and exactly matches HTTP(S) origins, resolves and pins the
 destination, rejects domain names resolving to non-public addresses, strips proxy
 credentials, and bounds relay lifetime. Explicit IP-literal origins may opt into private

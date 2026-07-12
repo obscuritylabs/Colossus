@@ -59,6 +59,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const HELPER_KEY_VARIABLE: &str = "COLOSSUS_SANDBOX_JOB_KEY";
 const NATIVE_INNER_VARIABLE: &str = "COLOSSUS_SANDBOX_NATIVE_INNER";
+const NATIVE_TARGET_PID_PREFIX: &[u8] = b"colossus-native-target-pid:";
 const OCI_PROXY_CONFIG_VARIABLE: &str = "COLOSSUS_OCI_PROXY_CONFIG";
 const OCI_PROXY_PORT: u16 = 18_080;
 const MAX_JOB_BYTES: usize = 1024 * 1024;
@@ -2593,17 +2594,6 @@ fn capture<R: Read + Send + 'static>(
 struct ProcessTreeUsage {
     processes: usize,
     memory: u64,
-    root_memory: u64,
-}
-
-impl ProcessTreeUsage {
-    fn excluding_root(self) -> Self {
-        Self {
-            processes: self.processes.saturating_sub(1),
-            memory: self.memory.saturating_sub(self.root_memory),
-            root_memory: 0,
-        }
-    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -2644,6 +2634,7 @@ fn supervise_native_inner_process(
     let timeout = Duration::from_millis(job.timeout_ms);
     let mut system = System::new();
     let root_pid = SystemPid::from_u32(child.id());
+    let mut target_pid = None;
     let (status, timed_out, resource_limit_exceeded) = loop {
         if let Some(status) = child.try_wait()? {
             let _ = child.kill();
@@ -2654,21 +2645,32 @@ fn supervise_native_inner_process(
             let _ = child.kill();
             break (child.wait()?, true, None);
         }
-        let usage = process_tree_usage(&mut system, root_pid).excluding_root();
-        let limit = if usage.processes
-            > usize::try_from(job.obligations.max_processes).unwrap_or(usize::MAX)
-        {
-            Some("process-count")
-        } else if usage.memory > job.obligations.max_memory_bytes {
-            Some("memory")
-        } else {
-            None
-        };
+        if target_pid.is_none() {
+            let state = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            target_pid = native_target_pid(&state.stderr);
+        }
+        let limit = target_pid.and_then(|target_pid| {
+            let usage = process_tree_usage(&mut system, target_pid);
+            if usage.processes
+                > usize::try_from(job.obligations.max_processes).unwrap_or(usize::MAX)
+            {
+                Some("process-count")
+            } else if usage.memory > job.obligations.max_memory_bytes {
+                Some("memory")
+            } else {
+                None
+            }
+        });
         if let Some(limit) = limit {
+            if let Some(target_pid) = target_pid {
+                terminate_process_tree(&mut system, target_pid);
+            }
             terminate_process_tree(&mut system, root_pid);
             let _ = child.kill();
             break (child.wait()?, false, Some(limit.into()));
-        }
+        };
         thread::sleep(Duration::from_millis(10));
     };
     stdout_handle.join().map_err(|_| {
@@ -2680,7 +2682,8 @@ fn supervise_native_inner_process(
     let state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let stderr = redact_proxy_credential(&state.stderr, job.proxy_credential.as_deref());
+    let stderr = native_helper_diagnostics(&state.stderr)?;
+    let stderr = redact_proxy_credential(&stderr, job.proxy_credential.as_deref());
     if timed_out || resource_limit_exceeded.is_some() {
         return Ok(SandboxJobResult {
             backend,
@@ -2720,6 +2723,10 @@ fn supervise(
     let mut child = command
         .group_spawn()
         .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if std::env::var_os(NATIVE_INNER_VARIABLE).is_some() {
+        announce_native_target(child.id())?;
+    }
     if let Some(encoded) = &job.process.stdin_base64 {
         let input = BASE64
             .decode(encoded)
@@ -2820,8 +2827,41 @@ fn process_tree_usage(system: &mut System, root: SystemPid) -> ProcessTreeUsage 
     ProcessTreeUsage {
         processes: members.len(),
         memory,
-        root_memory: system.process(root).map_or(0, |process| process.memory()),
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn announce_native_target(pid: u32) -> Result<(), SandboxHelperError> {
+    let mut stderr = std::io::stderr().lock();
+    stderr.write_all(NATIVE_TARGET_PID_PREFIX)?;
+    writeln!(stderr, "{pid}")?;
+    stderr.flush()?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn native_target_pid(stderr: &[u8]) -> Option<SystemPid> {
+    let line_end = stderr.iter().position(|byte| *byte == b'\n')?;
+    let pid = stderr[..line_end]
+        .strip_prefix(NATIVE_TARGET_PID_PREFIX)
+        .and_then(|value| std::str::from_utf8(value).ok())?
+        .parse::<u32>()
+        .ok()?;
+    Some(SystemPid::from_u32(pid))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn native_helper_diagnostics(stderr: &[u8]) -> Result<Vec<u8>, SandboxHelperError> {
+    let Some(line_end) = stderr.iter().position(|byte| *byte == b'\n') else {
+        return Ok(stderr.to_vec());
+    };
+    if !stderr[..line_end].starts_with(NATIVE_TARGET_PID_PREFIX) {
+        return Ok(stderr.to_vec());
+    }
+    native_target_pid(stderr).ok_or_else(|| {
+        SandboxHelperError::Execution("native inner helper emitted an invalid target PID".into())
+    })?;
+    Ok(stderr[line_end.saturating_add(1)..].to_vec())
 }
 
 fn process_tree_members(system: &System, root: SystemPid) -> std::collections::HashSet<SystemPid> {
@@ -3600,11 +3640,13 @@ fn canonical_origin(scheme: &str, host: &str, port: u16) -> Result<String, Execu
 #[cfg(test)]
 mod tests {
     use super::{
-        AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, ProcessTreeUsage, SandboxJob,
-        SignedSandboxJob, atomic_create, atomic_write, authority, non_public_ip, oci_command,
-        oci_remove_arguments, proposed_write_bytes, redact_proxy_credential, resolve_oci_origins,
-        tls_server_name, validate_process_spec,
+        AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
+        atomic_create, atomic_write, authority, non_public_ip, oci_command, oci_remove_arguments,
+        proposed_write_bytes, redact_proxy_credential, resolve_oci_origins, tls_server_name,
+        validate_process_spec,
     };
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    use super::{native_helper_diagnostics, native_target_pid};
     use base64::Engine as _;
     use colossus_contracts::{
         DecisionOutcome, EffectPhase, EffectRequest, PolicyDecision, PolicyObligations,
@@ -3741,24 +3783,23 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn native_supervisor_excludes_only_the_trusted_inner_helper() {
+    fn native_supervisor_accepts_only_its_strict_target_announcement() {
+        let announcement = b"colossus-native-target-pid:42\n";
         assert_eq!(
-            ProcessTreeUsage {
-                processes: 3,
-                memory: 700,
-                root_memory: 200,
-            }
-            .excluding_root(),
-            ProcessTreeUsage {
-                processes: 2,
-                memory: 500,
-                root_memory: 0,
-            }
+            native_target_pid(announcement).map(|pid| pid.as_u32()),
+            Some(42)
         );
         assert_eq!(
-            ProcessTreeUsage::default().excluding_root(),
-            ProcessTreeUsage::default()
+            native_helper_diagnostics(announcement).expect("strip announcement"),
+            Vec::<u8>::new()
+        );
+        assert!(native_target_pid(b"colossus-native-target-pid:nope\n").is_none());
+        assert!(native_helper_diagnostics(b"colossus-native-target-pid:nope\n").is_err());
+        assert_eq!(
+            native_helper_diagnostics(b"setup failed\n").expect("preserve diagnostics"),
+            b"setup failed\n"
         );
     }
 
