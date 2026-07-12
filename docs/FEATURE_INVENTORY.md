@@ -984,7 +984,9 @@ A reconstruction is complete only when all applicable checks pass:
   deltas, completes two sequential tool turns, preserves both tool results in provider
   continuation requests, and returns final output, distinct run/session IDs, durable
   event count, and positive elapsed time together.
-- [ ] Malformed provider tool arguments are retried within bounds and never executed.
+- [x] Loopback-live malformed provider tool arguments cover invalid JSON and non-object
+  shapes, produce exactly two correction attempts, recover on the third provider turn,
+  and create neither a tool-start event nor the policy-allowed target file.
 - [ ] Max-turn exhaustion is reported separately from empty or malformed provider output.
 - [ ] Filesystem escapes, shell wrappers, unknown tool arguments, and deterministic
   policy denies stop before execution.

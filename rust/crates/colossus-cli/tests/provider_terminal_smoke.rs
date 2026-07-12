@@ -190,6 +190,25 @@ data: [DONE]
     sse_server(vec![tool_call, final_answer])
 }
 
+fn malformed_arguments_server() -> (String, thread::JoinHandle<Vec<String>>) {
+    let first_invalid = r#"data: {"id":"invalid-tool-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"invalid-call-1","type":"function","function":{"name":"filesystem.write","arguments":"{\"path\":\"must-not-exist.txt\",\"content\":\"first\",\"mode\":\"create\""}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    let second_invalid = r#"data: {"id":"invalid-tool-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"invalid-call-2","type":"function","function":{"name":"filesystem.write","arguments":"[\"must-not-exist.txt\"]"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    let recovered = r#"data: {"id":"recovered-final","choices":[{"index":0,"delta":{"content":"recovered"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+    sse_server(vec![first_invalid, second_invalid, recovered])
+}
+
 #[test]
 fn compatible_provider_streams_tool_use_and_repl_output_through_terminal_surfaces() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
@@ -499,4 +518,154 @@ sandbox:
     assert!(requests[1].contains(r#""type":"function_call_output""#));
     assert!(requests[1].contains(r#""call_id":"call-r""#));
     assert!(requests[1].contains("responses-tool"));
+}
+
+#[test]
+fn malformed_provider_tool_arguments_retry_twice_without_executing_the_tool() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let directory = tempdir().expect("directory");
+    let state = directory.path().join("state.redb");
+    let anchor = directory.path().join("anchor.json");
+    let workflows = directory.path().join("workflows");
+    fs::create_dir(&workflows).expect("workflows");
+    let config = directory.path().join("config.yaml");
+    let (origin, server) = malformed_arguments_server();
+    fs::write(
+        &config,
+        format!(
+            r#"schemaVersion: 1
+storage:
+  path: {state}
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY
+    journal_key_id: malformed-terminal-journal-v1
+    signing_variable: COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY
+    anchor_path: {anchor}
+policy:
+  kind: built_in
+  allow_actions: [provider.openai.chat, filesystem.write]
+  approval_actions: []
+  require_post_effect: true
+workflows:
+  repository: {workflows}
+  user: {workflows}
+providers:
+  profiles:
+    malformed:
+      kind: open_ai_compatible
+      model: malformed-tool-model
+      baseUrl: {origin}/v1
+      credentialReference: null
+      timeoutMs: 10000
+  roles:
+    primary: malformed
+agent:
+  maxTurns: 4
+  tools: [filesystem.write]
+subagents:
+  maxConcurrent: 1
+sandbox:
+  backend: native
+  profile: malformed-terminal-v1
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem:
+    - root: {workspace}
+      mode: write
+  executables: []
+  environment: []
+  networkDestinations: [{origin}]
+  timeoutMs: 10000
+  maxOutputBytes: 1048576
+  maxProcesses: 2
+  maxMemoryBytes: 67108864
+  maxConcurrency: 1
+"#,
+            state = state.display(),
+            anchor = anchor.display(),
+            workflows = workflows.display(),
+            workspace = directory.path().display(),
+        ),
+    )
+    .expect("config");
+
+    let output = command(binary, &config)
+        .current_dir(directory.path())
+        .args([
+            "run",
+            "Attempt the requested write and recover malformed arguments.",
+            "--stream",
+            "--max-turns",
+            "4",
+        ])
+        .output()
+        .expect("run Colossus");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !directory.path().join("must-not-exist.txt").exists(),
+        "malformed tool arguments reached the filesystem adapter"
+    );
+    let terminal = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        terminal.matches("provider.invalid_tool_arguments").count(),
+        2,
+        "{terminal}"
+    );
+    assert!(!terminal.contains("[file] start filesystem.write"));
+    let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
+    assert_eq!(result["output"], "recovered");
+    let run_id = result["run_id"].as_str().expect("run id");
+
+    let requests = server.join().expect("malformed provider server");
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].contains("Attempt the requested write"));
+    assert!(requests[1].contains("No tool was executed"));
+    assert!(requests[1].contains("Recovery attempt 1/2"));
+    assert!(requests[2].contains("Recovery attempt 1/2"));
+    assert!(requests[2].contains("Recovery attempt 2/2"));
+
+    let audit = run(binary, &config, &["audit", "show", "--limit", "200"]);
+    assert!(audit.status.success());
+    let events: Vec<Value> = serde_json::from_slice(&audit.stdout).expect("audit JSON");
+    let stream_id = format!("run:{run_id}");
+    let run_events = events
+        .iter()
+        .filter(|event| event["stream_id"] == stream_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        run_events
+            .iter()
+            .filter(|event| event["event_type"] == "model.request.prepared.v1")
+            .count(),
+        3
+    );
+    assert_eq!(
+        run_events
+            .iter()
+            .filter(|event| event["event_type"] == "error.v1")
+            .count(),
+        2
+    );
+    assert!(
+        run_events
+            .iter()
+            .all(|event| event["event_type"] != "tool.call.started.v1")
+    );
+    assert_eq!(
+        result["event_count"].as_u64(),
+        Some(run_events.len() as u64)
+    );
+    assert_eq!(
+        run_events.last().map(|event| &event["event_type"]),
+        Some(&Value::String("run.completed.v1".into()))
+    );
 }
