@@ -52,7 +52,7 @@ Do not infer six-target readiness from a host-only build. Every matrix job must 
 Release evidence also includes:
 
 - native Seatbelt/Landlock escape acceptance on macOS/Linux arm64/x64;
-- Windows named-pipe authentication and fail-closed sandbox acceptance;
+- Windows named-pipe authentication and AppContainer/Job Object sandbox acceptance;
 - Docker and Podman OCI isolation/cleanup tests with preloaded digest-pinned images;
 - OPA decision, outage, readiness, disclosure, masking, and mTLS tests;
 - current/previous pinned Chroma v2 lifecycle tests;

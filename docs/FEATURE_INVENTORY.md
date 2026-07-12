@@ -1031,8 +1031,10 @@ A reconstruction is complete only when all applicable checks pass:
   pass durable acceptance tests.
 - [ ] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
   network escapes on each supported platform.
-  Mandatory macOS/Linux arm64/x64 native tests and Windows arm64/x64 fail-closed tests are
-  wired; a real Windows filesystem/network isolation backend remains required.
+  Mandatory macOS/Linux arm64/x64 native tests and Windows arm64/x64 AppContainer/Job
+  Object tests are wired. Windows covers filesystem/traversal, environment, raw-network,
+  process-tree, timeout, process-count, and memory boundaries; allowed Windows network
+  destinations remain blocked pending an authenticated AppContainer proxy transport.
 - [x] Production and independent fuzz dependency graphs enforce locked registry sources,
   explicit licenses and versions, banned crates, and warnings-denied RustSec audits.
 - [x] Active installation, configuration, user, tool, context, skill, integration,

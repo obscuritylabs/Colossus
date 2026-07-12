@@ -74,8 +74,10 @@ obsolete Go launcher.
   silently skips when Seatbelt or Landlock is unavailable and covers symlink and parent
   traversal, environment clearing/rejection, child cleanup after timeout and normal exit,
   process-count and memory limits, exact proxy egress, and raw proxy-bypass attempts.
-  Windows process isolation remains reserved and fail-closed; its native x64/arm64 suite
-  proves that the unavailable backend cannot downgrade or create a marker file.
+  Windows process isolation uses a per-job AppContainer plus an atomically attached Job
+  Object; its native x64/arm64 suite covers filesystem/traversal, environment, raw-network,
+  process-tree, timeout, process-count, and memory boundaries. Network-destination grants
+  remain fail-closed pending an authenticated AppContainer proxy transport.
 - Live Docker acceptance for bind mounts, immutable/preloaded workload and proxy images,
   environment clearing, read-only roots, proxy-only networking, raw-egress denial,
   timeouts, cancellation cleanup, and audited unknown outcomes. The same suite is wired
@@ -311,12 +313,13 @@ obligations to be present in the YAML configuration.
 This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
 cutover. The following planned work remains:
 
-- Podman revalidation of the new proxy-only network path and a real Windows filesystem/
-  network isolation backend. Native macOS/Linux isolation, live Docker execution/recovery, OCI
+- Podman revalidation of the new proxy-only network path and a Windows authenticated
+  allowlist-proxy transport. Native macOS/Linux isolation, Windows AppContainer/Job Object
+  filesystem and default-deny network isolation, live Docker execution/recovery, OCI
   command and allowlist-proxy hardening, the native allowlist proxy, authenticated
   helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
-  tests are implemented. CI compiles every
-  Rust target on macOS and Windows while unsupported Windows execution remains fail-closed.
+  tests are implemented. CI compiles every Rust target on macOS and Windows; Windows
+  network-destination obligations remain fail-closed rather than downgrading.
 - Durable Plan Mode, single-use approval, plan-to-goal handoff, bounded Goal Mode, and
   durable subagents are implemented. The durable memory, task/decision, and context
   budget/snapshot boundaries, durable multi-turn loop, bounded malformed-tool recovery,

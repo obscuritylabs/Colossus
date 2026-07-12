@@ -203,9 +203,11 @@ sandbox:
   maxConcurrency: 1
 ```
 
-Backends are `native`, `oci`, reserved fail-closed `windows_job`, and explicitly
-downgraded `broker`. Broker mode requires `allowBrokerFallback: true`. OCI images must
-be preloaded immutable `@sha256:` references and use an exact Docker or Podman executable.
+Backends are `native`, `oci`, Windows AppContainer-backed `windows_job`, and explicitly
+downgraded `broker`. `windows_job` supports network-free effects and rejects any network
+destination until an authenticated AppContainer proxy is available. Broker mode requires
+`allowBrokerFallback: true`. OCI images must be preloaded immutable `@sha256:` references
+and use an exact Docker or Podman executable.
 Run `sandbox doctor` before enabling process effects.
 
 ## Agent Tools

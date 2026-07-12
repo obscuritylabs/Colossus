@@ -1567,6 +1567,8 @@ fn validate_pack_references(
     manifest: &PackManifest,
     files: &BTreeSet<String>,
 ) -> Result<(), PackError> {
+    #[cfg(not(unix))]
+    let _ = root;
     let permissions = manifest.permissions.iter().collect::<BTreeSet<_>>();
     let capabilities = manifest
         .capabilities

@@ -8,8 +8,9 @@ The initial alpha implements the contracts, encrypted redb journal, exclusive wr
 lease, restartable redb projections and projected repositories, policy gateway, durable
 workflow core, and permit-bound filesystem/process/HTTP/provider adapters. macOS and
 Linux use a one-shot authenticated Seatbelt/Landlock helper. Windows process execution
-remains fail-closed until OCI path mapping and the live Windows acceptance suite are
-complete.
+uses a per-job AppContainer plus an atomically attached Job Object for network-free
+process effects. Network destinations remain fail-closed until an authenticated Windows
+proxy transport is accepted; Windows OCI path mapping is still disabled.
 
 The default fresh configuration routes `primary` to the credential-free echo profile,
 so the full one-shot agent path is available offline:
@@ -383,9 +384,11 @@ The separate runtime matrices execute native Seatbelt/Landlock acceptance on mac
 Linux arm64/x64 and the authenticated worker suite over Windows named pipes on Windows
 arm64/x64. The Unix suite treats unavailable kernel isolation as a failure and exercises
 filesystem traversal, environment, descendant, process-count, memory, timeout, proxy,
-and raw-egress boundaries. Windows process execution remains fail-closed: CI proves the
-reserved backend cannot silently downgrade, but it is not considered a completed Windows
-filesystem/network sandbox.
+and raw-egress boundaries. Windows `windows_job` execution uses a per-effect AppContainer
+identity for policy-root filesystem and default-deny network isolation plus an atomically
+attached Job Object for descendant, timeout, process-count, and aggregate-memory limits.
+Native x64 and arm64 CI exercises those boundaries. Non-empty Windows network grants fail
+closed until an authenticated AppContainer proxy transport exists.
 
 ```sh
 cargo fmt --all -- --check

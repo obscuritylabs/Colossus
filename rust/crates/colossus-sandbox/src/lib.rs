@@ -46,6 +46,14 @@ use uuid::Uuid;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use nono::{AccessMode, CapabilitySet, Sandbox};
 
+#[cfg(target_os = "windows")]
+use colossus_windows_process::{ResourceLimitViolation, SpawnRequest as WindowsSpawnRequest};
+#[cfg(target_os = "windows")]
+use rappct::{
+    AppContainerProfile,
+    acl::{self, AccessMask, ResourcePath},
+};
+
 type HmacSha256 = Hmac<Sha256>;
 
 const HELPER_KEY_VARIABLE: &str = "COLOSSUS_SANDBOX_JOB_KEY";
@@ -128,7 +136,13 @@ pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
         let support = Sandbox::support_info();
         (support.is_supported, support.details)
     };
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    let (native_supported, native_details) = (
+        true,
+        "AppContainer filesystem/default-deny network isolation with atomically attached Job Object"
+            .to_owned(),
+    );
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     let (native_supported, native_details) = (
         false,
         "native isolation is unavailable; configure the OCI backend".to_owned(),
@@ -1032,6 +1046,12 @@ impl EffectExecutor for SandboxProcessExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(target_os = "windows")]
+        for name in ["SystemRoot", "WINDIR"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
         let mut child = command.spawn().map_err(adapter_failure)?;
         let mut stdin = child
             .stdin
@@ -1139,6 +1159,15 @@ fn validate_process_spec(
     let cwd = fs::canonicalize(&spec.cwd).map_err(adapter_failure)?;
     if !cwd.is_dir() {
         return Err(adapter_failure("process cwd is not a directory"));
+    }
+    let cwd_allowed = obligations.filesystem.iter().any(|grant| {
+        matches!(grant.mode.as_str(), "read" | "write" | "metadata")
+            && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
+    });
+    if !cwd_allowed {
+        return Err(adapter_failure(
+            "process cwd is outside policy-authorized filesystem roots",
+        ));
     }
     if spec.args.len() > 256
         || spec
@@ -1388,6 +1417,18 @@ fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelpe
             "OCI execution is disabled on Windows until path mapping passes live acceptance".into(),
         ));
     }
+    if backend == "windows_job" {
+        #[cfg(target_os = "windows")]
+        {
+            return supervise_windows_job(&job, backend);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Err(SandboxHelperError::Setup(
+                "windows_job is available only on Windows".into(),
+            ));
+        }
+    }
     let mut oci_network = if backend == "oci" && !job.obligations.network_destinations.is_empty() {
         Some(OciNetworkResources::start(&job)?)
     } else {
@@ -1403,11 +1444,6 @@ fn execute_sandbox_job(job: SandboxJob) -> Result<SandboxJobResult, SandboxHelpe
         "broker" => {
             return Err(SandboxHelperError::Setup(
                 "broker downgrade was not explicitly authorized".into(),
-            ));
-        }
-        "windows_job" => {
-            return Err(SandboxHelperError::Setup(
-                "windows_job is not available in this build; configure OCI".into(),
             ));
         }
         other => {
@@ -1485,6 +1521,281 @@ fn native_command(_job: &SandboxJob) -> Result<Command, SandboxHelperError> {
     Err(SandboxHelperError::Setup(
         "native sandboxing is unsupported on this platform".into(),
     ))
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsProfileGuard(Option<AppContainerProfile>);
+
+#[cfg(target_os = "windows")]
+impl WindowsProfileGuard {
+    fn remove(&mut self) -> Result<(), SandboxHelperError> {
+        if let Some(profile) = self.0.take()
+            && let Err(error) = profile.clone().delete()
+        {
+            self.0 = Some(profile);
+            return Err(SandboxHelperError::Execution(format!(
+                "profile cleanup: {error}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsProfileGuard {
+    fn drop(&mut self) {
+        if let Some(profile) = self.0.take() {
+            let _ = profile.delete();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn supervise_windows_job(
+    job: &SandboxJob,
+    backend: String,
+) -> Result<SandboxJobResult, SandboxHelperError> {
+    if !job.obligations.network_destinations.is_empty() || job.proxy_port.is_some() {
+        return Err(SandboxHelperError::Setup(
+            "windows_job currently supports default-deny networking only".into(),
+        ));
+    }
+    let profile_name = format!("colossus.sandbox.{}", job.job_id.replace('-', ""));
+    let profile = AppContainerProfile::ensure(
+        &profile_name,
+        "Colossus sandbox",
+        Some("Ephemeral Colossus process isolation profile"),
+    )
+    .map_err(|error| SandboxHelperError::Setup(format!("AppContainer profile: {error}")))?;
+    let mut profile = WindowsProfileGuard(Some(profile));
+    let package = &profile.0.as_ref().expect("profile is present").sid;
+    let system_root = std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("WINDIR"))
+        .map_err(|_| SandboxHelperError::Setup("Windows system root is unavailable".into()))?;
+    let canonical_system_root = fs::canonicalize(&system_root)
+        .map_err(|error| SandboxHelperError::Setup(format!("Windows system root: {error}")))?;
+
+    let mut grants = BTreeMap::<PathBuf, u32>::new();
+    for grant in &job.obligations.filesystem {
+        let root = fs::canonicalize(&grant.root)
+            .map_err(|error| SandboxHelperError::Setup(format!("grant root: {error}")))?;
+        if grant.mode == "execute" && root.starts_with(&canonical_system_root) {
+            // Windows grants AppContainers read/execute access to operating-system binaries.
+            // Avoid mutating protected System32 ACLs while retaining the exact executable
+            // identity check performed before the helper is invoked.
+            continue;
+        }
+        let mask = match grant.mode.as_str() {
+            "execute" => 0x0012_0089 | 0x0012_00A0,
+            "write" => 0x0012_0089 | 0x0012_0116 | 0x0012_00A0,
+            "read" | "metadata" => 0x0012_0089 | 0x0012_00A0,
+            other => {
+                return Err(SandboxHelperError::Setup(format!(
+                    "unsupported Windows filesystem grant mode {other}"
+                )));
+            }
+        };
+        grants
+            .entry(root)
+            .and_modify(|combined| *combined |= mask)
+            .or_insert(mask);
+    }
+    for (path, mask) in grants {
+        let metadata = fs::metadata(&path)
+            .map_err(|error| SandboxHelperError::Setup(format!("grant target: {error}")))?;
+        let resource = if metadata.is_dir() {
+            ResourcePath::Directory(path.clone())
+        } else if metadata.is_file() {
+            ResourcePath::File(path.clone())
+        } else {
+            return Err(SandboxHelperError::Setup(format!(
+                "Windows filesystem grant is not a regular file or directory: {}",
+                path.display()
+            )));
+        };
+        acl::grant_to_package(resource, package, AccessMask(mask)).map_err(|error| {
+            SandboxHelperError::Setup(format!("AppContainer ACL {}: {error}", path.display()))
+        })?;
+    }
+
+    let profile_folder = profile
+        .0
+        .as_ref()
+        .expect("profile is present")
+        .folder_path()
+        .map_err(|error| SandboxHelperError::Setup(format!("profile folder: {error}")))?;
+    let temporary = profile_folder.join("Temp");
+    fs::create_dir_all(&temporary)
+        .map_err(|error| SandboxHelperError::Setup(format!("profile temp: {error}")))?;
+    acl::grant_to_package(
+        ResourcePath::Directory(temporary.clone()),
+        package,
+        AccessMask(0x0012_0089 | 0x0012_0116 | 0x0012_00A0),
+    )
+    .map_err(|error| SandboxHelperError::Setup(format!("profile temp ACL: {error}")))?;
+    let mut environment = job.process.environment.clone();
+    for reserved in [
+        "systemroot",
+        "windir",
+        "comspec",
+        "path",
+        "pathext",
+        "temp",
+        "tmp",
+    ] {
+        if environment
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(reserved))
+        {
+            return Err(SandboxHelperError::Setup(format!(
+                "Windows sandbox environment name {reserved} is reserved"
+            )));
+        }
+    }
+    environment.insert("SystemRoot".into(), system_root.clone());
+    environment.insert("WINDIR".into(), system_root.clone());
+    environment.insert(
+        "ComSpec".into(),
+        Path::new(&system_root)
+            .join("System32")
+            .join("cmd.exe")
+            .display()
+            .to_string(),
+    );
+    environment.insert(
+        "PATH".into(),
+        Path::new(&system_root)
+            .join("System32")
+            .display()
+            .to_string(),
+    );
+    environment.insert("PATHEXT".into(), ".COM;.EXE;.BAT;.CMD".into());
+    environment.insert("TEMP".into(), temporary.display().to_string());
+    environment.insert("TMP".into(), temporary.display().to_string());
+
+    let executable = fs::canonicalize(&job.executable)
+        .map_err(|error| SandboxHelperError::Setup(format!("executable: {error}")))?;
+    let cwd = fs::canonicalize(&job.process.cwd)
+        .map_err(|error| SandboxHelperError::Setup(format!("cwd: {error}")))?;
+    let request = WindowsSpawnRequest {
+        executable,
+        arguments: job.process.args.clone(),
+        cwd,
+        environment,
+        appcontainer_sid: package.as_string().into(),
+        max_processes: job.obligations.max_processes,
+        max_memory_bytes: job.obligations.max_memory_bytes,
+    };
+    let mut child = colossus_windows_process::spawn(&request)
+        .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+    if let Some(encoded) = &job.process.stdin_base64 {
+        let input = BASE64
+            .decode(encoded)
+            .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| SandboxHelperError::Execution("child stdin is absent".into()))?
+            .write_all(&input)?;
+    }
+    drop(child.stdin.take());
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| SandboxHelperError::Execution("child stdout is absent".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| SandboxHelperError::Execution("child stderr is absent".into()))?;
+    let output_limit = usize::try_from(job.obligations.max_output_bytes).unwrap_or(usize::MAX);
+    let capture_limit = output_limit.saturating_sub(1024).saturating_mul(3) / 4;
+    let state = Arc::new(Mutex::new(CaptureState {
+        remaining: capture_limit,
+        ..CaptureState::default()
+    }));
+    let stdout_handle = capture(stdout, Arc::clone(&state), CaptureStream::Stdout);
+    let stderr_handle = capture(stderr, Arc::clone(&state), CaptureStream::Stderr);
+    let started = Instant::now();
+    let timeout = Duration::from_millis(job.timeout_ms);
+    let mut timed_out = false;
+    let mut resource_limit_exceeded = None;
+    let exit_code = loop {
+        if let Some(code) = child
+            .wait_timeout(Duration::from_millis(10))
+            .map_err(|error| SandboxHelperError::Execution(error.to_string()))?
+        {
+            if resource_limit_exceeded.is_none() {
+                resource_limit_exceeded = windows_resource_limit(&child)?;
+            }
+            break code;
+        }
+        if let Some(limit) = windows_resource_limit(&child)? {
+            resource_limit_exceeded = Some(limit);
+            child
+                .terminate(0xC000_0044)
+                .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+            break wait_for_windows_termination(&child)?;
+        }
+        if started.elapsed() >= timeout {
+            timed_out = true;
+            child
+                .terminate(0xC000_013A)
+                .map_err(|error| SandboxHelperError::Execution(error.to_string()))?;
+            break wait_for_windows_termination(&child)?;
+        }
+    };
+    stdout_handle
+        .join()
+        .map_err(|_| SandboxHelperError::Execution("stdout capture panicked".into()))??;
+    stderr_handle
+        .join()
+        .map_err(|_| SandboxHelperError::Execution("stderr capture panicked".into()))??;
+    let state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let result = SandboxJobResult {
+        backend,
+        exit_code: Some(i32::from_ne_bytes(exit_code.to_ne_bytes())),
+        success: exit_code == 0 && !timed_out && resource_limit_exceeded.is_none(),
+        timed_out,
+        resource_limit_exceeded,
+        output_truncated: state.truncated,
+        stdout_base64: BASE64.encode(&state.stdout),
+        stderr_base64: BASE64.encode(&state.stderr),
+    };
+    drop(state);
+    drop(child);
+    profile.remove()?;
+    Ok(result)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_resource_limit(
+    child: &colossus_windows_process::SandboxedChild,
+) -> Result<Option<String>, SandboxHelperError> {
+    child
+        .resource_limit_violation()
+        .map(|limit| {
+            limit.map(|limit| match limit {
+                ResourceLimitViolation::Memory => "memory".into(),
+                ResourceLimitViolation::ProcessCount => "process-count".into(),
+            })
+        })
+        .map_err(|error| SandboxHelperError::Execution(error.to_string()))
+}
+
+#[cfg(target_os = "windows")]
+fn wait_for_windows_termination(
+    child: &colossus_windows_process::SandboxedChild,
+) -> Result<u32, SandboxHelperError> {
+    child
+        .wait_timeout(Duration::from_secs(5))
+        .map_err(|error| SandboxHelperError::Execution(error.to_string()))?
+        .ok_or_else(|| {
+            SandboxHelperError::Execution(
+                "Windows Job Object termination could not be confirmed".into(),
+            )
+        })
 }
 
 #[cfg(target_os = "macos")]

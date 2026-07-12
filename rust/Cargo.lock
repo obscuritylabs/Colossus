@@ -1030,6 +1030,7 @@ dependencies = [
  "colossus-policy",
  "colossus-ports",
  "colossus-testkit",
+ "colossus-windows-process",
  "command-group",
  "futures",
  "globset",
@@ -1037,6 +1038,7 @@ dependencies = [
  "hmac",
  "ignore",
  "nono",
+ "rappct",
  "regex",
  "reqwest 0.12.28",
  "serde",
@@ -1106,6 +1108,14 @@ dependencies = [
  "jsonschema",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "colossus-windows-process"
+version = "0.6.0-alpha.1"
+dependencies = [
+ "thiserror",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3307,6 +3317,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "rappct"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11762a6aea3b0a87a51b21cb2085d252f10c01cd0f3f505e1da002cf6e2427da"
+dependencies = [
+ "thiserror",
+ "windows",
 ]
 
 [[package]]

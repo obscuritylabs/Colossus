@@ -124,10 +124,13 @@ symlink and `..` traversal, undeclared environment use, descendant escape after 
 and normal leader exit, process-count and memory exhaustion, unlisted proxy destinations,
 and direct `NO_PROXY`/raw-socket bypass. Windows worker IPC is exercised over named pipes
 on native arm64/x64 runners with wrong-key and replay-resistant authentication. Windows
-process isolation is still unavailable: `windows_job` is rejected before adapter
-execution, and live tests verify that no marker process is launched. Broker execution is
-possible only through the existing explicit downgrade obligation and is not represented
-as sandbox isolation.
+process isolation uses an ephemeral AppContainer package identity plus a Job Object that
+is attached in the same `STARTUPINFOEX` process-creation operation. The AppContainer has
+no network capabilities, receives ACLs only for canonical policy roots, and receives only
+declared environment values plus fixed Windows loader/temp variables. The Job Object owns
+the descendant tree and applies aggregate process and memory ceilings. Broker execution
+remains available only through the existing explicit downgrade obligation and is not
+represented as sandbox isolation.
 
 The OCI backend constructs Docker/Podman invocations with no network, a read-only root,
 all capabilities dropped, `no-new-privileges`, bounded PIDs/memory, and only explicit
@@ -157,15 +160,23 @@ The configured OCI executable must resolve exactly to Docker, Podman, or the off
 an explicit zero-second stop timeout before absence verification, while Docker retains
 its force-removal semantics. Both runtimes execute the same live acceptance suite.
 
-The `windows_job` backend is reserved and currently fails closed because a Job Object
-alone does not isolate filesystem or network access. Windows execution remains disabled
-until OCI path mapping and its live platform suite pass; compilation alone does not
-constitute sandbox acceptance.
+The `windows_job` backend never relies on a Job Object alone. A unique AppContainer profile
+is created for each authenticated helper job, canonical grant roots receive package-SID
+ACLs, and the child starts with no network capability. The Job Object, AppContainer
+security capabilities, and exact inherited standard-I/O handle list are installed
+atomically at process creation, eliminating a create-then-assign descendant race. Closing
+the helper or Job handle terminates the whole tree. UI and clipboard access, desktop
+switching, global atoms, and system-parameter mutation are also Job-restricted. The
+profile is deleted after confirmed termination; an interrupted helper can leave only an
+unreferenced unique profile/ACL identity while Job-handle close still terminates processes.
+Windows network-free execution is supported. Any non-empty network-destination obligation
+fails before launch until a production AppContainer proxy transport is available; there
+is no loopback exemption or broker fallback. Windows OCI path mapping remains disabled.
 The plain broker is available only when configuration and the policy decision both
 explicitly authorize a downgrade.
 
-The native process-count and memory ceilings are supervisor-enforced; OCI supplies hard
-kernel/container ceilings. `sandbox doctor` reports the selected backend and available
+macOS/Linux native process-count and memory ceilings are supervisor-enforced; Windows Job
+Objects and OCI supply hard kernel/container ceilings. `sandbox doctor` reports the selected backend and available
 isolation mechanism so operators can reject an unsuitable deployment before effects run.
 The opt-in live security suites exercise Docker, Podman, and a real OPA process,
 including mTLS; normal workspace tests remain credential-free and network-free.

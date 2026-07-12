@@ -8,6 +8,7 @@ members = [
     "crates/colossus-projection",
     "crates/colossus-audit",
     "crates/colossus-sandbox",
+    "crates/colossus-windows-process",
     "crates/colossus-policy",
     "crates/colossus-provider",
     "crates/colossus-tools",
@@ -60,6 +61,7 @@ ignore = "0.4.28"
 jsonschema = "0.33.0"
 keyring = "4.1.4"
 nono = { version = "=0.67.1", default-features = false }
+rappct = "=0.13.3"
 nu-ansi-term = "0.50.3"
 redb = "4.1.0"
 regex = "1.13.0"
@@ -80,6 +82,7 @@ tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process",
 toml = "1.1.2"
 uuid = { version = "1.23.4", features = ["serde", "v7"] }
 url = "2.5.8"
+windows-sys = "=0.61.2"
 
 colossus-contracts = { version = "=0.6.0-alpha.1", path = "crates/colossus-contracts" }
 colossus-audit = { version = "=0.6.0-alpha.1", path = "crates/colossus-audit" }
@@ -105,6 +108,7 @@ colossus-session = { version = "=0.6.0-alpha.1", path = "crates/colossus-session
 colossus-ports = { version = "=0.6.0-alpha.1", path = "crates/colossus-ports" }
 colossus-projection = { version = "=0.6.0-alpha.1", path = "crates/colossus-projection" }
 colossus-sandbox = { version = "=0.6.0-alpha.1", path = "crates/colossus-sandbox" }
+colossus-windows-process = { version = "=0.6.0-alpha.1", path = "crates/colossus-windows-process" }
 colossus-runtime = { version = "=0.6.0-alpha.1", path = "crates/colossus-runtime" }
 colossus-worker = { version = "=0.6.0-alpha.1", path = "crates/colossus-worker" }
 colossus-workflow = { version = "=0.6.0-alpha.1", path = "crates/colossus-workflow" }

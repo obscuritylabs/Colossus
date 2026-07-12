@@ -17,6 +17,7 @@ colossus-cli -> colossus-runtime -> colossus-agent -> colossus-ports
                     +-> colossus-mcp -> colossus-sandbox -> colossus-policy
                     +-> colossus-audit -> colossus-policy
                     +-> colossus-sandbox  -> colossus-policy
+                    +-> colossus-sandbox  -> colossus-windows-process (Windows only)
 
 redb and future adapters -> colossus-ports -> colossus-contracts -> colossus-domain
 ```
@@ -161,9 +162,12 @@ jobs use a Colossus proxy sidecar: the workload joins an internal proxy-only net
 the sidecar alone joins a separate egress network, and the authenticated bootstrap pins
 the policy-approved origin/address sets. The direct HTTP adapter applies the same
 origin and DNS-address constraints and keeps the bounded response in gateway quarantine
-until post-effect policy allows release. Windows native filesystem/network isolation
-remains fail-closed, and Windows OCI path mapping stays disabled until its live platform
-suite passes.
+until post-effect policy allows release. Windows `windows_job` execution uses an ephemeral
+AppContainer identity for filesystem and default-deny network isolation plus an atomically
+attached Job Object for descendant ownership and hard process/memory limits. Network-free
+execution is supported; policy decisions that request Windows network destinations fail
+closed until an authenticated AppContainer proxy transport is accepted. Windows OCI path
+mapping stays disabled until its live platform suite passes.
 
 The strict Rust tool catalog implements the complete required offline surface. Repository
 mapping/search, context reads and mutations, exact patching, and trace export use private

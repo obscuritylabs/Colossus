@@ -163,7 +163,7 @@ jobs:
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
 
   rust-windows-runtime:
-    name: Rust Windows named pipe and fail-closed sandbox (${{ matrix.runner }})
+    name: Rust Windows named pipe and AppContainer sandbox (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     needs: rust
@@ -192,7 +192,7 @@ jobs:
           workspaces: rust -> target
           key: windows-runtime-${{ matrix.runner }}
 
-      - name: Run authenticated named-pipe and process fail-closed acceptance
+      - name: Run authenticated named-pipe and AppContainer escape acceptance
         run: >-
           cargo test --locked -p colossus-cli
           --test worker_smoke --test windows_sandbox -- --nocapture
