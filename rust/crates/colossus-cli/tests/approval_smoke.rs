@@ -27,7 +27,7 @@ fn command(binary: &Path, config: &Path) -> Command {
 
 fn read_request(stream: &mut TcpStream) -> String {
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .expect("read timeout");
     let mut request = Vec::new();
     let mut buffer = [0_u8; 4_096];
@@ -121,6 +121,9 @@ fn tool_server(
                 }
                 Err(error) => panic!("provider accept: {error}"),
             };
+            stream
+                .set_nonblocking(false)
+                .expect("blocking provider stream");
             let request = read_request(&mut stream);
             let body = if requests.is_empty() {
                 &tool_call

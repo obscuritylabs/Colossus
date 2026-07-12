@@ -1042,9 +1042,10 @@ A reconstruction is complete only when all applicable checks pass:
   pack/bundle, repository, context, presentation, and audit-export effects and proves no
   adapter start on rejection; permit tests bind request, decision, actor, obligations,
   authentication tag, expiry, and one-use consumption.
-- [ ] OPA allow, deny, approval, full-content disclosure, hard redaction, mTLS, bundle
-  revision, invalid response, outage, oversized input, and decision-log checks fail or
-  proceed exactly as specified.
+- [x] Real-OPA acceptance covers allow, deny, approval re-evaluation, complete nested
+  content and credential-reference disclosure with hard-secret hashing, pinned-CA mTLS,
+  bundle revision, strict invalid responses, outage/readiness, and decision-log warnings;
+  gateway tests additionally prove oversized input is audited and fails closed.
 - [ ] Two-phase file, network, provider, subprocess, and memory tests prove denied content
   never reaches the requester.
 - [ ] In-memory and embedded journals/repositories plus Tantivy and Chroma indexes pass

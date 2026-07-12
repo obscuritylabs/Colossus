@@ -106,6 +106,12 @@ alter the request, actor, decision, obligations, expiry, and authentication tag,
 verify rejection; a correctly authenticated permit succeeds exactly once and replay is
 rejected.
 
+The real-OPA acceptance policy authorizes a disclosure test only when it receives the
+complete nested logical request and credential references while the raw secret is absent
+and replaced by its bounded hash descriptor. The same suite exercises decision revision,
+approval re-evaluation, invalid responses, outages, readiness and decision-log warnings,
+post-effect denial, and pinned-CA mutual TLS.
+
 Subprocesses never use a shell. The parent sends a signed, expiring, one-use job document
 to a hidden helper over stdin. The signature binds the executable, literal arguments,
 working directory, environment, policy decision, permit nonce, obligations, and request

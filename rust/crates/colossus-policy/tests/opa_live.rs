@@ -1,7 +1,9 @@
 //! Opt-in integration against a real local OPA process.
 
 use async_trait::async_trait;
-use colossus_contracts::{DecisionOutcome, EffectRequest, QuarantinedEffectResult};
+use colossus_contracts::{
+    CredentialReference, DecisionOutcome, EffectRequest, QuarantinedEffectResult,
+};
 use colossus_policy::{
     AllowApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit, GatewayError,
     OpaConfig, OpaPolicy, SafetyKernel, effect_request, system_actor,
@@ -54,6 +56,20 @@ default effect := null
 
 effect := decision("allow", "explicit allow", false) if {
   input.action == "provider.echo"
+}
+
+effect := decision("allow", "complete redacted disclosure accepted", false) if {
+  input.action == "test.disclosure"
+  input.content.prompt == "classify the complete request"
+  input.content.options.mode == "strict"
+  input.content.options.limit == 7
+  input.content.api_key.redacted == true
+  input.content.api_key.sha256 != ""
+  input.content.api_key.size > 0
+  input.content.credential_reference == "env:OPENROUTER_API_KEY"
+  input.credential_references[0].reference == "env:OPENROUTER_API_KEY"
+  input.credential_references[0].value_hash == "sha256:live-reference"
+  not contains(json.marshal(input), "live-raw-secret")
 }
 
 effect := decision("deny", "explicit deny", false) if {
@@ -367,11 +383,34 @@ async fn live_opa_enforces_decisions_approval_release_readiness_and_outage() {
         }),
         SafetyKernel::new([
             "test.approval".into(),
+            "test.disclosure".into(),
             "test.post".into(),
             "provider.echo".into(),
         ]),
         [9_u8; 32],
     );
+    let mut disclosure = effect_request(
+        system_actor("opa-live"),
+        "test.disclosure",
+        "test:disclosure",
+        json!({
+            "prompt": "classify the complete request",
+            "options": {"mode": "strict", "limit": 7},
+            "api_key": "live-raw-secret",
+            "credential_reference": "env:OPENROUTER_API_KEY"
+        }),
+    );
+    disclosure.capabilities = vec!["test.disclosure".into()];
+    disclosure.credential_references = vec![CredentialReference {
+        reference: "env:OPENROUTER_API_KEY".into(),
+        value_hash: Some("sha256:live-reference".into()),
+    }];
+    let disclosed = gateway
+        .execute(disclosure, &StaticExecutor(b"disclosed"))
+        .await
+        .expect("OPA must receive complete content with hard secrets redacted");
+    assert_eq!(disclosed.bytes, b"disclosed");
+
     let mut approval = effect_request(
         system_actor("opa-live"),
         "test.approval",
