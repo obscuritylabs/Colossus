@@ -539,7 +539,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &workflows,
         &tools,
         2,
-        67_108_864,
+        268_435_456,
         5_000,
         &[],
     );
@@ -555,7 +555,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "$memory = [byte[]]::new(134217728); for ($offset = 0; $offset -lt $memory.Length; $offset += 4096) { $memory[$offset] = 1 }; Start-Sleep -Seconds 2",
+                "$memory = [byte[]]::new(536870912); for ($offset = 0; $offset -lt $memory.Length; $offset += 4096) { $memory[$offset] = 1 }; Start-Sleep -Seconds 2",
             ],
         ),
     );
