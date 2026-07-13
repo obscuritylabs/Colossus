@@ -586,7 +586,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         8,
         268_435_456,
-        500,
+        5_000,
         &[],
     );
     let child_marker = allowed.join("child-escaped.txt");
@@ -602,7 +602,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
                 "/D",
                 "/S",
                 "/C",
-                "start \"\" /B cmd.exe /D /S /C \"choice /D Y /T 2 >NUL & echo escaped> \\\"%TARGET%\\\"\" & choice /D Y /T 30 >NUL",
+                "start \"\" /B cmd.exe /D /S /C \"choice /D Y /T 5 >NUL & echo escaped> \\\"%TARGET%\\\"\" & choice /D Y /T 30 >NUL",
             ],
         ),
     );

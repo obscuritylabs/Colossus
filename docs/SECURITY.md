@@ -229,6 +229,10 @@ loopback-exemption setup failure blocks launch, and there is no broker downgrade
 filters disappear when the helper closes its WFP session; an interrupted helper can leave
 only an exemption for the job's otherwise orphaned unique package SID. Windows OCI path
 mapping remains disabled.
+Windows Job Object effects require at least a 5-second total timeout. The helper receives
+the execution budget minus a 2-second reserve so termination, output capture, temporary
+directory removal, AppContainer deletion, and WFP cleanup can be confirmed before the
+outer effect deadline. Failure to confirm cleanup remains `outcome_unknown`.
 The plain broker is available only when configuration and the policy decision both
 explicitly authorize a downgrade.
 

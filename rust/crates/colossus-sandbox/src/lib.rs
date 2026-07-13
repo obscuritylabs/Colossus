@@ -9,7 +9,7 @@ use colossus_contracts::{
 };
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, MIN_OCI_EFFECT_TIMEOUT_MS,
-    MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS,
+    MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS,
 };
 use command_group::CommandGroup as _;
 use futures::{StreamExt as _, stream::FuturesUnordered};
@@ -74,6 +74,7 @@ const MAX_WINDOWS_ACL_TARGETS: usize = 100_000;
 const WINDOWS_REPARSE_POINT_ATTRIBUTE: u32 = 0x400;
 const OCI_CLEANUP_RESERVE_MS: u64 = 2_000;
 const OCI_NETWORK_CLEANUP_RESERVE_MS: u64 = 5_000;
+const WINDOWS_JOB_CLEANUP_RESERVE_MS: u64 = 2_000;
 const OCI_CONTROL_COMMAND_TIMEOUT_MS: u64 = 1_500;
 const OCI_DNS_RESOLUTION_TIMEOUT_MS: u64 = 3_000;
 const MAX_OCI_CONTROL_DIAGNOSTIC_BYTES: usize = 4 * 1024;
@@ -1003,6 +1004,13 @@ impl EffectExecutor for SandboxProcessExecutor {
                 "networked OCI process execution requires at least {MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS}ms"
             )));
         }
+        if permit.obligations().sandbox_backend == "windows_job"
+            && effective_timeout_ms < MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS
+        {
+            return Err(adapter_failure(format!(
+                "Windows Job Object process execution requires at least {MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS}ms"
+            )));
+        }
         let proxy_credential = if permit.obligations().network_destinations.is_empty()
             || permit.obligations().sandbox_backend == "oci"
         {
@@ -1046,6 +1054,8 @@ impl EffectExecutor for SandboxProcessExecutor {
             OCI_NETWORK_CLEANUP_RESERVE_MS
         } else if permit.obligations().sandbox_backend == "oci" {
             OCI_CLEANUP_RESERVE_MS
+        } else if permit.obligations().sandbox_backend == "windows_job" {
+            WINDOWS_JOB_CLEANUP_RESERVE_MS
         } else {
             250
         };

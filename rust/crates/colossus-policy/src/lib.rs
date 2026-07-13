@@ -35,6 +35,8 @@ const PERMIT_LIFETIME_MS: i128 = 30_000;
 pub const MIN_OCI_EFFECT_TIMEOUT_MS: u64 = 5_000;
 /// Minimum timeout for OCI jobs that must also create and remove proxy networks.
 pub const MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS: u64 = 10_000;
+/// Minimum timeout that leaves Windows enough time to confirm Job Object cleanup.
+pub const MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS: u64 = 5_000;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -319,6 +321,14 @@ impl SafetyKernel {
             return Err(GatewayError::Safety(
                 "windows_job process execution is available only on Windows".into(),
             ));
+        }
+        if obligations.sandbox_backend == "windows_job"
+            && is_process_action(&request.action)
+            && obligations.timeout_ms < MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS
+        {
+            return Err(GatewayError::Safety(format!(
+                "Windows Job Object process execution requires timeout_ms >= {MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
+            )));
         }
         if cfg!(target_os = "windows")
             && obligations.sandbox_backend == "oci"

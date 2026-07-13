@@ -48,9 +48,9 @@ use colossus_memory_chroma::{
 use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
-    GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, OpaConfig,
-    OpaPolicy, ReleasedEffectObserver, ReleasedEffectResult, SafetyKernel, effect_request,
-    system_actor,
+    GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS,
+    MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, OpaConfig, OpaPolicy, ReleasedEffectObserver,
+    ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
 };
 use colossus_ports::{
     ApprovalProvider, AuditExporter, ContextError, ContextPreparer, ContextRepository,
@@ -641,6 +641,13 @@ impl RuntimeConfig {
         {
             return Err(RuntimeError::Config(format!(
                 "OCI sandbox timeoutMs must be at least {MIN_OCI_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
+            )));
+        }
+        if config.sandbox.backend == "windows_job"
+            && config.sandbox.timeout_ms < MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS
+        {
+            return Err(RuntimeError::Config(format!(
+                "Windows Job Object sandbox timeoutMs must be at least {MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
             )));
         }
         if config.sandbox.backend == "oci"
@@ -9592,7 +9599,8 @@ mod tests {
     };
     use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
     use colossus_policy::{
-        BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request,
+        BuiltInPolicy, DenyApproval, EffectGateway, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS,
+        SafetyKernel, effect_request,
     };
     use colossus_ports::{
         EventJournal, ExternalWorkQueue, ModelProvider, ModelProviderError, PolicyDecisionPoint,
@@ -10346,6 +10354,23 @@ surprise: true
         assert!(
             RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
             "unknown OCI runtime was accepted"
+        );
+    }
+
+    #[test]
+    fn windows_job_config_reserves_confirmed_cleanup_time() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        config.sandbox.backend = "windows_job".into();
+        config.sandbox.timeout_ms = MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS - 1;
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+            "short Windows cleanup budget was accepted"
+        );
+
+        config.sandbox.timeout_ms = MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS;
+        assert!(
+            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
+            "valid Windows cleanup budget was rejected"
         );
     }
 
