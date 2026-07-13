@@ -36,7 +36,7 @@ pub const MIN_OCI_EFFECT_TIMEOUT_MS: u64 = 5_000;
 /// Minimum timeout for OCI jobs that must also create and remove proxy networks.
 pub const MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS: u64 = 10_000;
 /// Minimum timeout that leaves Windows enough time to confirm Job Object cleanup.
-pub const MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS: u64 = 5_000;
+pub const MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS: u64 = 10_000;
 
 type HmacSha256 = Hmac<Sha256>;
 

@@ -199,7 +199,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        5_000,
+        10_000,
         &[],
     );
 
