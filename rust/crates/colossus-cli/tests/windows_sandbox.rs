@@ -555,12 +555,22 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "$memory = New-Object byte[] 134217728; Start-Sleep -Seconds 2",
+                "$memory = [byte[]]::new(134217728); for ($offset = 0; $offset -lt $memory.Length; $offset += 4096) { $memory[$offset] = 1 }; Start-Sleep -Seconds 2",
             ],
         ),
     );
-    assert!(!memory_limit.status.success());
-    assert!(String::from_utf8_lossy(&memory_limit.stderr).contains("memory"));
+    assert!(
+        !memory_limit.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&memory_limit.stdout),
+        String::from_utf8_lossy(&memory_limit.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&memory_limit.stderr).contains("memory"),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&memory_limit.stdout),
+        String::from_utf8_lossy(&memory_limit.stderr)
+    );
 
     write_config(
         &config,
