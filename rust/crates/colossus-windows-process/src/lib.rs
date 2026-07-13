@@ -206,13 +206,13 @@ mod windows_impl {
             IO::{CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED},
             JobObjects::{
                 CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_JOB_MEMORY,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_DESKTOP,
-                JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
-                JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
-                JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
-                JOB_OBJECT_UILIMIT_WRITECLIPBOARD, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
-                JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JOBOBJECT_LIMIT_VIOLATION_INFORMATION_2,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+                JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS,
+                JOB_OBJECT_UILIMIT_EXITWINDOWS, JOB_OBJECT_UILIMIT_GLOBALATOMS,
+                JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
+                JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+                JOBOBJECT_ASSOCIATE_COMPLETION_PORT, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOBOBJECT_LIMIT_VIOLATION_INFORMATION_2,
                 JobObjectAssociateCompletionPortInformation, JobObjectBasicUIRestrictions,
                 JobObjectExtendedLimitInformation, JobObjectLimitViolationInformation2,
                 QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
@@ -597,10 +597,13 @@ mod windows_impl {
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS
             | JOB_OBJECT_LIMIT_JOB_MEMORY
+            | JOB_OBJECT_LIMIT_PROCESS_MEMORY
             | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         limits.BasicLimitInformation.ActiveProcessLimit = request.max_processes;
-        limits.JobMemoryLimit = usize::try_from(request.max_memory_bytes)
+        let memory_limit = usize::try_from(request.max_memory_bytes)
             .map_err(|_| WindowsProcessError::Invalid("memory limit overflow".into()))?;
+        limits.ProcessMemoryLimit = memory_limit;
+        limits.JobMemoryLimit = memory_limit;
         // SAFETY: null security/name pointers request an unnamed default-security Job Object.
         let job = OwnedHandle::new(
             unsafe { CreateJobObjectW(null(), null()) },
