@@ -4,20 +4,20 @@ Colossus is an auditable agent and workflow runtime written in Rust. It combines
 bounded model/tool loop, durable YAML workflows, an encrypted event journal, policy-bound
 effects, replaceable memory indexes, and an authenticated local worker.
 
-The Rust alpha lives under [`rust/`](rust/README.md) until the P0+P1 cutover. Python 0.5
-is frozen at the `python-v0.5.0` tag and on the `python-legacy` branch; new installations
-use fresh Rust YAML and fresh redb state.
+Version 0.6 is the active root implementation. Python 0.5 is frozen at the
+`python-v0.5.0` tag and on the `python-legacy` branch; new installations use fresh Rust
+YAML and fresh redb state.
 
 ## Quick Start
 
 Rust 1.96 and edition 2024 are the source-build contract:
 
 ```bash
-cargo run --offline --manifest-path rust/Cargo.toml \
+cargo run --offline \
   -p colossus-cli --bin colossus-rs -- config init
-cargo run --offline --manifest-path rust/Cargo.toml \
+cargo run --offline \
   -p colossus-cli --bin colossus-rs -- run "hello"
-cargo run --offline --manifest-path rust/Cargo.toml \
+cargo run --offline \
   -p colossus-cli --bin colossus-rs -- audit verify
 ```
 
@@ -58,12 +58,12 @@ not expand configured policy or sandbox grants.
 - [Workflows](docs/WORKFLOWS.md)
 - [Integrations](docs/INTEGRATIONS.md)
 - [Security Model](docs/SECURITY.md)
-- [Rust Reconstruction Status](docs/RUST_RECONSTRUCTION.md)
+- [Runtime Status](docs/RUST_RECONSTRUCTION.md)
 - [Feature Inventory](docs/FEATURE_INVENTORY.md)
 
 ## Development
 
-Run the authoritative Rust gates from `rust/`:
+Run the authoritative Rust gates from the repository root:
 
 ```bash
 cargo fmt --all -- --check

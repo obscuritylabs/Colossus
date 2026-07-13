@@ -1,9 +1,0 @@
-{
-  "name": "offline-dev",
-  "version": "0.1.0",
-  "description": "Airgapped development and release-bundle workflow.",
-  "triggers": ["offline", "airgap", "bundle", "wheelhouse", "uv"],
-  "required_tools": [],
-  "permissions": [],
-  "offline_compatible": true
-}

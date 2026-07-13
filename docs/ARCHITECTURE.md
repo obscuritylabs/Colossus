@@ -2,10 +2,10 @@
 
 Colossus uses a ports-and-adapters architecture with strict dependency direction.
 
-## Rust Reconstruction Boundary
+## Rust Runtime Boundary
 
-The new runtime is developed under `rust/` until P0+P1 cutover. Its dependency direction
-is stricter than the legacy diagram below:
+The Rust runtime is the active repository-root implementation. Its dependency direction
+is stricter than the frozen legacy architecture:
 
 ```text
 colossus-cli -> colossus-runtime -> colossus-agent -> colossus-ports

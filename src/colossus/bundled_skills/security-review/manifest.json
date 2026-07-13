@@ -1,9 +1,0 @@
-{
-  "name": "security-review",
-  "version": "0.1.0",
-  "description": "Security review workflow for policy, tools, bundles, and execution boundaries.",
-  "triggers": ["security", "audit", "policy", "sandbox", "airgap"],
-  "required_tools": [],
-  "permissions": [],
-  "offline_compatible": true
-}

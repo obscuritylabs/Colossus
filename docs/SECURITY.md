@@ -40,9 +40,9 @@ artifacts.
 
 Rust dependency policy is locked and fail-closed for both the production and independent
 fuzz workspaces. `cargo-deny` evaluates the complete six-release-target graph, permits only
-the licenses listed in `rust/deny.toml`, rejects wildcard version requirements, rejects
+the licenses listed in `deny.toml`, rejects wildcard version requirements, rejects
 unknown registries and Git sources, and bans dependencies that would bypass the rustls or
-license boundary. Internal path dependencies include the exact current prerelease version.
+license boundary. Internal path dependencies include the exact current release version.
 Duplicate transitive versions remain visible warnings so they can be reduced without
 blocking an otherwise safe graph. `cargo-deny` advisory checks and an independent
 `cargo-audit` scan both deny RustSec warnings for `Cargo.lock` and `fuzz/Cargo.lock`; there
@@ -289,8 +289,8 @@ Static workflow step IDs never serve as the sole identity for repeated execution
 idempotency values, input completion, retries, and subworkflow links, preventing an
 approval or effect result for one iteration from authorizing or completing another.
 
-The sections below describe the frozen Python 0.5 implementation. They remain relevant
-to `python-v0.5.0` and `python-legacy`, but they are not authority for the Rust cutover.
+The general rules below remain part of the active Rust security contract. Historical
+Python 0.5 behavior is retained only at `python-v0.5.0` and on `python-legacy`.
 
 Colossus starts with capability-based policy, brokered execution, and append-only audit
 logs. OS-level isolation can be added behind the subprocess broker without changing tool
@@ -732,12 +732,12 @@ adds separate controls and redaction.
 Offline bundles must be verified before installation or use:
 
 ```bash
-uv run colossus bundle verify ./bundle
+colossus --config .colossus/config.yaml bundle verify ./bundle
 ```
 
-The current verifier checks that the bundle manifest exists, that file entries are
-well-formed, and that every listed file matches its SHA-256 checksum. Release bundles
-should also include signatures, SBOMs, lockfiles, wheels, and reviewed skill manifests.
+The verifier checks the signed bundle manifest, publisher trust, and every declared file
+hash before installation. Release bundles should also include SBOMs, lockfiles, native
+artifacts, and reviewed skill manifests.
 
 See [Offline Bundle Format](BUNDLE_FORMAT.md) for the directory and manifest format.
 

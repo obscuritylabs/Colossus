@@ -36,9 +36,9 @@ and linked destination `bin` directories, and make no network request.
 Install Rust 1.96, then build with the locked workspace:
 
 ```bash
-cargo build --locked --manifest-path rust/Cargo.toml \
+cargo build --locked \
   -p colossus-cli --bin colossus-rs
-rust/target/debug/colossus-rs --version
+target/debug/colossus-rs --version
 ```
 
 For a network-isolated checkout whose Cargo cache is already populated, add `--offline`.
@@ -62,7 +62,7 @@ instead; plaintext journal fallback is never allowed.
 
 ## Development Verification
 
-From `rust/`:
+From the repository root:
 
 ```bash
 cargo fmt --all -- --check

@@ -28,7 +28,7 @@ required—before installation.
 For source development, Rust 1.96 is required:
 
 ```bash
-cargo run --offline --manifest-path rust/Cargo.toml \
+cargo run --offline \
   -p colossus-cli --bin colossus-rs -- --version
 ```
 
@@ -139,7 +139,7 @@ integration, and provider details.
 
 ## Development Checks
 
-From `rust/`:
+From the repository root:
 
 ```bash
 cargo fmt --all -- --check

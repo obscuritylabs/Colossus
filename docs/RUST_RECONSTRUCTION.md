@@ -1,12 +1,12 @@
-# Rust Reconstruction Status
+# Rust Runtime Status
 
-The Rust reconstruction lives under `rust/` until the P0+P1 cutover. It uses version
-`0.6.0-alpha.1`, Rust 1.96, edition 2024, fresh strict YAML configuration, and fresh
-redb state. It does not read or migrate Python configuration or SQLite state.
+Rust 0.6.0 is the active repository-root implementation. It uses Rust 1.96, edition
+2024, fresh strict YAML configuration, and fresh redb state. It does not read or migrate
+Python configuration or SQLite state.
 
 The passing Python `0.5.0` baseline is frozen at the `python-v0.5.0` tag and on the
-`python-legacy` branch. The active branch continues the Rust reconstruction without the
-obsolete Go launcher.
+`python-legacy` branch. The active branch contains only the Rust runtime and supporting
+release tooling.
 
 ## Implemented Foundation
 
@@ -263,58 +263,58 @@ obsolete Go launcher.
 From the repository root:
 
 ```bash
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- config init
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- echo hello
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run 'Reply with exactly: ok'
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask run 'Create note.txt with filesystem.write'
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider profiles
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider doctor
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- provider models
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- models routes
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tools list
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sessions list
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- context status SESSION_ID
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- context compact SESSION_ID
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- tasks list --session SESSION_ID
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- decisions list --session SESSION_ID
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- plans list --session SESSION_ID
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- goals run 'Finish the scoped task' --session SESSION_ID --max-iterations 5
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- agents status
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories search 'query' --session SESSION_ID
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- memories index status
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- research run 'Summarize the audit architecture' --depth quick --source repo
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- research list
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- telemetry runs
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- telemetry metrics
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- skills list
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --skill coding 'Implement the scoped change'
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask skills scaffold my-skill 'My data-only skill'
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- skills validate path/to/local-skill --local
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask skills install path/to/local-skill
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations import-openapi demo openapi.json --base-url https://api.example.test --credential-reference env:DEMO_API_TOKEN
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- integrations list
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect github --credential-reference env:GITHUB_TOKEN
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect searxng --base-url http://127.0.0.1:8888 --auth-type none
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect opensearch --base-url http://127.0.0.1:9200 --auth-type none
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- mcp servers
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- mcp tools --server local
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- --approval-mode ask mcp call local search '{"query":"audit"}'
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- audit verify
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- policy doctor
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- state doctor
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- sandbox doctor
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- process run /bin/echo --cwd . -- hello
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- projection status
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- projection rebuild
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow validate .colossus/workflows/offline-echo.yaml
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow register .colossus/workflows/offline-echo.yaml
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}'
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}' --queued
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- work --session SESSION_ID
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- preferences show
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- preferences history
-cargo run --manifest-path rust/Cargo.toml -p colossus-cli --bin colossus-rs -- repl
+cargo run -p colossus-cli --bin colossus-rs -- config init
+cargo run -p colossus-cli --bin colossus-rs -- echo hello
+cargo run -p colossus-cli --bin colossus-rs -- run 'Reply with exactly: ok'
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask run 'Create note.txt with filesystem.write'
+cargo run -p colossus-cli --bin colossus-rs -- provider profiles
+cargo run -p colossus-cli --bin colossus-rs -- provider doctor
+cargo run -p colossus-cli --bin colossus-rs -- provider models
+cargo run -p colossus-cli --bin colossus-rs -- models routes
+cargo run -p colossus-cli --bin colossus-rs -- tools list
+cargo run -p colossus-cli --bin colossus-rs -- sessions list
+cargo run -p colossus-cli --bin colossus-rs -- context status SESSION_ID
+cargo run -p colossus-cli --bin colossus-rs -- context compact SESSION_ID
+cargo run -p colossus-cli --bin colossus-rs -- tasks list --session SESSION_ID
+cargo run -p colossus-cli --bin colossus-rs -- decisions list --session SESSION_ID
+cargo run -p colossus-cli --bin colossus-rs -- plans list --session SESSION_ID
+cargo run -p colossus-cli --bin colossus-rs -- goals run 'Finish the scoped task' --session SESSION_ID --max-iterations 5
+cargo run -p colossus-cli --bin colossus-rs -- agents status
+cargo run -p colossus-cli --bin colossus-rs -- memories search 'query' --session SESSION_ID
+cargo run -p colossus-cli --bin colossus-rs -- memories index status
+cargo run -p colossus-cli --bin colossus-rs -- research run 'Summarize the audit architecture' --depth quick --source repo
+cargo run -p colossus-cli --bin colossus-rs -- research list
+cargo run -p colossus-cli --bin colossus-rs -- telemetry runs
+cargo run -p colossus-cli --bin colossus-rs -- telemetry metrics
+cargo run -p colossus-cli --bin colossus-rs -- skills list
+cargo run -p colossus-cli --bin colossus-rs -- run --skill coding 'Implement the scoped change'
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask skills scaffold my-skill 'My data-only skill'
+cargo run -p colossus-cli --bin colossus-rs -- skills validate path/to/local-skill --local
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask skills install path/to/local-skill
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations import-openapi demo openapi.json --base-url https://api.example.test --credential-reference env:DEMO_API_TOKEN
+cargo run -p colossus-cli --bin colossus-rs -- integrations list
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect github --credential-reference env:GITHUB_TOKEN
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect searxng --base-url http://127.0.0.1:8888 --auth-type none
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect opensearch --base-url http://127.0.0.1:9200 --auth-type none
+cargo run -p colossus-cli --bin colossus-rs -- mcp servers
+cargo run -p colossus-cli --bin colossus-rs -- mcp tools --server local
+cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask mcp call local search '{"query":"audit"}'
+cargo run -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
+cargo run -p colossus-cli --bin colossus-rs -- audit verify
+cargo run -p colossus-cli --bin colossus-rs -- policy doctor
+cargo run -p colossus-cli --bin colossus-rs -- state doctor
+cargo run -p colossus-cli --bin colossus-rs -- sandbox doctor
+cargo run -p colossus-cli --bin colossus-rs -- process run /bin/echo --cwd . -- hello
+cargo run -p colossus-cli --bin colossus-rs -- projection status
+cargo run -p colossus-cli --bin colossus-rs -- projection rebuild
+cargo run -p colossus-cli --bin colossus-rs -- workflow validate .colossus/workflows/offline-echo.yaml
+cargo run -p colossus-cli --bin colossus-rs -- workflow register .colossus/workflows/offline-echo.yaml
+cargo run -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}'
+cargo run -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}' --queued
+cargo run -p colossus-cli --bin colossus-rs -- work --session SESSION_ID
+cargo run -p colossus-cli --bin colossus-rs -- preferences show
+cargo run -p colossus-cli --bin colossus-rs -- preferences history
+cargo run -p colossus-cli --bin colossus-rs -- repl
 ```
 
 `config init` creates a unique platform credential-store identity for that fresh state
@@ -323,57 +323,18 @@ file. It neither asks for an application credential nor performs a network reque
 executable, its execute grant, a working-directory grant, and any environment/network
 obligations to be present in the YAML configuration.
 
-## Remaining Delivery Milestones
+## Cutover Status
 
-This alpha is the audit/storage, authorization, and workflow foundation, not the P0+P1
-cutover. The following planned work remains:
+The Rust workspace has been promoted to the repository root, the Python runtime/package
+has been removed from `main`, and the active package version is 0.6.0. The local locked
+format, Clippy, workspace-test, fuzz-workspace, offline echo, and audit gates are the
+immediate cutover authority.
 
-- The first green remote Podman proxy-only and native Windows authenticated
-  allowlist-proxy matrices. Native macOS/Linux isolation, Windows
-  AppContainer/Job Object filesystem plus authenticated WFP proxy-only network isolation,
-  live Docker execution/recovery, OCI
-  command and allowlist-proxy hardening, the native allowlist proxy, authenticated
-  helper, explicit broker downgrade rules, resource supervision, and native/OCI escape
-  tests are implemented. CI compiles every Rust target on macOS and Windows; Windows
-  network destinations use per-permit proxy credentials and package-SID WFP filters and
-  fail closed before launch when either isolation layer is unavailable.
-- Durable Plan Mode, single-use approval, plan-to-goal handoff, bounded Goal Mode, and
-  durable subagents are implemented. The durable memory, task/decision, and context
-  budget/snapshot boundaries, durable multi-turn loop, bounded malformed-tool recovery,
-  strict catalog validation, and the complete P0 offline/network tool surface are
-  implemented through the normal permission, quarantine, and audit boundaries.
-- The first fully green remote Windows x64/arm64 named-pipe runtime matrix. The
-  cross-platform suite and CI jobs are implemented.
-- A broader hosted and version-specific provider terminal matrix remains. Unicode-aware
-  editor cursor/draft counters, loopback-live Responses and compatible streamed tool
-  continuation, and compatible one-shot/REPL/authenticated-worker parity are implemented.
-  Five typed built-in palettes, bounded data-only custom theme libraries with immutable
-  audited snapshots, encrypted REPL history with bounded
-  hydration, prompt-safe in-place activity refresh, a cached embedded/worker status prompt,
-  durable correlated run envelopes, semantic tool-family results, recoverability labels,
-  and phase/action elapsed lines are implemented.
-- Additional MCP transports/conformance coverage and the rest of P2 remain. Native
-  release archives now include clean-prefix offline installers, and signed offline
-  bundles can be deterministically materialized from staged native targets then verified
-  and installed through approval-required gateway effects with late signing-key
-  resolution and exact current-target/no-clobber enforcement. Native GitHub,
-  SearXNG, and OpenSearch tools plus event-sourced OpenAPI imports, strict dynamic schemas,
-  pending-auth hiding, environment credential brokering, exact-origin HTTP execution,
-  permit/approval enforcement, bounded quarantine, and post-effect release are implemented.
-  Declarative discovery, deterministic composition, active-scoped resources, optimistic
-  authoring, workspace-local validation, and approval-gated skill installation are
-  implemented; skill resources remain non-executable. Configured stdio MCP discovery,
-  invocation, and research collection are implemented through the normal sandbox and
-  gateway boundaries.
-- The active root and operator documentation now describes only the Rust executable,
-  strict YAML/redb state, policy/sandbox, workflow, extension, and native distribution
-  contracts. An executable documentation test parses the published configuration,
-  validates the workflow example, confirms documented command families, and rejects
-  Python-era operator signatures. Historical Python implementation detail remains only
-  in explicitly labeled architecture/security legacy sections and the frozen branch/tag.
-- The first fully green remote native sandbox/runtime and six-target release-artifact
-  matrices. CI now has one fail-closed `rust-cutover-gate` over every mandatory Rust job,
-  and repository acceptance pins that dependency set plus the supported runner/target
-  matrices so omitted platform evidence cannot silently appear green.
+Hosted GitHub Actions evidence is temporarily deferred while Actions credits are
+unavailable. The fail-closed `rust-cutover-gate`, native sandbox/runtime matrices,
+Windows x64/arm64 checks, live OPA/OCI/Chroma suites, and six-target artifact jobs remain
+configured and must be rerun before creating the final `v0.6.0` release tag. No skipped
+or billing-blocked remote job is represented as passing.
 
-Rust is promoted to the repository root only after those P0+P1 acceptance checks pass.
+P2 schedules, webhooks, repository events, event subscriptions, PostgreSQL storage,
+external WORM audit anchors, and additional adapters remain post-0.6 work.

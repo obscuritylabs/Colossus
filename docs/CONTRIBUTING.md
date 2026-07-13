@@ -28,7 +28,8 @@ Install the local commit hook after cloning:
 The hook validates commit messages with:
 
 ```bash
-uv run python scripts/check_conventional_commit.py .git/COMMIT_EDITMSG
+./scripts/check_conventional_commit.sh .git/COMMIT_EDITMSG
 ```
 
-CI also validates pull request titles and pushed commit messages with the same checker.
+The checker is POSIX shell and does not require Python. CI validates pull request titles
+and pushed commit messages with the same script.

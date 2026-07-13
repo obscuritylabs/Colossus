@@ -1,15 +1,14 @@
 # Release Process
 
-Rust alpha versions use `0.6.0-alpha.N`; P0+P1 cutover is `0.6.0`. Release only from a
-clean tree after the feature inventory and acceptance matrix accurately describe any
-remaining gap.
+Rust 0.6.0 is the P0+P1 cutover release. Release only from a clean tree after the feature
+inventory and acceptance matrix accurately describe any remaining gap.
 
 ## Readiness
 
 1. Update the workspace version, `CHANGELOG.md`, user docs, security notes, and migration
    guidance together.
 2. Confirm `Cargo.lock` and `fuzz/Cargo.lock` contain only reviewed dependency changes.
-3. Run the authoritative gates from `rust/`:
+3. Run the authoritative gates from the repository root:
 
 ```bash
 cargo fmt --all -- --check
@@ -38,7 +37,7 @@ Each native job:
 1. builds with `--locked --release`;
 2. executes version, strict config, credential-free echo, and encrypted audit checks;
 3. verifies static linkage for Linux;
-4. packages `colossus`/`colossus.exe`, the platform installer, license, and Rust README;
+4. packages `colossus`/`colossus.exe`, the platform installer, license, and root README;
 5. writes a SHA-256 sidecar;
 6. extracts the completed archive into a clean directory;
 7. installs into a clean prefix and repeats version/echo/audit using only the installed
@@ -84,7 +83,7 @@ staging tree and install its current-target executable without an archive tool:
 
 ```bash
 colossus --config .colossus/config.yaml --approval-mode ask bundle build \
-  ./bundle-stage ./bundle --name colossus-offline --version 0.6.0-alpha.N \
+  ./bundle-stage ./bundle --name colossus-offline --version 0.6.0 \
   --publisher colossus --created-at CREATED_AT --source-revision GIT_COMMIT \
   --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED
 colossus --config .colossus/config.yaml --approval-mode ask bundle install \
@@ -99,8 +98,8 @@ status, and artifact hashes as release evidence.
 After all required CI and acceptance evidence is green:
 
 ```bash
-git tag -a v0.6.0-alpha.N -m "Colossus v0.6.0-alpha.N"
-git push origin v0.6.0-alpha.N
+git tag -a v0.6.0 -m "Colossus v0.6.0"
+git push origin v0.6.0
 ```
 
 Attach all six archives, sidecars, SBOM/signature material, changelog excerpt, and known

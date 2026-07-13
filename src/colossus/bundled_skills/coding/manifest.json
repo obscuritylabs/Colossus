@@ -1,9 +1,0 @@
-{
-  "name": "coding",
-  "version": "0.1.0",
-  "description": "General software implementation workflow for Colossus agents.",
-  "triggers": ["code", "implement", "fix", "test", "refactor"],
-  "required_tools": ["filesystem.read", "git.diff"],
-  "permissions": ["filesystem:read", "filesystem:write"],
-  "offline_compatible": true
-}

@@ -14,63 +14,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python:
-    name: Python legacy checkpoint
+  rust:
+    name: Rust format, Clippy, and tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: uv sync --extra dev --locked
-
-      - name: Run tests
-        run: uv run pytest
-
-      - name: Run ruff
-        run: uv run ruff check .
-
-      - name: Run mypy
-        run: uv run mypy src/colossus
-
       - name: Validate Conventional Commit message
+        shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            printf '%s\n' "$PR_TITLE" | uv run python scripts/check_conventional_commit.py --stdin
+            printf '%s\n' "$PR_TITLE" | ./scripts/check_conventional_commit.sh --stdin
           else
-            git log -1 --pretty=%B | uv run python scripts/check_conventional_commit.py --stdin
+            git log -1 --pretty=%B | ./scripts/check_conventional_commit.sh --stdin
           fi
-
-      - name: Build package
-        run: uv run python -m build
-
-  rust:
-    name: Rust format, Clippy, and tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: rust
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
 
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@master
@@ -81,7 +43,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust -> target
+          workspaces: . -> target
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -106,10 +68,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-14, windows-latest]
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -122,7 +80,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust -> target
+          workspaces: . -> target
 
       - name: Compile every target
         run: cargo check --locked --workspace --all-targets
@@ -140,10 +98,6 @@ jobs:
           - macos-14
           - ubuntu-24.04
           - ubuntu-24.04-arm
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -156,7 +110,7 @@ jobs:
       - name: Cache native sandbox target
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust -> target
+          workspaces: . -> target
           key: native-sandbox-${{ matrix.runner }}
 
       - name: Run native isolation and escape acceptance
@@ -173,10 +127,6 @@ jobs:
         runner:
           - windows-2025
           - windows-11-arm
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -189,7 +139,7 @@ jobs:
       - name: Cache Windows runtime target
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust -> target
+          workspaces: . -> target
           key: windows-runtime-${{ matrix.runner }}
 
       - name: Run authenticated named-pipe and AppContainer escape acceptance
@@ -202,10 +152,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: rust
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -218,7 +164,7 @@ jobs:
       - name: Cache fuzz dependencies and targets
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust/fuzz -> target
+          workspaces: fuzz -> target
 
       - name: Install cargo-fuzz 0.13.2
         run: cargo install cargo-fuzz --version 0.13.2 --locked
@@ -240,7 +186,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: colossus-fuzz-artifacts
-          path: rust/fuzz/artifacts/
+          path: fuzz/artifacts/
           if-no-files-found: ignore
 
   rust-supply-chain:
@@ -248,10 +194,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: rust
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -264,7 +206,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust -> target
+          workspaces: . -> target
 
       - name: Install pinned supply-chain tools
         run: |
@@ -310,10 +252,6 @@ jobs:
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             archive: zip
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -333,7 +271,7 @@ jobs:
       - name: Cache release target
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust -> target
+          workspaces: . -> target
           key: release-${{ matrix.target }}
 
       - name: Build locked release binary
@@ -357,7 +295,7 @@ jobs:
           COLOSSUS_RELEASE_SIGNING_KEY: "6666666666666666666666666666666666666666666666666666666666666666"
         run: |
           set -euo pipefail
-          binary="$GITHUB_WORKSPACE/rust/target/${{ matrix.target }}/release/colossus-rs"
+          binary="$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/colossus-rs"
           smoke="$RUNNER_TEMP/colossus-release-smoke-${{ matrix.target }}"
           rm -rf "$smoke"
           mkdir -p "$smoke/workflows"
@@ -397,7 +335,7 @@ jobs:
           COLOSSUS_RELEASE_SIGNING_KEY: "6666666666666666666666666666666666666666666666666666666666666666"
         run: |
           $ErrorActionPreference = "Stop"
-          $binary = Join-Path $env:GITHUB_WORKSPACE "rust/target/${{ matrix.target }}/release/colossus-rs.exe"
+          $binary = Join-Path $env:GITHUB_WORKSPACE "target/${{ matrix.target }}/release/colossus-rs.exe"
           $smoke = Join-Path $env:RUNNER_TEMP "colossus-release-smoke-${{ matrix.target }}"
           Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force (Join-Path $smoke "workflows") | Out-Null
@@ -439,7 +377,7 @@ jobs:
           mkdir -p "$stage" dist
           install -m 0755 target/${{ matrix.target }}/release/colossus-rs "$stage/colossus"
           install -m 0755 release/install.sh "$stage/install.sh"
-          cp ../LICENSE "$stage/LICENSE"
+          cp LICENSE "$stage/LICENSE"
           cp README.md "$stage/README.md"
           tar -C "$RUNNER_TEMP" -czf "dist/$package.tar.gz" "$package"
           cd dist
@@ -463,7 +401,7 @@ jobs:
           New-Item -ItemType Directory -Force $stage, $dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/colossus-rs.exe" (Join-Path $stage "colossus.exe")
           Copy-Item release/install.ps1 (Join-Path $stage "install.ps1")
-          Copy-Item ../LICENSE (Join-Path $stage "LICENSE")
+          Copy-Item LICENSE (Join-Path $stage "LICENSE")
           Copy-Item README.md (Join-Path $stage "README.md")
           $archive = Join-Path $dist "$package.zip"
           Compress-Archive -Path $stage -DestinationPath $archive -Force
@@ -568,7 +506,7 @@ jobs:
           COLOSSUS_BUNDLE_SIGNING_SEED: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         run: |
           set -euo pipefail
-          binary="$GITHUB_WORKSPACE/rust/target/${{ matrix.target }}/release/colossus-rs"
+          binary="$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/colossus-rs"
           root="$RUNNER_TEMP/colossus-bundle-smoke-${{ matrix.target }}"
           stage="$root/stage"
           bundle="$root/bundle"
@@ -683,7 +621,7 @@ jobs:
           COLOSSUS_BUNDLE_SIGNING_SEED: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         run: |
           $ErrorActionPreference = "Stop"
-          $binary = Join-Path $env:GITHUB_WORKSPACE "rust/target/${{ matrix.target }}/release/colossus-rs.exe"
+          $binary = Join-Path $env:GITHUB_WORKSPACE "target/${{ matrix.target }}/release/colossus-rs.exe"
           $root = Join-Path $env:RUNNER_TEMP "colossus-bundle-smoke-${{ matrix.target }}"
           $stage = Join-Path $root "stage"
           $bundle = Join-Path $root "bundle"
@@ -783,7 +721,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: colossus-${{ matrix.target }}
-          path: rust/dist/colossus-*-${{ matrix.target }}.${{ matrix.archive }}*
+          path: dist/colossus-*-${{ matrix.target }}.${{ matrix.archive }}*
           if-no-files-found: error
           compression-level: 0
 
@@ -800,10 +738,6 @@ jobs:
             image: chromadb/chroma:1.5.8@sha256:607103123fbd79794e3cd8029e16137031a464551e3a61df77191627a9d23c72
           - chroma: "1.5.9"
             image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -816,7 +750,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust -> target
+          workspaces: . -> target
 
       - name: Start pinned Chroma release
         run: |
@@ -848,10 +782,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     needs: rust
-    defaults:
-      run:
-        working-directory: rust
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -864,7 +794,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust -> target
+          workspaces: . -> target
 
       - name: Install static proxy and Podman prerequisites
         run: |

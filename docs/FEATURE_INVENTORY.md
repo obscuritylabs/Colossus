@@ -973,6 +973,11 @@ disabled, and audited without exposing its credentials.
 
 A reconstruction is complete only when all applicable checks pass:
 
+Cutover note (2026-07-13): Rust 0.6.0 is promoted to the repository root and the Python
+runtime/package is removed from `main`. Hosted-only boxes remain open because GitHub
+Actions credits are temporarily unavailable; they must be rerun when credits return and
+are not treated as passing in the meantime.
+
 - [ ] Offline install and echo smoke test require no provider credentials or network.
   Native archive installers now require no Cargo or Python; clean-prefix install,
   echo-agent, and encrypted audit verification pass locally on Unix and are wired into

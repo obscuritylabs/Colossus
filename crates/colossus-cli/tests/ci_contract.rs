@@ -1,0 +1,290 @@
+//! Repository-level contract for the mandatory Rust cutover matrices.
+
+use serde_json::{Map, Value};
+use std::{collections::BTreeSet, fs, path::Path};
+
+const REQUIRED_CUTOVER_JOBS: &[&str] = &[
+    "rust",
+    "rust-portability",
+    "rust-native-sandbox",
+    "rust-windows-runtime",
+    "rust-fuzz",
+    "rust-supply-chain",
+    "rust-release-smoke",
+    "rust-live-chroma",
+    "rust-live-security",
+];
+
+fn repository_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repository root")
+}
+
+fn workflow() -> Value {
+    let path = repository_root().join(".github/workflows/ci.yml");
+    let source = fs::read_to_string(&path).expect("read CI workflow");
+    serde_saphyr::from_str(&source).expect("CI workflow must be valid YAML")
+}
+
+fn mapping<'a>(value: &'a Value, context: &str) -> &'a Map<String, Value> {
+    value
+        .as_object()
+        .unwrap_or_else(|| panic!("{context} must be a mapping"))
+}
+
+fn field<'a>(mapping: &'a Map<String, Value>, name: &str) -> &'a Value {
+    mapping
+        .get(name)
+        .unwrap_or_else(|| panic!("missing field {name}"))
+}
+
+fn strings(value: &Value, context: &str) -> BTreeSet<String> {
+    value
+        .as_array()
+        .unwrap_or_else(|| panic!("{context} must be a sequence"))
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .unwrap_or_else(|| panic!("{context} entries must be strings"))
+                .to_owned()
+        })
+        .collect()
+}
+
+fn jobs(workflow: &Value) -> &Map<String, Value> {
+    mapping(field(mapping(workflow, "workflow"), "jobs"), "jobs")
+}
+
+fn job<'a>(jobs: &'a Map<String, Value>, name: &str) -> &'a Map<String, Value> {
+    mapping(field(jobs, name), name)
+}
+
+fn matrix_includes<'a>(jobs: &'a Map<String, Value>, name: &str) -> &'a Vec<Value> {
+    let strategy = mapping(field(job(jobs, name), "strategy"), "strategy");
+    let matrix = mapping(field(strategy, "matrix"), "matrix");
+    field(matrix, "include")
+        .as_array()
+        .expect("matrix include must be a sequence")
+}
+
+fn named_step<'a>(job: &'a Map<String, Value>, name: &str) -> &'a Map<String, Value> {
+    field(job, "steps")
+        .as_array()
+        .expect("job steps must be a sequence")
+        .iter()
+        .map(|step| mapping(step, "job step"))
+        .find(|step| field(step, "name").as_str() == Some(name))
+        .unwrap_or_else(|| panic!("missing job step {name}"))
+}
+
+#[test]
+fn cutover_gate_fails_closed_over_every_required_rust_job() {
+    let workflow = workflow();
+    let jobs = jobs(&workflow);
+    let gate = job(jobs, "rust-cutover-gate");
+    assert_eq!(
+        field(gate, "if").as_str(),
+        Some("${{ always() }}"),
+        "the gate must run even when a dependency fails or is skipped"
+    );
+    assert_eq!(
+        strings(field(gate, "needs"), "cutover needs"),
+        REQUIRED_CUTOVER_JOBS
+            .iter()
+            .map(|job| (*job).to_owned())
+            .collect(),
+        "the cutover gate must aggregate exactly the mandatory Rust jobs"
+    );
+
+    let steps = field(gate, "steps")
+        .as_array()
+        .expect("cutover steps must be a sequence");
+    let environment = mapping(
+        field(mapping(&steps[0], "cutover step"), "env"),
+        "cutover environment",
+    );
+    assert_eq!(
+        environment.len(),
+        1,
+        "the complete needs object must be checked as one immutable result set"
+    );
+    assert_eq!(
+        field(environment, "RUST_ACCEPTANCE_RESULTS").as_str(),
+        Some("${{ toJSON(needs) }}"),
+        "the gate must inspect every declared dependency result"
+    );
+    let script = field(mapping(&steps[0], "cutover step"), "run")
+        .as_str()
+        .expect("cutover script");
+    assert!(script.contains("details.get(\"result\") != \"success\""));
+    assert!(script.contains("raise SystemExit(bool(failed))"));
+}
+
+#[test]
+fn hosted_platform_and_release_matrices_cover_every_supported_architecture() {
+    let workflow = workflow();
+    let jobs = jobs(&workflow);
+
+    let native = job(jobs, "rust-native-sandbox");
+    let native_matrix = mapping(
+        field(
+            mapping(field(native, "strategy"), "native strategy"),
+            "matrix",
+        ),
+        "native matrix",
+    );
+    assert_eq!(
+        strings(field(native_matrix, "runner"), "native runners"),
+        [
+            "macos-15-intel",
+            "macos-14",
+            "ubuntu-24.04",
+            "ubuntu-24.04-arm"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let windows = job(jobs, "rust-windows-runtime");
+    let windows_matrix = mapping(
+        field(
+            mapping(field(windows, "strategy"), "Windows strategy"),
+            "matrix",
+        ),
+        "Windows matrix",
+    );
+    assert_eq!(
+        strings(field(windows_matrix, "runner"), "Windows runners"),
+        ["windows-2025", "windows-11-arm"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+
+    let releases: BTreeSet<(String, String, String)> = matrix_includes(jobs, "rust-release-smoke")
+        .iter()
+        .map(|entry| {
+            let entry = mapping(entry, "release matrix entry");
+            (
+                field(entry, "runner")
+                    .as_str()
+                    .expect("release runner")
+                    .into(),
+                field(entry, "target")
+                    .as_str()
+                    .expect("release target")
+                    .into(),
+                field(entry, "archive")
+                    .as_str()
+                    .expect("release archive")
+                    .into(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        releases,
+        [
+            ("macos-15-intel", "x86_64-apple-darwin", "tar.gz"),
+            ("macos-14", "aarch64-apple-darwin", "tar.gz"),
+            ("ubuntu-24.04", "x86_64-unknown-linux-musl", "tar.gz"),
+            ("ubuntu-24.04-arm", "aarch64-unknown-linux-musl", "tar.gz"),
+            ("windows-2025", "x86_64-pc-windows-msvc", "zip"),
+            ("windows-11-arm", "aarch64-pc-windows-msvc", "zip"),
+        ]
+        .into_iter()
+        .map(|(runner, target, archive)| (runner.into(), target.into(), archive.into()))
+        .collect()
+    );
+}
+
+#[test]
+fn bounded_fuzzing_executes_with_the_pinned_nightly_toolchain() {
+    let workflow = workflow();
+    let jobs = jobs(&workflow);
+    let fuzz = job(jobs, "rust-fuzz");
+    let install = named_step(fuzz, "Install pinned nightly Rust");
+    let toolchain = mapping(field(install, "with"), "nightly install inputs");
+    assert_eq!(
+        field(toolchain, "toolchain").as_str(),
+        Some("nightly-2026-07-10")
+    );
+
+    let run = field(
+        named_step(fuzz, "Run bounded security parser fuzzing"),
+        "run",
+    )
+    .as_str()
+    .expect("fuzz run script");
+    assert!(run.contains("cargo +nightly-2026-07-10 fuzz run"));
+    for bound in [
+        "-runs=5000",
+        "-max_len=65536",
+        "-timeout=10",
+        "-rss_limit_mb=2048",
+    ] {
+        assert!(run.contains(bound), "fuzz run must retain {bound}");
+    }
+}
+
+#[test]
+fn unix_release_install_smoke_is_compatible_with_macos_bash() {
+    let workflow = workflow();
+    let jobs = jobs(&workflow);
+    let release = job(jobs, "rust-release-smoke");
+    let run = field(
+        named_step(release, "Install packaged Unix artifact offline"),
+        "run",
+    )
+    .as_str()
+    .expect("Unix install smoke script");
+    assert!(run.contains("packages=(\"$extract\"/colossus-*)"));
+    assert!(run.contains("test -d \"$package\""));
+    assert!(
+        !run.contains("mapfile"),
+        "macOS ships Bash 3.2 without mapfile"
+    );
+}
+
+#[test]
+fn conventional_commit_checker_is_python_free_and_preserves_the_contract() {
+    let checker = repository_root().join("scripts/check_conventional_commit.sh");
+    for valid in [
+        "feat: add repl themes",
+        "fix(repl): clear approved prompt",
+        "security!: tighten approval policy",
+        "Merge branch 'main' into feature",
+    ] {
+        let mut child = std::process::Command::new(&checker)
+            .arg("--stdin")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("start Conventional Commit checker");
+        use std::io::Write as _;
+        child
+            .stdin
+            .as_mut()
+            .expect("checker stdin")
+            .write_all(valid.as_bytes())
+            .expect("write valid subject");
+        assert!(child.wait().expect("wait for checker").success(), "{valid}");
+    }
+
+    let mut child = std::process::Command::new(&checker)
+        .arg("--stdin")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("start Conventional Commit checker");
+    use std::io::Write as _;
+    child
+        .stdin
+        .as_mut()
+        .expect("checker stdin")
+        .write_all(b"Update docs")
+        .expect("write invalid subject");
+    assert!(!child.wait().expect("wait for checker").success());
+}

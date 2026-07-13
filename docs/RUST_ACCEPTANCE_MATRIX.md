@@ -1,9 +1,9 @@
-# Rust Foundational Acceptance Matrix
+# Rust Acceptance Matrix
 
-This matrix tracks the new reconstruction requirements separately from the full P0-P2
-product checklist. `Passing` means an executable test exists in the current Rust alpha;
-`Partial` means the contract/foundation exists but later adapters or platform suites are
-still required.
+This matrix tracks the reconstruction requirements separately from the full P0-P2
+product checklist. `Passing` means executable acceptance exists in the active Rust
+runtime; hosted-only evidence remains explicit in the final column until credits permit
+the remote matrices to run again.
 
 | Requirement | Status | Current evidence | Remaining acceptance |
 | --- | --- | --- | --- |
@@ -15,38 +15,38 @@ still required.
 | FLOW-01 | Passing P0+P1 durable acceptance | strict YAML and exact hash invalidation; condition grammar; direct and indirect call-cycle rejection; 16-level call-depth enforcement; journal-native queued/claimed/drained runs; pinned and policy-authorized linked child runs with parent/step/depth projections, visible waiting-child identity, duplicate-free resume, intent-to-queue crash repair, terminal propagation, and cancellation cascade; durable output and attempt-budget reconstruction; root, nested, and iteration-scoped wait/input resume; scoped effect, retry, idempotency, parallel-branch, and child-call identities; bounded parallel journal writes; explicit idempotent retry; separately dispatched compensation effects; abandoned-attempt `outcome_unknown` recovery bound to exact execution and phase; separate-process redb kills after synced non-idempotent/idempotent primary effects, compensation, durable step completion, parallel sibling completion, child-link intent, and nested child effects proving unsafe replay refusal, stable reopen, exact-key safe retry, child-first recovery, and no duplicate completion or launch; authenticated worker validate/register/start/status/resume/input/cancel/drain routing | P2 schedules, webhooks, repository events, and event subscriptions remain explicitly deferred |
 | PROV-01 | Passing P0 provider foundation | strict echo/Responses/compatible profiles; role routing; one-shot CLI and REPL path; incremental Responses and compatible SSE; per-item quarantine and post-effect release; durable partial streams; normalized usage telemetry; model catalog/doctor; full logical request disclosure; reference-only credential policy input; permit-bound late credential resolution across provider, embedding/Chroma, MCP, integration, pack, and signed-bundle adapters; adversarial streamed credential echo proving the value exists only in the adapter Authorization header and is redacted before tool arguments, continuation bodies, session history, telemetry, audit, stdout, and stderr; safe reasoning summaries; durable multi-turn continuation; call-ID-correlated tool results; strict pre-policy schemas; loopback-live invalid-JSON and non-object tool arguments with exactly two correction requests, third-turn recovery, no tool lifecycle, and no policy-allowed filesystem mutation; loopback-live terminal classification separating `agent.max_turns` plus `run.max_turns.v1` after valid tool turns from `provider.failed` empty output and three-attempt malformed-argument exhaustion; complete required P0 tool catalog; one loopback-live compatible CLI run proving released SSE text, two sequential tool turns with correlated continuation results, final output, distinct run/session IDs, durable event count, and positive elapsed time; loopback-live Responses and compatible streamed tool loops; compatible CLI/REPL/authenticated-worker parity; redirected ANSI safety | Hosted services and broader compatible implementation/version matrix |
 | DIST-01 | Passing local native-installer and signed-bundle foundation | strict Unix and PowerShell clean-prefix installers; linked source/destination rejection; idempotent archive-installer replacement; package contents include installer/license/README; local installed-binary version/config/echo/audit acceptance without Cargo, Python, provider credentials, or network; completed-archive extraction and installed-binary smoke wired across all six native release jobs; deterministic gateway-bound signed-bundle materialization from a staged multi-target tree; reference-only late signing-seed resolution; publisher/key trust enforcement; copied-byte re-verification; exact current-target selection; clean-prefix/no-clobber installed execution and audit verification; reproducibility, tamper, and repeat-install rejection tests; the release matrix and aggregate cutover dependencies are pinned by executable repository acceptance | First green remote six-target installer and signed-bundle matrix reported through `rust-cutover-gate` |
-| CUTOVER-DOC | Passing Rust-first operator contract | root and operator docs use the native executable, strict YAML, redb, effect gateway, durable workflows, and signed native bundle contract; published config parses through `RuntimeConfig`; published workflow validates through `validate_definition`; documented command families execute Clap help; active docs reject Python-era command/config/index signatures; end-to-end `config show` preserves environment references without resolving values and unknown raw-secret fields fail without diagnostic disclosure | Keep the contract test current as remaining P0+P1 surfaces complete and Rust is promoted to repository root |
+| CUTOVER-DOC | Passing Rust-first operator contract | Rust 0.6.0 is promoted to the repository root; the Python runtime/package is absent from `main`; root and operator docs use the native executable, strict YAML, redb, effect gateway, durable workflows, and signed native bundle contract; published config parses through `RuntimeConfig`; published workflow validates through `validate_definition`; documented command families execute Clap help; active docs reject Python-era command/config/index signatures; end-to-end `config show` preserves environment references without resolving values and unknown raw-secret fields fail without diagnostic disclosure | Keep the contract test current; rerun hosted cutover evidence when Actions credits return |
 | STATE-01 | Passing session, context, and work-state foundation | canonical session creation and append-only messages; optimistic versions; reconstructed summaries/history; newest/latest/exact resume; session id in run/effect provenance and results; provider history restoration; one credential-free cross-process redb lifecycle with exact-ID reconstruction of session/messages, events, task, superseding decision, draft plan, superseded memory, bounded goal, completed subagent, offline repository research, cited sources, and every corresponding domain event; numbered REPL picker; automatic/manual context compaction, immutable snapshots, restore, runtime-injected session scope, policy/approval enforcement, and provenance tests; cross-process automatic compaction proving visible status/list state, deterministic fallback without a model summarizer, reduced prepared input, immutable snapshot events, and preservation of every raw message; loopback-live Plan Mode proving mutating tools are neither disclosed nor executable, structured draft creation, fixed-run-id direct consumption, replay rejection, and atomic plan-to-goal handoff; bounded session work-state aggregation for tasks, active decisions, actionable plans, current goals, and nonterminal subagents through embedded CLI/REPL and authenticated worker | Migration/cutover UX |
 
 The relevant tests live in:
 
-- `rust/crates/colossus-journal-redb/src/lib.rs`
-- `rust/crates/colossus-agent/src/lib.rs`
-- `rust/crates/colossus-audit/src/lib.rs`
-- `rust/crates/colossus-fuzzing/src/lib.rs`
-- `rust/crates/colossus-memory/src/lib.rs`
-- `rust/crates/colossus-memory-chroma/src/lib.rs`
-- `rust/crates/colossus-policy/src/lib.rs`
-- `rust/crates/colossus-policy/tests/opa_live.rs`
-- `rust/crates/colossus-provider/src/lib.rs`
-- `rust/crates/colossus-tools/src/lib.rs`
-- `rust/crates/colossus-projection/src/lib.rs`
-- `rust/crates/colossus-presentation/src/lib.rs`
-- `rust/crates/colossus-runtime/src/lib.rs`
-- `rust/crates/colossus-sandbox/src/lib.rs`
-- `rust/crates/colossus-windows-process/src/lib.rs`
-- `rust/crates/colossus-session/src/lib.rs`
-- `rust/crates/colossus-cli/tests/agent_smoke.rs`
-- `rust/crates/colossus-cli/tests/approval_smoke.rs`
-- `rust/crates/colossus-cli/tests/context_compaction_smoke.rs`
-- `rust/crates/colossus-cli/tests/plan_mode_smoke.rs`
-- `rust/crates/colossus-cli/tests/provider_terminal_smoke.rs`
-- `rust/crates/colossus-cli/tests/tool_rejection_smoke.rs`
-- `rust/crates/colossus-cli/tests/release_install_smoke.rs`
-- `rust/crates/colossus-cli/tests/bundle_distribution_smoke.rs`
-- `rust/crates/colossus-cli/tests/ci_contract.rs`
-- `rust/crates/colossus-cli/tests/documentation_contract.rs`
-- `rust/crates/colossus-cli/tests/native_sandbox.rs`
-- `rust/crates/colossus-cli/tests/oci_sandbox.rs`
-- `rust/crates/colossus-workflow/src/lib.rs`
-- `rust/crates/colossus-testkit/src/lib.rs`
+- `crates/colossus-journal-redb/src/lib.rs`
+- `crates/colossus-agent/src/lib.rs`
+- `crates/colossus-audit/src/lib.rs`
+- `crates/colossus-fuzzing/src/lib.rs`
+- `crates/colossus-memory/src/lib.rs`
+- `crates/colossus-memory-chroma/src/lib.rs`
+- `crates/colossus-policy/src/lib.rs`
+- `crates/colossus-policy/tests/opa_live.rs`
+- `crates/colossus-provider/src/lib.rs`
+- `crates/colossus-tools/src/lib.rs`
+- `crates/colossus-projection/src/lib.rs`
+- `crates/colossus-presentation/src/lib.rs`
+- `crates/colossus-runtime/src/lib.rs`
+- `crates/colossus-sandbox/src/lib.rs`
+- `crates/colossus-windows-process/src/lib.rs`
+- `crates/colossus-session/src/lib.rs`
+- `crates/colossus-cli/tests/agent_smoke.rs`
+- `crates/colossus-cli/tests/approval_smoke.rs`
+- `crates/colossus-cli/tests/context_compaction_smoke.rs`
+- `crates/colossus-cli/tests/plan_mode_smoke.rs`
+- `crates/colossus-cli/tests/provider_terminal_smoke.rs`
+- `crates/colossus-cli/tests/tool_rejection_smoke.rs`
+- `crates/colossus-cli/tests/release_install_smoke.rs`
+- `crates/colossus-cli/tests/bundle_distribution_smoke.rs`
+- `crates/colossus-cli/tests/ci_contract.rs`
+- `crates/colossus-cli/tests/documentation_contract.rs`
+- `crates/colossus-cli/tests/native_sandbox.rs`
+- `crates/colossus-cli/tests/oci_sandbox.rs`
+- `crates/colossus-workflow/src/lib.rs`
+- `crates/colossus-testkit/src/lib.rs`

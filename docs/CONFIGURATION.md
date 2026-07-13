@@ -306,7 +306,7 @@ workflows:
 skills:
   enabled: true
   allowUserOverrides: false
-  bundled: rust/bundled-skills
+  bundled: bundled-skills
   repository: .colossus/skills
   user: skills
   disabled: []

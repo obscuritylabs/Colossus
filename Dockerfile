@@ -1,19 +1,15 @@
-FROM python:3.12-slim
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+FROM rust:1.96-bookworm AS builder
 
 WORKDIR /src
-
-# Copy only project metadata first for better caching
 COPY . ./
+RUN cargo build --locked --release -p colossus-cli --bin colossus-rs
 
-# Install build tools and build a wheel
-RUN uv sync --all-groups && uv build
+FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y gzip && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    tar -czvf /colossus.tar.gz /src/
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-# Default to running the development CLI via `uv run colossus`.
-ENTRYPOINT ["uv", "run", "colossus"]
+COPY --from=builder /src/target/release/colossus-rs /usr/local/bin/colossus
+
+ENTRYPOINT ["colossus"]
