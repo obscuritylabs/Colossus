@@ -75,6 +75,7 @@ const WINDOWS_REPARSE_POINT_ATTRIBUTE: u32 = 0x400;
 const OCI_CLEANUP_RESERVE_MS: u64 = 2_000;
 const OCI_NETWORK_CLEANUP_RESERVE_MS: u64 = 5_000;
 const WINDOWS_JOB_CLEANUP_RESERVE_MS: u64 = 7_000;
+const NATIVE_CLEANUP_RESERVE_MS: u64 = 250;
 const OCI_CONTROL_COMMAND_TIMEOUT_MS: u64 = 1_500;
 const OCI_DNS_RESOLUTION_TIMEOUT_MS: u64 = 3_000;
 const MAX_OCI_CONTROL_DIAGNOSTIC_BYTES: usize = 4 * 1024;
@@ -971,6 +972,24 @@ fn is_sandbox_process_action(action: &str) -> bool {
         )
 }
 
+fn sandbox_helper_budget(obligations: &PolicyObligations, effective_timeout_ms: u64) -> u64 {
+    let cleanup_reserve_ms =
+        if obligations.sandbox_backend == "oci" && !obligations.network_destinations.is_empty() {
+            OCI_NETWORK_CLEANUP_RESERVE_MS
+        } else if obligations.sandbox_backend == "oci" {
+            OCI_CLEANUP_RESERVE_MS
+        } else if obligations.sandbox_backend == "windows_job" {
+            WINDOWS_JOB_CLEANUP_RESERVE_MS
+        } else {
+            NATIVE_CLEANUP_RESERVE_MS
+        };
+    obligations
+        .timeout_ms
+        .min(effective_timeout_ms)
+        .saturating_sub(cleanup_reserve_ms)
+        .max(1)
+}
+
 #[async_trait]
 impl EffectExecutor for SandboxProcessExecutor {
     async fn execute(
@@ -1048,23 +1067,7 @@ impl EffectExecutor for SandboxProcessExecutor {
                 "networked process execution currently requires the native proxy-only backend",
             ));
         };
-        let helper_reserve = if permit.obligations().sandbox_backend == "oci"
-            && !permit.obligations().network_destinations.is_empty()
-        {
-            OCI_NETWORK_CLEANUP_RESERVE_MS
-        } else if permit.obligations().sandbox_backend == "oci" {
-            OCI_CLEANUP_RESERVE_MS
-        } else if permit.obligations().sandbox_backend == "windows_job" {
-            WINDOWS_JOB_CLEANUP_RESERVE_MS
-        } else {
-            250
-        };
-        let helper_budget = permit
-            .obligations()
-            .timeout_ms
-            .min(effective_timeout_ms)
-            .saturating_sub(helper_reserve)
-            .max(1);
+        let helper_budget = sandbox_helper_budget(permit.obligations(), effective_timeout_ms);
         let mut job_obligations = permit.obligations().clone();
         job_obligations.timeout_ms = effective_timeout_ms;
         job_obligations.max_output_bytes = effective_output_bytes;
@@ -3928,8 +3931,8 @@ mod tests {
         AllowlistProxy, BASE64, FilesystemExecutor, HttpExecutor, SandboxJob, SignedSandboxJob,
         atomic_create, atomic_write, authority, host_process_limits_apply, non_public_ip,
         oci_command, oci_proxy_run_arguments, oci_remove_arguments, oci_resource_names,
-        proposed_write_bytes, redact_proxy_credential, resolve_oci_origins, tls_server_name,
-        validate_process_spec,
+        proposed_write_bytes, redact_proxy_credential, resolve_oci_origins, sandbox_helper_budget,
+        tls_server_name, validate_process_spec,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::{native_helper_diagnostics, native_target_pid};
@@ -3969,6 +3972,29 @@ mod tests {
     }
 
     struct AdapterPostDenyPolicy(BuiltInPolicy);
+
+    #[test]
+    fn helper_budgets_reserve_backend_cleanup_before_the_outer_deadline() {
+        let mut obligations = PolicyObligations {
+            sandbox_backend: "windows_job".into(),
+            timeout_ms: 10_000,
+            ..PolicyObligations::default()
+        };
+        assert_eq!(sandbox_helper_budget(&obligations, 10_000), 3_000);
+
+        obligations.sandbox_backend = "oci".into();
+        obligations.timeout_ms = 5_000;
+        assert_eq!(sandbox_helper_budget(&obligations, 5_000), 3_000);
+
+        obligations.timeout_ms = 10_000;
+        obligations.network_destinations = vec!["https://example.com".into()];
+        assert_eq!(sandbox_helper_budget(&obligations, 10_000), 5_000);
+
+        obligations.sandbox_backend = "native".into();
+        obligations.network_destinations.clear();
+        obligations.timeout_ms = 1_000;
+        assert_eq!(sandbox_helper_budget(&obligations, 800), 550);
+    }
 
     #[async_trait::async_trait]
     impl PolicyDecisionPoint for AdapterPostDenyPolicy {
