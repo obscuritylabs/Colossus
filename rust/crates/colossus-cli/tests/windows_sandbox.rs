@@ -56,7 +56,7 @@ fn decoded(value: &Value, field: &str) -> Vec<u8> {
 struct WindowsTools {
     cmd: PathBuf,
     curl: PathBuf,
-    powershell: PathBuf,
+    memory_probe: PathBuf,
 }
 
 impl WindowsTools {
@@ -67,11 +67,7 @@ impl WindowsTools {
         Self {
             cmd: windows.join("System32").join("cmd.exe"),
             curl: windows.join("System32").join("curl.exe"),
-            powershell: windows
-                .join("System32")
-                .join("WindowsPowerShell")
-                .join("v1.0")
-                .join("powershell.exe"),
+            memory_probe: std::env::current_exe().expect("Windows memory probe executable"),
         }
     }
 }
@@ -120,7 +116,7 @@ sandbox:
   filesystem:
     - root: {allowed}
       mode: write
-  executables: [{cmd}, {curl}, {powershell}]
+  executables: [{cmd}, {curl}, {memory_probe}]
   environment: [SAFE, TARGET]
   networkDestinations: {network_destinations}
   timeoutMs: {timeout_ms}
@@ -135,10 +131,21 @@ sandbox:
             allowed = yaml_path(allowed),
             cmd = yaml_path(&tools.cmd),
             curl = yaml_path(&tools.curl),
-            powershell = yaml_path(&tools.powershell),
+            memory_probe = yaml_path(&tools.memory_probe),
         ),
     )
     .expect("config");
+}
+
+#[test]
+#[ignore = "launched only inside the AppContainer memory-limit acceptance"]
+fn windows_memory_pressure_probe() {
+    let mut memory = vec![0_u8; 536_870_912];
+    for page in memory.chunks_mut(4096) {
+        page[0] = 1;
+    }
+    std::hint::black_box(&memory);
+    thread::sleep(Duration::from_secs(2));
 }
 
 fn process<'a>(
@@ -182,7 +189,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     let tools = WindowsTools::discover();
     assert!(tools.cmd.is_file(), "cmd.exe is required");
     assert!(tools.curl.is_file(), "curl.exe is required");
-    assert!(tools.powershell.is_file(), "Windows PowerShell is required");
+    assert!(tools.memory_probe.is_file(), "memory probe is required");
     let config = root.join("config.yaml");
     write_config(
         &config,
@@ -547,15 +554,14 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         binary,
         &config,
         &process(
-            &tools.powershell,
+            &tools.memory_probe,
             &allowed,
             &[],
             &[
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "$memory = [byte[]]::new(536870912); for ($offset = 0; $offset -lt $memory.Length; $offset += 4096) { $memory[$offset] = 1 }; Start-Sleep -Seconds 2",
+                "--ignored",
+                "--exact",
+                "windows_memory_pressure_probe",
+                "--nocapture",
             ],
         ),
     );
