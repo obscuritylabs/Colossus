@@ -584,7 +584,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &allowed,
         &workflows,
         &tools,
-        2,
+        8,
         268_435_456,
         500,
         &[],
@@ -607,7 +607,12 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         ),
     );
     assert!(!timed_out.status.success());
-    assert!(String::from_utf8_lossy(&timed_out.stderr).contains("exceeded its timeout"));
+    assert!(
+        String::from_utf8_lossy(&timed_out.stderr).contains("exceeded its timeout"),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&timed_out.stdout),
+        String::from_utf8_lossy(&timed_out.stderr)
+    );
     thread::sleep(Duration::from_secs(3));
     assert!(
         !child_marker.exists(),
