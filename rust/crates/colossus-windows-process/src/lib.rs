@@ -807,24 +807,30 @@ mod windows_impl {
         completion_port: &OwnedHandle,
     ) -> Result<Option<ResourceLimitViolation>, WindowsProcessError> {
         let mut observed = None;
+        let mut wait_for_delivery = false;
         loop {
             let mut message = 0_u32;
             let mut key = 0_usize;
             let mut overlapped: *mut OVERLAPPED = null_mut();
-            // SAFETY: all output pointers are valid and the zero timeout makes this nonblocking.
+            let timeout_ms = if wait_for_delivery { 100 } else { 0 };
+            // SAFETY: all output pointers are valid and the timeout is strictly bounded.
             let status = unsafe {
                 GetQueuedCompletionStatus(
                     completion_port.raw(),
                     &mut message,
                     &mut key,
                     &mut overlapped,
-                    0,
+                    timeout_ms,
                 )
             };
             if status == 0 {
                 // SAFETY: GetLastError immediately follows the failed Win32 call.
                 let error = unsafe { GetLastError() };
                 if error == WAIT_TIMEOUT {
+                    if !wait_for_delivery {
+                        wait_for_delivery = true;
+                        continue;
+                    }
                     break;
                 }
                 return Err(code_error("GetQueuedCompletionStatus", error));

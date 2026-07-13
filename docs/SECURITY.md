@@ -212,9 +212,9 @@ security capabilities, and exact inherited standard-I/O handle list are installe
 atomically at process creation, eliminating a create-then-assign descendant race. Closing
 the helper or Job handle terminates the whole tree. UI and clipboard access, desktop
 switching, global atoms, and system-parameter mutation are also Job-restricted. Before
-releasing a result, the helper drains a Job Object completion port for hard active-process
-and memory-limit messages. The authenticated helper job carries a canonical host temporary
-root; the helper creates one
+releasing a result, the helper performs a bounded drain of the Job Object completion port
+for hard active-process and memory-limit messages. The authenticated helper job carries a
+canonical host temporary root; the helper creates one
 unpredictable package-ACL-scoped directory directly beneath it, supplies only that path as
 `TEMP`/`TMP`, and removes it after confirmed termination. The profile is then deleted; an
 interrupted helper can leave only an unreferenced unique profile/ACL identity and private
