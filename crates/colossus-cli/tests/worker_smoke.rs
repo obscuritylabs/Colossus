@@ -212,7 +212,11 @@ sandbox:
     );
 
     let status = run(binary, &config, &["worker", "--status"]);
-    assert!(status.status.success());
+    assert!(
+        status.status.success(),
+        "worker status failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
     assert_eq!(status["protocol_version"], 2);

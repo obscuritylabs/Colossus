@@ -32,7 +32,11 @@ const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
 const REPLAY_WINDOW: usize = 4_096;
-const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+// Windows can briefly report a freshly rotated named-pipe instance as busy,
+// especially in debug builds on hosted runners. Keep the outer bound above the
+// platform retry window so it can do the work it promises without making local
+// IPC unbounded.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 type HmacSha256 = Hmac<Sha256>;
 
