@@ -973,10 +973,10 @@ disabled, and audited without exposing its credentials.
 
 A reconstruction is complete only when all applicable checks pass:
 
-Cutover note (2026-07-13): Rust 0.6.0 is promoted to the repository root and the Python
-runtime/package is removed from `main`. Hosted-only boxes remain open because GitHub
-Actions credits are temporarily unavailable; they must be rerun when credits return and
-are not treated as passing in the meantime.
+Cutover note (2026-07-14): Rust 0.6.0 is promoted to the repository root, the Python
+runtime/package is removed from `main`, and the pull-request security gate is green.
+Release-only boxes remain open until the explicit six-target artifact workflow passes;
+ordinary `main` pushes intentionally do not duplicate that expensive matrix.
 
 - [ ] Offline install and echo smoke test require no provider credentials or network.
   Native archive installers now require no Cargo or Python; clean-prefix install,
@@ -1004,6 +1004,10 @@ are not treated as passing in the meantime.
   tool semantics in loopback-live agent acceptance; denied writes never reach the
   filesystem, interactive modes require explicit approval, and `full-access` cannot
   override a deterministic deny.
+- [x] `risk-auto` invokes a tools-disabled, policy-bound model review only after
+  deterministic policy requires approval for `shell.run`; strict low/allow output
+  auto-proves the re-hashed request, while unavailable, invalid, medium/high, and deny
+  results require an explicit prompt and deterministic denies never invoke the evaluator.
 - [x] One credential-free redb lifecycle reconstructs sessions, messages, events, tasks,
   decisions, draft plans, superseded memories, bounded goals, completed subagents,
   offline repository research, and cited sources through fresh CLI processes, with final
@@ -1028,8 +1032,8 @@ are not treated as passing in the meantime.
 - [x] Built-in theme palettes cover prompt, assistant, semantic event, and activity-frame
   styling without emitting ANSI sequences to redirected output.
 - [x] Bounded JSON/TOML custom themes have strict parsing, immutable source-hash-bound
-  preference snapshots, legacy data-only schema mapping, embedded/worker parity,
-  restart reconstruction, and ANSI-free redirected output.
+  preference snapshots, embedded/worker parity, restart reconstruction, and ANSI-free
+  redirected output.
 - [x] Reedline prompt repaint reports Unicode-aware cursor/draft metrics without
   per-keystroke state effects, and loopback-live Responses/compatible streamed tool loops
   pass CLI, REPL, worker, ANSI-safety, continuation, and credential non-disclosure checks.
@@ -1109,7 +1113,6 @@ the milestones above:
 
 - Remote multi-user control plane and authentication.
 - Graphical desktop or browser interface.
-- Operating-system container sandbox beyond the subprocess broker boundary.
 - Unbounded or self-replicating child-agent trees.
 - Storage of raw provider chain-of-thought.
 - Automatic execution of scripts found inside skill directories.

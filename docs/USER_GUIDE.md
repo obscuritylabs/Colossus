@@ -29,6 +29,8 @@ colossus --config .colossus/config.yaml --approval-mode ask \
 
 `deny` is the noninteractive default. `ask`, `risk-auto`, and `full-access` satisfy only
 approval obligations; none can override a policy deny or add sandbox capabilities.
+`risk-auto` reviews eligible `shell.run` requests and auto-proves only a strict
+low-risk/allow result; all other assessments require a prompt.
 
 ## REPL
 

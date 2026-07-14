@@ -62,7 +62,7 @@ enum ApprovalMode {
     Deny,
     /// Prompt on the terminal for every approval obligation.
     Ask,
-    /// Prompt explicitly while risk-model evaluation is not yet configured.
+    /// Auto-approve only low-risk shell effects after model-assisted review.
     RiskAuto,
     /// Grant approval obligations automatically without expanding policy permissions.
     FullAccess,
@@ -104,7 +104,7 @@ impl ApprovalMode {
 }
 
 struct TerminalApproval {
-    risk_unavailable: bool,
+    risk_auto: bool,
     lock: Mutex<()>,
 }
 
@@ -168,6 +168,10 @@ impl UserPromptProvider for TerminalUserPrompt {
 
 #[async_trait]
 impl ApprovalProvider for TerminalApproval {
+    fn risk_auto_enabled(&self) -> bool {
+        self.risk_auto
+    }
+
     async fn request_approval(
         &self,
         request: &EffectRequest,
@@ -180,8 +184,9 @@ impl ApprovalProvider for TerminalApproval {
             .map_err(|_| PolicyError::Unavailable("approval terminal lock is poisoned".into()))?;
         eprintln!("approval required: {} {}", request.action, request.resource);
         eprintln!("reason: {}", decision.reason);
-        if self.risk_unavailable {
-            eprintln!("risk status: unavailable; explicit approval is required");
+        if let Some(reason) = request.risk.reason.as_deref() {
+            let level = request.risk.level.as_deref().unwrap_or("unavailable");
+            eprintln!("risk review: {level}; {reason}");
         }
         let content = serde_json::to_string_pretty(&request.content)
             .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
@@ -481,7 +486,7 @@ fn approval_provider(
     match mode {
         ApprovalMode::Deny => Arc::new(DenyApproval),
         ApprovalMode::Ask | ApprovalMode::RiskAuto => Arc::new(TerminalApproval {
-            risk_unavailable: mode == ApprovalMode::RiskAuto,
+            risk_auto: mode == ApprovalMode::RiskAuto,
             lock: Mutex::new(()),
         }),
         ApprovalMode::FullAccess => Arc::new(AllowApproval {
