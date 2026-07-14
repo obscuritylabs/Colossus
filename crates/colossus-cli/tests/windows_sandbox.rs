@@ -17,6 +17,7 @@ use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
+const WINDOWS_JOB_TIMEOUT_MS: u64 = 10_000;
 
 fn run<I, S>(binary: &Path, config: &Path, arguments: I) -> Output
 where
@@ -173,7 +174,7 @@ fn process<'a>(
 
 #[test]
 fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundaries() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let root = fs::canonicalize(directory.path()).expect("root");
     let allowed = root.join("allowed");
@@ -199,7 +200,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        10_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         &[],
     );
 
@@ -343,7 +344,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         std::slice::from_ref(&origin),
     );
     listener.set_nonblocking(false).expect("blocking listener");
@@ -424,7 +425,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         std::slice::from_ref(&bypass_origin),
     );
     let direct_bypass = run(
@@ -518,7 +519,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         1,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         &[],
     );
     let process_limit = run(
@@ -547,7 +548,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         &[],
     );
     let memory_limit = run(
@@ -586,11 +587,14 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         8,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         &[],
     );
     let child_marker = allowed.join("child-escaped.txt");
     let child_marker_target = child_marker.to_string_lossy();
+    // `choice` exits immediately when the sandbox's intentionally closed stdin is not a
+    // console. Use only cmd.exe built-ins so both leader and descendant remain alive until
+    // the Job Object timeout terminates the complete process tree.
     let timed_out = run(
         binary,
         &config,
@@ -602,7 +606,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
                 "/D",
                 "/S",
                 "/C",
-                "start \"\" /B cmd.exe /D /S /C \"choice /D Y /T 5 >NUL & echo escaped> \\\"%TARGET%\\\"\" & choice /D Y /T 30 >NUL",
+                "start \"\" /B cmd.exe /D /S /C \"for /L %I in (1,1,2147483647) do @ver >NUL & echo escaped> \\\"%TARGET%\\\"\" & for /L %I in (1,1,2147483647) do @ver >NUL",
             ],
         ),
     );

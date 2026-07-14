@@ -4,6 +4,7 @@ on:
   push:
     branches: ["main"]
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -14,8 +15,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust-quick:
+    name: Rust quick validation
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Conventional Commit message
+        shell: bash
+        run: git log -1 --pretty=%B | ./scripts/check_conventional_commit.sh --stdin
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          components: rustfmt
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check independent fuzz harness formatting
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+
+      - name: Compile locked workspace
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Compile locked fuzz harnesses
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
+
   rust:
     name: Rust format, Clippy, and tests
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -60,31 +98,6 @@ jobs:
       - name: Lint locked fuzz harnesses on stable
         run: cargo clippy --locked --manifest-path fuzz/Cargo.toml --bins -- -D warnings
 
-  rust-portability:
-    name: Rust portability (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-14, windows-latest]
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust 1.96
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.96.0
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-
-      - name: Compile every target
-        run: cargo check --locked --workspace --all-targets
-
   rust-native-sandbox:
     name: Rust native sandbox (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
@@ -112,6 +125,9 @@ jobs:
         with:
           workspaces: . -> target
           key: native-sandbox-${{ matrix.runner }}
+
+      - name: Compile every target on the native platform
+        run: cargo check --locked --workspace --all-targets
 
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
@@ -141,6 +157,9 @@ jobs:
         with:
           workspaces: . -> target
           key: windows-runtime-${{ matrix.runner }}
+
+      - name: Compile every target on the native platform
+        run: cargo test --locked --workspace --all-targets --no-run
 
       - name: Run authenticated named-pipe and AppContainer escape acceptance
         run: >-
@@ -227,6 +246,7 @@ jobs:
 
   rust-release-smoke:
     name: Rust release artifact (${{ matrix.target }})
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     needs: [rust, rust-supply-chain]
@@ -277,14 +297,14 @@ jobs:
       - name: Build locked release binary
         run: >-
           cargo build --locked --release --target ${{ matrix.target }}
-          --package colossus-cli --bin colossus-rs
+          --package colossus-cli --bin colossus
 
       - name: Prove static Linux linkage
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          file target/${{ matrix.target }}/release/colossus-rs | tee binary-file.txt
+          file target/${{ matrix.target }}/release/colossus | tee binary-file.txt
           grep -Eq 'static(-pie)? linked|statically linked' binary-file.txt
 
       - name: Execute offline artifact smoke on Unix
@@ -295,7 +315,7 @@ jobs:
           COLOSSUS_RELEASE_SIGNING_KEY: "6666666666666666666666666666666666666666666666666666666666666666"
         run: |
           set -euo pipefail
-          binary="$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/colossus-rs"
+          binary="$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/colossus"
           smoke="$RUNNER_TEMP/colossus-release-smoke-${{ matrix.target }}"
           rm -rf "$smoke"
           mkdir -p "$smoke/workflows"
@@ -335,7 +355,7 @@ jobs:
           COLOSSUS_RELEASE_SIGNING_KEY: "6666666666666666666666666666666666666666666666666666666666666666"
         run: |
           $ErrorActionPreference = "Stop"
-          $binary = Join-Path $env:GITHUB_WORKSPACE "target/${{ matrix.target }}/release/colossus-rs.exe"
+          $binary = Join-Path $env:GITHUB_WORKSPACE "target/${{ matrix.target }}/release/colossus.exe"
           $smoke = Join-Path $env:RUNNER_TEMP "colossus-release-smoke-${{ matrix.target }}"
           Remove-Item -Recurse -Force $smoke -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force (Join-Path $smoke "workflows") | Out-Null
@@ -375,7 +395,7 @@ jobs:
           stage="$RUNNER_TEMP/$package"
           rm -rf "$stage"
           mkdir -p "$stage" dist
-          install -m 0755 target/${{ matrix.target }}/release/colossus-rs "$stage/colossus"
+          install -m 0755 target/${{ matrix.target }}/release/colossus "$stage/colossus"
           install -m 0755 release/install.sh "$stage/install.sh"
           cp LICENSE "$stage/LICENSE"
           cp README.md "$stage/README.md"
@@ -399,7 +419,7 @@ jobs:
           $dist = Join-Path $PWD "dist"
           Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $stage, $dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/colossus-rs.exe" (Join-Path $stage "colossus.exe")
+          Copy-Item "target/${{ matrix.target }}/release/colossus.exe" (Join-Path $stage "colossus.exe")
           Copy-Item release/install.ps1 (Join-Path $stage "install.ps1")
           Copy-Item LICENSE (Join-Path $stage "LICENSE")
           Copy-Item README.md (Join-Path $stage "README.md")
@@ -506,7 +526,7 @@ jobs:
           COLOSSUS_BUNDLE_SIGNING_SEED: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         run: |
           set -euo pipefail
-          binary="$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/colossus-rs"
+          binary="$GITHUB_WORKSPACE/target/${{ matrix.target }}/release/colossus"
           root="$RUNNER_TEMP/colossus-bundle-smoke-${{ matrix.target }}"
           stage="$root/stage"
           bundle="$root/bundle"
@@ -621,7 +641,7 @@ jobs:
           COLOSSUS_BUNDLE_SIGNING_SEED: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         run: |
           $ErrorActionPreference = "Stop"
-          $binary = Join-Path $env:GITHUB_WORKSPACE "target/${{ matrix.target }}/release/colossus-rs.exe"
+          $binary = Join-Path $env:GITHUB_WORKSPACE "target/${{ matrix.target }}/release/colossus.exe"
           $root = Join-Path $env:RUNNER_TEMP "colossus-bundle-smoke-${{ matrix.target }}"
           $stage = Join-Path $root "stage"
           $bundle = Join-Path $root "bundle"
@@ -860,14 +880,49 @@ jobs:
           COLOSSUS_OPENSSL_BIN: /usr/bin/openssl
         run: cargo test --locked -p colossus-policy --test opa_live -- --ignored
 
+  rust-pr-gate:
+    name: Rust pull request validation gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+    needs:
+      - rust
+      - rust-native-sandbox
+      - rust-windows-runtime
+      - rust-fuzz
+      - rust-supply-chain
+      - rust-live-chroma
+      - rust-live-security
+
+    steps:
+      - name: Require every Rust pull request matrix
+        env:
+          RUST_ACCEPTANCE_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          results = json.loads(os.environ["RUST_ACCEPTANCE_RESULTS"])
+          failed = {
+              name: details.get("result")
+              for name, details in results.items()
+              if details.get("result") != "success"
+          }
+          for name, result in sorted(failed.items()):
+              print(f"{name} pull request validation did not succeed: {result}", file=sys.stderr)
+          raise SystemExit(bool(failed))
+          PY
+
   rust-cutover-gate:
     name: Rust P0+P1 cutover gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: ${{ always() }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
     needs:
       - rust
-      - rust-portability
       - rust-native-sandbox
       - rust-windows-runtime
       - rust-fuzz

@@ -29,7 +29,7 @@ fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> st
 
 #[test]
 fn repository_research_crosses_gateway_and_reconstructs_citations() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");

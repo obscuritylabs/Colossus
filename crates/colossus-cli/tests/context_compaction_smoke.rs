@@ -31,7 +31,7 @@ fn parse(output: &std::process::Output, label: &str) -> Value {
 
 #[test]
 fn automatic_compaction_is_visible_deterministic_and_preserves_raw_history() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");

@@ -24,7 +24,7 @@ fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> st
 
 #[test]
 fn configured_mcp_is_allowlisted_permit_bound_redacted_and_research_capable() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let server = Path::new(env!("CARGO_BIN_EXE_colossus-mcp-test-server"));
     let directory = tempdir().expect("directory");
     let workspace = directory.path().canonicalize().expect("workspace");

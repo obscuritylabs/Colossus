@@ -23,8 +23,9 @@ const OPERATOR_DOCS: &[&str] = &[
     "docs/BUNDLE_FORMAT.md",
 ];
 
-const PYTHON_OPERATOR_SIGNATURES: &[&str] = &[
+const LEGACY_OPERATOR_SIGNATURES: &[&str] = &[
     "uv run colossus",
+    "colossus-rs",
     "`config.json`",
     "local_openai_chat",
     "sqlite_fts",
@@ -68,7 +69,7 @@ fn marked_yaml<'a>(document: &'a str, marker: &str) -> &'a str {
 fn active_operator_docs_do_not_reintroduce_python_runtime_commands() {
     for path in OPERATOR_DOCS {
         let document = read(path);
-        for signature in PYTHON_OPERATOR_SIGNATURES {
+        for signature in LEGACY_OPERATOR_SIGNATURES {
             assert!(
                 !document.contains(signature),
                 "{path} reintroduced legacy operator signature {signature:?}"
@@ -90,7 +91,7 @@ fn published_config_and_workflow_examples_are_accepted_by_the_rust_parsers() {
 
 #[test]
 fn documented_command_families_are_real_clap_routes() {
-    let binary = env!("CARGO_BIN_EXE_colossus-rs");
+    let binary = env!("CARGO_BIN_EXE_colossus");
     let routes: &[&[&str]] = &[
         &["config", "init"],
         &["audit", "anchor-status"],

@@ -21,7 +21,7 @@ fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> st
 
 #[test]
 fn skill_activation_and_resources_are_durable_policy_bound_and_data_only() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let workflows = directory.path().join("workflows");
     let skills = directory.path().join("skills");

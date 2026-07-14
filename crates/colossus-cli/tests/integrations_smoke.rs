@@ -28,7 +28,7 @@ fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> st
 
 #[test]
 fn openapi_connections_are_durable_hidden_until_connected_and_gateway_bound() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let workspace = directory.path().canonicalize().expect("workspace");
     let workflows = workspace.join("workflows");

@@ -365,7 +365,7 @@ data: [DONE]
 
 #[test]
 fn compatible_provider_streams_tool_use_and_repl_output_through_terminal_surfaces() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
     let anchor = directory.path().join("anchor.json");
@@ -559,7 +559,7 @@ sandbox:
 
 #[test]
 fn responses_provider_keeps_credentials_out_of_streamed_tool_terminal_output() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
     let anchor = directory.path().join("anchor.json");
@@ -711,7 +711,7 @@ sandbox:
 
 #[test]
 fn malformed_provider_tool_arguments_retry_twice_without_executing_the_tool() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
     let anchor = directory.path().join("anchor.json");
@@ -861,7 +861,7 @@ sandbox:
 
 #[test]
 fn max_turn_empty_output_and_malformed_recovery_have_distinct_terminal_states() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let root = tempdir().expect("root directory");
 
     let max_turn_directory = root.path().join("max-turn");

@@ -37,8 +37,8 @@ Install Rust 1.96, then build with the locked workspace:
 
 ```bash
 cargo build --locked \
-  -p colossus-cli --bin colossus-rs
-target/debug/colossus-rs --version
+  -p colossus-cli --bin colossus
+target/debug/colossus --version
 ```
 
 For a network-isolated checkout whose Cargo cache is already populated, add `--offline`.

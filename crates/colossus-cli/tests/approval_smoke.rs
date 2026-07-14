@@ -254,7 +254,7 @@ fn run_tool_scenario(
 
 #[test]
 fn terminal_modes_deny_prompt_or_auto_prove_the_same_policy_obligation() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
@@ -374,7 +374,7 @@ sandbox:
 
 #[test]
 fn every_terminal_mode_preserves_allowed_denied_and_approval_required_tool_semantics() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let root = tempdir().expect("root directory");
     let modes = ["deny", "ask", "risk-auto", "full-access"];
 

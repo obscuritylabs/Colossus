@@ -14,11 +14,11 @@ Rust 1.96 and edition 2024 are the source-build contract:
 
 ```bash
 cargo run --offline \
-  -p colossus-cli --bin colossus-rs -- config init
+  -p colossus-cli --bin colossus -- config init
 cargo run --offline \
-  -p colossus-cli --bin colossus-rs -- run "hello"
+  -p colossus-cli --bin colossus -- run "hello"
 cargo run --offline \
-  -p colossus-cli --bin colossus-rs -- audit verify
+  -p colossus-cli --bin colossus -- audit verify
 ```
 
 The generated `echo` profile needs no provider credential or network. Native release

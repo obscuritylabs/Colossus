@@ -27,12 +27,17 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u16 = 2;
+const PROTOCOL_VERSION: u16 = 3;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
 const REPLAY_WINDOW: usize = 4_096;
+#[cfg(not(windows))]
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(windows)]
+// The platform connector retries a busy named pipe for two seconds. Keep the
+// outer bound above that window so concurrent clients can use the retry path.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 type HmacSha256 = Hmac<Sha256>;
 
@@ -924,7 +929,7 @@ struct UnsignedFrame<'a> {
     request_id: &'a str,
     sequence: u64,
     timestamp_ms: i128,
-    content: &'a WorkerFrameContent,
+    content_base64: &'a str,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -934,7 +939,7 @@ struct WorkerFrame {
     request_id: String,
     sequence: u64,
     timestamp_ms: i128,
-    content: WorkerFrameContent,
+    content_base64: String,
     authentication_tag: String,
 }
 
@@ -1015,13 +1020,13 @@ impl WorkerClient {
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let mut sequence = 0_u64;
         let frame: WorkerFrame = read_message(&mut stream, MAX_FRAME_BYTES).await?;
-        validate_frame(
+        let content = validate_frame(
             &self.authentication_key,
             &request.request_id,
             &mut sequence,
             &frame,
         )?;
-        match frame.content {
+        match content {
             WorkerFrameContent::Event { .. } => Err(WorkerError::Protocol(
                 "non-streaming call received a run event".into(),
             )),
@@ -1056,13 +1061,13 @@ impl WorkerClient {
         let mut sequence = 0_u64;
         loop {
             let frame: WorkerFrame = read_message(&mut stream, MAX_FRAME_BYTES).await?;
-            validate_frame(
+            let content = validate_frame(
                 &self.authentication_key,
                 &request.request_id,
                 &mut sequence,
                 &frame,
             )?;
-            match frame.content {
+            match content {
                 WorkerFrameContent::Event { event } => observer
                     .observe(event)
                     .await
@@ -1485,6 +1490,7 @@ where
             timestamp_ms: hello.timestamp_ms,
         },
         &hello.authentication_tag,
+        "worker server handshake",
     )?;
     Ok(hello.server_nonce)
 }
@@ -2276,8 +2282,10 @@ async fn drain_once(
 ) -> Result<Value, WorkerError> {
     let _guard = maintenance.lock().await;
     let workflows = runtime.workflows().drain().await?;
-    let projections = runtime.drain_projections()?;
+    // Durable execution queues take precedence over disposable projections so
+    // a large projection backlog cannot starve queued child work.
     let subagents = runtime.drain_subagents().await?;
+    let projections = runtime.drain_projections()?;
     let audit_exports = runtime.drain_audit_exports().await?;
     Ok(json!({
         "workflows": workflows,
@@ -2406,6 +2414,7 @@ fn validate_request(
             operation: &request.operation,
         },
         &request.authentication_tag,
+        "worker request",
     )?;
     replay
         .lock()
@@ -2418,7 +2427,7 @@ fn validate_frame(
     request_id: &str,
     sequence: &mut u64,
     frame: &WorkerFrame,
-) -> Result<(), WorkerError> {
+) -> Result<WorkerFrameContent, WorkerError> {
     let expected_sequence = sequence.saturating_add(1);
     if frame.version != PROTOCOL_VERSION
         || frame.request_id != request_id
@@ -2436,12 +2445,18 @@ fn validate_frame(
             request_id: &frame.request_id,
             sequence: frame.sequence,
             timestamp_ms: frame.timestamp_ms,
-            content: &frame.content,
+            content_base64: &frame.content_base64,
         },
         &frame.authentication_tag,
+        "worker response",
     )?;
+    let content = BASE64
+        .decode(&frame.content_base64)
+        .map_err(|_| WorkerError::Protocol("worker response payload is not base64".into()))?;
+    let content = serde_json::from_slice(&content)
+        .map_err(|error| WorkerError::Protocol(format!("invalid worker response: {error}")))?;
     *sequence = expected_sequence;
-    Ok(())
+    Ok(content)
 }
 
 async fn write_signed_frame<S>(
@@ -2455,6 +2470,9 @@ where
     S: AsyncWrite + Unpin,
 {
     let timestamp_ms = now_ms();
+    let content =
+        serde_json::to_vec(&content).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    let content_base64 = BASE64.encode(content);
     let authentication_tag = request_tag(
         key,
         &UnsignedFrame {
@@ -2462,7 +2480,7 @@ where
             request_id,
             sequence,
             timestamp_ms,
-            content: &content,
+            content_base64: &content_base64,
         },
     )?;
     write_message(
@@ -2472,7 +2490,7 @@ where
             request_id: request_id.into(),
             sequence,
             timestamp_ms,
-            content,
+            content_base64,
             authentication_tag,
         },
         MAX_FRAME_BYTES,
@@ -2481,24 +2499,68 @@ where
 }
 
 fn request_tag<T: Serialize>(key: &[u8; 32], value: &T) -> Result<String, WorkerError> {
-    let bytes =
-        serde_json::to_vec(value).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    let bytes = canonical_authentication_bytes(value)?;
     let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|error| WorkerError::Protocol(error.to_string()))?;
     mac.update(&bytes);
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
-fn verify_tag<T: Serialize>(key: &[u8; 32], value: &T, tag: &str) -> Result<(), WorkerError> {
-    let bytes =
-        serde_json::to_vec(value).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+fn verify_tag<T: Serialize>(
+    key: &[u8; 32],
+    value: &T,
+    tag: &str,
+    context: &str,
+) -> Result<(), WorkerError> {
+    let bytes = canonical_authentication_bytes(value)?;
     let tag = hex::decode(tag)
         .map_err(|_| WorkerError::Protocol("authentication tag is not hexadecimal".into()))?;
     let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|error| WorkerError::Protocol(error.to_string()))?;
     mac.update(&bytes);
     mac.verify_slice(&tag)
-        .map_err(|_| WorkerError::Protocol("authentication tag mismatch".into()))
+        .map_err(|_| WorkerError::Protocol(format!("{context} authentication tag mismatch")))
+}
+
+fn canonical_authentication_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, WorkerError> {
+    let value =
+        serde_json::to_value(value).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    let mut bytes = Vec::new();
+    write_canonical_json(&value, &mut bytes)?;
+    Ok(bytes)
+}
+
+fn write_canonical_json(value: &Value, bytes: &mut Vec<u8>) -> Result<(), WorkerError> {
+    match value {
+        Value::Object(object) => {
+            bytes.push(b'{');
+            let mut entries = object.iter().collect::<Vec<_>>();
+            entries.sort_unstable_by_key(|(key, _)| *key);
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    bytes.push(b',');
+                }
+                serde_json::to_writer(&mut *bytes, key)
+                    .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+                bytes.push(b':');
+                write_canonical_json(value, bytes)?;
+            }
+            bytes.push(b'}');
+        }
+        Value::Array(array) => {
+            bytes.push(b'[');
+            for (index, value) in array.iter().enumerate() {
+                if index > 0 {
+                    bytes.push(b',');
+                }
+                write_canonical_json(value, bytes)?;
+            }
+            bytes.push(b']');
+        }
+        _ => serde_json::to_writer(bytes, value)
+            .map_err(|error| WorkerError::Protocol(error.to_string()))?,
+    }
+    Ok(())
 }
 
 async fn write_message<S, T>(stream: &mut S, value: &T, limit: usize) -> Result<(), WorkerError>
@@ -2667,11 +2729,19 @@ mod platform {
         }
 
         pub async fn accept(&mut self) -> Result<ServerStream, WorkerError> {
+            // Keep the pending instance in `self` while awaiting connection. This
+            // future is polled inside `select!`; taking the instance first would
+            // drop it whenever another branch wins and permanently lose the
+            // listener after serving one client.
+            self.next
+                .as_ref()
+                .ok_or_else(|| WorkerError::Protocol("named pipe listener lost instance".into()))?
+                .connect()
+                .await?;
             let server = self
                 .next
                 .take()
                 .ok_or_else(|| WorkerError::Protocol("named pipe listener lost instance".into()))?;
-            server.connect().await?;
             self.next = Some(ServerOptions::new().create(&self.endpoint)?);
             Ok(server)
         }
@@ -2707,6 +2777,45 @@ compile_error!("colossus-worker supports only Unix sockets or Windows named pipe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authenticated_frames_cover_exact_serialized_payload_bytes() {
+        let key = [6_u8; 32];
+        let content = WorkerFrameContent::Complete {
+            result: json!({
+                "z": {"two": 2, "one": 1},
+                "a": [true, null, "value"],
+            }),
+        };
+        let timestamp_ms = now_ms();
+        let content_base64 = BASE64.encode(serde_json::to_vec(&content).expect("content JSON"));
+        let authentication_tag = request_tag(
+            &key,
+            &UnsignedFrame {
+                version: PROTOCOL_VERSION,
+                request_id: "canonical-frame",
+                sequence: 1,
+                timestamp_ms,
+                content_base64: &content_base64,
+            },
+        )
+        .expect("tag");
+        let encoded = serde_json::to_vec(&WorkerFrame {
+            version: PROTOCOL_VERSION,
+            request_id: "canonical-frame".into(),
+            sequence: 1,
+            timestamp_ms,
+            content_base64,
+            authentication_tag,
+        })
+        .expect("frame JSON");
+        let decoded: WorkerFrame = serde_json::from_slice(&encoded).expect("decoded frame");
+        let mut sequence = 0;
+        let decoded =
+            validate_frame(&key, "canonical-frame", &mut sequence, &decoded).expect("frame");
+        assert!(matches!(decoded, WorkerFrameContent::Complete { .. }));
+        assert_eq!(sequence, 1);
+    }
 
     #[test]
     fn authentication_detects_tampering_and_replay() {

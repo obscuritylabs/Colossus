@@ -82,7 +82,7 @@ fn approved_connect(binary: &Path, config: &Path, workspace: &Path, arguments: &
 
 #[test]
 fn native_connectors_are_hidden_typed_credential_brokered_and_post_gated() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let workspace = directory.path().canonicalize().expect("workspace");
     let workflows = workspace.join("workflows");

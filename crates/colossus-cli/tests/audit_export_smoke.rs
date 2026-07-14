@@ -24,7 +24,7 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
 
 #[test]
 fn configured_audit_export_is_queued_policy_bound_redacted_and_replayable() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
     let anchor = directory.path().join("anchor.json");

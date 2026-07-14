@@ -34,7 +34,7 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
 
 #[test]
 fn native_helper_enforces_filesystem_environment_and_process_tree_boundaries() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let allowed = directory.path().join("allowed");
     let denied = directory.path().join("denied");

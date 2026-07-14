@@ -15,6 +15,10 @@ use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "5555555555555555555555555555555555555555555555555555555555555555";
 const SIGNING_KEY: &str = "6666666666666666666666666666666666666666666666666666666666666666";
+#[cfg(not(windows))]
+const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(windows)]
+const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct ChildGuard(Child);
 
@@ -89,7 +93,7 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) {
 
 #[test]
 fn worker_owns_lease_routes_streams_rejects_wrong_key_and_shuts_down_cleanly() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
     #[cfg(unix)]
@@ -212,10 +216,14 @@ sandbox:
     );
 
     let status = run(binary, &config, &["worker", "--status"]);
-    assert!(status.status.success());
+    assert!(
+        status.status.success(),
+        "worker status failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 2);
+    assert_eq!(status["protocol_version"], 3);
 
     let route = run(binary, &config, &["models", "route", "primary"]);
     assert!(
@@ -236,7 +244,12 @@ sandbox:
                 scope.spawn(move || {
                     let message = format!("parallel-{index}");
                     let output = run(binary, config, &["echo", &message]);
-                    assert!(output.status.success());
+                    assert!(
+                        output.status.success(),
+                        "parallel client {index} failed; stderr: {}; stdout: {}",
+                        String::from_utf8_lossy(&output.stderr),
+                        String::from_utf8_lossy(&output.stdout)
+                    );
                     assert_eq!(
                         String::from_utf8_lossy(&output.stdout),
                         format!("{message}\n")
@@ -418,7 +431,7 @@ sandbox:
     );
     let agent: Value = serde_json::from_slice(&agent.stdout).expect("agent JSON");
     let job_id = agent["id"].as_str().expect("job id");
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + WORKER_AGENT_DRAIN_TIMEOUT;
     loop {
         let shown = run(binary, &config, &["agents", "show", job_id]);
         assert!(shown.status.success());
@@ -543,8 +556,9 @@ sandbox:
     );
     assert!(
         repl.status.success(),
-        "{}",
-        String::from_utf8_lossy(&repl.stderr)
+        "stderr={}\nstdout={}",
+        String::from_utf8_lossy(&repl.stderr),
+        String::from_utf8_lossy(&repl.stdout)
     );
     let repl_stdout = String::from_utf8_lossy(&repl.stdout);
     let repl_stderr = String::from_utf8_lossy(&repl.stderr);
