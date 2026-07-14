@@ -924,7 +924,7 @@ struct UnsignedFrame<'a> {
     request_id: &'a str,
     sequence: u64,
     timestamp_ms: i128,
-    content: &'a WorkerFrameContent,
+    content_base64: &'a str,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -934,7 +934,7 @@ struct WorkerFrame {
     request_id: String,
     sequence: u64,
     timestamp_ms: i128,
-    content: WorkerFrameContent,
+    content_base64: String,
     authentication_tag: String,
 }
 
@@ -1015,13 +1015,13 @@ impl WorkerClient {
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let mut sequence = 0_u64;
         let frame: WorkerFrame = read_message(&mut stream, MAX_FRAME_BYTES).await?;
-        validate_frame(
+        let content = validate_frame(
             &self.authentication_key,
             &request.request_id,
             &mut sequence,
             &frame,
         )?;
-        match frame.content {
+        match content {
             WorkerFrameContent::Event { .. } => Err(WorkerError::Protocol(
                 "non-streaming call received a run event".into(),
             )),
@@ -1056,13 +1056,13 @@ impl WorkerClient {
         let mut sequence = 0_u64;
         loop {
             let frame: WorkerFrame = read_message(&mut stream, MAX_FRAME_BYTES).await?;
-            validate_frame(
+            let content = validate_frame(
                 &self.authentication_key,
                 &request.request_id,
                 &mut sequence,
                 &frame,
             )?;
-            match frame.content {
+            match content {
                 WorkerFrameContent::Event { event } => observer
                     .observe(event)
                     .await
@@ -2422,7 +2422,7 @@ fn validate_frame(
     request_id: &str,
     sequence: &mut u64,
     frame: &WorkerFrame,
-) -> Result<(), WorkerError> {
+) -> Result<WorkerFrameContent, WorkerError> {
     let expected_sequence = sequence.saturating_add(1);
     if frame.version != PROTOCOL_VERSION
         || frame.request_id != request_id
@@ -2440,13 +2440,18 @@ fn validate_frame(
             request_id: &frame.request_id,
             sequence: frame.sequence,
             timestamp_ms: frame.timestamp_ms,
-            content: &frame.content,
+            content_base64: &frame.content_base64,
         },
         &frame.authentication_tag,
         "worker response",
     )?;
+    let content = BASE64
+        .decode(&frame.content_base64)
+        .map_err(|_| WorkerError::Protocol("worker response payload is not base64".into()))?;
+    let content = serde_json::from_slice(&content)
+        .map_err(|error| WorkerError::Protocol(format!("invalid worker response: {error}")))?;
     *sequence = expected_sequence;
-    Ok(())
+    Ok(content)
 }
 
 async fn write_signed_frame<S>(
@@ -2460,6 +2465,9 @@ where
     S: AsyncWrite + Unpin,
 {
     let timestamp_ms = now_ms();
+    let content =
+        serde_json::to_vec(&content).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    let content_base64 = BASE64.encode(content);
     let authentication_tag = request_tag(
         key,
         &UnsignedFrame {
@@ -2467,7 +2475,7 @@ where
             request_id,
             sequence,
             timestamp_ms,
-            content: &content,
+            content_base64: &content_base64,
         },
     )?;
     write_message(
@@ -2477,7 +2485,7 @@ where
             request_id: request_id.into(),
             sequence,
             timestamp_ms,
-            content,
+            content_base64,
             authentication_tag,
         },
         MAX_FRAME_BYTES,
@@ -2766,7 +2774,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn authenticated_frames_use_canonical_json_across_wire_round_trips() {
+    fn authenticated_frames_cover_exact_serialized_payload_bytes() {
         let key = [6_u8; 32];
         let content = WorkerFrameContent::Complete {
             result: json!({
@@ -2775,6 +2783,7 @@ mod tests {
             }),
         };
         let timestamp_ms = now_ms();
+        let content_base64 = BASE64.encode(serde_json::to_vec(&content).expect("content JSON"));
         let authentication_tag = request_tag(
             &key,
             &UnsignedFrame {
@@ -2782,7 +2791,7 @@ mod tests {
                 request_id: "canonical-frame",
                 sequence: 1,
                 timestamp_ms,
-                content: &content,
+                content_base64: &content_base64,
             },
         )
         .expect("tag");
@@ -2791,13 +2800,15 @@ mod tests {
             request_id: "canonical-frame".into(),
             sequence: 1,
             timestamp_ms,
-            content,
+            content_base64,
             authentication_tag,
         })
         .expect("frame JSON");
         let decoded: WorkerFrame = serde_json::from_slice(&encoded).expect("decoded frame");
         let mut sequence = 0;
-        validate_frame(&key, "canonical-frame", &mut sequence, &decoded).expect("canonical frame");
+        let decoded =
+            validate_frame(&key, "canonical-frame", &mut sequence, &decoded).expect("frame");
+        assert!(matches!(decoded, WorkerFrameContent::Complete { .. }));
         assert_eq!(sequence, 1);
     }
 
