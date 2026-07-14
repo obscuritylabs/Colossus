@@ -592,6 +592,9 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
     );
     let child_marker = allowed.join("child-escaped.txt");
     let child_marker_target = child_marker.to_string_lossy();
+    // `choice` exits immediately when the sandbox's intentionally closed stdin is not a
+    // console. Use only cmd.exe built-ins so both leader and descendant remain alive until
+    // the Job Object timeout terminates the complete process tree.
     let timed_out = run(
         binary,
         &config,
@@ -603,7 +606,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
                 "/D",
                 "/S",
                 "/C",
-                "start \"\" /B cmd.exe /D /S /C \"choice /D Y /T 5 >NUL & echo escaped> \\\"%TARGET%\\\"\" & choice /D Y /T 30 >NUL",
+                "start \"\" /B cmd.exe /D /S /C \"for /L %I in (1,1,2147483647) do @ver >NUL & echo escaped> \\\"%TARGET%\\\"\" & for /L %I in (1,1,2147483647) do @ver >NUL",
             ],
         ),
     );
