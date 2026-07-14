@@ -1,6 +1,8 @@
 //! Repository-level contract for the mandatory Rust cutover matrices.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fs, path::Path};
 
 const REQUIRED_CUTOVER_JOBS: &[&str] = &[
@@ -50,6 +52,34 @@ fn canonical_source_and_release_binary_is_colossus() {
         .expect("read CI workflow");
     assert!(workflow.contains("--package colossus-cli --bin colossus"));
     assert!(!workflow.contains("colossus-rs"));
+}
+
+#[test]
+fn release_bundle_publisher_identity_is_self_consistent() {
+    let source = fs::read_to_string(repository_root().join("release/bundle-publisher.json"))
+        .expect("read release bundle publisher identity");
+    let identity: Value = serde_json::from_str(&source).expect("publisher identity JSON");
+    let identity = mapping(&identity, "publisher identity");
+    assert_eq!(field(identity, "publisher").as_str(), Some("colossus"));
+    assert_eq!(field(identity, "algorithm").as_str(), Some("ed25519"));
+    assert_eq!(
+        field(identity, "purpose").as_str(),
+        Some("offline-bundle-manifest-signing")
+    );
+    let public_key = BASE64
+        .decode(
+            field(identity, "public_key")
+                .as_str()
+                .expect("publisher public_key"),
+        )
+        .expect("publisher public_key must be base64");
+    assert_eq!(public_key.len(), 32, "Ed25519 public keys contain 32 bytes");
+    let key_id = hex::encode(Sha256::digest(public_key));
+    assert_eq!(
+        field(identity, "key_id").as_str(),
+        Some(key_id.as_str()),
+        "key_id must be the SHA-256 digest of the decoded public key"
+    );
 }
 
 #[test]

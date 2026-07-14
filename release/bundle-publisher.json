@@ -1,0 +1,7 @@
+{
+  "publisher": "colossus",
+  "purpose": "offline-bundle-manifest-signing",
+  "algorithm": "ed25519",
+  "key_id": "56dff0e111867269353b1f534f63989e4924f4f67f64aaa9224193cb60735f21",
+  "public_key": "kyheq1omtl17SZNoa9UOGo69pdef8jYjAwQH+QeJ/ww="
+}
