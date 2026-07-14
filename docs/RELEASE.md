@@ -3,6 +3,25 @@
 Rust 0.6.0 is the P0+P1 cutover release. Release only from a clean tree after the feature
 inventory and acceptance matrix accurately describe any remaining gap.
 
+## Actions Cost Policy
+
+An ordinary push to `main` runs only the Ubuntu quick gate: commit-message validation,
+formatting, and locked production/fuzz compilation. Pull requests and merge-queue commits
+run the full test, native sandbox/runtime, fuzz, supply-chain, Chroma, and live-security
+matrices through the fail-closed `rust-pr-gate`. They do not build release archives.
+
+The six-target artifact/install/bundle matrix and fail-closed `rust-cutover-gate` run only
+after an explicit manual dispatch. This avoids repeating costly macOS release builds after
+every pull request merge while retaining complete release evidence. From a clean final
+commit on `main`, start that validation with:
+
+```bash
+gh workflow run ci.yml --ref main
+```
+
+A green pull-request gate is required for merge, but it does not replace the green manual
+cutover gate required before tagging.
+
 ## Readiness
 
 1. Update the workspace version, `CHANGELOG.md`, user docs, security notes, and migration
@@ -11,9 +30,18 @@ inventory and acceptance matrix accurately describe any remaining gap.
 3. Run the authoritative gates from the repository root:
 
 ```bash
+./release/verify-local-cutover.sh
+```
+
+The verifier requires Rust 1.96.0, `cargo-deny 0.20.2`, and `cargo-audit 0.22.2`.
+It resolves Cargo-installed tools from `CARGO_HOME/bin` even when that directory is not
+on `PATH`, rejects a reintroduced Python package or tracked Python source, and runs the
+production and independent fuzz dependency policies. Its expanded command sequence is:
+
+```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
 cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
 cargo deny --locked check -A license-not-encountered licenses sources bans
 cargo deny --locked check -D warnings advisories
@@ -23,6 +51,9 @@ cargo audit -D warnings --file Cargo.lock
 Apply the equivalent deny/audit checks to `fuzz/Cargo.toml` and `fuzz/Cargo.lock`.
 Pinned nightly CI runs bounded libFuzzer mutation targets in addition to committed corpus
 tests.
+
+This host-side verifier does not replace the supported-platform, live-service, or bounded
+nightly fuzz matrices described below.
 
 ## Native Artifacts
 

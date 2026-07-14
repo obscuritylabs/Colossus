@@ -263,58 +263,58 @@ release tooling.
 From the repository root:
 
 ```bash
-cargo run -p colossus-cli --bin colossus-rs -- config init
-cargo run -p colossus-cli --bin colossus-rs -- echo hello
-cargo run -p colossus-cli --bin colossus-rs -- run 'Reply with exactly: ok'
-cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask run 'Create note.txt with filesystem.write'
-cargo run -p colossus-cli --bin colossus-rs -- provider profiles
-cargo run -p colossus-cli --bin colossus-rs -- provider doctor
-cargo run -p colossus-cli --bin colossus-rs -- provider models
-cargo run -p colossus-cli --bin colossus-rs -- models routes
-cargo run -p colossus-cli --bin colossus-rs -- tools list
-cargo run -p colossus-cli --bin colossus-rs -- sessions list
-cargo run -p colossus-cli --bin colossus-rs -- context status SESSION_ID
-cargo run -p colossus-cli --bin colossus-rs -- context compact SESSION_ID
-cargo run -p colossus-cli --bin colossus-rs -- tasks list --session SESSION_ID
-cargo run -p colossus-cli --bin colossus-rs -- decisions list --session SESSION_ID
-cargo run -p colossus-cli --bin colossus-rs -- plans list --session SESSION_ID
-cargo run -p colossus-cli --bin colossus-rs -- goals run 'Finish the scoped task' --session SESSION_ID --max-iterations 5
-cargo run -p colossus-cli --bin colossus-rs -- agents status
-cargo run -p colossus-cli --bin colossus-rs -- memories search 'query' --session SESSION_ID
-cargo run -p colossus-cli --bin colossus-rs -- memories index status
-cargo run -p colossus-cli --bin colossus-rs -- research run 'Summarize the audit architecture' --depth quick --source repo
-cargo run -p colossus-cli --bin colossus-rs -- research list
-cargo run -p colossus-cli --bin colossus-rs -- telemetry runs
-cargo run -p colossus-cli --bin colossus-rs -- telemetry metrics
-cargo run -p colossus-cli --bin colossus-rs -- skills list
-cargo run -p colossus-cli --bin colossus-rs -- run --skill coding 'Implement the scoped change'
-cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask skills scaffold my-skill 'My data-only skill'
-cargo run -p colossus-cli --bin colossus-rs -- skills validate path/to/local-skill --local
-cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask skills install path/to/local-skill
-cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations import-openapi demo openapi.json --base-url https://api.example.test --credential-reference env:DEMO_API_TOKEN
-cargo run -p colossus-cli --bin colossus-rs -- integrations list
-cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect github --credential-reference env:GITHUB_TOKEN
-cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect searxng --base-url http://127.0.0.1:8888 --auth-type none
-cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask integrations connect opensearch --base-url http://127.0.0.1:9200 --auth-type none
-cargo run -p colossus-cli --bin colossus-rs -- mcp servers
-cargo run -p colossus-cli --bin colossus-rs -- mcp tools --server local
-cargo run -p colossus-cli --bin colossus-rs -- --approval-mode ask mcp call local search '{"query":"audit"}'
-cargo run -p colossus-cli --bin colossus-rs -- run --resume 'Continue'
-cargo run -p colossus-cli --bin colossus-rs -- audit verify
-cargo run -p colossus-cli --bin colossus-rs -- policy doctor
-cargo run -p colossus-cli --bin colossus-rs -- state doctor
-cargo run -p colossus-cli --bin colossus-rs -- sandbox doctor
-cargo run -p colossus-cli --bin colossus-rs -- process run /bin/echo --cwd . -- hello
-cargo run -p colossus-cli --bin colossus-rs -- projection status
-cargo run -p colossus-cli --bin colossus-rs -- projection rebuild
-cargo run -p colossus-cli --bin colossus-rs -- workflow validate .colossus/workflows/offline-echo.yaml
-cargo run -p colossus-cli --bin colossus-rs -- workflow register .colossus/workflows/offline-echo.yaml
-cargo run -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}'
-cargo run -p colossus-cli --bin colossus-rs -- workflow run offline-echo 1.0.0 --inputs '{}' --queued
-cargo run -p colossus-cli --bin colossus-rs -- work --session SESSION_ID
-cargo run -p colossus-cli --bin colossus-rs -- preferences show
-cargo run -p colossus-cli --bin colossus-rs -- preferences history
-cargo run -p colossus-cli --bin colossus-rs -- repl
+cargo run -p colossus-cli --bin colossus -- config init
+cargo run -p colossus-cli --bin colossus -- echo hello
+cargo run -p colossus-cli --bin colossus -- run 'Reply with exactly: ok'
+cargo run -p colossus-cli --bin colossus -- --approval-mode ask run 'Create note.txt with filesystem.write'
+cargo run -p colossus-cli --bin colossus -- provider profiles
+cargo run -p colossus-cli --bin colossus -- provider doctor
+cargo run -p colossus-cli --bin colossus -- provider models
+cargo run -p colossus-cli --bin colossus -- models routes
+cargo run -p colossus-cli --bin colossus -- tools list
+cargo run -p colossus-cli --bin colossus -- sessions list
+cargo run -p colossus-cli --bin colossus -- context status SESSION_ID
+cargo run -p colossus-cli --bin colossus -- context compact SESSION_ID
+cargo run -p colossus-cli --bin colossus -- tasks list --session SESSION_ID
+cargo run -p colossus-cli --bin colossus -- decisions list --session SESSION_ID
+cargo run -p colossus-cli --bin colossus -- plans list --session SESSION_ID
+cargo run -p colossus-cli --bin colossus -- goals run 'Finish the scoped task' --session SESSION_ID --max-iterations 5
+cargo run -p colossus-cli --bin colossus -- agents status
+cargo run -p colossus-cli --bin colossus -- memories search 'query' --session SESSION_ID
+cargo run -p colossus-cli --bin colossus -- memories index status
+cargo run -p colossus-cli --bin colossus -- research run 'Summarize the audit architecture' --depth quick --source repo
+cargo run -p colossus-cli --bin colossus -- research list
+cargo run -p colossus-cli --bin colossus -- telemetry runs
+cargo run -p colossus-cli --bin colossus -- telemetry metrics
+cargo run -p colossus-cli --bin colossus -- skills list
+cargo run -p colossus-cli --bin colossus -- run --skill coding 'Implement the scoped change'
+cargo run -p colossus-cli --bin colossus -- --approval-mode ask skills scaffold my-skill 'My data-only skill'
+cargo run -p colossus-cli --bin colossus -- skills validate path/to/local-skill --local
+cargo run -p colossus-cli --bin colossus -- --approval-mode ask skills install path/to/local-skill
+cargo run -p colossus-cli --bin colossus -- --approval-mode ask integrations import-openapi demo openapi.json --base-url https://api.example.test --credential-reference env:DEMO_API_TOKEN
+cargo run -p colossus-cli --bin colossus -- integrations list
+cargo run -p colossus-cli --bin colossus -- --approval-mode ask integrations connect github --credential-reference env:GITHUB_TOKEN
+cargo run -p colossus-cli --bin colossus -- --approval-mode ask integrations connect searxng --base-url http://127.0.0.1:8888 --auth-type none
+cargo run -p colossus-cli --bin colossus -- --approval-mode ask integrations connect opensearch --base-url http://127.0.0.1:9200 --auth-type none
+cargo run -p colossus-cli --bin colossus -- mcp servers
+cargo run -p colossus-cli --bin colossus -- mcp tools --server local
+cargo run -p colossus-cli --bin colossus -- --approval-mode ask mcp call local search '{"query":"audit"}'
+cargo run -p colossus-cli --bin colossus -- run --resume 'Continue'
+cargo run -p colossus-cli --bin colossus -- audit verify
+cargo run -p colossus-cli --bin colossus -- policy doctor
+cargo run -p colossus-cli --bin colossus -- state doctor
+cargo run -p colossus-cli --bin colossus -- sandbox doctor
+cargo run -p colossus-cli --bin colossus -- process run /bin/echo --cwd . -- hello
+cargo run -p colossus-cli --bin colossus -- projection status
+cargo run -p colossus-cli --bin colossus -- projection rebuild
+cargo run -p colossus-cli --bin colossus -- workflow validate .colossus/workflows/offline-echo.yaml
+cargo run -p colossus-cli --bin colossus -- workflow register .colossus/workflows/offline-echo.yaml
+cargo run -p colossus-cli --bin colossus -- workflow run offline-echo 1.0.0 --inputs '{}'
+cargo run -p colossus-cli --bin colossus -- workflow run offline-echo 1.0.0 --inputs '{}' --queued
+cargo run -p colossus-cli --bin colossus -- work --session SESSION_ID
+cargo run -p colossus-cli --bin colossus -- preferences show
+cargo run -p colossus-cli --bin colossus -- preferences history
+cargo run -p colossus-cli --bin colossus -- repl
 ```
 
 `config init` creates a unique platform credential-store identity for that fresh state
@@ -326,15 +326,29 @@ obligations to be present in the YAML configuration.
 ## Cutover Status
 
 The Rust workspace has been promoted to the repository root, the Python runtime/package
-has been removed from `main`, and the active package version is 0.6.0. The local locked
-format, Clippy, workspace-test, fuzz-workspace, offline echo, and audit gates are the
-immediate cutover authority.
+has been removed from `main`, and the active package version is 0.6.0. The canonical
+Cargo, local, installed, container, and release executable is `colossus`; the
+transitional `colossus-rs` binary name is no longer produced. The local locked format,
+Clippy, workspace-test, fuzz-workspace, offline echo, and audit gates are the immediate
+cutover authority. `release/verify-local-cutover.sh` reproduces the complete host-side
+gate, including pinned production and fuzz supply-chain policy, and rejects any
+reintroduced Python package or tracked Python source.
+
+The 2026-07-13 macOS arm64 cutover audit also reran the opt-in live suites without
+Actions credits: OPA 1.16.2 passed decision, approval, release, readiness, outage,
+pinned-trust, and mTLS acceptance; Chroma 1.5.8 and 1.5.9 each passed the complete v2
+candidate-index lifecycle; and Docker passed the digest-pinned OCI escape and cleanup
+suite. These host results strengthen local evidence but do not substitute for the
+supported-platform or aggregate remote matrices.
 
 Hosted GitHub Actions evidence is temporarily deferred while Actions credits are
 unavailable. The fail-closed `rust-cutover-gate`, native sandbox/runtime matrices,
 Windows x64/arm64 checks, live OPA/OCI/Chroma suites, and six-target artifact jobs remain
-configured and must be rerun before creating the final `v0.6.0` release tag. No skipped
-or billing-blocked remote job is represented as passing.
+configured and must be rerun through an explicit release-validation workflow dispatch
+before creating the final `v0.6.0` release tag. Pull requests retain the full test and
+security matrices through `rust-pr-gate`, ordinary `main` pushes run only the inexpensive
+Ubuntu compile gate, and release packaging is not duplicated after every merge. No
+skipped or billing-blocked remote job is represented as passing.
 
 P2 schedules, webhooks, repository events, event subscriptions, PostgreSQL storage,
 external WORM audit anchors, and additional adapters remain post-0.6 work.

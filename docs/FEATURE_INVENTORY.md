@@ -1097,8 +1097,10 @@ are not treated as passing in the meantime.
 - [ ] Unit, integration, boundary, security, type, lint, and packaging checks pass.
   The complete local Rust workspace, independent fuzz harness, dependency/license,
   vulnerability, native installer, signed-bundle, and host-native sandbox gates pass in the
-  current checkout. The first green hosted `rust-cutover-gate` remains required before this
-  cross-platform check can close.
+  current checkout through `release/verify-local-cutover.sh`. Real OPA 1.16.2, pinned
+  Chroma 1.5.8/1.5.9, and digest-pinned Docker OCI acceptance also pass locally. The first
+  green hosted `rust-cutover-gate` remains required before this cross-platform check can
+  close.
 
 ## 24. Explicitly Deferred Product Decisions
 

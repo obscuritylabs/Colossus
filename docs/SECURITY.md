@@ -24,6 +24,11 @@ consistent tail truncation. Startup verification failure enables read-only recov
 blocks effects. A missing terminal event after `effect.started` is recorded as
 `effect.outcome_unknown` and never automatically retried.
 
+Platform credential material is loaded at most once per service/account identity in a
+process and retained only in memory for that process lifetime. Concurrent requests share
+one credential-store lookup; failed or denied lookups are never cached. Secure anchors
+remain separately protected and verified against the journal chain.
+
 Checkpoint creation persists the independently protected head anchor before redb
 checkpoint metadata. If the process terminates between those writes, verified startup
 recreates the signed checkpoint from the anchored journal head. It also repairs a due

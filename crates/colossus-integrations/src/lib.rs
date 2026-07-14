@@ -712,7 +712,7 @@ impl IntegrationExecutor {
             .request(method.clone(), url)
             .timeout(Duration::from_millis(permit.obligations().timeout_ms))
             .header("accept", "application/json")
-            .header("user-agent", "colossus-rs/0.6");
+            .header("user-agent", "colossus/0.6");
         let credential_value = connection
             .credential_reference
             .as_deref()

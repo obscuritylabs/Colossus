@@ -283,7 +283,7 @@ fn denied_effect_events(events: &[Value]) -> Vec<&Value> {
 
 #[test]
 fn invalid_and_denied_tools_stop_before_effect_execution() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let root = tempdir().expect("root directory");
 
     let traversal_directory = root.path().join("traversal");

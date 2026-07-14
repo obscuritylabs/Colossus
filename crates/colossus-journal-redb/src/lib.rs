@@ -15,15 +15,15 @@ use colossus_ports::{
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use fs4::fs_std::FileExt as _;
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
-use serde::Serialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -276,6 +276,26 @@ pub struct PlatformKeyProvider {
     key_id: String,
 }
 
+type PlatformSecretCache = Mutex<BTreeMap<(String, String), [u8; 32]>>;
+
+static PLATFORM_SECRET_CACHE: OnceLock<PlatformSecretCache> = OnceLock::new();
+
+fn cached_platform_secret(
+    service: &str,
+    account: &str,
+    load: impl FnOnce() -> Result<[u8; 32], StoreError>,
+) -> Result<[u8; 32], StoreError> {
+    let cache = PLATFORM_SECRET_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut cache = cache.lock().map_err(adapter_error)?;
+    let identity = (service.to_owned(), account.to_owned());
+    if let Some(secret) = cache.get(&identity) {
+        return Ok(*secret);
+    }
+    let secret = load()?;
+    cache.insert(identity, secret);
+    Ok(secret)
+}
+
 impl PlatformKeyProvider {
     /// Load or create the active journal key in the platform credential store.
     pub fn new(service: impl Into<String>, key_id: impl Into<String>) -> Result<Self, StoreError> {
@@ -300,37 +320,44 @@ impl PlatformKeyProvider {
 }
 
 /// Load or create exactly 32 random bytes in the configured platform credential store.
+///
+/// Material is cached by service and account for this process so replaying a journal does not
+/// repeatedly reopen the same protected credential.
 pub fn platform_secret(service: &str, account: &str) -> Result<[u8; 32], StoreError> {
-    let entry = keyring::Entry::new(service, account).map_err(adapter_error)?;
-    let secret = match entry.get_secret() {
-        Ok(secret) => secret,
-        Err(keyring::Error::NoEntry) => {
-            let mut secret = [0_u8; 32];
-            getrandom::fill(&mut secret).map_err(adapter_error)?;
-            entry.set_secret(&secret).map_err(adapter_error)?;
-            secret.to_vec()
-        }
-        Err(error) => return Err(adapter_error(error)),
-    };
-    secret.try_into().map_err(|_| {
-        StoreError::KeyUnavailable(format!(
-            "platform credential {service}/{account} is not 32 bytes"
-        ))
+    cached_platform_secret(service, account, || {
+        let entry = keyring::Entry::new(service, account).map_err(adapter_error)?;
+        let secret = match entry.get_secret() {
+            Ok(secret) => secret,
+            Err(keyring::Error::NoEntry) => {
+                let mut secret = [0_u8; 32];
+                getrandom::fill(&mut secret).map_err(adapter_error)?;
+                entry.set_secret(&secret).map_err(adapter_error)?;
+                secret.to_vec()
+            }
+            Err(error) => return Err(adapter_error(error)),
+        };
+        secret.try_into().map_err(|_| {
+            StoreError::KeyUnavailable(format!(
+                "platform credential {service}/{account} is not 32 bytes"
+            ))
+        })
     })
 }
 
 fn platform_existing_secret(service: &str, account: &str) -> Result<[u8; 32], StoreError> {
-    let entry = keyring::Entry::new(service, account).map_err(adapter_error)?;
-    let secret = entry.get_secret().map_err(|error| match error {
-        keyring::Error::NoEntry => {
-            StoreError::KeyUnavailable(format!("platform credential {service}/{account} is absent"))
-        }
-        other => adapter_error(other),
-    })?;
-    secret.try_into().map_err(|_| {
-        StoreError::KeyUnavailable(format!(
-            "platform credential {service}/{account} is not 32 bytes"
-        ))
+    cached_platform_secret(service, account, || {
+        let entry = keyring::Entry::new(service, account).map_err(adapter_error)?;
+        let secret = entry.get_secret().map_err(|error| match error {
+            keyring::Error::NoEntry => StoreError::KeyUnavailable(format!(
+                "platform credential {service}/{account} is absent"
+            )),
+            other => adapter_error(other),
+        })?;
+        secret.try_into().map_err(|_| {
+            StoreError::KeyUnavailable(format!(
+                "platform credential {service}/{account} is not 32 bytes"
+            ))
+        })
     })
 }
 
@@ -436,6 +463,50 @@ struct RecordHashInput<'a> {
     previous_hash: &'a str,
 }
 
+// Preserve the exact nested JSON used when a record was encrypted and hashed. Reconstructing
+// these values through evolving typed contracts can add defaulted fields and invalidate valid
+// historical evidence.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedEventEnvelope {
+    schema_version: u16,
+    event_version: u16,
+    event_id: String,
+    global_sequence: u64,
+    stream_id: String,
+    stream_version: u64,
+    classification: colossus_contracts::EventClassification,
+    event_type: String,
+    actor: Box<RawValue>,
+    context: Box<RawValue>,
+    occurred_at: String,
+    payload: Box<RawValue>,
+    previous_hash: String,
+    record_hash: String,
+}
+
+#[derive(Serialize)]
+struct PersistedAssociatedData<'a> {
+    schema_version: u16,
+    event_version: u16,
+    event_id: &'a str,
+    global_sequence: u64,
+    stream_id: &'a str,
+    stream_version: u64,
+    classification: &'a colossus_contracts::EventClassification,
+    event_type: &'a str,
+    actor: &'a RawValue,
+    context: &'a RawValue,
+    occurred_at: &'a str,
+}
+
+#[derive(Serialize)]
+struct PersistedRecordHashInput<'a> {
+    associated_data: PersistedAssociatedData<'a>,
+    payload: &'a RawValue,
+    previous_hash: &'a str,
+}
+
 fn associated_data(envelope: &EventEnvelope) -> AssociatedData<'_> {
     AssociatedData {
         schema_version: envelope.schema_version,
@@ -455,6 +526,33 @@ fn associated_data(envelope: &EventEnvelope) -> AssociatedData<'_> {
 fn record_hash(envelope: &EventEnvelope) -> Result<String, StoreError> {
     let input = RecordHashInput {
         associated_data: associated_data(envelope),
+        payload: &envelope.payload,
+        previous_hash: &envelope.previous_hash,
+    };
+    Ok(sha256_hex(
+        &serde_json::to_vec(&input).map_err(adapter_error)?,
+    ))
+}
+
+fn persisted_associated_data(envelope: &PersistedEventEnvelope) -> PersistedAssociatedData<'_> {
+    PersistedAssociatedData {
+        schema_version: envelope.schema_version,
+        event_version: envelope.event_version,
+        event_id: &envelope.event_id,
+        global_sequence: envelope.global_sequence,
+        stream_id: &envelope.stream_id,
+        stream_version: envelope.stream_version,
+        classification: &envelope.classification,
+        event_type: &envelope.event_type,
+        actor: &envelope.actor,
+        context: &envelope.context,
+        occurred_at: &envelope.occurred_at,
+    }
+}
+
+fn persisted_record_hash(envelope: &PersistedEventEnvelope) -> Result<String, StoreError> {
+    let input = PersistedRecordHashInput {
+        associated_data: persisted_associated_data(envelope),
         payload: &envelope.payload,
         previous_hash: &envelope.previous_hash,
     };
@@ -674,7 +772,11 @@ impl RedbEventJournal {
         Ok(persisted)
     }
 
-    fn decrypt(&self, event: &EventEnvelope) -> Result<Vec<u8>, StoreError> {
+    fn decrypt_persisted(
+        &self,
+        event: &EventEnvelope,
+        persisted: &PersistedEventEnvelope,
+    ) -> Result<Vec<u8>, StoreError> {
         if event.payload.algorithm != "XChaCha20-Poly1305" {
             return Err(StoreError::Verification(format!(
                 "unsupported payload algorithm {}",
@@ -687,7 +789,8 @@ impl RedbEventJournal {
             .try_into()
             .map_err(|_| StoreError::Verification("invalid XChaCha20 nonce length".into()))?;
         let ciphertext = hex::decode(&event.payload.ciphertext).map_err(adapter_error)?;
-        let aad = serde_json::to_vec(&associated_data(event)).map_err(adapter_error)?;
+        let aad =
+            serde_json::to_vec(&persisted_associated_data(persisted)).map_err(adapter_error)?;
         XChaCha20Poly1305::new((&key).into())
             .decrypt(
                 XNonce::from_slice(&nonce),
@@ -702,6 +805,30 @@ impl RedbEventJournal {
                     event.event_id
                 ))
             })
+    }
+
+    fn load_persisted(&self, event: &EventEnvelope) -> Result<PersistedEventEnvelope, StoreError> {
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let table = read.open_table(EVENTS).map_err(adapter_error)?;
+        let bytes = table
+            .get(event.global_sequence)
+            .map_err(adapter_error)?
+            .ok_or_else(|| {
+                StoreError::Verification(format!(
+                    "event {} is absent from the journal",
+                    event.event_id
+                ))
+            })?
+            .value()
+            .to_vec();
+        let stored: EventEnvelope = serde_json::from_slice(&bytes).map_err(adapter_error)?;
+        if stored != *event {
+            return Err(StoreError::Verification(format!(
+                "event {} does not match its persisted envelope",
+                event.event_id
+            )));
+        }
+        serde_json::from_slice(&bytes).map_err(adapter_error)
     }
 
     fn checkpoint_sequence(&self) -> Result<u64, StoreError> {
@@ -764,6 +891,8 @@ impl RedbEventJournal {
                     "global sequence gap: expected {expected_sequence}, got {sequence}"
                 )));
             }
+            let persisted: PersistedEventEnvelope =
+                serde_json::from_slice(value.value()).map_err(adapter_error)?;
             let envelope: EventEnvelope =
                 serde_json::from_slice(value.value()).map_err(adapter_error)?;
             if envelope.global_sequence != sequence || envelope.previous_hash != previous_hash {
@@ -783,14 +912,16 @@ impl RedbEventJournal {
                     envelope.stream_id
                 )));
             }
-            let computed_hash = record_hash(&envelope)?;
-            if computed_hash != envelope.record_hash {
+            let computed_hash = persisted_record_hash(&persisted)?;
+            if computed_hash != persisted.record_hash
+                || envelope.record_hash != persisted.record_hash
+            {
                 return Err(StoreError::Verification(format!(
                     "event {} record hash mismatch",
                     envelope.event_id
                 )));
             }
-            let plaintext = self.decrypt(&envelope)?;
+            let plaintext = self.decrypt_persisted(&envelope, &persisted)?;
             if sha256_hex(&plaintext) != envelope.payload.plaintext_hash {
                 return Err(StoreError::Verification(format!(
                     "event {} plaintext hash mismatch",
@@ -1026,7 +1157,8 @@ impl EventJournal for RedbEventJournal {
     }
 
     fn decrypt_payload(&self, event: &EventEnvelope) -> Result<Value, StoreError> {
-        serde_json::from_slice(&self.decrypt(event)?).map_err(adapter_error)
+        let persisted = self.load_persisted(event)?;
+        serde_json::from_slice(&self.decrypt_persisted(event, &persisted)?).map_err(adapter_error)
     }
 
     fn verify(&self) -> Result<VerificationReport, StoreError> {
@@ -1231,8 +1363,14 @@ impl ProjectionStore for RedbEventJournal {
 #[cfg(test)]
 mod tests {
     use super::{
-        EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX, PROJECTION_POSITIONS, RedbEventJournal,
-        RedbWriterLease, STREAM_VERSIONS, StaticKeyProvider, adapter_error,
+        EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX, PROJECTION_POSITIONS,
+        PersistedEventEnvelope, RedbEventJournal, RedbWriterLease, STREAM_VERSIONS,
+        StaticKeyProvider, adapter_error, cached_platform_secret, persisted_associated_data,
+        persisted_record_hash,
+    };
+    use chacha20poly1305::{
+        KeyInit, XChaCha20Poly1305, XNonce,
+        aead::{Aead, Payload},
     };
     use colossus_contracts::{Actor, ActorType, EventClassification, ExecutionContext, NewEvent};
     use colossus_memory::EventSourcedMemoryRepository;
@@ -1251,7 +1389,15 @@ mod tests {
     use colossus_workflow::EventSourcedWorkflowRepository;
     use redb::{Database, ReadableDatabase};
     use serde_json::json;
-    use std::{process::Command, sync::Arc, thread};
+    use std::{
+        process::Command,
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+        time::Duration,
+    };
     use tempfile::tempdir;
 
     fn event(stream: &str, version: u64, value: u64) -> NewEvent {
@@ -1670,6 +1816,58 @@ mod tests {
     }
 
     #[test]
+    fn platform_secret_cache_loads_once_for_concurrent_callers() {
+        let service = format!("test-service-{}", uuid::Uuid::now_v7());
+        let account = "shared-account".to_owned();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(8));
+        let handles = (0..8)
+            .map(|_| {
+                let service = service.clone();
+                let account = account.clone();
+                let loads = Arc::clone(&loads);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    cached_platform_secret(&service, &account, || {
+                        loads.fetch_add(1, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(20));
+                        Ok([42_u8; 32])
+                    })
+                    .expect("cached secret")
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            assert_eq!(handle.join().expect("caller"), [42_u8; 32]);
+        }
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn platform_secret_cache_does_not_cache_load_failures() {
+        let service = format!("test-service-{}", uuid::Uuid::now_v7());
+        let account = "retry-account";
+        let loads = AtomicUsize::new(0);
+
+        let first = cached_platform_secret(&service, account, || {
+            loads.fetch_add(1, Ordering::SeqCst);
+            Err(StoreError::KeyUnavailable("operator denied access".into()))
+        });
+        assert!(matches!(first, Err(StoreError::KeyUnavailable(_))));
+        assert_eq!(
+            cached_platform_secret(&service, account, || {
+                loads.fetch_add(1, Ordering::SeqCst);
+                Ok([24_u8; 32])
+            })
+            .expect("retried secret"),
+            [24_u8; 32]
+        );
+        assert_eq!(loads.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
     fn projection_worker_catches_up_after_journal_only_restart() {
         let directory = tempdir().expect("tempdir");
         let path = directory.path().join("state.redb");
@@ -1761,6 +1959,81 @@ mod tests {
         assert_eq!(
             journal.verify().expect("verify").checkpoint,
             Some(checkpoint)
+        );
+    }
+
+    #[test]
+    fn persisted_legacy_context_shape_remains_verifiable_and_decryptable() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("state.redb");
+        let keys = Arc::new(StaticKeyProvider::new("test-key", [7_u8; 32]));
+        {
+            let journal = journal_with_keys(&path, Arc::clone(&keys));
+            journal.append(event("stream-1", 0, 1)).expect("append");
+        }
+
+        let database = Database::create(&path).expect("database");
+        let read = database.begin_read().expect("read");
+        let table = read.open_table(EVENTS).expect("events");
+        let bytes = table.get(1).expect("get").expect("event").value().to_vec();
+        drop(table);
+        drop(read);
+
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        let context = value["context"].as_object_mut().expect("context object");
+        for field in ["goal_id", "plan_id", "subagent_id", "skill_ids"] {
+            context.remove(field);
+        }
+
+        let persisted: PersistedEventEnvelope =
+            serde_json::from_value(value.clone()).expect("legacy persisted envelope");
+        let aad = serde_json::to_vec(&persisted_associated_data(&persisted)).expect("aad");
+        let nonce = hex::decode(value["payload"]["nonce"].as_str().expect("nonce")).expect("hex");
+        let nonce: [u8; 24] = nonce.try_into().expect("nonce length");
+        let plaintext = serde_json::to_vec(&json!({"value": 1})).expect("plaintext");
+        let ciphertext = XChaCha20Poly1305::new((&[7_u8; 32]).into())
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &plaintext,
+                    aad: &aad,
+                },
+            )
+            .expect("encrypt legacy payload");
+        value["payload"]["ciphertext"] = json!(hex::encode(ciphertext));
+
+        let persisted: PersistedEventEnvelope =
+            serde_json::from_value(value.clone()).expect("updated persisted envelope");
+        let record_hash = persisted_record_hash(&persisted).expect("legacy record hash");
+        value["record_hash"] = json!(record_hash);
+        let bytes = serde_json::to_vec(&value).expect("encode legacy envelope");
+        let hash_bytes = serde_json::to_vec(&record_hash).expect("encode head hash");
+
+        let write = database.begin_write().expect("write");
+        {
+            let mut events = write.open_table(EVENTS).expect("events");
+            events.insert(1, bytes.as_slice()).expect("replace event");
+            let mut metadata = write.open_table(METADATA).expect("metadata");
+            metadata
+                .insert("last_hash", hash_bytes.as_slice())
+                .expect("replace head hash");
+        }
+        write.commit().expect("commit");
+        drop(database);
+
+        let reopened = journal_with_keys(&path, keys);
+        assert!(!reopened.is_recovery_mode());
+        reopened.verify().expect("verify legacy envelope");
+        let stored = reopened
+            .read_global(1, 1)
+            .expect("read legacy event")
+            .pop()
+            .expect("legacy event");
+        assert_eq!(
+            reopened
+                .decrypt_payload(&stored)
+                .expect("decrypt legacy event"),
+            json!({"value": 1})
         );
     }
 

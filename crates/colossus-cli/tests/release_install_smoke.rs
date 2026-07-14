@@ -99,7 +99,7 @@ fn offline_command(binary: &Path, working_directory: &Path) -> Command {
 
 #[test]
 fn packaged_installer_places_a_standalone_binary_that_completes_an_offline_echo_run() {
-    let source_binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let source_binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let package = directory.path().join("package");
     let prefix = directory.path().join("prefix");

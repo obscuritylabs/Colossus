@@ -89,7 +89,7 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) {
 
 #[test]
 fn worker_owns_lease_routes_streams_rejects_wrong_key_and_shuts_down_cleanly() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
     #[cfg(unix)]

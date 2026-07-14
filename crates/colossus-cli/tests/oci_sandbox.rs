@@ -101,7 +101,7 @@ fn live_oci_enforces_mount_environment_network_timeout_and_cleanup_boundaries() 
         proxy_image.starts_with("sha256:") || proxy_image.contains("@sha256:"),
         "proxy image must be digest pinned"
     );
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let allowed = directory.path().join("allowed");
     let workflows = directory.path().join("workflows");

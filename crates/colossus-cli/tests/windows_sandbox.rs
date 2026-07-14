@@ -173,7 +173,7 @@ fn process<'a>(
 
 #[test]
 fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundaries() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let root = fs::canonicalize(directory.path()).expect("root");
     let allowed = root.join("allowed");

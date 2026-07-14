@@ -686,7 +686,7 @@ fn resolve_environment(
 fn protocol_input(operation: &McpOperation) -> Result<Vec<u8>, ExecutionError> {
     let initialize = InitializeRequestParams::new(
         ClientCapabilities::default(),
-        Implementation::new("colossus-rs", env!("CARGO_PKG_VERSION")),
+        Implementation::new("colossus", env!("CARGO_PKG_VERSION")),
     )
     .with_protocol_version(ProtocolVersion::LATEST);
     let operation_message = match operation {

@@ -99,7 +99,7 @@ fn assert_secrets_absent(bytes: &[u8]) {
 
 #[test]
 fn config_show_preserves_only_references_and_unknown_secret_fields_fail_without_disclosure() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     fs::create_dir(directory.path().join("workflows")).expect("workflows");
 

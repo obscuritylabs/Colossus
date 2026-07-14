@@ -65,7 +65,7 @@ fn artifact_path(staged: &Path, target: &str) -> PathBuf {
 
 #[test]
 fn trusted_bundle_is_built_verified_installed_and_executed_without_network() {
-    let source_binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let source_binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let root = fs::canonicalize(directory.path()).expect("canonical root");
     let staged = root.join("staged");

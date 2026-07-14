@@ -8,6 +8,25 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the repository-root Cargo binary from the transitional `colossus-rs` name to
+  the canonical `colossus` command used by installed, container, and release artifacts.
+- Added a reproducible host-side cutover verifier that pins the Rust and supply-chain
+  tool versions, rejects reintroduced Python source, and checks both dependency graphs.
+- Split hosted validation into a lightweight post-merge Ubuntu gate, a fail-closed
+  pull-request test/security gate, and an explicit six-target release gate so routine
+  pushes do not duplicate costly macOS artifact builds.
+
+### Fixed
+
+- Preserved the exact persisted event representation during journal hash verification
+  and authenticated decryption so additive context fields do not invalidate older Rust
+  journal records.
+- Cached platform credential material per service/account for the process lifetime so
+  journal replay and concurrent runtime setup do not repeatedly reopen the same Keychain,
+  DPAPI, or Secret Service entry; failed credential reads remain uncached.
+
 ## [0.6.0] - 2026-07-13
 
 ### Added

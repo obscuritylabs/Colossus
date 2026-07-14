@@ -29,7 +29,7 @@ For source development, Rust 1.96 is required:
 
 ```bash
 cargo run --offline \
-  -p colossus-cli --bin colossus-rs -- --version
+  -p colossus-cli --bin colossus -- --version
 ```
 
 ## Initialize And Smoke Test

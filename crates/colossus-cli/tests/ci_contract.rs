@@ -5,7 +5,6 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 const REQUIRED_CUTOVER_JOBS: &[&str] = &[
     "rust",
-    "rust-portability",
     "rust-native-sandbox",
     "rust-windows-runtime",
     "rust-fuzz",
@@ -14,6 +13,18 @@ const REQUIRED_CUTOVER_JOBS: &[&str] = &[
     "rust-live-chroma",
     "rust-live-security",
 ];
+
+const REQUIRED_PULL_REQUEST_JOBS: &[&str] = &[
+    "rust",
+    "rust-native-sandbox",
+    "rust-windows-runtime",
+    "rust-fuzz",
+    "rust-supply-chain",
+    "rust-live-chroma",
+    "rust-live-security",
+];
+
+const FULL_VALIDATION_CONDITION: &str = "${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}";
 
 fn repository_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -26,6 +37,44 @@ fn workflow() -> Value {
     let path = repository_root().join(".github/workflows/ci.yml");
     let source = fs::read_to_string(&path).expect("read CI workflow");
     serde_saphyr::from_str(&source).expect("CI workflow must be valid YAML")
+}
+
+#[test]
+fn canonical_source_and_release_binary_is_colossus() {
+    let manifest = fs::read_to_string(repository_root().join("crates/colossus-cli/Cargo.toml"))
+        .expect("read CLI manifest");
+    assert!(manifest.contains("name = \"colossus\""));
+    assert!(!manifest.contains("colossus-rs"));
+
+    let workflow = fs::read_to_string(repository_root().join(".github/workflows/ci.yml"))
+        .expect("read CI workflow");
+    assert!(workflow.contains("--package colossus-cli --bin colossus"));
+    assert!(!workflow.contains("colossus-rs"));
+}
+
+#[test]
+fn local_cutover_verifier_is_complete_and_tool_version_pinned() {
+    let script = fs::read_to_string(repository_root().join("release/verify-local-cutover.sh"))
+        .expect("read local cutover verifier");
+    for required in [
+        "rustc 1.96.0",
+        "cargo-deny 0.20.2",
+        "cargo-audit 0.22.2",
+        "cargo fmt --all -- --check",
+        "cargo clippy --locked --workspace --all-targets -- -D warnings",
+        "cargo test --locked --workspace",
+        "cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets",
+        "cargo deny --locked check",
+        "cargo audit -D warnings",
+        "--file Cargo.lock",
+        "--file fuzz/Cargo.lock",
+        "git ls-files '*.py'",
+    ] {
+        assert!(
+            script.contains(required),
+            "local cutover verifier is missing {required:?}"
+        );
+    }
 }
 
 fn mapping<'a>(value: &'a Value, context: &str) -> &'a Map<String, Value> {
@@ -80,14 +129,93 @@ fn named_step<'a>(job: &'a Map<String, Value>, name: &str) -> &'a Map<String, Va
 }
 
 #[test]
+fn actions_cost_policy_runs_full_validation_only_before_merge_or_on_manual_dispatch() {
+    let workflow = workflow();
+    let root = mapping(&workflow, "workflow");
+    let triggers = mapping(field(root, "on"), "workflow triggers");
+    assert_eq!(
+        triggers.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        ["merge_group", "pull_request", "push", "workflow_dispatch"]
+            .into_iter()
+            .collect()
+    );
+    let push = mapping(field(triggers, "push"), "push trigger");
+    assert_eq!(
+        strings(field(push, "branches"), "push branches"),
+        ["main"].into_iter().map(str::to_owned).collect()
+    );
+
+    let jobs = jobs(&workflow);
+    assert_eq!(
+        field(job(jobs, "rust-quick"), "if").as_str(),
+        Some("${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}")
+    );
+    assert_eq!(
+        field(job(jobs, "rust"), "if").as_str(),
+        Some(FULL_VALIDATION_CONDITION)
+    );
+    assert!(
+        !jobs.contains_key("rust-portability"),
+        "standalone macOS/Windows portability duplicates native matrix runners"
+    );
+    for name in ["rust-native-sandbox", "rust-windows-runtime"] {
+        let compile = named_step(
+            job(jobs, name),
+            "Compile every target on the native platform",
+        );
+        assert_eq!(
+            field(compile, "run").as_str(),
+            Some("cargo check --locked --workspace --all-targets")
+        );
+    }
+    assert_eq!(
+        field(job(jobs, "rust-release-smoke"), "if").as_str(),
+        Some("${{ github.event_name == 'workflow_dispatch' }}"),
+        "six-target packaging must run only for explicit release validation"
+    );
+}
+
+#[test]
+fn pull_request_gate_fails_closed_without_scheduling_release_artifacts() {
+    let workflow = workflow();
+    let jobs = jobs(&workflow);
+    let gate = job(jobs, "rust-pr-gate");
+    assert_eq!(
+        field(gate, "if").as_str(),
+        Some(
+            "${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}"
+        )
+    );
+    assert_eq!(
+        strings(field(gate, "needs"), "pull request needs"),
+        REQUIRED_PULL_REQUEST_JOBS
+            .iter()
+            .map(|job| (*job).to_owned())
+            .collect()
+    );
+    assert!(!REQUIRED_PULL_REQUEST_JOBS.contains(&"rust-release-smoke"));
+    let script = field(
+        mapping(
+            &field(gate, "steps").as_array().expect("gate steps")[0],
+            "pull request gate step",
+        ),
+        "run",
+    )
+    .as_str()
+    .expect("pull request gate script");
+    assert!(script.contains("details.get(\"result\") != \"success\""));
+    assert!(script.contains("raise SystemExit(bool(failed))"));
+}
+
+#[test]
 fn cutover_gate_fails_closed_over_every_required_rust_job() {
     let workflow = workflow();
     let jobs = jobs(&workflow);
     let gate = job(jobs, "rust-cutover-gate");
     assert_eq!(
         field(gate, "if").as_str(),
-        Some("${{ always() }}"),
-        "the gate must run even when a dependency fails or is skipped"
+        Some("${{ always() && github.event_name == 'workflow_dispatch' }}"),
+        "the release gate must run after every dependency on explicit validation"
     );
     assert_eq!(
         strings(field(gate, "needs"), "cutover needs"),

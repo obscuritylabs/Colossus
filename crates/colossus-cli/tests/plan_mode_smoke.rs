@@ -130,7 +130,7 @@ data: [DONE]
         goal_complete,
         goal_finished,
     ]);
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let workflows = directory.path().join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");

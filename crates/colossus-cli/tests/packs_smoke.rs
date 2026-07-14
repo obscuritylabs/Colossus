@@ -27,7 +27,7 @@ fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> st
 
 #[test]
 fn unsigned_pack_requires_override_and_lifecycle_is_permit_bound_and_audited() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus-rs"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let mcp_server = Path::new(env!("CARGO_BIN_EXE_colossus-mcp-test-server"));
     let directory = tempdir().expect("directory");
     let source = directory.path().join("source-pack");
