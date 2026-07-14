@@ -793,6 +793,28 @@ pub enum PolicyError {
     InvalidDecision(String),
 }
 
+/// Model-assisted risk evaluation failures require an explicit approval fallback.
+#[derive(Debug, Error)]
+pub enum RiskEvaluationError {
+    /// The configured evaluator or its policy-bound provider was unavailable.
+    #[error("risk evaluator unavailable: {0}")]
+    Unavailable(String),
+    /// The evaluator returned output outside the strict response contract.
+    #[error("invalid risk assessment: {0}")]
+    InvalidAssessment(String),
+}
+
+/// Advisory risk evaluator invoked only after deterministic policy requires approval.
+#[async_trait]
+pub trait RiskEvaluator: Send + Sync {
+    /// Assess one prepared request using tools-disabled, policy-bound model access.
+    async fn evaluate(
+        &self,
+        request: &EffectRequest,
+        decision: &PolicyDecision,
+    ) -> Result<colossus_contracts::RiskAssessment, RiskEvaluationError>;
+}
+
 /// Built-in or OPA policy decision point.
 #[async_trait]
 pub trait PolicyDecisionPoint: Send + Sync {
@@ -806,6 +828,11 @@ pub trait PolicyDecisionPoint: Send + Sync {
 /// Interactive or application-supplied approval handler.
 #[async_trait]
 pub trait ApprovalProvider: Send + Sync {
+    /// Whether eligible approval-required shell effects should receive risk review.
+    fn risk_auto_enabled(&self) -> bool {
+        false
+    }
+
     /// Request a proof bound to the canonical request hash and initial decision.
     async fn request_approval(
         &self,

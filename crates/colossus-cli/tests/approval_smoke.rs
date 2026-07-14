@@ -466,7 +466,7 @@ fn every_terminal_mode_preserves_allowed_denied_and_approval_required_tool_seman
             "ask" => assert!(stderr.contains("approval required"), "{stderr}"),
             "risk-auto" => {
                 assert!(stderr.contains("approval required"), "{stderr}");
-                assert!(stderr.contains("risk status: unavailable"), "{stderr}");
+                assert!(!stderr.contains("risk review:"), "{stderr}");
             }
             "full-access" => assert!(!stderr.contains("approval required"), "{stderr}"),
             _ => unreachable!("fixed approval mode"),

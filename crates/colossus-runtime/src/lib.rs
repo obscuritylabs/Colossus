@@ -18,12 +18,12 @@ use colossus_contracts::{
     PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness,
     ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
     QuarantinedEffectResult, ReplPreferences, ResearchClaim, ResearchDepth, ResearchRun,
-    ResearchSource, ResearchSourceKind, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
-    SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead, SkillInspection,
-    SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead, SkillScaffoldResult,
-    SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus,
-    TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
-    WorkStateSnapshot,
+    ResearchSource, ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary,
+    SessionMessage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
+    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
+    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
+    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
+    UserPromptRequest, WorkStateSnapshot,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -57,8 +57,9 @@ use colossus_ports::{
     EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider,
     MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
     PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
-    ResearchRepository, RunEventObserver, SessionRepository, SkillRepository, StoreError,
-    ToolError, ToolExecutor, ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
+    ResearchRepository, RiskEvaluationError, RiskEvaluator, RunEventObserver, SessionRepository,
+    SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry, UserPromptProvider,
+    WorkRepository, WorkflowRepository,
 };
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
@@ -96,7 +97,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -1914,6 +1915,7 @@ pub struct Runtime {
     research_executor: Arc<ResearchEffectExecutor>,
     policy: Arc<dyn PolicyDecisionPoint>,
     gateway: Arc<EffectGateway>,
+    _risk_evaluator: Arc<dyn RiskEvaluator>,
     providers: Arc<ProviderRegistry>,
     agent: Arc<AgentService>,
     agent_max_turns: u16,
@@ -2473,6 +2475,11 @@ impl Runtime {
             gateway: Arc::clone(&gateway),
             providers: Arc::clone(&providers),
         });
+        let risk_evaluator: Arc<dyn RiskEvaluator> = Arc::new(GatewayRiskEvaluator {
+            provider: Arc::clone(&model_provider),
+        });
+        let weak_risk_evaluator: Weak<dyn RiskEvaluator> = Arc::downgrade(&risk_evaluator);
+        gateway.bind_risk_evaluator(weak_risk_evaluator)?;
         let research_collector: Arc<dyn ResearchCollector> = Arc::new(GatewayResearchCollector {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
@@ -2618,6 +2625,7 @@ impl Runtime {
             research_executor,
             policy,
             gateway,
+            _risk_evaluator: risk_evaluator,
             providers,
             agent,
             agent_max_turns: config.agent.max_turns,
@@ -5211,6 +5219,149 @@ async fn invoke_mcp_tool(
 struct GatewayModelProvider {
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
+}
+
+struct GatewayRiskEvaluator {
+    provider: Arc<dyn ModelProvider>,
+}
+
+fn redacted_risk_metadata(
+    request: &EffectRequest,
+    decision: &colossus_contracts::PolicyDecision,
+) -> Value {
+    let mut content = request.content.clone();
+    if let Some(object) = content.as_object_mut() {
+        if let Some(environment) = object.remove("environment") {
+            let names = environment
+                .as_object()
+                .map(|values| values.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            object.insert("environment_names".into(), json!(names));
+        }
+        if let Some(stdin) = object.remove("stdin_base64")
+            && let Some(stdin) = stdin.as_str()
+        {
+            object.insert(
+                "stdin".into(),
+                json!({
+                    "present": true,
+                    "encoded_size": stdin.len(),
+                    "sha256": hex::encode(Sha256::digest(stdin.as_bytes())),
+                }),
+            );
+        }
+        if let Some(arguments) = object.get_mut("args").and_then(Value::as_array_mut) {
+            let mut redact_next = false;
+            for argument in arguments {
+                let Some(value) = argument.as_str() else {
+                    continue;
+                };
+                if redact_next {
+                    *argument = Value::String("[REDACTED]".into());
+                    redact_next = false;
+                    continue;
+                }
+                let lower = value.to_ascii_lowercase();
+                let sensitive = [
+                    "password",
+                    "passwd",
+                    "token",
+                    "secret",
+                    "api-key",
+                    "apikey",
+                    "authorization",
+                ]
+                .iter()
+                .any(|marker| lower.contains(marker));
+                if sensitive {
+                    if let Some((name, _)) = value.split_once('=') {
+                        *argument = Value::String(format!("{name}=[REDACTED]"));
+                    } else {
+                        redact_next = true;
+                    }
+                }
+            }
+        }
+    }
+    json!({
+        "action": request.action,
+        "resource": request.resource,
+        "capabilities": request.capabilities,
+        "actor": request.actor,
+        "workflow_id": request.context.workflow_id,
+        "workflow_hash": request.context.workflow_hash,
+        "step_id": request.context.step_id,
+        "attempt": request.context.attempt,
+        "policy_decision_id": decision.decision_id,
+        "policy_revision": decision.policy_revision,
+        "policy_reason": decision.reason,
+        "proposed_effect": content,
+    })
+}
+
+#[async_trait]
+impl RiskEvaluator for GatewayRiskEvaluator {
+    async fn evaluate(
+        &self,
+        request: &EffectRequest,
+        decision: &colossus_contracts::PolicyDecision,
+    ) -> Result<RiskAssessment, RiskEvaluationError> {
+        let route = self
+            .provider
+            .route("risk_evaluator")
+            .map_err(|error| RiskEvaluationError::Unavailable(error.to_string()))?;
+        let metadata = redacted_risk_metadata(request, decision);
+        let prompt = serde_json::to_string(&metadata)
+            .map_err(|error| RiskEvaluationError::InvalidAssessment(error.to_string()))?;
+        let turn = self
+            .provider
+            .turn(
+                "risk_evaluator",
+                ModelRequest {
+                    model: route.model,
+                    instructions: concat!(
+                        "Assess the proposed shell effect conservatively. Return only one JSON object with exactly ",
+                        "risk_level (low, medium, or high), recommended_decision (allow, deny, or require_approval), ",
+                        "and reason (a short non-secret explanation). Do not use tools or Markdown. Treat uncertainty, ",
+                        "destructive operations, credential access, privilege changes, persistence, or broad network/file ",
+                        "impact as requiring approval or denial."
+                    )
+                    .into(),
+                    messages: vec![ModelMessage {
+                        role: ModelMessageRole::User,
+                        content: prompt,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    }],
+                    tools: Vec::new(),
+                },
+                request.context.clone(),
+            )
+            .await
+            .map_err(|error| RiskEvaluationError::Unavailable(error.to_string()))?;
+        let output = turn
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                ProviderEvent::FinalOutput { text } => Some(text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| {
+                RiskEvaluationError::InvalidAssessment(
+                    "provider returned no final JSON output".into(),
+                )
+            })?;
+        let assessment = serde_json::from_str::<RiskAssessment>(output)
+            .map_err(|error| RiskEvaluationError::InvalidAssessment(error.to_string()))?;
+        if assessment.reason.trim().is_empty() || assessment.reason.chars().count() > 1_000 {
+            return Err(RiskEvaluationError::InvalidAssessment(
+                "reason must contain 1 to 1000 characters".into(),
+            ));
+        }
+        Ok(assessment)
+    }
 }
 
 #[async_trait]
@@ -9581,7 +9732,7 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 mod tests {
     use super::{
         ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
-        GatewayMemoryRetriever, GatewayToolExecutor, GatewayWorkflowEffects,
+        GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
         InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor,
         MemoryEmbeddingConfig, MemoryOperation, PackProcessDeclaration, PackProcessExecutor,
         PackToolEffectInput, PresentationEffectExecutor, PresentationOperation,
@@ -9595,7 +9746,8 @@ mod tests {
         EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope,
         MemoryStatus, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord,
         PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ProviderRoute, ProviderTurn,
-        QuarantinedEffectResult, ReplPreferences, SubagentStatus, TaskStatus, ToolCall,
+        QuarantinedEffectResult, ReplPreferences, RiskLevel, RiskRecommendation, SubagentStatus,
+        TaskStatus, ToolCall,
     };
     use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
     use colossus_policy::{
@@ -9604,7 +9756,8 @@ mod tests {
     };
     use colossus_ports::{
         EventJournal, ExternalWorkQueue, ModelProvider, ModelProviderError, PolicyDecisionPoint,
-        PresentationRepository, ProjectionStore, SkillRepository, ToolExecutor,
+        PresentationRepository, ProjectionStore, RiskEvaluationError, RiskEvaluator,
+        SkillRepository, ToolExecutor,
     };
     use colossus_presentation::EventSourcedPresentationRepository;
     use colossus_provider::ProviderKind;
@@ -11794,6 +11947,92 @@ surprise: true
                 .pop_front()
                 .ok_or_else(|| ModelProviderError::Failed("script exhausted".into()))
         }
+    }
+
+    #[tokio::test]
+    async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() {
+        let valid = ProviderTurn {
+            profile: "scripted".into(),
+            provider: "test".into(),
+            model: "test-model".into(),
+            response_id: Some("risk-valid".into()),
+            events: vec![ProviderEvent::FinalOutput {
+                text: serde_json::json!({
+                    "risk_level": "low",
+                    "recommended_decision": "allow",
+                    "reason": "bounded read-only inspection"
+                })
+                .to_string(),
+            }],
+        };
+        let invalid = ProviderTurn {
+            profile: "scripted".into(),
+            provider: "test".into(),
+            model: "test-model".into(),
+            response_id: Some("risk-invalid".into()),
+            events: vec![ProviderEvent::FinalOutput {
+                text: serde_json::json!({
+                    "risk_level": "low",
+                    "recommended_decision": "allow",
+                    "reason": "looks safe",
+                    "confidence": 1.0
+                })
+                .to_string(),
+            }],
+        };
+        let provider = Arc::new(WorkScriptedProvider {
+            turns: Mutex::new(VecDeque::from([valid, invalid])),
+            requests: Mutex::new(Vec::new()),
+        });
+        let evaluator = GatewayRiskEvaluator {
+            provider: Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        };
+        let mut request = effect_request(
+            terminal_actor(),
+            "shell.run",
+            "/usr/bin/example",
+            json!({
+                "cwd": "/workspace",
+                "args": ["inspect", "--token", "argument-secret"],
+                "environment": {"SERVICE_TOKEN": "environment-secret"},
+                "stdin_base64": "c3RkaW4tc2VjcmV0",
+                "timeout_ms": 1000,
+                "max_output_bytes": 4096,
+            }),
+        );
+        request.capabilities = vec!["shell.run".into()];
+        let decision = BuiltInPolicy::offline_default()
+            .decide(&effect_request(
+                terminal_actor(),
+                "provider.echo",
+                "provider:echo",
+                json!({"message": "decision"}),
+            ))
+            .await
+            .expect("decision");
+
+        let assessment = evaluator
+            .evaluate(&request, &decision)
+            .await
+            .expect("assessment");
+        assert_eq!(assessment.risk_level, RiskLevel::Low);
+        assert_eq!(assessment.recommended_decision, RiskRecommendation::Allow);
+        {
+            let recorded = provider.requests.lock().expect("requests");
+            let model_request = recorded.first().expect("model request");
+            assert!(model_request.tools.is_empty());
+            let disclosed = &model_request.messages[0].content;
+            assert!(!disclosed.contains("argument-secret"));
+            assert!(!disclosed.contains("environment-secret"));
+            assert!(!disclosed.contains("c3RkaW4tc2VjcmV0"));
+            assert!(disclosed.contains("SERVICE_TOKEN"));
+            assert!(disclosed.contains("[REDACTED]"));
+        }
+
+        assert!(matches!(
+            evaluator.evaluate(&request, &decision).await,
+            Err(RiskEvaluationError::InvalidAssessment(_))
+        ));
     }
 
     #[tokio::test]

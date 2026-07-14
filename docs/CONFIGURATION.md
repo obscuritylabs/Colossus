@@ -96,6 +96,7 @@ providers:
       timeoutMs: 120000
   roles:
     primary: openrouter
+    risk_evaluator: openrouter
     context_summarizer: openrouter
     subagent_default: openrouter
     research_planner: openrouter

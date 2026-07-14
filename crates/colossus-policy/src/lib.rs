@@ -5,9 +5,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, ActorType, ApprovalProof, DecisionOutcome, EffectPhase, EffectRequest,
     EventClassification, NewEvent, PolicyDecision, PolicyObligations, QuarantinedEffectResult,
+    RiskLevel, RiskRecommendation, RiskStatus,
 };
 use colossus_ports::{
-    ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, StoreError,
+    ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluator, StoreError,
 };
 use hmac::{Hmac, Mac};
 use reqwest::{Certificate, Client, Identity, Url};
@@ -19,7 +20,7 @@ use std::{
     fs,
     path::Path,
     sync::{
-        Arc,
+        Arc, RwLock, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -50,6 +51,21 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn now_unix_ms() -> i128 {
     OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000
+}
+
+fn approval_proof(
+    request_hash: &str,
+    approved_by: impl Into<String>,
+) -> Result<ApprovalProof, PolicyError> {
+    let approved_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+    Ok(ApprovalProof {
+        approval_id: Uuid::now_v7().to_string(),
+        request_hash: request_hash.into(),
+        approved_by: approved_by.into(),
+        approved_at,
+    })
 }
 
 /// Effect gateway failure. Denied content is deliberately absent.
@@ -663,6 +679,7 @@ pub struct EffectGateway {
     journal: Arc<dyn EventJournal>,
     policy: Arc<dyn PolicyDecisionPoint>,
     approvals: Arc<dyn ApprovalProvider>,
+    risk_evaluator: RwLock<Option<Weak<dyn RiskEvaluator>>>,
     kernel: SafetyKernel,
     permit_key: [u8; 32],
 }
@@ -819,8 +836,113 @@ impl EffectGateway {
             journal,
             policy,
             approvals,
+            risk_evaluator: RwLock::new(None),
             kernel,
             permit_key,
+        }
+    }
+
+    /// Bind the policy-gated model evaluator after provider composition is complete.
+    pub fn bind_risk_evaluator(
+        &self,
+        evaluator: Weak<dyn RiskEvaluator>,
+    ) -> Result<(), GatewayError> {
+        *self
+            .risk_evaluator
+            .write()
+            .map_err(|_| GatewayError::Contract("risk evaluator lock is poisoned".into()))? =
+            Some(evaluator);
+        Ok(())
+    }
+
+    async fn review_risk(
+        &self,
+        request: &mut EffectRequest,
+        decision: &PolicyDecision,
+    ) -> Result<bool, GatewayError> {
+        if request.action != "shell.run" || !self.approvals.risk_auto_enabled() {
+            return Ok(false);
+        }
+        self.event(
+            request,
+            "risk.review.requested.v1",
+            EventClassification::Policy,
+            json!({
+                "decision_id": decision.decision_id,
+                "policy_revision": decision.policy_revision,
+            }),
+        )?;
+        let evaluator = self
+            .risk_evaluator
+            .read()
+            .map_err(|_| GatewayError::Contract("risk evaluator lock is poisoned".into()))?
+            .as_ref()
+            .and_then(Weak::upgrade);
+        let Some(evaluator) = evaluator else {
+            request.risk.status = RiskStatus::Unavailable;
+            request.risk.level = None;
+            request.risk.reason = Some("risk evaluator is not available".into());
+            self.event(
+                request,
+                "risk.review.unavailable.v1",
+                EventClassification::Policy,
+                json!({"reason": "risk evaluator is not available"}),
+            )?;
+            return Ok(false);
+        };
+        match evaluator.evaluate(request, decision).await {
+            Ok(assessment) => {
+                let reason = assessment.reason.trim();
+                if reason.is_empty() || reason.chars().count() > 1_000 {
+                    request.risk.status = RiskStatus::Unavailable;
+                    request.risk.level = None;
+                    request.risk.reason = Some("risk evaluator returned an invalid reason".into());
+                    self.event(
+                        request,
+                        "risk.review.unavailable.v1",
+                        EventClassification::Policy,
+                        json!({"reason": "risk evaluator returned an invalid reason"}),
+                    )?;
+                    return Ok(false);
+                }
+                request.risk.status = RiskStatus::Available;
+                request.risk.level = Some(
+                    match assessment.risk_level {
+                        RiskLevel::Low => "low",
+                        RiskLevel::Medium => "medium",
+                        RiskLevel::High => "high",
+                    }
+                    .into(),
+                );
+                request.risk.reason = Some(reason.into());
+                self.event(
+                    request,
+                    "risk.review.completed.v1",
+                    EventClassification::Policy,
+                    json!({
+                        "decision_id": decision.decision_id,
+                        "risk_level": assessment.risk_level,
+                        "recommended_decision": assessment.recommended_decision,
+                        "reason": reason,
+                    }),
+                )?;
+                Ok(assessment.risk_level == RiskLevel::Low
+                    && assessment.recommended_decision == RiskRecommendation::Allow)
+            }
+            Err(error) => {
+                let message = error.to_string();
+                let bounded = message.chars().take(1_000).collect::<String>();
+                request.risk.status = RiskStatus::Unavailable;
+                request.risk.level = None;
+                request.risk.reason = Some(bounded.clone());
+                self.event(
+                    request,
+                    "risk.review.unavailable.v1",
+                    EventClassification::Policy,
+                    json!({"reason": bounded}),
+                )?;
+                Ok(false)
+            }
         }
     }
 
@@ -1027,14 +1149,21 @@ impl EffectGateway {
                 return Err(error);
             }
         };
-        let request_hash = sha256_hex(&canonical_bytes(&request)?);
         let mut decision = self.decide(&request).await?;
         if decision.outcome == DecisionOutcome::RequireApproval {
-            let proof = match self
-                .approvals
-                .request_approval(&request, &request_hash, &decision)
-                .await
-            {
+            let risk_auto_approved = self.review_risk(&mut request, &decision).await?;
+            let request_hash = sha256_hex(&canonical_bytes(&request)?);
+            let approval = if risk_auto_approved {
+                Ok(Some(approval_proof(
+                    &request_hash,
+                    "risk-evaluator:auto-low-risk",
+                )?))
+            } else {
+                self.approvals
+                    .request_approval(&request, &request_hash, &decision)
+                    .await
+            };
+            let proof = match approval {
                 Ok(Some(proof)) => proof,
                 Ok(None) => {
                     self.event(
@@ -1536,15 +1665,10 @@ impl ApprovalProvider for AllowApproval {
         request_hash: &str,
         _decision: &PolicyDecision,
     ) -> Result<Option<ApprovalProof>, PolicyError> {
-        let approved_at = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
-        Ok(Some(ApprovalProof {
-            approval_id: Uuid::now_v7().to_string(),
-            request_hash: request_hash.into(),
-            approved_by: self.approved_by.clone(),
-            approved_at,
-        }))
+        Ok(Some(approval_proof(
+            request_hash,
+            self.approved_by.clone(),
+        )?))
     }
 }
 
@@ -1739,8 +1863,14 @@ mod tests {
         ReleasedEffectResult, SafetyKernel, StreamingEffectExecutor, effect_request, system_actor,
     };
     use async_trait::async_trait;
-    use colossus_contracts::{DecisionOutcome, QuarantinedEffectResult};
-    use colossus_ports::{EventJournal, PolicyDecisionPoint};
+    use colossus_contracts::{
+        DecisionOutcome, QuarantinedEffectResult, RiskAssessment, RiskLevel, RiskRecommendation,
+        RiskStatus,
+    };
+    use colossus_ports::{
+        ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
+        RiskEvaluator,
+    };
     use colossus_testkit::InMemoryEventJournal;
     use std::sync::{
         Arc, Mutex,
@@ -1755,6 +1885,116 @@ mod tests {
 
     struct CountingExecutor {
         calls: AtomicUsize,
+    }
+
+    struct RiskAutoApproval {
+        prompts: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ApprovalProvider for RiskAutoApproval {
+        fn risk_auto_enabled(&self) -> bool {
+            true
+        }
+
+        async fn request_approval(
+            &self,
+            _request: &colossus_contracts::EffectRequest,
+            request_hash: &str,
+            _decision: &colossus_contracts::PolicyDecision,
+        ) -> Result<Option<colossus_contracts::ApprovalProof>, PolicyError> {
+            self.prompts.fetch_add(1, Ordering::AcqRel);
+            Ok(Some(super::approval_proof(request_hash, "test-operator")?))
+        }
+    }
+
+    struct StaticRiskEvaluator {
+        calls: AtomicUsize,
+        assessment: Option<RiskAssessment>,
+    }
+
+    #[async_trait]
+    impl RiskEvaluator for StaticRiskEvaluator {
+        async fn evaluate(
+            &self,
+            _request: &colossus_contracts::EffectRequest,
+            _decision: &colossus_contracts::PolicyDecision,
+        ) -> Result<RiskAssessment, RiskEvaluationError> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            self.assessment.clone().ok_or_else(|| {
+                RiskEvaluationError::Unavailable("test evaluator unavailable".into())
+            })
+        }
+    }
+
+    struct RiskRecordingPolicy {
+        executable: String,
+        cwd: String,
+        saw_available_risk: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PolicyDecisionPoint for RiskRecordingPolicy {
+        async fn decide(
+            &self,
+            request: &colossus_contracts::EffectRequest,
+        ) -> Result<colossus_contracts::PolicyDecision, PolicyError> {
+            let outcome = if request.phase == colossus_contracts::EffectPhase::PostEffect
+                || request.approval.is_some()
+            {
+                if request.risk.status == RiskStatus::Available {
+                    self.saw_available_risk.fetch_add(1, Ordering::AcqRel);
+                }
+                DecisionOutcome::Allow
+            } else {
+                DecisionOutcome::RequireApproval
+            };
+            let mut obligations = super::default_obligations();
+            obligations.sandbox_backend = "native".into();
+            obligations.filesystem = vec![
+                colossus_contracts::FilesystemGrant {
+                    root: self.executable.clone(),
+                    mode: "execute".into(),
+                },
+                colossus_contracts::FilesystemGrant {
+                    root: self.cwd.clone(),
+                    mode: "read".into(),
+                },
+            ];
+            obligations.require_post_effect = true;
+            Ok(colossus_contracts::PolicyDecision {
+                decision_id: uuid::Uuid::now_v7().to_string(),
+                policy_revision: "risk-test-v1".into(),
+                outcome,
+                reason: "risk test decision".into(),
+                obligations,
+            })
+        }
+
+        async fn doctor(&self) -> Result<serde_json::Value, PolicyError> {
+            Ok(serde_json::json!({"ready": true}))
+        }
+    }
+
+    fn shell_request(
+        executable: &std::path::Path,
+        cwd: &std::path::Path,
+    ) -> colossus_contracts::EffectRequest {
+        let mut request = effect_request(
+            system_actor("risk-test"),
+            "shell.run",
+            executable.display().to_string(),
+            serde_json::json!({
+                "cwd": cwd,
+                "args": ["--version"],
+                "environment": {},
+                "stdin_base64": null,
+                "timeout_ms": null,
+                "max_output_bytes": null,
+            }),
+        );
+        request.capabilities = vec!["shell.run".into()];
+        request
     }
 
     #[tokio::test]
@@ -2293,6 +2533,173 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[tokio::test]
+    async fn low_allow_risk_review_auto_approves_and_reaches_policy_as_advisory_input() {
+        let directory = tempfile::tempdir().expect("directory");
+        let executable = std::env::current_exe()
+            .expect("current executable")
+            .canonicalize()
+            .expect("canonical executable");
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+        });
+        let evaluator = Arc::new(StaticRiskEvaluator {
+            calls: AtomicUsize::new(0),
+            assessment: Some(RiskAssessment {
+                risk_level: RiskLevel::Low,
+                recommended_decision: RiskRecommendation::Allow,
+                reason: "read-only version inspection".into(),
+            }),
+        });
+        let policy = Arc::new(RiskRecordingPolicy {
+            executable: executable.display().to_string(),
+            cwd: directory.path().display().to_string(),
+            saw_available_risk: AtomicUsize::new(0),
+        });
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::clone(&policy) as Arc<dyn PolicyDecisionPoint>,
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new(["shell.run".into()]),
+            [42_u8; 32],
+        );
+        let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+        gateway
+            .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+            .expect("bind evaluator");
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+
+        gateway
+            .execute(shell_request(&executable, directory.path()), &executor)
+            .await
+            .expect("low-risk effect");
+
+        assert_eq!(evaluator.calls.load(Ordering::Acquire), 1);
+        assert_eq!(approvals.prompts.load(Ordering::Acquire), 0);
+        assert_eq!(policy.saw_available_risk.load(Ordering::Acquire), 2);
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+        let events = journal.read_global(1, 30).expect("events");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "risk.review.completed.v1")
+        );
+        let approval = events
+            .iter()
+            .find(|event| event.event_type == "approval.granted.v1")
+            .expect("approval event");
+        let payload = journal.decrypt_payload(approval).expect("approval payload");
+        assert_eq!(payload["approved_by"], "risk-evaluator:auto-low-risk");
+    }
+
+    #[tokio::test]
+    async fn unavailable_or_non_low_risk_review_requires_explicit_approval() {
+        for assessment in [
+            None,
+            Some(RiskAssessment {
+                risk_level: RiskLevel::Medium,
+                recommended_decision: RiskRecommendation::RequireApproval,
+                reason: "writes repository state".into(),
+            }),
+            Some(RiskAssessment {
+                risk_level: RiskLevel::High,
+                recommended_decision: RiskRecommendation::Deny,
+                reason: "destructive command".into(),
+            }),
+        ] {
+            let directory = tempfile::tempdir().expect("directory");
+            let executable = std::env::current_exe()
+                .expect("current executable")
+                .canonicalize()
+                .expect("canonical executable");
+            let approvals = Arc::new(RiskAutoApproval {
+                prompts: AtomicUsize::new(0),
+            });
+            let evaluator = Arc::new(StaticRiskEvaluator {
+                calls: AtomicUsize::new(0),
+                assessment,
+            });
+            let policy = Arc::new(RiskRecordingPolicy {
+                executable: executable.display().to_string(),
+                cwd: directory.path().display().to_string(),
+                saw_available_risk: AtomicUsize::new(0),
+            });
+            let gateway = EffectGateway::new(
+                Arc::new(InMemoryEventJournal::default()),
+                policy as Arc<dyn PolicyDecisionPoint>,
+                Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+                SafetyKernel::new(["shell.run".into()]),
+                [43_u8; 32],
+            );
+            let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+            gateway
+                .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+                .expect("bind evaluator");
+            let executor = CountingExecutor {
+                calls: AtomicUsize::new(0),
+            };
+
+            gateway
+                .execute(shell_request(&executable, directory.path()), &executor)
+                .await
+                .expect("operator-approved effect");
+
+            assert_eq!(evaluator.calls.load(Ordering::Acquire), 1);
+            assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+            assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn deterministic_deny_never_invokes_risk_review_or_approval() {
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+        });
+        let evaluator = Arc::new(StaticRiskEvaluator {
+            calls: AtomicUsize::new(0),
+            assessment: Some(RiskAssessment {
+                risk_level: RiskLevel::Low,
+                recommended_decision: RiskRecommendation::Allow,
+                reason: "would allow if policy requested approval".into(),
+            }),
+        });
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(BuiltInPolicy::offline_default().with_sandbox(
+                "native",
+                "risk-deny-test",
+                false,
+            )),
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new(["shell.run".into()]),
+            [44_u8; 32],
+        );
+        let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+        gateway
+            .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+            .expect("bind evaluator");
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let executable = std::env::current_exe().expect("current executable");
+
+        assert!(matches!(
+            gateway
+                .execute(
+                    shell_request(&executable, std::env::temp_dir().as_path()),
+                    &executor
+                )
+                .await,
+            Err(GatewayError::Denied(_))
+        ));
+        assert_eq!(evaluator.calls.load(Ordering::Acquire), 0);
+        assert_eq!(approvals.prompts.load(Ordering::Acquire), 0);
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
     }
 
     #[tokio::test]

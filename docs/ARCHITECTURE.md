@@ -5,7 +5,7 @@ Colossus uses a ports-and-adapters architecture with strict dependency direction
 ## Rust Runtime Boundary
 
 The Rust runtime is the active repository-root implementation. Its dependency direction
-is stricter than the frozen legacy architecture:
+is explicit:
 
 ```text
 colossus-cli -> colossus-runtime -> colossus-agent -> colossus-ports
@@ -261,24 +261,10 @@ worker never grants clients direct repository access.
 See [Rust Reconstruction Status](RUST_RECONSTRUCTION.md) for the current implementation
 line and remaining milestones.
 
-## Python 0.5 Legacy Architecture
+## Application Services And Adapters
 
 For user-facing documentation, start with [Documentation Home](README.md). This document
 is the implementation-boundary reference for contributors.
-
-```text
-interfaces -> application -> ports -> domain
-adapters   -> application -> ports -> domain
-infrastructure may be used by interfaces/adapters/application
-domain depends on the Python standard library and Pydantic only
-```
-
-The core orchestration loop consumes typed model events, executes approved tools, writes
-state and audit records through ports, and emits a typed run result. Providers normalize
-OpenAI Responses and local OpenAI-compatible servers into the same event model.
-Streaming providers emit `ModelDeltaEvent`, `ToolCallRequestedEvent`, and optional
-safe `ReasoningSummaryEvent` values through the same observer path used by the CLI,
-and REPL.
 
 The Rust provider boundary consumes Responses API and compatible Chat Completions SSE
 incrementally. Each normalized event is quarantined, independently post-authorized when
@@ -300,8 +286,8 @@ No user surface owns model calls, tool execution, policy decisions, or persisten
 The application `ModelRouter` resolves named roles such as `primary`,
 `risk_evaluator`, `context_summarizer`, and `subagent_default` to concrete provider/model
 profiles. Infrastructure builds providers from config; application services consume
-role-resolved providers without knowing where they came from. Legacy single-provider
-config is normalized into the `primary` role for compatibility.
+role-resolved providers without knowing where they came from. Unconfigured specialized
+roles resolve through the `primary` profile.
 
 ## Tool Composition
 
@@ -380,9 +366,9 @@ provider credentials stay separate.
 
 The application `ContextService` prepares model input messages before each provider turn.
 It may replace older raw session messages with a synthetic context snapshot plus recent
-tail messages, but raw messages and run events remain persisted in SQLite. Providers do
-not own compaction behavior; OpenAI-compatible online and local endpoints receive the
-same normalized compacted message list.
+tail messages, but raw messages and run events remain encrypted in the canonical event
+journal. Providers do not own compaction behavior; OpenAI-compatible online and local
+endpoints receive the same normalized compacted message list.
 
 ## Skill Composition
 
@@ -463,5 +449,4 @@ the application API; it never owns a plaintext history file. The CLI and authent
 worker only coordinate the application operation; they do not write presentation files
 or canonical storage directly. Pure semantic rendering remains in
 `colossus-presentation`, and preference values never enter provider routing, policy,
-tool, approval, or prompt-composition decisions. The frozen Python implementation's
-SQLite preference records and plaintext history are legacy state and are not imported.
+tool, approval, or prompt-composition decisions. Legacy preference state is not imported.

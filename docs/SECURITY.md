@@ -294,30 +294,8 @@ Static workflow step IDs never serve as the sole identity for repeated execution
 idempotency values, input completion, retries, and subworkflow links, preventing an
 approval or effect result for one iteration from authorizing or completing another.
 
-The general rules below remain part of the active Rust security contract. Historical
-Python 0.5 behavior is retained only at `python-v0.5.0` and on `python-legacy`.
-
-Colossus starts with capability-based policy, brokered execution, and append-only audit
-logs. OS-level isolation can be added behind the subprocess broker without changing tool
-contracts.
-
 For user-facing setup and troubleshooting, see [Getting Started](GETTING_STARTED.md) and
 [Troubleshooting](TROUBLESHOOTING.md). This document is the trust-boundary reference.
-
-## Core Rules
-
-- Tools declare command, argument schema, working-root policy, environment allowlist,
-  timeout, output cap, and network policy.
-- Subprocess execution goes through the broker.
-- `shell=True` is not used.
-- Tool inputs are validated before execution.
-- Approval is required when policy returns `requires_approval`, unless the user
-  explicitly selects a no-prompt approval mode.
-- Audit records are hash-chained JSONL entries.
-- Redaction is on by default for command inputs and environment values.
-
-Airgapped installs should be verified from signed bundles containing wheelhouse,
-lockfiles, SBOM, manifests, signatures, and skills.
 
 ## Trust Boundaries
 
@@ -486,9 +464,12 @@ Rust one-shot commands deny approval obligations unless `--approval-mode ask`,
 `risk-auto`, or `full-access` is selected; the REPL defaults to `ask`. Ask mode shows a
 bounded, hard-redacted proposed-content preview and accepts only an explicit `y`/`yes`.
 `full-access` can produce a proof for `require_approval`, but cannot convert a policy deny
-to allow, add a filesystem root, or mint an adapter permit itself. `risk-auto` currently
-records risk as unavailable and prompts rather than silently auto-approving. Declined and
-failed prompts append approval and effect denial events before returning.
+to allow, add a filesystem root, or mint an adapter permit itself. `risk-auto` invokes
+the policy-bound `risk_evaluator` role only after deterministic policy requires approval
+for `shell.run`. Only `risk_level=low` plus `recommended_decision=allow` creates a one-use
+automatic proof. All other recommendations, invalid responses, and unavailable evaluators
+require an explicit prompt. Declined and failed prompts append approval and effect denial
+events before returning.
 
 Filesystem mutation requests disclose the full proposed UTF-8 content before execution.
 The adapter performs create/overwrite/append/replace checks and the atomic write under one
@@ -582,8 +563,8 @@ tool arguments against the tool schema before requesting approval.
 auto-approve low-risk `shell.run` calls after model-assisted risk review. In `risk-auto`,
 risk-review `deny` results become approval prompts rather than unconditional hard stops.
 `full-access` auto-approves approval-required tools without prompting, skips
-model-assisted `shell.run` risk review, and records `tool.auto_approved` audit entries
-plus `ApprovalAutoGrantedEvent` events.
+model-assisted `shell.run` risk review, and records the normal approval proof with an
+automatic approver identity.
 
 `full-access` is a no-prompt approval policy, not a broader sandbox profile. It does not
 expand filesystem roots, network implementations, tool schemas, or deterministic policy
@@ -603,24 +584,21 @@ with a configured subagent runner starts.
 
 ## Model-Assisted Risk Review
 
-`shell.run` is reviewed by the `risk_evaluator` model role when configured and approval
-mode is not `full-access`. Review happens after deterministic schema and policy checks,
-before approval prompts. The evaluator sees redacted structured metadata and runs with
-tools disabled. It may add risk explanation, require approval, deny a call, or
-auto-approve only when `--approval-mode risk-auto` is explicitly enabled and the review
-returns `risk_level=low` with `recommended_decision=allow`. In `risk-auto`, model-risk
-denies are escalated to explicit approval prompts; outside `risk-auto`, they stop before
-execution. It cannot make deterministic denies executable. If risk review is unavailable
-or returns invalid JSON, Colossus records `risk.review_unavailable` and continues with
-deterministic policy.
+`shell.run` is reviewed by the `risk_evaluator` model role only in `risk-auto`. Review
+happens after deterministic schema and policy checks and before approval prompts. The
+evaluator sees redacted structured metadata, runs with tools disabled, and returns a
+strict three-field JSON assessment. It cannot make deterministic denies executable.
+Assessment, unavailable, approval, and execution outcomes remain separate durable audit
+events. The assessed request is re-hashed before a proof is accepted and the assessment
+is advisory input to the post-approval policy decision.
 
 ## Context Compaction
 
-Python 0.5 context snapshots are derived from raw session messages and persisted in SQLite. They are
-used to reduce what is sent to a provider, but they do not delete, rewrite, or replace
-raw message history. `context.restore` is approval-required because it changes which
-snapshot is active for future model requests. Model-assisted compaction is best-effort;
-deterministic offline compaction remains the fallback.
+Context snapshots are encrypted derived events in the canonical journal. They reduce
+what is sent to a provider but do not delete, rewrite, or replace raw message history.
+`context.restore` is approval-required because it changes which snapshot is active for
+future model requests. Model-assisted compaction is best-effort; deterministic offline
+compaction remains the fallback.
 
 Key decisions are durable commitments, not memories. They should store the interpreted
 future-facing decision, user intent, applicability, and a short source excerpt rather
@@ -641,8 +619,8 @@ or denied source lanes are recorded as limitations rather than bypassed. Search 
 secrets are read from environment variables and must not be sent as tool arguments,
 source metadata, or audit payload fields.
 
-Global HTTP PKI and proxy settings configure transport for Colossus-owned `httpx`
-clients only. They do not grant network approval, expand tool schemas, or affect HTTP
+Global HTTP PKI and proxy settings configure Colossus-owned HTTP clients only. They do
+not grant network approval, expand tool schemas, or affect HTTP
 requests made inside external subprocesses or MCP server processes.
 
 Rust MCP servers are exact configured stdio process identities, never arbitrary commands
@@ -697,8 +675,7 @@ display behavior only and do not change provider, policy, tool, approval, capabi
 prompt decisions. Built-in themes are data-only identities; executable plugins are not
 loaded through the presentation path, and unknown schemas fail closed. Their fixed Rust
 palettes can add ANSI styling only after the terminal interface confirms an interactive
-terminal; redirected output remains control-sequence-free. The frozen Python implementation
-retains its legacy SQLite preferences and plaintext history separately.
+terminal; redirected output remains control-sequence-free.
 
 Custom Rust themes remain configuration-only data. The loader accepts only bounded JSON
 or TOML from non-symlink config-adjacent and platform theme directories, caps individual
@@ -706,8 +683,7 @@ files and total theme count, rejects unknown fields and identity collisions, and
 colors/styles/spinners into typed values. It never loads code or follows theme symlinks.
 Selection stores the fully resolved palette and SHA-256 source hash in the encrypted
 preference event, so restart does not reread mutable theme content to reconstruct the
-active appearance. The supported data-only Python schema is mapped through the same
-bounds during cutover.
+active appearance.
 
 Composer metrics are interface-local derived values. Reedline supplies the draft and
 insertion point to a data-only highlighter during repaint; Colossus retains only cursor
@@ -716,10 +692,9 @@ prompt status, worker IPC, telemetry, policy input, or audit events.
 
 ## Audit Logs
 
-The frozen Python audit records are append-only hash-chained JSONL. The Rust canonical
-journal is encrypted, hash chained, checkpoint-signed redb state and remains the source
-of truth. Its optional directory exporter emits one strict ciphertext-free JSON evidence
-record per non-exporter event through the permission boundary. Both forms are intended
+The canonical journal is encrypted, hash chained, checkpoint-signed redb state and is the
+source of truth. Its optional directory exporter emits one strict ciphertext-free JSON
+evidence record per non-exporter event through the permission boundary. Both forms are intended
 for debugging, release review, and incident response. Operators should still treat all
 audit material as sensitive operational evidence.
 

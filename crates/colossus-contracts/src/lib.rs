@@ -70,6 +70,30 @@ pub enum RiskStatus {
     Unavailable,
 }
 
+/// Bounded model-assisted risk level. This is advisory input to policy, never authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskLevel {
+    /// No material hazard was identified in the proposed effect.
+    Low,
+    /// The effect has meaningful consequences that warrant operator review.
+    Medium,
+    /// The effect can cause broad, destructive, or difficult-to-reverse consequences.
+    High,
+}
+
+/// Strict recommendation returned by a model-assisted risk evaluator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskRecommendation {
+    /// The evaluator found no reason to block the effect.
+    Allow,
+    /// The evaluator recommends that the effect not execute.
+    Deny,
+    /// The evaluator requires an explicit operator decision.
+    RequireApproval,
+}
+
 /// Serializable durable workflow status.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -353,6 +377,18 @@ pub struct RiskInput {
     pub level: Option<String>,
     /// Optional bounded explanation.
     pub reason: Option<String>,
+}
+
+/// Strict model-assisted assessment returned to the effect gateway.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RiskAssessment {
+    /// Bounded advisory risk level.
+    pub risk_level: RiskLevel,
+    /// Advisory recommendation interpreted by the gateway and policy.
+    pub recommended_decision: RiskRecommendation,
+    /// Short human-readable explanation with no secret material.
+    pub reason: String,
 }
 
 /// A reference to a credential whose value is deliberately absent.

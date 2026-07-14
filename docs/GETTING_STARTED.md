@@ -99,7 +99,8 @@ colossus --config .colossus/config.yaml --approval-mode full-access \
   run 'Apply the approved change'
 ```
 
-`risk-auto` falls back to an explicit prompt while the risk evaluator is unavailable.
+`risk-auto` auto-proves only a strict low-risk/allow assessment for approval-required
+`shell.run`; every other result or evaluator failure falls back to an explicit prompt.
 `full-access` auto-proves only approval-required requests that policy already permits.
 
 ## Configure A Real Model
@@ -119,6 +120,7 @@ providers:
       timeoutMs: 120000
   roles:
     primary: openrouter
+    risk_evaluator: openrouter
 
 sandbox:
   networkDestinations:
