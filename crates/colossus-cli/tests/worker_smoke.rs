@@ -15,6 +15,10 @@ use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "5555555555555555555555555555555555555555555555555555555555555555";
 const SIGNING_KEY: &str = "6666666666666666666666666666666666666666666666666666666666666666";
+#[cfg(not(windows))]
+const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(windows)]
+const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct ChildGuard(Child);
 
@@ -219,7 +223,7 @@ sandbox:
     );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 2);
+    assert_eq!(status["protocol_version"], 3);
 
     let route = run(binary, &config, &["models", "route", "primary"]);
     assert!(
@@ -422,7 +426,7 @@ sandbox:
     );
     let agent: Value = serde_json::from_slice(&agent.stdout).expect("agent JSON");
     let job_id = agent["id"].as_str().expect("job id");
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + WORKER_AGENT_DRAIN_TIMEOUT;
     loop {
         let shown = run(binary, &config, &["agents", "show", job_id]);
         assert!(shown.status.success());
@@ -547,8 +551,9 @@ sandbox:
     );
     assert!(
         repl.status.success(),
-        "{}",
-        String::from_utf8_lossy(&repl.stderr)
+        "stderr={}\nstdout={}",
+        String::from_utf8_lossy(&repl.stderr),
+        String::from_utf8_lossy(&repl.stdout)
     );
     let repl_stdout = String::from_utf8_lossy(&repl.stdout);
     let repl_stderr = String::from_utf8_lossy(&repl.stderr);

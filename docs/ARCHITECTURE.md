@@ -416,7 +416,7 @@ Terminal activity rendering consumes strict `RunEventEnvelope` values through th
 wraps them with correlated run/session identity and adds durable run phase, tool-start,
 tool-completion, recoverability, and elapsed-time events. Provider and tool content is
 observed only after its corresponding authoritative journal event is durable and any
-post-effect release policy has allowed it. Authenticated worker protocol v2 transports
+post-effect release policy has allowed it. Authenticated worker protocol v3 transports
 the same envelopes used by embedded callers.
 
 `colossus-presentation` renders compact, verbose, or off activity modes and semantic

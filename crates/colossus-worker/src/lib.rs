@@ -27,7 +27,7 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u16 = 2;
+const PROTOCOL_VERSION: u16 = 3;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -1485,6 +1485,7 @@ where
             timestamp_ms: hello.timestamp_ms,
         },
         &hello.authentication_tag,
+        "worker server handshake",
     )?;
     Ok(hello.server_nonce)
 }
@@ -2276,8 +2277,10 @@ async fn drain_once(
 ) -> Result<Value, WorkerError> {
     let _guard = maintenance.lock().await;
     let workflows = runtime.workflows().drain().await?;
-    let projections = runtime.drain_projections()?;
+    // Durable execution queues take precedence over disposable projections so
+    // a large projection backlog cannot starve queued child work.
     let subagents = runtime.drain_subagents().await?;
+    let projections = runtime.drain_projections()?;
     let audit_exports = runtime.drain_audit_exports().await?;
     Ok(json!({
         "workflows": workflows,
@@ -2406,6 +2409,7 @@ fn validate_request(
             operation: &request.operation,
         },
         &request.authentication_tag,
+        "worker request",
     )?;
     replay
         .lock()
@@ -2439,6 +2443,7 @@ fn validate_frame(
             content: &frame.content,
         },
         &frame.authentication_tag,
+        "worker response",
     )?;
     *sequence = expected_sequence;
     Ok(())
@@ -2481,24 +2486,68 @@ where
 }
 
 fn request_tag<T: Serialize>(key: &[u8; 32], value: &T) -> Result<String, WorkerError> {
-    let bytes =
-        serde_json::to_vec(value).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    let bytes = canonical_authentication_bytes(value)?;
     let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|error| WorkerError::Protocol(error.to_string()))?;
     mac.update(&bytes);
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
-fn verify_tag<T: Serialize>(key: &[u8; 32], value: &T, tag: &str) -> Result<(), WorkerError> {
-    let bytes =
-        serde_json::to_vec(value).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+fn verify_tag<T: Serialize>(
+    key: &[u8; 32],
+    value: &T,
+    tag: &str,
+    context: &str,
+) -> Result<(), WorkerError> {
+    let bytes = canonical_authentication_bytes(value)?;
     let tag = hex::decode(tag)
         .map_err(|_| WorkerError::Protocol("authentication tag is not hexadecimal".into()))?;
     let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|error| WorkerError::Protocol(error.to_string()))?;
     mac.update(&bytes);
     mac.verify_slice(&tag)
-        .map_err(|_| WorkerError::Protocol("authentication tag mismatch".into()))
+        .map_err(|_| WorkerError::Protocol(format!("{context} authentication tag mismatch")))
+}
+
+fn canonical_authentication_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, WorkerError> {
+    let value =
+        serde_json::to_value(value).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    let mut bytes = Vec::new();
+    write_canonical_json(&value, &mut bytes)?;
+    Ok(bytes)
+}
+
+fn write_canonical_json(value: &Value, bytes: &mut Vec<u8>) -> Result<(), WorkerError> {
+    match value {
+        Value::Object(object) => {
+            bytes.push(b'{');
+            let mut entries = object.iter().collect::<Vec<_>>();
+            entries.sort_unstable_by_key(|(key, _)| *key);
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    bytes.push(b',');
+                }
+                serde_json::to_writer(&mut *bytes, key)
+                    .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+                bytes.push(b':');
+                write_canonical_json(value, bytes)?;
+            }
+            bytes.push(b'}');
+        }
+        Value::Array(array) => {
+            bytes.push(b'[');
+            for (index, value) in array.iter().enumerate() {
+                if index > 0 {
+                    bytes.push(b',');
+                }
+                write_canonical_json(value, bytes)?;
+            }
+            bytes.push(b']');
+        }
+        _ => serde_json::to_writer(bytes, value)
+            .map_err(|error| WorkerError::Protocol(error.to_string()))?,
+    }
+    Ok(())
 }
 
 async fn write_message<S, T>(stream: &mut S, value: &T, limit: usize) -> Result<(), WorkerError>
@@ -2715,6 +2764,42 @@ compile_error!("colossus-worker supports only Unix sockets or Windows named pipe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authenticated_frames_use_canonical_json_across_wire_round_trips() {
+        let key = [6_u8; 32];
+        let content = WorkerFrameContent::Complete {
+            result: json!({
+                "z": {"two": 2, "one": 1},
+                "a": [true, null, "value"],
+            }),
+        };
+        let timestamp_ms = now_ms();
+        let authentication_tag = request_tag(
+            &key,
+            &UnsignedFrame {
+                version: PROTOCOL_VERSION,
+                request_id: "canonical-frame",
+                sequence: 1,
+                timestamp_ms,
+                content: &content,
+            },
+        )
+        .expect("tag");
+        let encoded = serde_json::to_vec(&WorkerFrame {
+            version: PROTOCOL_VERSION,
+            request_id: "canonical-frame".into(),
+            sequence: 1,
+            timestamp_ms,
+            content,
+            authentication_tag,
+        })
+        .expect("frame JSON");
+        let decoded: WorkerFrame = serde_json::from_slice(&encoded).expect("decoded frame");
+        let mut sequence = 0;
+        validate_frame(&key, "canonical-frame", &mut sequence, &decoded).expect("canonical frame");
+        assert_eq!(sequence, 1);
+    }
 
     #[test]
     fn authentication_detects_tampering_and_replay() {

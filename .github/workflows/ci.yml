@@ -159,7 +159,7 @@ jobs:
           key: windows-runtime-${{ matrix.runner }}
 
       - name: Compile every target on the native platform
-        run: cargo check --locked --workspace --all-targets
+        run: cargo test --locked --workspace --all-targets --no-run
 
       - name: Run authenticated named-pipe and AppContainer escape acceptance
         run: >-

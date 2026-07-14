@@ -183,16 +183,22 @@ fn actions_cost_policy_runs_full_validation_only_before_merge_or_on_manual_dispa
         !jobs.contains_key("rust-portability"),
         "standalone macOS/Windows portability duplicates native matrix runners"
     );
-    for name in ["rust-native-sandbox", "rust-windows-runtime"] {
-        let compile = named_step(
-            job(jobs, name),
-            "Compile every target on the native platform",
-        );
-        assert_eq!(
-            field(compile, "run").as_str(),
-            Some("cargo check --locked --workspace --all-targets")
-        );
-    }
+    let native_compile = named_step(
+        job(jobs, "rust-native-sandbox"),
+        "Compile every target on the native platform",
+    );
+    assert_eq!(
+        field(native_compile, "run").as_str(),
+        Some("cargo check --locked --workspace --all-targets")
+    );
+    let windows_compile = named_step(
+        job(jobs, "rust-windows-runtime"),
+        "Compile every target on the native platform",
+    );
+    assert_eq!(
+        field(windows_compile, "run").as_str(),
+        Some("cargo test --locked --workspace --all-targets --no-run")
+    );
     assert_eq!(
         field(job(jobs, "rust-release-smoke"), "if").as_str(),
         Some("${{ github.event_name == 'workflow_dispatch' }}"),
