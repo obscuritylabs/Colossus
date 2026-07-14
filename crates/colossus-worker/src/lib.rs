@@ -32,7 +32,12 @@ const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
 const REPLAY_WINDOW: usize = 4_096;
+#[cfg(not(windows))]
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(windows)]
+// The platform connector retries a busy named pipe for two seconds. Keep the
+// outer bound above that window so concurrent clients can use the retry path.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 type HmacSha256 = Hmac<Sha256>;
 

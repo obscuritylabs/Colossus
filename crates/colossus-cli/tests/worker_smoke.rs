@@ -244,7 +244,12 @@ sandbox:
                 scope.spawn(move || {
                     let message = format!("parallel-{index}");
                     let output = run(binary, config, &["echo", &message]);
-                    assert!(output.status.success());
+                    assert!(
+                        output.status.success(),
+                        "parallel client {index} failed; stderr: {}; stdout: {}",
+                        String::from_utf8_lossy(&output.stderr),
+                        String::from_utf8_lossy(&output.stdout)
+                    );
                     assert_eq!(
                         String::from_utf8_lossy(&output.stdout),
                         format!("{message}\n")
