@@ -83,6 +83,12 @@ colossus --config .colossus/config.yaml packs trust list
 colossus --config .colossus/config.yaml bundle verify ./bundle
 ```
 
+Official Colossus release bundles use the Ed25519 publisher identity recorded in
+[`release/bundle-publisher.json`](../release/bundle-publisher.json). Before verifying an
+official bundle, compare that file with the copy attached to the GitHub release and add
+its `public_key` for publisher `colossus`. The expected `key_id` is the SHA-256 digest of
+the decoded public key; Colossus derives and checks that binding when trust is added.
+
 Verification returns bounded evidence: bundle name/version, canonical manifest hash,
 file count, total verified bytes, trusted key ID, and optional source revision. It does
 not install or execute payloads.
