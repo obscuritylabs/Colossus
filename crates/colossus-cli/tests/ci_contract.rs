@@ -53,6 +53,31 @@ fn canonical_source_and_release_binary_is_colossus() {
 }
 
 #[test]
+fn oci_proxy_build_context_contains_only_the_static_proxy_artifact() {
+    let dockerignore = fs::read_to_string(repository_root().join(".dockerignore"))
+        .expect("read Docker ignore rules");
+    let rules = dockerignore.lines().collect::<BTreeSet<_>>();
+
+    assert!(
+        !rules.contains("target/"),
+        "target/ prevents negated children from being included"
+    );
+    for required in [
+        "target/*",
+        "!target/x86_64-unknown-linux-musl/",
+        "target/x86_64-unknown-linux-musl/*",
+        "!target/x86_64-unknown-linux-musl/release/",
+        "target/x86_64-unknown-linux-musl/release/*",
+        "!target/x86_64-unknown-linux-musl/release/colossus-oci-proxy",
+    ] {
+        assert!(
+            rules.contains(required),
+            "Docker context is missing exact proxy rule {required:?}"
+        );
+    }
+}
+
+#[test]
 fn local_cutover_verifier_is_complete_and_tool_version_pinned() {
     let script = fs::read_to_string(repository_root().join("release/verify-local-cutover.sh"))
         .expect("read local cutover verifier");

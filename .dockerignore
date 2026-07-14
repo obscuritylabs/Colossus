@@ -1,4 +1,9 @@
-target/
+target/*
+!target/x86_64-unknown-linux-musl/
+target/x86_64-unknown-linux-musl/*
+!target/x86_64-unknown-linux-musl/release/
+target/x86_64-unknown-linux-musl/release/*
+!target/x86_64-unknown-linux-musl/release/colossus-oci-proxy
 dist/
 .git/
 .github/
