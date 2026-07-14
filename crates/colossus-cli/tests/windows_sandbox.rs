@@ -17,6 +17,7 @@ use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
+const WINDOWS_JOB_TIMEOUT_MS: u64 = 10_000;
 
 fn run<I, S>(binary: &Path, config: &Path, arguments: I) -> Output
 where
@@ -199,7 +200,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        10_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         &[],
     );
 
@@ -343,7 +344,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         std::slice::from_ref(&origin),
     );
     listener.set_nonblocking(false).expect("blocking listener");
@@ -424,7 +425,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         std::slice::from_ref(&bypass_origin),
     );
     let direct_bypass = run(
@@ -518,7 +519,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         1,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         &[],
     );
     let process_limit = run(
@@ -547,7 +548,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         2,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         &[],
     );
     let memory_limit = run(
@@ -586,7 +587,7 @@ fn windows_appcontainer_enforces_filesystem_environment_job_and_network_boundari
         &tools,
         8,
         268_435_456,
-        5_000,
+        WINDOWS_JOB_TIMEOUT_MS,
         &[],
     );
     let child_marker = allowed.join("child-escaped.txt");
