@@ -441,8 +441,8 @@ fn unix_release_install_smoke_is_compatible_with_macos_bash() {
 fn conventional_commit_checker_is_python_free_and_preserves_the_contract() {
     let checker = repository_root().join("scripts/check_conventional_commit.sh");
     for valid in [
-        "feat: add repl themes",
-        "fix(repl): clear approved prompt",
+        "feat: add tui themes",
+        "fix(tui): clear approved prompt",
         "security!: tighten approval policy",
         "Merge branch 'main' into feature",
     ] {

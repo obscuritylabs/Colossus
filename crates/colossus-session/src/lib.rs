@@ -414,6 +414,58 @@ mod tests {
     }
 
     #[test]
+    fn message_pages_are_chronological_bounded_and_cursor_safe() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository = EventSourcedSessionRepository::new(journal);
+        repository
+            .create_session("paged", None, actor())
+            .expect("session");
+        for index in 1..=7 {
+            repository
+                .append_message(
+                    "paged",
+                    "run-1",
+                    message(ModelMessageRole::User, &format!("message-{index}")),
+                    actor(),
+                )
+                .expect("message");
+        }
+
+        let newest = repository
+            .list_messages_page("paged", None, 3, 2 * 1024 * 1024)
+            .expect("newest page");
+        assert_eq!(
+            newest
+                .messages
+                .iter()
+                .map(|message| message.sequence)
+                .collect::<Vec<_>>(),
+            vec![5, 6, 7]
+        );
+        assert_eq!(newest.before_sequence, Some(5));
+        assert!(newest.has_more);
+
+        let older = repository
+            .list_messages_page("paged", newest.before_sequence, 3, 2 * 1024 * 1024)
+            .expect("older page");
+        assert_eq!(
+            older
+                .messages
+                .iter()
+                .map(|message| message.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
+        assert_eq!(older.before_sequence, Some(2));
+        assert!(older.has_more);
+
+        assert!(matches!(
+            repository.list_messages_page("paged", None, 100, 1),
+            Err(StoreError::Adapter(message)) if message.contains("bounded page size")
+        ));
+    }
+
+    #[test]
     fn invalid_message_shapes_fail_before_append() {
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
         let repository = EventSourcedSessionRepository::new(Arc::clone(&journal));

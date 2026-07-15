@@ -1,14 +1,15 @@
 //! Thin terminal interface for the Rust runtime.
 
+mod tui_host;
+
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use colossus_contracts::{
-    ApprovalProof, ContextStatus, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus,
-    IntegrationAuth, MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision,
-    ProviderEvent, ProviderRoute, ResearchDepth, ResearchSourceKind, RunEvent, RunEventEnvelope,
-    SessionSummary, SubagentStatus, TaskStatus, ToolCall, UserPromptRequest, UserPromptResponse,
-    WorkStateSnapshot,
+    ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
+    MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
+    ResearchSourceKind, RunEvent, RunEventEnvelope, SessionSummary, SubagentStatus, TaskStatus,
+    ToolCall, UserPromptRequest, UserPromptResponse,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{
@@ -16,28 +17,21 @@ use colossus_ports::{
     UserPromptProvider,
 };
 use colossus_presentation::{
-    EventDisplayMode, PresentationBlock, PresentationDocument, PresentationTable, ReplPreferences,
-    RgbColor, SemanticRenderer, StreamDisplayMode, TerminalDocumentRenderer, TerminalPalette,
+    EventDisplayMode, PresentationBlock, PresentationDocument, PresentationTable, SemanticRenderer,
+    StreamDisplayMode, TerminalDocumentRenderer, TerminalPalette, TerminalPreferences,
     ThemeLibrary, ThemeName, TranscriptDensity, document_from_json,
 };
 use colossus_runtime::{Runtime, RuntimeConfig};
-use colossus_worker::{WorkerClient, WorkerOperation, WorkerServer};
-use crossterm::style::Color as CrosstermColor;
-use reedline::{
-    ColumnarMenu, DefaultCompleter, DefaultHinter, EditCommand, Emacs, FileBackedHistory,
-    Highlighter, Hinter, History, HistoryItem, KeyCode, KeyModifiers, MenuBuilder, Prompt,
-    PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline, ReedlineEvent,
-    ReedlineMenu, Signal, StyledText, default_emacs_keybindings,
-};
+use colossus_tui::{BootstrapRequest, ScreenMode, TuiOptions, run_tui};
+use colossus_worker::{WorkerApprovalMode, WorkerClient, WorkerOperation, WorkerServer};
 use serde_json::{Value, json};
 #[cfg(windows)]
 use std::fmt;
 use std::{
-    borrow::Cow,
     collections::BTreeMap,
     error::Error,
     fs,
-    io::{self, BufRead as _, IsTerminal as _, Write as _},
+    io::{self, BufRead, IsTerminal as _, Write as _},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
@@ -61,13 +55,16 @@ struct Cli {
     /// Output format for structured commands. Auto is human on a terminal and JSON when piped.
     #[arg(long, value_enum, default_value_t = OutputMode::Auto)]
     output: OutputMode,
+    /// Preserve terminal scrollback by using Ratatui's inline viewport.
+    #[arg(long, global = true)]
+    no_alt_screen: bool,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum ApprovalMode {
-    /// Fail closed without prompting (default outside the REPL).
+    /// Fail closed without prompting (default outside the interactive TUI).
     Deny,
     /// Prompt on the terminal for every approval obligation.
     Ask,
@@ -89,13 +86,14 @@ enum OutputMode {
 }
 
 static OUTPUT_MODE: AtomicU8 = AtomicU8::new(0);
-static TERMINAL_PREFERENCES: OnceLock<Mutex<ReplPreferences>> = OnceLock::new();
+static TERMINAL_PREFERENCES: OnceLock<Mutex<TerminalPreferences>> = OnceLock::new();
 
-const REPL_HISTORY_CAPACITY: usize = 1_000;
-const REPL_COMPLETIONS: &[&str] = &[
+const TERMINAL_HISTORY_CAPACITY: usize = 1_000;
+const TERMINAL_COMPLETIONS: &[&str] = &[
     "/help",
-    "/repl prefs",
-    "/repl reset",
+    "/tui prefs",
+    "/tui save",
+    "/tui reset",
     "/theme",
     "/theme list",
     "/theme preview",
@@ -357,7 +355,7 @@ struct TerminalStreamObserver {
     buffered_text: String,
     final_rendered: bool,
     tool_calls: BTreeMap<String, ToolCall>,
-    preferences: ReplPreferences,
+    preferences: TerminalPreferences,
     activity: Option<tokio::task::JoinHandle<()>>,
     output_lock: Arc<Mutex<()>>,
 }
@@ -370,13 +368,13 @@ impl TerminalStreamObserver {
             buffered_text: String::new(),
             final_rendered: false,
             tool_calls: BTreeMap::new(),
-            preferences: ReplPreferences::default(),
+            preferences: TerminalPreferences::default(),
             activity: None,
             output_lock: Arc::new(Mutex::new(())),
         }
     }
 
-    fn with_preferences(target: StreamTarget, preferences: ReplPreferences) -> Self {
+    fn with_preferences(target: StreamTarget, preferences: TerminalPreferences) -> Self {
         Self {
             target,
             wrote_text: false,
@@ -698,7 +696,7 @@ fn approval_provider(
     command: &Command,
     configured: Option<ApprovalMode>,
 ) -> Arc<dyn ApprovalProvider> {
-    let mode = configured.unwrap_or(if matches!(command, Command::Repl { .. }) {
+    let mode = configured.unwrap_or(if matches!(command, Command::Tui { .. }) {
         ApprovalMode::Ask
     } else {
         ApprovalMode::Deny
@@ -822,8 +820,8 @@ enum Command {
         /// Text returned by the deterministic provider.
         message: String,
     },
-    /// Start the modern interactive terminal.
-    Repl {
+    /// Start the Ratatui interactive terminal.
+    Tui {
         /// Start attached to this exact durable session.
         #[arg(long, conflicts_with = "resume")]
         session: Option<String>,
@@ -864,7 +862,7 @@ struct PreferencesCommand {
 enum PreferencesAction {
     /// Show the strict effective local profile.
     Show,
-    /// Show newest encrypted REPL history entries in chronological order.
+    /// Show newest encrypted terminal history entries in chronological order.
     History {
         #[arg(long, default_value_t = 100)]
         limit: usize,
@@ -1971,16 +1969,16 @@ fn output_mode() -> OutputMode {
     }
 }
 
-fn set_terminal_preferences(preferences: &ReplPreferences) {
+fn set_terminal_preferences(preferences: &TerminalPreferences) {
     *TERMINAL_PREFERENCES
-        .get_or_init(|| Mutex::new(ReplPreferences::default()))
+        .get_or_init(|| Mutex::new(TerminalPreferences::default()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = preferences.clone();
 }
 
-fn terminal_preferences() -> ReplPreferences {
+fn terminal_preferences() -> TerminalPreferences {
     TERMINAL_PREFERENCES
-        .get_or_init(|| Mutex::new(ReplPreferences::default()))
+        .get_or_init(|| Mutex::new(TerminalPreferences::default()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
@@ -2004,7 +2002,7 @@ fn render_structured_output(
     mode: OutputMode,
     terminal: bool,
     width: usize,
-    preferences: ReplPreferences,
+    preferences: TerminalPreferences,
 ) -> Result<String, serde_json::Error> {
     let human = mode == OutputMode::Human || mode == OutputMode::Auto && terminal;
     if !human {
@@ -2031,7 +2029,7 @@ fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Error>> {
 }
 
 fn print_theme_library(
-    preferences: &ReplPreferences,
+    preferences: &TerminalPreferences,
     themes: &ThemeLibrary,
 ) -> Result<(), Box<dyn Error>> {
     let terminal = io::stdout().is_terminal();
@@ -2056,7 +2054,7 @@ fn human_output(terminal: bool) -> bool {
 
 fn print_terminal_document(
     document: &PresentationDocument,
-    preferences: &ReplPreferences,
+    preferences: &TerminalPreferences,
     terminal: bool,
 ) {
     println!(
@@ -2068,7 +2066,7 @@ fn print_terminal_document(
 }
 
 fn print_theme_preview(
-    preferences: &ReplPreferences,
+    preferences: &TerminalPreferences,
     themes: &ThemeLibrary,
     name: &str,
 ) -> Result<(), Box<dyn Error>> {
@@ -2084,7 +2082,7 @@ fn print_theme_preview(
 }
 
 fn print_theme_validation(
-    preferences: &ReplPreferences,
+    preferences: &TerminalPreferences,
     themes: &ThemeLibrary,
 ) -> Result<(), Box<dyn Error>> {
     let terminal = io::stdout().is_terminal();
@@ -2099,7 +2097,7 @@ fn print_theme_validation(
 }
 
 fn print_theme_scaffold(
-    preferences: &ReplPreferences,
+    preferences: &TerminalPreferences,
     themes: &ThemeLibrary,
     name: &str,
 ) -> Result<(), Box<dyn Error>> {
@@ -2117,7 +2115,7 @@ fn print_theme_scaffold(
 }
 
 fn print_theme_applied(
-    preferences: &ReplPreferences,
+    preferences: &TerminalPreferences,
     themes: &ThemeLibrary,
 ) -> Result<(), Box<dyn Error>> {
     let terminal = io::stdout().is_terminal();
@@ -2141,10 +2139,10 @@ fn write_stderr_document(document: &PresentationDocument) -> io::Result<()> {
     io::stderr().flush()
 }
 
-fn print_repl_help(preferences: &ReplPreferences) {
+fn print_terminal_help(preferences: &TerminalPreferences) {
     let mut table = PresentationTable::new(
         ["Area", "Commands", "What it does"],
-        "No REPL commands are available.",
+        "No interactive terminal commands are available.",
     );
     for row in [
         [
@@ -2187,14 +2185,14 @@ fn print_repl_help(preferences: &ReplPreferences) {
             "/theme · /stream · /events · /reasoning · /transcript · /multiline",
             "Tune the terminal experience",
         ],
-        ["Exit", "/exit · Ctrl-D", "Leave the REPL safely"],
+        ["Exit", "/exit · Ctrl-D", "Leave the terminal safely"],
     ] {
         table.push_row(row);
     }
     let document = PresentationDocument {
         blocks: vec![
             PresentationBlock::Markdown(
-                "# Colossus REPL\n\nType a normal message to talk to the configured primary model. Press **Tab** to complete commands and `@skill` names."
+                "# Colossus Terminal\n\nType a normal message to talk to the configured primary model. Press **Tab** to complete commands and `@skill` names."
                     .into(),
             ),
             PresentationBlock::KeyValue(vec![
@@ -2241,198 +2239,8 @@ enum PresentationCommandResult {
     ChooseTheme,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ComposerMetrics {
-    cursor_line: usize,
-    cursor_column: usize,
-    chars: usize,
-    lines: usize,
-}
-
-impl Default for ComposerMetrics {
-    fn default() -> Self {
-        Self {
-            cursor_line: 1,
-            cursor_column: 1,
-            chars: 0,
-            lines: 1,
-        }
-    }
-}
-
-impl ComposerMetrics {
-    fn from_buffer(line: &str, cursor: usize) -> Self {
-        let before_cursor = line.get(..cursor).unwrap_or_default();
-        Self {
-            cursor_line: before_cursor.bytes().filter(|byte| *byte == b'\n').count() + 1,
-            cursor_column: before_cursor
-                .rsplit_once('\n')
-                .map_or(before_cursor, |(_, current)| current)
-                .chars()
-                .count()
-                + 1,
-            chars: line.chars().count(),
-            lines: line.bytes().filter(|byte| *byte == b'\n').count() + 1,
-        }
-    }
-}
-
-struct ComposerHighlighter {
-    metrics: Arc<Mutex<ComposerMetrics>>,
-}
-
-impl Highlighter for ComposerHighlighter {
-    fn highlight(&self, line: &str, cursor: usize) -> StyledText {
-        *self
-            .metrics
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            ComposerMetrics::from_buffer(line, cursor);
-        let mut styled = StyledText::new();
-        styled.push((nu_ansi_term::Style::new(), line.into()));
-        styled
-    }
-}
-
-struct ColossusHinter {
-    history: DefaultHinter,
-    completions: Vec<String>,
-    current_hint: String,
-    hint_style: nu_ansi_term::Style,
-}
-
-fn typeahead_hint_style(preferences: &ReplPreferences) -> nu_ansi_term::Style {
-    let theme = TerminalPalette::for_preferences(preferences).meta_style();
-    let mut style = nu_ansi_term::Style::new();
-    if let Some(color) = theme.foreground {
-        style = style.fg(nu_ansi_term::Color::Rgb(color.red, color.green, color.blue));
-    }
-    if theme.bold {
-        style = style.bold();
-    }
-    style.dimmed().italic()
-}
-
-impl ColossusHinter {
-    fn new(completions: Vec<String>, preferences: &ReplPreferences) -> Self {
-        let hint_style = typeahead_hint_style(preferences);
-        Self {
-            history: DefaultHinter::default().with_style(hint_style),
-            completions,
-            current_hint: String::new(),
-            hint_style,
-        }
-    }
-
-    fn styled_hint(&self, use_ansi_coloring: bool) -> String {
-        if use_ansi_coloring && !self.current_hint.is_empty() {
-            self.hint_style.paint(&self.current_hint).to_string()
-        } else {
-            self.current_hint.clone()
-        }
-    }
-}
-
-impl Hinter for ColossusHinter {
-    fn handle(
-        &mut self,
-        line: &str,
-        pos: usize,
-        history: &dyn History,
-        use_ansi_coloring: bool,
-        cwd: &str,
-    ) -> String {
-        self.current_hint.clear();
-        if line.is_empty() || pos != line.len() {
-            return String::new();
-        }
-        if (line.starts_with('/') || line.starts_with('@'))
-            && let Some(suffix) = self.completions.iter().find_map(|candidate| {
-                candidate
-                    .strip_prefix(line)
-                    .filter(|suffix| !suffix.is_empty())
-            })
-        {
-            self.current_hint = suffix.into();
-            return self.styled_hint(use_ansi_coloring);
-        }
-
-        let history_hint = self
-            .history
-            .handle(line, pos, history, use_ansi_coloring, cwd);
-        self.current_hint = self.history.complete_hint();
-        history_hint
-    }
-
-    fn complete_hint(&self) -> String {
-        self.current_hint.clone()
-    }
-
-    fn next_hint_token(&self) -> String {
-        let mut saw_content = false;
-        let mut end = self.current_hint.len();
-        for (index, character) in self.current_hint.char_indices() {
-            if saw_content && character.is_whitespace() {
-                end = index;
-                break;
-            }
-            saw_content |= !character.is_whitespace();
-        }
-        self.current_hint[..end].into()
-    }
-}
-
-fn repl_editor(
-    multiline: bool,
-    history_entries: &[String],
-    skill_names: &[String],
-    themes: &ThemeLibrary,
-    preferences: &ReplPreferences,
-    composer_metrics: Arc<Mutex<ComposerMetrics>>,
-) -> Result<Reedline, Box<dyn Error>> {
-    let mut history = FileBackedHistory::new(REPL_HISTORY_CAPACITY)?;
-    for entry in history_entries {
-        history.save(HistoryItem::from_command_line(entry))?;
-    }
-    let completion_values = repl_completion_values(skill_names, themes);
-    let hinter = ColossusHinter::new(completion_values.clone(), preferences);
-    let mut completer = DefaultCompleter::with_inclusions(&['/', '@', '-', '_', '.']);
-    completer.insert(completion_values);
-    let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
-    let mut keybindings = default_emacs_keybindings();
-    keybindings.add_binding(
-        KeyModifiers::NONE,
-        KeyCode::Tab,
-        ReedlineEvent::UntilFound(vec![
-            ReedlineEvent::Menu("completion_menu".into()),
-            ReedlineEvent::MenuNext,
-        ]),
-    );
-    if multiline {
-        keybindings.add_binding(
-            KeyModifiers::NONE,
-            KeyCode::Enter,
-            ReedlineEvent::Edit(vec![EditCommand::InsertNewline]),
-        );
-        keybindings.add_binding(KeyModifiers::ALT, KeyCode::Enter, ReedlineEvent::Submit);
-    }
-    let editor = Reedline::create()
-        .with_ansi_colors(io::stdout().is_terminal())
-        .with_history(Box::new(history))
-        .with_highlighter(Box::new(ComposerHighlighter {
-            metrics: composer_metrics,
-        }))
-        .with_hinter(Box::new(hinter))
-        .with_completer(Box::new(completer))
-        .with_quick_completions(true)
-        .with_partial_completions(true)
-        .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
-        .with_edit_mode(Box::new(Emacs::new(keybindings)));
-    Ok(editor)
-}
-
-fn repl_completion_values(skill_names: &[String], themes: &ThemeLibrary) -> Vec<String> {
-    let mut completion_values = REPL_COMPLETIONS
+fn terminal_completion_values(skill_names: &[String], themes: &ThemeLibrary) -> Vec<String> {
+    let mut completion_values = TERMINAL_COMPLETIONS
         .iter()
         .map(|value| (*value).to_owned())
         .collect::<Vec<_>>();
@@ -2466,7 +2274,7 @@ fn remember_history_entry(history_entries: &mut Vec<String>, entry: &str) {
     if history_entries.last().is_some_and(|last| last == entry) {
         return;
     }
-    if history_entries.len() == REPL_HISTORY_CAPACITY {
+    if history_entries.len() == TERMINAL_HISTORY_CAPACITY {
         history_entries.remove(0);
     }
     history_entries.push(entry.into());
@@ -2474,15 +2282,15 @@ fn remember_history_entry(history_entries: &mut Vec<String>, entry: &str) {
 
 fn handle_presentation_command(
     line: &str,
-    preferences: &mut ReplPreferences,
+    preferences: &mut TerminalPreferences,
     themes: &ThemeLibrary,
 ) -> Result<PresentationCommandResult, Box<dyn Error>> {
     let mut changed = false;
     match line {
-        "/repl" | "/repl prefs" => print_json(preferences)?,
-        "/repl save" => changed = true,
-        "/repl reset" => {
-            *preferences = ReplPreferences::default();
+        "/tui" | "/tui prefs" => print_json(preferences)?,
+        "/tui save" => changed = true,
+        "/tui reset" => {
+            *preferences = TerminalPreferences::default();
             changed = true;
         }
         "/theme" if human_output(io::stdout().is_terminal()) => {
@@ -2612,7 +2420,7 @@ fn handle_presentation_command(
             changed = true;
         }
         command
-            if command.starts_with("/repl ")
+            if command.starts_with("/tui ")
                 || command.starts_with("/events ")
                 || command.starts_with("/transcript ")
                 || command.starts_with("/stream ") =>
@@ -2757,265 +2565,6 @@ async fn workflow_command(
     Ok(())
 }
 
-#[derive(Default)]
-struct ReplPromptState {
-    context: Option<ContextStatus>,
-    work: Option<WorkStateSnapshot>,
-    route: Option<ProviderRoute>,
-    last_status: String,
-}
-
-impl ReplPromptState {
-    fn new() -> Self {
-        Self {
-            last_status: "ready".into(),
-            ..Self::default()
-        }
-    }
-
-    async fn refresh_embedded(&mut self, runtime: &Runtime, session_id: &str) {
-        self.context = runtime.context_status(session_id).await.ok();
-        self.work = runtime.work_state(session_id).ok();
-        self.route = runtime.provider_route("primary").ok();
-    }
-
-    async fn refresh_worker(&mut self, client: &WorkerClient, session_id: &str) {
-        self.context = match client
-            .call(WorkerOperation::ContextStatus {
-                session_id: session_id.into(),
-            })
-            .await
-        {
-            Ok(value) => serde_json::from_value(value).ok(),
-            Err(_) => None,
-        };
-        self.work = match client
-            .call(WorkerOperation::WorkState {
-                session_id: session_id.into(),
-            })
-            .await
-        {
-            Ok(value) => serde_json::from_value(value).ok(),
-            Err(_) => None,
-        };
-        self.route = match client
-            .call(WorkerOperation::ProviderRoute {
-                role: "primary".into(),
-            })
-            .await
-        {
-            Ok(value) => serde_json::from_value(value).ok(),
-            Err(_) => None,
-        };
-    }
-}
-
-struct ColossusPrompt {
-    left: String,
-    right_full: String,
-    right_compact: String,
-    status: String,
-    composer_metrics: Arc<Mutex<ComposerMetrics>>,
-    multiline: bool,
-    indicator: String,
-    multiline_indicator: String,
-    continuation_indicator: String,
-    palette: TerminalPalette,
-}
-
-impl ColossusPrompt {
-    fn new(
-        session_id: &str,
-        state: &ReplPromptState,
-        preferences: &ReplPreferences,
-        approval: &str,
-        composer_metrics: Arc<Mutex<ComposerMetrics>>,
-    ) -> Self {
-        let short_session = session_id.chars().take(8).collect::<String>();
-        let route = state.route.as_ref().map_or_else(
-            || "primary:unknown".into(),
-            |route| format!("{}:{}@{}", route.role, route.model, route.profile),
-        );
-        let context = state.context.as_ref().map_or_else(
-            || "ctx=? msgs=?".into(),
-            |context| {
-                format!(
-                    "ctx={}/{} msgs={}",
-                    context.token_estimate, context.context_window_tokens, context.message_count
-                )
-            },
-        );
-        let work = state.work.as_ref().map_or_else(
-            || "work=?".into(),
-            |work| format!("work={}/{}", work.open_task_count, work.tasks.len()),
-        );
-        let reasoning = if preferences.show_reasoning {
-            "on"
-        } else {
-            "off"
-        };
-        let (title, indicator, multiline_indicator, continuation_indicator) =
-            preferences.custom_theme.as_ref().map_or_else(
-                || ("Colossus".into(), " › ".into(), " · ".into(), " … ".into()),
-                |theme| {
-                    (
-                        theme.title.clone(),
-                        format!(" {} ", theme.caret),
-                        format!(" {} ", theme.continuation),
-                        format!(" {} ", theme.continuation),
-                    )
-                },
-            );
-        Self {
-            left: format!("{title} {short_session}"),
-            right_full: format!(
-                "{route} {context} {work} approval={approval} theme={} stream={} events={} reasoning={reasoning} status={}",
-                preferences.theme_name(),
-                preferences.stream_mode.as_str(),
-                preferences.events_mode.as_str(),
-                state.last_status,
-            ),
-            right_compact: format!("{route} {context} status={}", state.last_status),
-            status: state.last_status.clone(),
-            composer_metrics,
-            multiline: preferences.multiline,
-            indicator,
-            multiline_indicator,
-            continuation_indicator,
-            palette: TerminalPalette::for_preferences(preferences),
-        }
-    }
-
-    fn render_prompt_right_for_width(&self, width: usize) -> String {
-        let metrics = *self
-            .composer_metrics
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let indicator = if self.multiline {
-            &self.multiline_indicator
-        } else {
-            &self.indicator
-        };
-        let draft_width = if metrics.lines == 1 {
-            metrics.chars
-        } else {
-            metrics.cursor_column.saturating_sub(1)
-        };
-        let occupied = self
-            .left
-            .chars()
-            .count()
-            .saturating_add(indicator.chars().count())
-            .saturating_add(draft_width)
-            .saturating_add(2);
-        let available = width.saturating_sub(occupied);
-        let position = format!(
-            "pos={}:{} chars={} lines={}",
-            metrics.cursor_line, metrics.cursor_column, metrics.chars, metrics.lines
-        );
-        let candidates = [
-            format!("{} {position}", self.right_full),
-            format!("{} {position}", self.right_compact),
-            format!(
-                "{} {}:{}",
-                self.status, metrics.cursor_line, metrics.cursor_column
-            ),
-        ];
-        candidates
-            .into_iter()
-            .find(|candidate| candidate.chars().count() <= available)
-            .unwrap_or_default()
-    }
-}
-
-fn crossterm_color(color: Option<RgbColor>) -> CrosstermColor {
-    color.map_or(CrosstermColor::Reset, |color| CrosstermColor::Rgb {
-        r: color.red,
-        g: color.green,
-        b: color.blue,
-    })
-}
-
-fn nu_color(color: Option<RgbColor>) -> nu_ansi_term::Color {
-    color.map_or(nu_ansi_term::Color::Default, |color| {
-        nu_ansi_term::Color::Rgb(color.red, color.green, color.blue)
-    })
-}
-
-impl Prompt for ColossusPrompt {
-    fn render_prompt_left(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.left)
-    }
-
-    fn render_prompt_right(&self) -> Cow<'_, str> {
-        Cow::Owned(self.render_prompt_right_for_width(terminal_width()))
-    }
-
-    fn render_prompt_indicator(&self, _prompt_mode: PromptEditMode) -> Cow<'_, str> {
-        Cow::Borrowed(if self.multiline {
-            &self.multiline_indicator
-        } else {
-            &self.indicator
-        })
-    }
-
-    fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.continuation_indicator)
-    }
-
-    fn render_prompt_history_search_indicator(
-        &self,
-        history_search: PromptHistorySearch,
-    ) -> Cow<'_, str> {
-        let prefix = match history_search.status {
-            PromptHistorySearchStatus::Passing => "",
-            PromptHistorySearchStatus::Failing => "failing ",
-        };
-        Cow::Owned(format!(
-            "({prefix}reverse-search: {}) ",
-            history_search.term
-        ))
-    }
-
-    fn get_prompt_color(&self) -> CrosstermColor {
-        crossterm_color(self.palette.prompt_left())
-    }
-
-    fn get_prompt_multiline_color(&self) -> nu_ansi_term::Color {
-        nu_color(self.palette.continuation())
-    }
-
-    fn get_indicator_color(&self) -> CrosstermColor {
-        crossterm_color(self.palette.indicator())
-    }
-
-    fn get_prompt_right_color(&self) -> CrosstermColor {
-        crossterm_color(self.palette.prompt_right())
-    }
-}
-
-fn repl_line_changes_status(line: &str) -> bool {
-    !line.starts_with('/')
-        || [
-            "/session",
-            "/resume",
-            "/context",
-            "/work",
-            "/tasks",
-            "/decisions",
-            "/plans",
-            "/goals",
-            "/goal ",
-            "/agents",
-            "/memories",
-            "/memory ",
-            "/research",
-            "/workflow",
-        ]
-        .iter()
-        .any(|prefix| line.starts_with(prefix))
-}
-
 #[derive(Debug, Eq, PartialEq)]
 enum ThemePickerInput {
     Cancelled,
@@ -3056,10 +2605,8 @@ fn parse_theme_picker_input(choice: &str, names: &[String]) -> ThemePickerInput 
 }
 
 fn choose_theme(
-    editor: &mut Reedline,
-    prompt: &dyn Prompt,
-    scripted_input: &mut Option<io::StdinLock<'_>>,
-    preferences: &ReplPreferences,
+    scripted_input: &mut dyn BufRead,
+    preferences: &TerminalPreferences,
     themes: &ThemeLibrary,
 ) -> Result<ThemePickerInput, Box<dyn Error>> {
     let names = themes.names();
@@ -3068,9 +2615,10 @@ fn choose_theme(
         "Enter a number or theme name to apply it, `p NUMBER` to preview it, or leave the line blank to cancel."
     );
     loop {
-        let Signal::Success(choice) = read_repl_signal(editor, prompt, scripted_input)? else {
+        let mut choice = String::new();
+        if scripted_input.read_line(&mut choice)? == 0 {
             return Ok(ThemePickerInput::Cancelled);
-        };
+        }
         match parse_theme_picker_input(&choice, &names) {
             ThemePickerInput::Preview(name) => {
                 print_theme_preview(preferences, themes, &name)?;
@@ -3118,9 +2666,7 @@ fn parse_session_picker_input(choice: &str, sessions: &[SessionSummary]) -> Sess
 
 fn choose_session(
     runtime: &Runtime,
-    editor: &mut Reedline,
-    prompt: &dyn Prompt,
-    scripted_input: &mut Option<io::StdinLock<'_>>,
+    scripted_input: &mut dyn BufRead,
     limit: usize,
 ) -> Result<SessionPickerInput, Box<dyn Error>> {
     let mut sessions = runtime
@@ -3143,11 +2689,14 @@ fn choose_session(
             session.message_count
         );
     }
-    println!("Enter a number or exact session id (blank cancels; /command returns to the REPL).");
+    println!(
+        "Enter a number or exact session id (blank cancels; /command returns to the terminal)."
+    );
     loop {
-        let Signal::Success(choice) = read_repl_signal(editor, prompt, scripted_input)? else {
+        let mut choice = String::new();
+        if scripted_input.read_line(&mut choice)? == 0 {
             return Ok(SessionPickerInput::Cancelled);
-        };
+        }
         let parsed = parse_session_picker_input(&choice, &sessions);
         if parsed != SessionPickerInput::Invalid {
             return Ok(parsed);
@@ -3159,27 +2708,11 @@ fn choose_session(
     }
 }
 
-fn read_repl_signal(
-    editor: &mut Reedline,
-    prompt: &dyn Prompt,
-    scripted_input: &mut Option<io::StdinLock<'_>>,
-) -> Result<Signal, Box<dyn Error>> {
-    let Some(input) = scripted_input.as_mut() else {
-        return Ok(editor.read_line(prompt)?);
-    };
-    let mut line = String::new();
-    if input.read_line(&mut line)? == 0 {
-        Ok(Signal::CtrlD)
-    } else {
-        Ok(Signal::Success(line))
-    }
-}
-
-async fn repl(
+async fn line_runner(
     runtime: &Runtime,
     initial_session: Option<String>,
     resume_latest: bool,
-    approval_mode: ApprovalMode,
+    _approval_mode: ApprovalMode,
     themes: &ThemeLibrary,
 ) -> Result<(), Box<dyn Error>> {
     if output_mode() == OutputMode::Auto {
@@ -3187,23 +2720,17 @@ async fn repl(
     }
     let mut preferences = runtime.presentation_preferences()?;
     set_terminal_preferences(&preferences);
-    let mut history_entries = runtime.repl_history(REPL_HISTORY_CAPACITY)?;
+    let mut history_entries = runtime.terminal_history(TERMINAL_HISTORY_CAPACITY)?;
     let skill_names = runtime
         .list_skills()?
         .into_iter()
         .map(|skill| skill.manifest.name)
         .collect::<Vec<_>>();
-    let composer_metrics = Arc::new(Mutex::new(ComposerMetrics::default()));
-    let mut editor = repl_editor(
-        preferences.multiline,
-        &history_entries,
-        &skill_names,
-        themes,
-        &preferences,
-        Arc::clone(&composer_metrics),
-    )?;
     let stdin = io::stdin();
-    let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
+    if stdin.is_terminal() {
+        return Err("interactive terminals must use the TUI".into());
+    }
+    let mut scripted_input = stdin.lock();
     let mut active_session_id = if resume_latest {
         runtime.latest_session()?.id
     } else if let Some(session_id) = initial_session {
@@ -3215,411 +2742,364 @@ async fn repl(
         runtime.create_session(None)?.id
     };
     let mut sticky_skills = Vec::<String>::new();
-    let mut prompt_state = ReplPromptState::new();
-    let mut prompt_dirty = true;
     let mut pending_line = None::<String>;
     println!(
         "Colossus Rust {}. session={active_session_id}; /help for commands; Ctrl-D to exit.",
         env!("CARGO_PKG_VERSION")
     );
     loop {
-        if prompt_dirty {
-            prompt_state
-                .refresh_embedded(runtime, &active_session_id)
-                .await;
-            prompt_dirty = false;
+        let line = if let Some(line) = pending_line.take() {
+            line
+        } else {
+            let mut line = String::new();
+            if scripted_input.read_line(&mut line)? == 0 {
+                break;
+            }
+            line
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
         }
-        let prompt = ColossusPrompt::new(
-            &active_session_id,
-            &prompt_state,
-            &preferences,
-            approval_mode.as_str(),
-            Arc::clone(&composer_metrics),
-        );
-        let signal = pending_line.take().map_or_else(
-            || read_repl_signal(&mut editor, &prompt, &mut scripted_input),
-            |line| Ok(Signal::Success(line)),
-        )?;
-        match signal {
-            Signal::Success(line) => {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
+        match runtime.append_terminal_history(line).await {
+            Ok(entry) => remember_history_entry(&mut history_entries, &entry),
+            Err(error) => eprintln!("history was not persisted: {error}"),
+        }
+        if matches!(line, "/quit" | "/exit") {
+            break;
+        }
+        match handle_presentation_command(line, &mut preferences, themes)? {
+            PresentationCommandResult::NotHandled => {}
+            PresentationCommandResult::Handled => continue,
+            PresentationCommandResult::Save => {
+                preferences = runtime
+                    .save_presentation_preferences(preferences.clone())
+                    .await?;
+                set_terminal_preferences(&preferences);
+                if line.starts_with("/theme") {
+                    print_theme_applied(&preferences, themes)?;
+                } else {
+                    print_json(&preferences)?;
                 }
-                match runtime.append_repl_history(line).await {
-                    Ok(entry) => remember_history_entry(&mut history_entries, &entry),
-                    Err(error) => eprintln!("history was not persisted: {error}"),
-                }
-                if matches!(line, "/quit" | "/exit") {
-                    break;
-                }
-                prompt_dirty = repl_line_changes_status(line);
-                match handle_presentation_command(line, &mut preferences, themes)? {
-                    PresentationCommandResult::NotHandled => {}
-                    PresentationCommandResult::Handled => continue,
-                    PresentationCommandResult::Save => {
+                continue;
+            }
+            PresentationCommandResult::ChooseTheme => {
+                match choose_theme(&mut scripted_input, &preferences, themes)? {
+                    ThemePickerInput::Selected(name) => {
+                        themes.select(&name, &mut preferences)?;
                         preferences = runtime
                             .save_presentation_preferences(preferences.clone())
                             .await?;
                         set_terminal_preferences(&preferences);
-                        if line.starts_with("/theme") {
-                            print_theme_applied(&preferences, themes)?;
-                        } else {
-                            print_json(&preferences)?;
-                        }
-                        editor = repl_editor(
-                            preferences.multiline,
-                            &history_entries,
-                            &skill_names,
-                            themes,
-                            &preferences,
-                            Arc::clone(&composer_metrics),
-                        )?;
-                        continue;
+                        print_theme_applied(&preferences, themes)?;
                     }
-                    PresentationCommandResult::ChooseTheme => {
-                        match choose_theme(
-                            &mut editor,
-                            &prompt,
-                            &mut scripted_input,
-                            &preferences,
-                            themes,
-                        )? {
-                            ThemePickerInput::Selected(name) => {
-                                themes.select(&name, &mut preferences)?;
-                                preferences = runtime
-                                    .save_presentation_preferences(preferences.clone())
-                                    .await?;
-                                set_terminal_preferences(&preferences);
-                                print_theme_applied(&preferences, themes)?;
-                                editor = repl_editor(
-                                    preferences.multiline,
-                                    &history_entries,
-                                    &skill_names,
-                                    themes,
-                                    &preferences,
-                                    Arc::clone(&composer_metrics),
-                                )?;
-                            }
-                            ThemePickerInput::Command(command) => pending_line = Some(command),
-                            ThemePickerInput::Cancelled => {}
-                            ThemePickerInput::Preview(_) | ThemePickerInput::Invalid => {
-                                unreachable!("picker consumes preview and invalid input")
-                            }
-                        }
-                        continue;
+                    ThemePickerInput::Command(command) => pending_line = Some(command),
+                    ThemePickerInput::Cancelled => {}
+                    ThemePickerInput::Preview(_) | ThemePickerInput::Invalid => {
+                        unreachable!("picker consumes preview and invalid input")
                     }
                 }
-                if line == "/help" {
-                    print_repl_help(&preferences);
-                } else if line == "/workflow list" {
-                    workflow_command(runtime, WorkflowAction::List).await?;
-                } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
-                    workflow_command(
-                        runtime,
-                        WorkflowAction::Status {
-                            run_id: run_id.trim().into(),
-                        },
-                    )
-                    .await?;
-                } else if line == "/audit verify" {
-                    print_json(&runtime.journal().verify()?)?;
-                } else if line == "/projection status" {
-                    print_json(&runtime.projection_status()?)?;
-                } else if line == "/tools" {
-                    print_json(&runtime.tool_specs())?;
-                } else if line == "/sessions" {
-                    print_json(&runtime.list_sessions(20)?)?;
-                } else if line == "/work" {
-                    println!(
-                        "{}",
-                        SemanticRenderer::new(preferences.clone())
-                            .with_color(io::stdout().is_terminal())
-                            .work_state(&runtime.work_state(&active_session_id)?)
-                    );
-                } else if line == "/tasks" {
-                    print_json(&runtime.list_tasks(Some(&active_session_id), None, 100)?)?;
-                } else if line == "/decisions" {
-                    print_json(&runtime.list_decisions(
-                        Some(&active_session_id),
-                        Some(DecisionStatus::Active),
-                        100,
-                    )?)?;
-                } else if line == "/plans" {
-                    print_json(&runtime.list_plans(Some(&active_session_id), None, 100)?)?;
-                } else if line == "/goals" {
-                    print_json(&runtime.list_goals(Some(&active_session_id), None, 100)?)?;
-                } else if let Some(objective) = line.strip_prefix("/goal ") {
-                    print_json(
-                        &runtime
-                            .run_goal("primary", objective.trim(), &active_session_id, 5, None)
-                            .await?,
-                    )?;
-                } else if line == "/agents" {
-                    print_json(&runtime.list_subagents(Some(&active_session_id), None, 100)?)?;
-                } else if line == "/agents drain" {
-                    print_json(&runtime.drain_subagents().await?)?;
-                } else if line == "/memories" {
-                    print_json(
-                        &runtime
-                            .list_memories(Some(MemoryStatus::Active), 20)
-                            .await?,
-                    )?;
-                } else if let Some(query) = line.strip_prefix("/memory search ") {
-                    print_json(
-                        &runtime
-                            .search_memories(query.trim(), Some(&active_session_id), None, 8)
-                            .await?,
-                    )?;
-                } else if line == "/research list" {
-                    print_json(&runtime.list_research_runs(Some(&active_session_id), 20)?)?;
-                } else if let Some(question) = line.strip_prefix("/research ") {
-                    print_json(
-                        &runtime
-                            .run_research(
-                                &active_session_id,
-                                question.trim(),
-                                ResearchDepth::Standard,
-                                vec![
-                                    ResearchSourceKind::Repo,
-                                    ResearchSourceKind::Web,
-                                    ResearchSourceKind::Mcp,
-                                ],
-                            )
-                            .await?,
-                    )?;
-                } else if line == "/telemetry" {
-                    print_json(&runtime.telemetry_runs(Some(&active_session_id), 20)?)?;
-                } else if line == "/telemetry metrics" {
-                    print_json(&runtime.telemetry_metrics(Some(&active_session_id), 100)?)?;
-                } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
-                    print_json(&runtime.telemetry_run(run_id.trim(), 500)?)?;
-                } else if line == "/packs" || line == "/packs list" {
-                    print_json(&runtime.list_packs(100)?)?;
-                } else if let Some(name) = line.strip_prefix("/packs show ") {
-                    let name = name.trim();
-                    print_json(
-                        &runtime
-                            .get_pack(name)?
-                            .ok_or_else(|| cli_error(format!("pack not found: {name}")))?,
-                    )?;
-                } else if let Some(path) = line
-                    .strip_prefix("/packs verify ")
-                    .or_else(|| line.strip_prefix("/packs validate "))
-                {
-                    print_json(&runtime.verify_pack(path.trim()).await?)?;
-                } else if let Some(value) = line.strip_prefix("/packs install ") {
-                    let value = value.trim();
-                    let (path, allow_untrusted) = value
-                        .strip_suffix(" --allow-untrusted")
-                        .map_or((value, false), |path| (path.trim(), true));
-                    print_json(&runtime.install_pack(path, allow_untrusted).await?)?;
-                } else if let Some(name) = line.strip_prefix("/packs enable ") {
-                    print_json(&runtime.enable_pack(name.trim()).await?)?;
-                } else if let Some(name) = line.strip_prefix("/packs disable ") {
-                    print_json(&runtime.disable_pack(name.trim()).await?)?;
-                } else if let Some(name) = line.strip_prefix("/packs uninstall ") {
-                    print_json(&runtime.uninstall_pack(name.trim()).await?)?;
-                } else if let Some(tool) = line.strip_prefix("/packs call ") {
-                    print_json(&runtime.call_pack_tool(tool.trim()).await?)?;
-                } else if line == "/packs trust" || line == "/packs trust list" {
-                    print_json(&runtime.list_pack_trust(100)?)?;
-                } else if let Some(value) = line.strip_prefix("/packs trust add ") {
-                    let (publisher, public_key) =
-                        value.trim().split_once(' ').ok_or_else(|| {
-                            cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY")
-                        })?;
-                    print_json(&runtime.add_pack_trust(publisher, public_key.trim()).await?)?;
-                } else if let Some(path) = line.strip_prefix("/bundle verify ") {
-                    print_json(&runtime.verify_bundle(path.trim()).await?)?;
-                } else if line == "/integrations" {
-                    print_json(&runtime.list_integrations(100)?)?;
-                } else if let Some(name) = line.strip_prefix("/integration show ") {
-                    print_json(
-                        &runtime
-                            .get_integration(name.trim())?
-                            .ok_or_else(|| cli_error(format!("integration not found: {name}")))?,
-                    )?;
-                } else if let Some(name) = line.strip_prefix("/integration disconnect ") {
-                    print_json(&runtime.disconnect_integration(name.trim()).await?)?;
-                } else if let Some(arguments) = line.strip_prefix("/integration call ") {
-                    let (tool, arguments) = arguments
-                        .trim()
-                        .split_once(' ')
-                        .ok_or_else(|| cli_error("usage: /integration call TOOL JSON"))?;
-                    let arguments: Value = serde_json::from_str(arguments.trim())?;
-                    print_json(&runtime.call_integration_tool(tool, arguments).await?)?;
-                } else if line == "/mcp servers" {
-                    print_json(&runtime.mcp_servers())?;
-                } else if line == "/mcp tools" {
-                    print_json(&runtime.mcp_tools(None).await?)?;
-                } else if let Some(server) = line.strip_prefix("/mcp tools ") {
-                    print_json(&runtime.mcp_tools(Some(server.trim())).await?)?;
-                } else if let Some(arguments) = line.strip_prefix("/mcp call ") {
-                    let mut parts = arguments.trim().splitn(3, ' ');
-                    let server = parts
-                        .next()
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
-                    let tool = parts
-                        .next()
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
-                    let arguments = parts
-                        .next()
-                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
-                    print_json(
-                        &runtime
-                            .mcp_call(server, tool, serde_json::from_str(arguments.trim())?)
-                            .await?,
-                    )?;
-                } else if line == "/skills" {
-                    let skills = runtime
-                        .list_skills()?
-                        .into_iter()
-                        .map(|skill| {
-                            json!({
-                                "name": skill.manifest.name,
-                                "version": skill.manifest.version,
-                                "description": skill.manifest.description,
-                                "source": skill.source,
-                                "active": sticky_skills.contains(&skill.manifest.name),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    print_json(&skills)?;
-                } else if line == "/skill active" {
-                    if sticky_skills.is_empty() {
-                        println!("No skills are active.");
-                    } else {
-                        println!("Active skills: {}", sticky_skills.join(", "));
-                    }
-                } else if line == "/skill clear" {
-                    sticky_skills.clear();
-                    println!("active skills cleared");
-                } else if let Some(name) = line.strip_prefix("/skill use ") {
-                    let name = name.trim();
-                    runtime
-                        .get_skill(name)?
-                        .ok_or_else(|| cli_error(format!("skill not found: {name}")))?;
-                    if !sticky_skills.iter().any(|active| active == name) {
-                        sticky_skills.push(name.into());
-                    }
-                    println!("active skill={name}");
-                } else if let Some(name) = line.strip_prefix("/skill show ") {
-                    print_json(
-                        &runtime
-                            .get_skill(name.trim())?
-                            .ok_or_else(|| cli_error(format!("skill not found: {name}")))?,
-                    )?;
-                } else if let Some(name) = line.strip_prefix("/skill resources ") {
-                    print_json(&runtime.skill_resources(name.trim(), &sticky_skills).await?)?;
-                } else if let Some(arguments) = line.strip_prefix("/skill read ") {
-                    let (name, path) = arguments
-                        .trim()
-                        .split_once(' ')
-                        .ok_or_else(|| cli_error("usage: /skill read NAME PATH"))?;
-                    print_json(
-                        &runtime
-                            .read_skill_resource(name, path.trim(), &sticky_skills)
-                            .await?,
-                    )?;
-                } else if line == "/context" || line == "/context status" {
-                    println!(
-                        "{}",
-                        SemanticRenderer::new(preferences.clone())
-                            .with_color(io::stdout().is_terminal())
-                            .context_status(&runtime.context_status(&active_session_id).await?)
-                    );
-                } else if line == "/context list" {
-                    print_json(&runtime.context_snapshots(&active_session_id).await?)?;
-                } else if line == "/context compact" {
-                    print_json(&runtime.compact_context(&active_session_id).await?)?;
-                } else if let Some(snapshot_id) = line.strip_prefix("/context restore ") {
-                    print_json(
-                        &runtime
-                            .restore_context(&active_session_id, snapshot_id.trim())
-                            .await?,
-                    )?;
-                } else if line == "/session" || line == "/session show" {
-                    print_json(
-                        &runtime
-                            .get_session(&active_session_id)?
-                            .ok_or_else(|| cli_error("active session disappeared"))?,
-                    )?;
-                } else if line == "/session new" {
-                    active_session_id = runtime.create_session(None)?.id;
-                    println!("session={active_session_id}");
-                } else if line == "/session resume"
-                    || line == "/resume"
-                    || line.starts_with("/resume ")
-                {
-                    let limit = if line == "/session resume" {
-                        10
-                    } else {
-                        line.strip_prefix("/resume ")
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(str::parse::<usize>)
-                            .transpose()?
-                            .unwrap_or(10)
-                            .clamp(1, 100)
-                    };
-                    match choose_session(runtime, &mut editor, &prompt, &mut scripted_input, limit)?
-                    {
-                        SessionPickerInput::Selected(session_id) => {
-                            active_session_id = session_id;
-                            println!("session={active_session_id}");
-                        }
-                        SessionPickerInput::Command(command) => pending_line = Some(command),
-                        SessionPickerInput::Cancelled => {}
-                        SessionPickerInput::Invalid => unreachable!("picker retries invalid input"),
-                    }
-                } else if let Some(session_id) = line.strip_prefix("/session resume ") {
-                    let session_id = session_id.trim();
-                    active_session_id = runtime
-                        .get_session(session_id)?
-                        .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?
-                        .id;
-                    println!("session={active_session_id}");
-                } else if line.starts_with('/') {
-                    println!("unknown REPL command: {line}; use /help");
-                } else {
-                    let (prompt, explicit_skills) = resolve_skill_mentions(line, &skill_names);
-                    if prompt.is_empty() {
-                        println!("Add a message after the @skill name.");
-                        continue;
-                    }
-                    let mut observer = TerminalStreamObserver::with_preferences(
-                        StreamTarget::Stdout,
-                        preferences.clone(),
-                    );
-                    let result = runtime
-                        .run_model_with_skills_stream(
-                            "primary",
-                            "You are Colossus.",
-                            &prompt,
-                            None,
-                            Some(&active_session_id),
-                            &explicit_skills,
-                            &sticky_skills,
-                            &mut observer,
-                        )
-                        .await;
-                    let result = match result {
-                        Ok(result) => result,
-                        Err(error) => {
-                            prompt_state.last_status = "error".into();
-                            eprintln!("run failed; REPL remains available: {error}");
-                            continue;
-                        }
-                    };
-                    observer.finish_response(&result.output)?;
-                    prompt_state.last_status = "ok".into();
-                }
+                continue;
             }
-            Signal::CtrlD | Signal::CtrlC => break,
-            _ => continue,
+        }
+        if line == "/help" {
+            print_terminal_help(&preferences);
+        } else if line == "/workflow list" {
+            workflow_command(runtime, WorkflowAction::List).await?;
+        } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
+            workflow_command(
+                runtime,
+                WorkflowAction::Status {
+                    run_id: run_id.trim().into(),
+                },
+            )
+            .await?;
+        } else if line == "/audit verify" {
+            print_json(&runtime.journal().verify()?)?;
+        } else if line == "/projection status" {
+            print_json(&runtime.projection_status()?)?;
+        } else if line == "/tools" {
+            print_json(&runtime.tool_specs())?;
+        } else if line == "/sessions" {
+            print_json(&runtime.list_sessions(20)?)?;
+        } else if line == "/work" {
+            println!(
+                "{}",
+                SemanticRenderer::new(preferences.clone())
+                    .with_color(io::stdout().is_terminal())
+                    .work_state(&runtime.work_state(&active_session_id)?)
+            );
+        } else if line == "/tasks" {
+            print_json(&runtime.list_tasks(Some(&active_session_id), None, 100)?)?;
+        } else if line == "/decisions" {
+            print_json(&runtime.list_decisions(
+                Some(&active_session_id),
+                Some(DecisionStatus::Active),
+                100,
+            )?)?;
+        } else if line == "/plans" {
+            print_json(&runtime.list_plans(Some(&active_session_id), None, 100)?)?;
+        } else if line == "/goals" {
+            print_json(&runtime.list_goals(Some(&active_session_id), None, 100)?)?;
+        } else if let Some(objective) = line.strip_prefix("/goal ") {
+            print_json(
+                &runtime
+                    .run_goal("primary", objective.trim(), &active_session_id, 5, None)
+                    .await?,
+            )?;
+        } else if line == "/agents" {
+            print_json(&runtime.list_subagents(Some(&active_session_id), None, 100)?)?;
+        } else if line == "/agents drain" {
+            print_json(&runtime.drain_subagents().await?)?;
+        } else if line == "/memories" {
+            print_json(
+                &runtime
+                    .list_memories(Some(MemoryStatus::Active), 20)
+                    .await?,
+            )?;
+        } else if let Some(query) = line.strip_prefix("/memory search ") {
+            print_json(
+                &runtime
+                    .search_memories(query.trim(), Some(&active_session_id), None, 8)
+                    .await?,
+            )?;
+        } else if line == "/research list" {
+            print_json(&runtime.list_research_runs(Some(&active_session_id), 20)?)?;
+        } else if let Some(question) = line.strip_prefix("/research ") {
+            print_json(
+                &runtime
+                    .run_research(
+                        &active_session_id,
+                        question.trim(),
+                        ResearchDepth::Standard,
+                        vec![
+                            ResearchSourceKind::Repo,
+                            ResearchSourceKind::Web,
+                            ResearchSourceKind::Mcp,
+                        ],
+                    )
+                    .await?,
+            )?;
+        } else if line == "/telemetry" {
+            print_json(&runtime.telemetry_runs(Some(&active_session_id), 20)?)?;
+        } else if line == "/telemetry metrics" {
+            print_json(&runtime.telemetry_metrics(Some(&active_session_id), 100)?)?;
+        } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
+            print_json(&runtime.telemetry_run(run_id.trim(), 500)?)?;
+        } else if line == "/packs" || line == "/packs list" {
+            print_json(&runtime.list_packs(100)?)?;
+        } else if let Some(name) = line.strip_prefix("/packs show ") {
+            let name = name.trim();
+            print_json(
+                &runtime
+                    .get_pack(name)?
+                    .ok_or_else(|| cli_error(format!("pack not found: {name}")))?,
+            )?;
+        } else if let Some(path) = line
+            .strip_prefix("/packs verify ")
+            .or_else(|| line.strip_prefix("/packs validate "))
+        {
+            print_json(&runtime.verify_pack(path.trim()).await?)?;
+        } else if let Some(value) = line.strip_prefix("/packs install ") {
+            let value = value.trim();
+            let (path, allow_untrusted) = value
+                .strip_suffix(" --allow-untrusted")
+                .map_or((value, false), |path| (path.trim(), true));
+            print_json(&runtime.install_pack(path, allow_untrusted).await?)?;
+        } else if let Some(name) = line.strip_prefix("/packs enable ") {
+            print_json(&runtime.enable_pack(name.trim()).await?)?;
+        } else if let Some(name) = line.strip_prefix("/packs disable ") {
+            print_json(&runtime.disable_pack(name.trim()).await?)?;
+        } else if let Some(name) = line.strip_prefix("/packs uninstall ") {
+            print_json(&runtime.uninstall_pack(name.trim()).await?)?;
+        } else if let Some(tool) = line.strip_prefix("/packs call ") {
+            print_json(&runtime.call_pack_tool(tool.trim()).await?)?;
+        } else if line == "/packs trust" || line == "/packs trust list" {
+            print_json(&runtime.list_pack_trust(100)?)?;
+        } else if let Some(value) = line.strip_prefix("/packs trust add ") {
+            let (publisher, public_key) = value
+                .trim()
+                .split_once(' ')
+                .ok_or_else(|| cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY"))?;
+            print_json(&runtime.add_pack_trust(publisher, public_key.trim()).await?)?;
+        } else if let Some(path) = line.strip_prefix("/bundle verify ") {
+            print_json(&runtime.verify_bundle(path.trim()).await?)?;
+        } else if line == "/integrations" {
+            print_json(&runtime.list_integrations(100)?)?;
+        } else if let Some(name) = line.strip_prefix("/integration show ") {
+            print_json(
+                &runtime
+                    .get_integration(name.trim())?
+                    .ok_or_else(|| cli_error(format!("integration not found: {name}")))?,
+            )?;
+        } else if let Some(name) = line.strip_prefix("/integration disconnect ") {
+            print_json(&runtime.disconnect_integration(name.trim()).await?)?;
+        } else if let Some(arguments) = line.strip_prefix("/integration call ") {
+            let (tool, arguments) = arguments
+                .trim()
+                .split_once(' ')
+                .ok_or_else(|| cli_error("usage: /integration call TOOL JSON"))?;
+            let arguments: Value = serde_json::from_str(arguments.trim())?;
+            print_json(&runtime.call_integration_tool(tool, arguments).await?)?;
+        } else if line == "/mcp servers" {
+            print_json(&runtime.mcp_servers())?;
+        } else if line == "/mcp tools" {
+            print_json(&runtime.mcp_tools(None).await?)?;
+        } else if let Some(server) = line.strip_prefix("/mcp tools ") {
+            print_json(&runtime.mcp_tools(Some(server.trim())).await?)?;
+        } else if let Some(arguments) = line.strip_prefix("/mcp call ") {
+            let mut parts = arguments.trim().splitn(3, ' ');
+            let server = parts
+                .next()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+            let tool = parts
+                .next()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+            let arguments = parts
+                .next()
+                .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+            print_json(
+                &runtime
+                    .mcp_call(server, tool, serde_json::from_str(arguments.trim())?)
+                    .await?,
+            )?;
+        } else if line == "/skills" {
+            let skills = runtime
+                .list_skills()?
+                .into_iter()
+                .map(|skill| {
+                    json!({
+                        "name": skill.manifest.name,
+                        "version": skill.manifest.version,
+                        "description": skill.manifest.description,
+                        "source": skill.source,
+                        "active": sticky_skills.contains(&skill.manifest.name),
+                    })
+                })
+                .collect::<Vec<_>>();
+            print_json(&skills)?;
+        } else if line == "/skill active" {
+            if sticky_skills.is_empty() {
+                println!("No skills are active.");
+            } else {
+                println!("Active skills: {}", sticky_skills.join(", "));
+            }
+        } else if line == "/skill clear" {
+            sticky_skills.clear();
+            println!("active skills cleared");
+        } else if let Some(name) = line.strip_prefix("/skill use ") {
+            let name = name.trim();
+            runtime
+                .get_skill(name)?
+                .ok_or_else(|| cli_error(format!("skill not found: {name}")))?;
+            if !sticky_skills.iter().any(|active| active == name) {
+                sticky_skills.push(name.into());
+            }
+            println!("active skill={name}");
+        } else if let Some(name) = line.strip_prefix("/skill show ") {
+            print_json(
+                &runtime
+                    .get_skill(name.trim())?
+                    .ok_or_else(|| cli_error(format!("skill not found: {name}")))?,
+            )?;
+        } else if let Some(name) = line.strip_prefix("/skill resources ") {
+            print_json(&runtime.skill_resources(name.trim(), &sticky_skills).await?)?;
+        } else if let Some(arguments) = line.strip_prefix("/skill read ") {
+            let (name, path) = arguments
+                .trim()
+                .split_once(' ')
+                .ok_or_else(|| cli_error("usage: /skill read NAME PATH"))?;
+            print_json(
+                &runtime
+                    .read_skill_resource(name, path.trim(), &sticky_skills)
+                    .await?,
+            )?;
+        } else if line == "/context" || line == "/context status" {
+            println!(
+                "{}",
+                SemanticRenderer::new(preferences.clone())
+                    .with_color(io::stdout().is_terminal())
+                    .context_status(&runtime.context_status(&active_session_id).await?)
+            );
+        } else if line == "/context list" {
+            print_json(&runtime.context_snapshots(&active_session_id).await?)?;
+        } else if line == "/context compact" {
+            print_json(&runtime.compact_context(&active_session_id).await?)?;
+        } else if let Some(snapshot_id) = line.strip_prefix("/context restore ") {
+            print_json(
+                &runtime
+                    .restore_context(&active_session_id, snapshot_id.trim())
+                    .await?,
+            )?;
+        } else if line == "/session" || line == "/session show" {
+            print_json(
+                &runtime
+                    .get_session(&active_session_id)?
+                    .ok_or_else(|| cli_error("active session disappeared"))?,
+            )?;
+        } else if line == "/session new" {
+            active_session_id = runtime.create_session(None)?.id;
+            println!("session={active_session_id}");
+        } else if line == "/session resume" || line == "/resume" || line.starts_with("/resume ") {
+            let limit = if line == "/session resume" {
+                10
+            } else {
+                line.strip_prefix("/resume ")
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::parse::<usize>)
+                    .transpose()?
+                    .unwrap_or(10)
+                    .clamp(1, 100)
+            };
+            match choose_session(runtime, &mut scripted_input, limit)? {
+                SessionPickerInput::Selected(session_id) => {
+                    active_session_id = session_id;
+                    println!("session={active_session_id}");
+                }
+                SessionPickerInput::Command(command) => pending_line = Some(command),
+                SessionPickerInput::Cancelled => {}
+                SessionPickerInput::Invalid => unreachable!("picker retries invalid input"),
+            }
+        } else if let Some(session_id) = line.strip_prefix("/session resume ") {
+            let session_id = session_id.trim();
+            active_session_id = runtime
+                .get_session(session_id)?
+                .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?
+                .id;
+            println!("session={active_session_id}");
+        } else if line.starts_with('/') {
+            println!("unknown terminal command: {line}; use /help");
+        } else {
+            let (prompt, explicit_skills) = resolve_skill_mentions(line, &skill_names);
+            if prompt.is_empty() {
+                println!("Add a message after the @skill name.");
+                continue;
+            }
+            let mut observer =
+                TerminalStreamObserver::with_preferences(StreamTarget::Stdout, preferences.clone());
+            let result = runtime
+                .run_model_with_skills_stream(
+                    "primary",
+                    "You are Colossus.",
+                    &prompt,
+                    None,
+                    Some(&active_session_id),
+                    &explicit_skills,
+                    &sticky_skills,
+                    &mut observer,
+                )
+                .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("run failed; terminal input remains available: {error}");
+                    continue;
+                }
+            };
+            observer.finish_response(&result.output)?;
         }
     }
     Ok(())
@@ -3630,6 +3110,7 @@ async fn dispatch_to_worker_if_active(
     config_path: &Path,
     command: &Command,
     approval_mode: Option<ApprovalMode>,
+    no_alt_screen: bool,
 ) -> Result<bool, Box<dyn Error>> {
     let Some(client) = WorkerClient::discover(config)? else {
         return Ok(false);
@@ -4601,9 +4082,35 @@ async fn dispatch_to_worker_if_active(
             print_json(&client.call(operation).await?)?;
             Ok(true)
         }
-        Command::Repl { session, resume } => {
+        Command::Tui { session, resume } => {
             let themes = ThemeLibrary::load_for_config(config_path)?;
-            worker_repl(&client, session.clone(), *resume, &themes).await?;
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                if output_mode() == OutputMode::Json {
+                    return Err("interactive --output json is not supported; omit it for the TUI or redirect line-mode input".into());
+                }
+                let host = Arc::new(tui_host::WorkerInteractiveHost::new(
+                    client,
+                    themes,
+                    ApprovalMode::Ask,
+                ));
+                run_tui(
+                    host,
+                    TuiOptions {
+                        bootstrap: BootstrapRequest {
+                            session_id: session.clone(),
+                            resume_latest: *resume,
+                        },
+                        screen_mode: if no_alt_screen {
+                            ScreenMode::Inline
+                        } else {
+                            ScreenMode::Alternate
+                        },
+                    },
+                )
+                .await?;
+            } else {
+                worker_line_runner(&client, session.clone(), *resume, &themes).await?;
+            }
             Ok(true)
         }
         Command::Preferences(command) => {
@@ -4613,7 +4120,7 @@ async fn dispatch_to_worker_if_active(
                     WorkerOperation::PresentationHistory { limit }
                 }
                 PreferencesAction::Reset => WorkerOperation::PresentationSave {
-                    preferences: ReplPreferences::default(),
+                    preferences: TerminalPreferences::default(),
                 },
             };
             print_json(&client.call(operation).await?)?;
@@ -4623,7 +4130,7 @@ async fn dispatch_to_worker_if_active(
     }
 }
 
-async fn worker_repl(
+async fn worker_line_runner(
     client: &WorkerClient,
     requested_session: Option<String>,
     resume: bool,
@@ -4655,14 +4162,14 @@ async fn worker_repl(
         )?
         .id
     };
-    let mut preferences = serde_json::from_value::<ReplPreferences>(
+    let mut preferences = serde_json::from_value::<TerminalPreferences>(
         client.call(WorkerOperation::PresentationGet).await?,
     )?;
     set_terminal_preferences(&preferences);
     let mut history_entries = serde_json::from_value::<Vec<String>>(
         client
             .call(WorkerOperation::PresentationHistory {
-                limit: REPL_HISTORY_CAPACITY,
+                limit: TERMINAL_HISTORY_CAPACITY,
             })
             .await?,
     )?;
@@ -4675,64 +4182,64 @@ async fn worker_repl(
         .filter_map(|skill| skill.get("name").and_then(Value::as_str))
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    let composer_metrics = Arc::new(Mutex::new(ComposerMetrics::default()));
-    let mut editor = repl_editor(
-        preferences.multiline,
-        &history_entries,
-        &skill_names,
-        themes,
-        &preferences,
-        Arc::clone(&composer_metrics),
-    )?;
     let stdin = io::stdin();
-    let mut scripted_input = (!stdin.is_terminal()).then(|| stdin.lock());
+    if stdin.is_terminal() {
+        return Err("interactive terminals must use the TUI".into());
+    }
+    let mut scripted_input = stdin.lock();
     let mut sticky_skills = Vec::<String>::new();
-    let mut prompt_state = ReplPromptState::new();
-    let mut prompt_dirty = true;
     let mut pending_line = None::<String>;
-    println!("Colossus Rust REPL via authenticated worker. Type /help for commands.");
+    println!("Colossus Rust line runner via authenticated worker. Type /help for commands.");
     loop {
-        if prompt_dirty {
-            prompt_state
-                .refresh_worker(client, &active_session_id)
-                .await;
-            prompt_dirty = false;
+        let line = if let Some(line) = pending_line.take() {
+            line
+        } else {
+            let mut line = String::new();
+            if scripted_input.read_line(&mut line)? == 0 {
+                break;
+            }
+            line
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
         }
-        let prompt = ColossusPrompt::new(
-            &active_session_id,
-            &prompt_state,
-            &preferences,
-            "worker",
-            Arc::clone(&composer_metrics),
-        );
-        let signal = pending_line.take().map_or_else(
-            || read_repl_signal(&mut editor, &prompt, &mut scripted_input),
-            |line| Ok(Signal::Success(line)),
-        )?;
-        match signal {
-            Signal::Success(line) => {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
+        match client
+            .call(WorkerOperation::PresentationHistoryAppend { entry: line.into() })
+            .await
+        {
+            Ok(value) => match serde_json::from_value::<String>(value) {
+                Ok(entry) => remember_history_entry(&mut history_entries, &entry),
+                Err(error) => eprintln!("history was not persisted: {error}"),
+            },
+            Err(error) => eprintln!("history was not persisted: {error}"),
+        }
+        if matches!(line, "/quit" | "/exit") {
+            break;
+        }
+        match handle_presentation_command(line, &mut preferences, themes)? {
+            PresentationCommandResult::NotHandled => {}
+            PresentationCommandResult::Handled => continue,
+            PresentationCommandResult::Save => {
+                preferences = serde_json::from_value(
+                    client
+                        .call(WorkerOperation::PresentationSave {
+                            preferences: preferences.clone(),
+                        })
+                        .await?,
+                )?;
+                set_terminal_preferences(&preferences);
+                if line.starts_with("/theme") {
+                    print_theme_applied(&preferences, themes)?;
+                } else {
+                    print_json(&preferences)?;
                 }
-                match client
-                    .call(WorkerOperation::PresentationHistoryAppend { entry: line.into() })
-                    .await
-                {
-                    Ok(value) => match serde_json::from_value::<String>(value) {
-                        Ok(entry) => remember_history_entry(&mut history_entries, &entry),
-                        Err(error) => eprintln!("history was not persisted: {error}"),
-                    },
-                    Err(error) => eprintln!("history was not persisted: {error}"),
-                }
-                if matches!(line, "/quit" | "/exit") {
-                    break;
-                }
-                prompt_dirty = repl_line_changes_status(line);
-                match handle_presentation_command(line, &mut preferences, themes)? {
-                    PresentationCommandResult::NotHandled => {}
-                    PresentationCommandResult::Handled => continue,
-                    PresentationCommandResult::Save => {
+                continue;
+            }
+            PresentationCommandResult::ChooseTheme => {
+                match choose_theme(&mut scripted_input, &preferences, themes)? {
+                    ThemePickerInput::Selected(name) => {
+                        themes.select(&name, &mut preferences)?;
                         preferences = serde_json::from_value(
                             client
                                 .call(WorkerOperation::PresentationSave {
@@ -4741,617 +4248,556 @@ async fn worker_repl(
                                 .await?,
                         )?;
                         set_terminal_preferences(&preferences);
-                        if line.starts_with("/theme") {
-                            print_theme_applied(&preferences, themes)?;
-                        } else {
-                            print_json(&preferences)?;
-                        }
-                        editor = repl_editor(
-                            preferences.multiline,
-                            &history_entries,
-                            &skill_names,
-                            themes,
-                            &preferences,
-                            Arc::clone(&composer_metrics),
-                        )?;
-                        continue;
+                        print_theme_applied(&preferences, themes)?;
                     }
-                    PresentationCommandResult::ChooseTheme => {
-                        match choose_theme(
-                            &mut editor,
-                            &prompt,
-                            &mut scripted_input,
-                            &preferences,
-                            themes,
-                        )? {
-                            ThemePickerInput::Selected(name) => {
-                                themes.select(&name, &mut preferences)?;
-                                preferences = serde_json::from_value(
-                                    client
-                                        .call(WorkerOperation::PresentationSave {
-                                            preferences: preferences.clone(),
-                                        })
-                                        .await?,
-                                )?;
-                                set_terminal_preferences(&preferences);
-                                print_theme_applied(&preferences, themes)?;
-                                editor = repl_editor(
-                                    preferences.multiline,
-                                    &history_entries,
-                                    &skill_names,
-                                    themes,
-                                    &preferences,
-                                    Arc::clone(&composer_metrics),
-                                )?;
-                            }
-                            ThemePickerInput::Command(command) => pending_line = Some(command),
-                            ThemePickerInput::Cancelled => {}
-                            ThemePickerInput::Preview(_) | ThemePickerInput::Invalid => {
-                                unreachable!("picker consumes preview and invalid input")
-                            }
-                        }
-                        continue;
+                    ThemePickerInput::Command(command) => pending_line = Some(command),
+                    ThemePickerInput::Cancelled => {}
+                    ThemePickerInput::Preview(_) | ThemePickerInput::Invalid => {
+                        unreachable!("picker consumes preview and invalid input")
                     }
                 }
-                if line == "/help" {
-                    print_repl_help(&preferences);
-                } else if line == "/workflow list" {
-                    print_json(&client.call(WorkerOperation::WorkflowList).await?)?;
-                } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::WorkflowStatus {
-                                run_id: run_id.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/audit verify" {
-                    print_json(&client.call(WorkerOperation::AuditVerify).await?)?;
-                } else if line == "/projection status" {
-                    print_json(&client.call(WorkerOperation::ProjectionStatus).await?)?;
-                } else if line == "/tools" {
-                    print_json(&client.call(WorkerOperation::ToolsList).await?)?;
-                } else if line == "/sessions" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::SessionList { limit: 20 })
-                            .await?,
-                    )?;
-                } else if line == "/work" {
-                    let state = serde_json::from_value::<colossus_contracts::WorkStateSnapshot>(
-                        client
-                            .call(WorkerOperation::WorkState {
-                                session_id: active_session_id.clone(),
-                            })
-                            .await?,
-                    )?;
-                    println!(
-                        "{}",
-                        SemanticRenderer::new(preferences.clone())
-                            .with_color(io::stdout().is_terminal())
-                            .work_state(&state)
-                    );
-                } else if line == "/tasks" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::TaskList {
-                                session_id: Some(active_session_id.clone()),
-                                status: None,
-                                limit: 100,
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/decisions" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::DecisionList {
-                                session_id: Some(active_session_id.clone()),
-                                status: Some(DecisionStatus::Active),
-                                limit: 100,
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/plans" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PlanList {
-                                session_id: Some(active_session_id.clone()),
-                                status: None,
-                                limit: 100,
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/goals" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::GoalList {
-                                session_id: Some(active_session_id.clone()),
-                                status: None,
-                                limit: 100,
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(objective) = line.strip_prefix("/goal ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::GoalRun {
-                                role: "primary".into(),
-                                objective: objective.trim().into(),
-                                session_id: active_session_id.clone(),
-                                max_iterations: 5,
-                                source_plan_id: None,
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/agents" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::AgentList {
-                                session_id: Some(active_session_id.clone()),
-                                status: None,
-                                limit: 100,
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/agents drain" {
-                    print_json(&client.call(WorkerOperation::AgentDrain).await?)?;
-                } else if line == "/memories" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::MemoryList {
-                                status: Some(MemoryStatus::Active),
-                                limit: 20,
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(query) = line.strip_prefix("/memory search ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::MemorySearch {
-                                query: query.trim().into(),
-                                session_id: Some(active_session_id.clone()),
-                                repository_id: None,
-                                limit: 8,
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/research list" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::ResearchList {
-                                session_id: Some(active_session_id.clone()),
-                                limit: 20,
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(question) = line.strip_prefix("/research ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::ResearchRun {
-                                question: question.trim().into(),
-                                session_id: Some(active_session_id.clone()),
-                                depth: ResearchDepth::Standard,
-                                source_kinds: vec![
-                                    ResearchSourceKind::Repo,
-                                    ResearchSourceKind::Web,
-                                    ResearchSourceKind::Mcp,
-                                ],
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/telemetry" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::TelemetryRuns {
-                                session_id: Some(active_session_id.clone()),
-                                limit: 20,
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/telemetry metrics" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::TelemetryMetrics {
-                                session_id: Some(active_session_id.clone()),
-                                limit: 100,
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::TelemetryShow {
-                                id_or_prefix: run_id.trim().into(),
-                                limit: 500,
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/packs" || line == "/packs list" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackList { limit: 100 })
-                            .await?,
-                    )?;
-                } else if let Some(name) = line.strip_prefix("/packs show ") {
-                    let name = name.trim();
-                    let pack = client
-                        .call(WorkerOperation::PackGet { name: name.into() })
-                        .await?;
-                    if pack.is_null() {
-                        return Err(cli_error(format!("pack not found: {name}")).into());
+                continue;
+            }
+        }
+        if line == "/help" {
+            print_terminal_help(&preferences);
+        } else if line == "/workflow list" {
+            print_json(&client.call(WorkerOperation::WorkflowList).await?)?;
+        } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::WorkflowStatus {
+                        run_id: run_id.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/audit verify" {
+            print_json(&client.call(WorkerOperation::AuditVerify).await?)?;
+        } else if line == "/projection status" {
+            print_json(&client.call(WorkerOperation::ProjectionStatus).await?)?;
+        } else if line == "/tools" {
+            print_json(&client.call(WorkerOperation::ToolsList).await?)?;
+        } else if line == "/sessions" {
+            print_json(
+                &client
+                    .call(WorkerOperation::SessionList { limit: 20 })
+                    .await?,
+            )?;
+        } else if line == "/work" {
+            let state = serde_json::from_value::<colossus_contracts::WorkStateSnapshot>(
+                client
+                    .call(WorkerOperation::WorkState {
+                        session_id: active_session_id.clone(),
+                    })
+                    .await?,
+            )?;
+            println!(
+                "{}",
+                SemanticRenderer::new(preferences.clone())
+                    .with_color(io::stdout().is_terminal())
+                    .work_state(&state)
+            );
+        } else if line == "/tasks" {
+            print_json(
+                &client
+                    .call(WorkerOperation::TaskList {
+                        session_id: Some(active_session_id.clone()),
+                        status: None,
+                        limit: 100,
+                    })
+                    .await?,
+            )?;
+        } else if line == "/decisions" {
+            print_json(
+                &client
+                    .call(WorkerOperation::DecisionList {
+                        session_id: Some(active_session_id.clone()),
+                        status: Some(DecisionStatus::Active),
+                        limit: 100,
+                    })
+                    .await?,
+            )?;
+        } else if line == "/plans" {
+            print_json(
+                &client
+                    .call(WorkerOperation::PlanList {
+                        session_id: Some(active_session_id.clone()),
+                        status: None,
+                        limit: 100,
+                    })
+                    .await?,
+            )?;
+        } else if line == "/goals" {
+            print_json(
+                &client
+                    .call(WorkerOperation::GoalList {
+                        session_id: Some(active_session_id.clone()),
+                        status: None,
+                        limit: 100,
+                    })
+                    .await?,
+            )?;
+        } else if let Some(objective) = line.strip_prefix("/goal ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::GoalRun {
+                        role: "primary".into(),
+                        objective: objective.trim().into(),
+                        session_id: active_session_id.clone(),
+                        max_iterations: 5,
+                        source_plan_id: None,
+                    })
+                    .await?,
+            )?;
+        } else if line == "/agents" {
+            print_json(
+                &client
+                    .call(WorkerOperation::AgentList {
+                        session_id: Some(active_session_id.clone()),
+                        status: None,
+                        limit: 100,
+                    })
+                    .await?,
+            )?;
+        } else if line == "/agents drain" {
+            print_json(&client.call(WorkerOperation::AgentDrain).await?)?;
+        } else if line == "/memories" {
+            print_json(
+                &client
+                    .call(WorkerOperation::MemoryList {
+                        status: Some(MemoryStatus::Active),
+                        limit: 20,
+                    })
+                    .await?,
+            )?;
+        } else if let Some(query) = line.strip_prefix("/memory search ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::MemorySearch {
+                        query: query.trim().into(),
+                        session_id: Some(active_session_id.clone()),
+                        repository_id: None,
+                        limit: 8,
+                    })
+                    .await?,
+            )?;
+        } else if line == "/research list" {
+            print_json(
+                &client
+                    .call(WorkerOperation::ResearchList {
+                        session_id: Some(active_session_id.clone()),
+                        limit: 20,
+                    })
+                    .await?,
+            )?;
+        } else if let Some(question) = line.strip_prefix("/research ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::ResearchRun {
+                        question: question.trim().into(),
+                        session_id: Some(active_session_id.clone()),
+                        depth: ResearchDepth::Standard,
+                        source_kinds: vec![
+                            ResearchSourceKind::Repo,
+                            ResearchSourceKind::Web,
+                            ResearchSourceKind::Mcp,
+                        ],
+                    })
+                    .await?,
+            )?;
+        } else if line == "/telemetry" {
+            print_json(
+                &client
+                    .call(WorkerOperation::TelemetryRuns {
+                        session_id: Some(active_session_id.clone()),
+                        limit: 20,
+                    })
+                    .await?,
+            )?;
+        } else if line == "/telemetry metrics" {
+            print_json(
+                &client
+                    .call(WorkerOperation::TelemetryMetrics {
+                        session_id: Some(active_session_id.clone()),
+                        limit: 100,
+                    })
+                    .await?,
+            )?;
+        } else if let Some(run_id) = line.strip_prefix("/telemetry ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::TelemetryShow {
+                        id_or_prefix: run_id.trim().into(),
+                        limit: 500,
+                    })
+                    .await?,
+            )?;
+        } else if line == "/packs" || line == "/packs list" {
+            print_json(
+                &client
+                    .call(WorkerOperation::PackList { limit: 100 })
+                    .await?,
+            )?;
+        } else if let Some(name) = line.strip_prefix("/packs show ") {
+            let name = name.trim();
+            let pack = client
+                .call(WorkerOperation::PackGet { name: name.into() })
+                .await?;
+            if pack.is_null() {
+                return Err(cli_error(format!("pack not found: {name}")).into());
+            }
+            print_json(&pack)?;
+        } else if let Some(path) = line
+            .strip_prefix("/packs verify ")
+            .or_else(|| line.strip_prefix("/packs validate "))
+        {
+            print_json(
+                &client
+                    .call(WorkerOperation::PackVerify {
+                        path: path.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(value) = line.strip_prefix("/packs install ") {
+            let value = value.trim();
+            let (path, allow_untrusted) = value
+                .strip_suffix(" --allow-untrusted")
+                .map_or((value, false), |path| (path.trim(), true));
+            print_json(
+                &client
+                    .call(WorkerOperation::PackInstall {
+                        path: path.into(),
+                        allow_untrusted,
+                    })
+                    .await?,
+            )?;
+        } else if let Some(name) = line.strip_prefix("/packs enable ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::PackEnable {
+                        name: name.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(name) = line.strip_prefix("/packs disable ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::PackDisable {
+                        name: name.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(name) = line.strip_prefix("/packs uninstall ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::PackUninstall {
+                        name: name.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(tool) = line.strip_prefix("/packs call ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::PackCall {
+                        tool: tool.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/packs trust" || line == "/packs trust list" {
+            print_json(
+                &client
+                    .call(WorkerOperation::PackTrustList { limit: 100 })
+                    .await?,
+            )?;
+        } else if let Some(value) = line.strip_prefix("/packs trust add ") {
+            let (publisher, public_key) = value
+                .trim()
+                .split_once(' ')
+                .ok_or_else(|| cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY"))?;
+            print_json(
+                &client
+                    .call(WorkerOperation::PackTrustAdd {
+                        publisher: publisher.into(),
+                        public_key: public_key.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(path) = line.strip_prefix("/bundle verify ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::BundleVerify {
+                        path: path.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/integrations" {
+            print_json(
+                &client
+                    .call(WorkerOperation::IntegrationList { limit: 100 })
+                    .await?,
+            )?;
+        } else if let Some(name) = line.strip_prefix("/integration show ") {
+            let name = name.trim();
+            let integration = client
+                .call(WorkerOperation::IntegrationGet { name: name.into() })
+                .await?;
+            if integration.is_null() {
+                return Err(cli_error(format!("integration not found: {name}")).into());
+            }
+            print_json(&integration)?;
+        } else if let Some(name) = line.strip_prefix("/integration disconnect ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::IntegrationDisconnect {
+                        name: name.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(arguments) = line.strip_prefix("/integration call ") {
+            let (tool, arguments) = arguments
+                .trim()
+                .split_once(' ')
+                .ok_or_else(|| cli_error("usage: /integration call TOOL JSON"))?;
+            print_json(
+                &client
+                    .call(WorkerOperation::IntegrationCall {
+                        tool: tool.into(),
+                        arguments_source: arguments.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/mcp servers" {
+            print_json(&client.call(WorkerOperation::McpServers).await?)?;
+        } else if line == "/mcp tools" {
+            print_json(
+                &client
+                    .call(WorkerOperation::McpTools { server: None })
+                    .await?,
+            )?;
+        } else if let Some(server) = line.strip_prefix("/mcp tools ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::McpTools {
+                        server: Some(server.trim().into()),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(arguments) = line.strip_prefix("/mcp call ") {
+            let mut parts = arguments.trim().splitn(3, ' ');
+            let server = parts
+                .next()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+            let tool = parts
+                .next()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+            let arguments_source = parts
+                .next()
+                .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
+            print_json(
+                &client
+                    .call(WorkerOperation::McpCall {
+                        server: server.into(),
+                        tool: tool.into(),
+                        arguments_source: arguments_source.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/skills" {
+            let mut skills = client.call(WorkerOperation::SkillList).await?;
+            if let Some(skills) = skills.as_array_mut() {
+                for skill in skills {
+                    let is_active = skill
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| sticky_skills.iter().any(|item| item == name));
+                    if let Some(skill) = skill.as_object_mut() {
+                        skill.insert("active".into(), Value::Bool(is_active));
                     }
-                    print_json(&pack)?;
-                } else if let Some(path) = line
-                    .strip_prefix("/packs verify ")
-                    .or_else(|| line.strip_prefix("/packs validate "))
-                {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackVerify {
-                                path: path.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(value) = line.strip_prefix("/packs install ") {
-                    let value = value.trim();
-                    let (path, allow_untrusted) = value
-                        .strip_suffix(" --allow-untrusted")
-                        .map_or((value, false), |path| (path.trim(), true));
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackInstall {
-                                path: path.into(),
-                                allow_untrusted,
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(name) = line.strip_prefix("/packs enable ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackEnable {
-                                name: name.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(name) = line.strip_prefix("/packs disable ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackDisable {
-                                name: name.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(name) = line.strip_prefix("/packs uninstall ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackUninstall {
-                                name: name.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(tool) = line.strip_prefix("/packs call ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackCall {
-                                tool: tool.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/packs trust" || line == "/packs trust list" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackTrustList { limit: 100 })
-                            .await?,
-                    )?;
-                } else if let Some(value) = line.strip_prefix("/packs trust add ") {
-                    let (publisher, public_key) =
-                        value.trim().split_once(' ').ok_or_else(|| {
-                            cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY")
-                        })?;
-                    print_json(
-                        &client
-                            .call(WorkerOperation::PackTrustAdd {
-                                publisher: publisher.into(),
-                                public_key: public_key.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(path) = line.strip_prefix("/bundle verify ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::BundleVerify {
-                                path: path.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/integrations" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::IntegrationList { limit: 100 })
-                            .await?,
-                    )?;
-                } else if let Some(name) = line.strip_prefix("/integration show ") {
-                    let name = name.trim();
-                    let integration = client
-                        .call(WorkerOperation::IntegrationGet { name: name.into() })
-                        .await?;
-                    if integration.is_null() {
-                        return Err(cli_error(format!("integration not found: {name}")).into());
-                    }
-                    print_json(&integration)?;
-                } else if let Some(name) = line.strip_prefix("/integration disconnect ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::IntegrationDisconnect {
-                                name: name.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(arguments) = line.strip_prefix("/integration call ") {
-                    let (tool, arguments) = arguments
-                        .trim()
-                        .split_once(' ')
-                        .ok_or_else(|| cli_error("usage: /integration call TOOL JSON"))?;
-                    print_json(
-                        &client
-                            .call(WorkerOperation::IntegrationCall {
-                                tool: tool.into(),
-                                arguments_source: arguments.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/mcp servers" {
-                    print_json(&client.call(WorkerOperation::McpServers).await?)?;
-                } else if line == "/mcp tools" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::McpTools { server: None })
-                            .await?,
-                    )?;
-                } else if let Some(server) = line.strip_prefix("/mcp tools ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::McpTools {
-                                server: Some(server.trim().into()),
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(arguments) = line.strip_prefix("/mcp call ") {
-                    let mut parts = arguments.trim().splitn(3, ' ');
-                    let server = parts
-                        .next()
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
-                    let tool = parts
-                        .next()
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
-                    let arguments_source = parts
-                        .next()
-                        .ok_or_else(|| cli_error("usage: /mcp call SERVER TOOL JSON"))?;
-                    print_json(
-                        &client
-                            .call(WorkerOperation::McpCall {
-                                server: server.into(),
-                                tool: tool.into(),
-                                arguments_source: arguments_source.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/skills" {
-                    let mut skills = client.call(WorkerOperation::SkillList).await?;
-                    if let Some(skills) = skills.as_array_mut() {
-                        for skill in skills {
-                            let is_active = skill
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .is_some_and(|name| sticky_skills.iter().any(|item| item == name));
-                            if let Some(skill) = skill.as_object_mut() {
-                                skill.insert("active".into(), Value::Bool(is_active));
-                            }
-                        }
-                    }
-                    print_json(&skills)?;
-                } else if line == "/skill active" {
-                    if sticky_skills.is_empty() {
-                        println!("No skills are active.");
-                    } else {
-                        println!("Active skills: {}", sticky_skills.join(", "));
-                    }
-                } else if line == "/skill clear" {
-                    sticky_skills.clear();
-                    println!("active skills cleared");
-                } else if let Some(name) = line.strip_prefix("/skill use ") {
-                    let name = name.trim();
-                    if name.is_empty() {
-                        return Err("skill name is required".into());
-                    }
-                    let skill = client
-                        .call(WorkerOperation::SkillGet { name: name.into() })
-                        .await?;
-                    if skill.is_null() {
-                        return Err(cli_error(format!("skill not found: {name}")).into());
-                    }
-                    if !sticky_skills.iter().any(|active| active == name) {
-                        sticky_skills.push(name.into());
-                    }
-                    println!("active skill={name}");
-                } else if let Some(name) = line.strip_prefix("/skill show ") {
-                    let name = name.trim();
-                    let skill = client
-                        .call(WorkerOperation::SkillGet { name: name.into() })
-                        .await?;
-                    if skill.is_null() {
-                        return Err(cli_error(format!("skill not found: {name}")).into());
-                    }
-                    print_json(&skill)?;
-                } else if let Some(name) = line.strip_prefix("/skill resources ") {
-                    let name = name.trim();
-                    if !sticky_skills.iter().any(|active| active == name) {
-                        return Err(cli_error(format!("skill is not active: {name}")).into());
-                    }
-                    print_json(
-                        &client
-                            .call(WorkerOperation::SkillResources { name: name.into() })
-                            .await?,
-                    )?;
-                } else if let Some(arguments) = line.strip_prefix("/skill read ") {
-                    let (name, path) = arguments
-                        .trim()
-                        .split_once(' ')
-                        .ok_or_else(|| cli_error("usage: /skill read NAME PATH"))?;
-                    if !sticky_skills.iter().any(|active| active == name) {
-                        return Err(cli_error(format!("skill is not active: {name}")).into());
-                    }
-                    print_json(
-                        &client
-                            .call(WorkerOperation::SkillResourceRead {
-                                name: name.into(),
-                                path: path.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/context" || line == "/context status" {
-                    let status = serde_json::from_value::<colossus_contracts::ContextStatus>(
-                        client
-                            .call(WorkerOperation::ContextStatus {
-                                session_id: active_session_id.clone(),
-                            })
-                            .await?,
-                    )?;
-                    println!(
-                        "{}",
-                        SemanticRenderer::new(preferences.clone())
-                            .with_color(io::stdout().is_terminal())
-                            .context_status(&status)
-                    );
-                } else if line == "/context list" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::ContextList {
-                                session_id: active_session_id.clone(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/context compact" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::ContextCompact {
-                                session_id: active_session_id.clone(),
-                            })
-                            .await?,
-                    )?;
-                } else if let Some(snapshot_id) = line.strip_prefix("/context restore ") {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::ContextRestore {
-                                session_id: active_session_id.clone(),
-                                snapshot_id: snapshot_id.trim().into(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/session" || line == "/session show" {
-                    print_json(
-                        &client
-                            .call(WorkerOperation::SessionGet {
-                                session_id: active_session_id.clone(),
-                            })
-                            .await?,
-                    )?;
-                } else if line == "/session new" {
-                    active_session_id =
-                        serde_json::from_value::<colossus_contracts::SessionSummary>(
-                            client
-                                .call(WorkerOperation::SessionCreate { title: None })
-                                .await?,
-                        )?
-                        .id;
-                    println!("session={active_session_id}");
-                } else if line == "/session resume"
-                    || line == "/resume"
-                    || line.starts_with("/resume ")
-                {
-                    let limit = if line == "/session resume" {
-                        10
-                    } else {
-                        line.strip_prefix("/resume ")
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(str::parse::<usize>)
-                            .transpose()?
-                            .unwrap_or(10)
-                            .clamp(1, 100)
-                    };
-                    match choose_worker_session(
-                        client,
-                        &mut editor,
-                        &prompt,
-                        &mut scripted_input,
-                        limit,
-                    )
-                    .await?
-                    {
-                        SessionPickerInput::Selected(session_id) => {
-                            active_session_id = session_id;
-                            println!("session={active_session_id}");
-                        }
-                        SessionPickerInput::Command(command) => pending_line = Some(command),
-                        SessionPickerInput::Cancelled => {}
-                        SessionPickerInput::Invalid => unreachable!("picker retries invalid input"),
-                    }
-                } else if let Some(session_id) = line.strip_prefix("/session resume ") {
-                    let session_id = session_id.trim();
-                    let session = client
-                        .call(WorkerOperation::SessionGet {
-                            session_id: session_id.into(),
-                        })
-                        .await?;
-                    if session.is_null() {
-                        return Err(format!("session not found: {session_id}").into());
-                    }
-                    active_session_id = session_id.into();
-                    println!("session={active_session_id}");
-                } else if line.starts_with('/') {
-                    println!("unknown REPL command: {line}; use /help");
-                } else {
-                    let (prompt, explicit_skills) = resolve_skill_mentions(line, &skill_names);
-                    if prompt.is_empty() {
-                        println!("Add a message after the @skill name.");
-                        continue;
-                    }
-                    let mut observer = TerminalStreamObserver::with_preferences(
-                        StreamTarget::Stdout,
-                        preferences.clone(),
-                    );
-                    let result = client
-                        .run_model(
-                            WorkerOperation::RunModel {
-                                role: "primary".into(),
-                                instructions: "You are Colossus.".into(),
-                                prompt,
-                                max_turns: None,
-                                session_id: Some(active_session_id.clone()),
-                                explicit_skills,
-                                sticky_skills: sticky_skills.clone(),
-                            },
-                            &mut observer,
-                        )
-                        .await;
-                    let result = match result {
-                        Ok(result) => result,
-                        Err(error) => {
-                            prompt_state.last_status = "error".into();
-                            eprintln!("run failed; REPL remains available: {error}");
-                            continue;
-                        }
-                    };
-                    observer.finish_response(&result.output)?;
-                    prompt_state.last_status = "ok".into();
-                    client.call(WorkerOperation::Drain).await?;
                 }
             }
-            Signal::CtrlD | Signal::CtrlC => break,
-            _ => continue,
+            print_json(&skills)?;
+        } else if line == "/skill active" {
+            if sticky_skills.is_empty() {
+                println!("No skills are active.");
+            } else {
+                println!("Active skills: {}", sticky_skills.join(", "));
+            }
+        } else if line == "/skill clear" {
+            sticky_skills.clear();
+            println!("active skills cleared");
+        } else if let Some(name) = line.strip_prefix("/skill use ") {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err("skill name is required".into());
+            }
+            let skill = client
+                .call(WorkerOperation::SkillGet { name: name.into() })
+                .await?;
+            if skill.is_null() {
+                return Err(cli_error(format!("skill not found: {name}")).into());
+            }
+            if !sticky_skills.iter().any(|active| active == name) {
+                sticky_skills.push(name.into());
+            }
+            println!("active skill={name}");
+        } else if let Some(name) = line.strip_prefix("/skill show ") {
+            let name = name.trim();
+            let skill = client
+                .call(WorkerOperation::SkillGet { name: name.into() })
+                .await?;
+            if skill.is_null() {
+                return Err(cli_error(format!("skill not found: {name}")).into());
+            }
+            print_json(&skill)?;
+        } else if let Some(name) = line.strip_prefix("/skill resources ") {
+            let name = name.trim();
+            if !sticky_skills.iter().any(|active| active == name) {
+                return Err(cli_error(format!("skill is not active: {name}")).into());
+            }
+            print_json(
+                &client
+                    .call(WorkerOperation::SkillResources { name: name.into() })
+                    .await?,
+            )?;
+        } else if let Some(arguments) = line.strip_prefix("/skill read ") {
+            let (name, path) = arguments
+                .trim()
+                .split_once(' ')
+                .ok_or_else(|| cli_error("usage: /skill read NAME PATH"))?;
+            if !sticky_skills.iter().any(|active| active == name) {
+                return Err(cli_error(format!("skill is not active: {name}")).into());
+            }
+            print_json(
+                &client
+                    .call(WorkerOperation::SkillResourceRead {
+                        name: name.into(),
+                        path: path.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/context" || line == "/context status" {
+            let status = serde_json::from_value::<colossus_contracts::ContextStatus>(
+                client
+                    .call(WorkerOperation::ContextStatus {
+                        session_id: active_session_id.clone(),
+                    })
+                    .await?,
+            )?;
+            println!(
+                "{}",
+                SemanticRenderer::new(preferences.clone())
+                    .with_color(io::stdout().is_terminal())
+                    .context_status(&status)
+            );
+        } else if line == "/context list" {
+            print_json(
+                &client
+                    .call(WorkerOperation::ContextList {
+                        session_id: active_session_id.clone(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/context compact" {
+            print_json(
+                &client
+                    .call(WorkerOperation::ContextCompact {
+                        session_id: active_session_id.clone(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(snapshot_id) = line.strip_prefix("/context restore ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::ContextRestore {
+                        session_id: active_session_id.clone(),
+                        snapshot_id: snapshot_id.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/session" || line == "/session show" {
+            print_json(
+                &client
+                    .call(WorkerOperation::SessionGet {
+                        session_id: active_session_id.clone(),
+                    })
+                    .await?,
+            )?;
+        } else if line == "/session new" {
+            active_session_id = serde_json::from_value::<colossus_contracts::SessionSummary>(
+                client
+                    .call(WorkerOperation::SessionCreate { title: None })
+                    .await?,
+            )?
+            .id;
+            println!("session={active_session_id}");
+        } else if line == "/session resume" || line == "/resume" || line.starts_with("/resume ") {
+            let limit = if line == "/session resume" {
+                10
+            } else {
+                line.strip_prefix("/resume ")
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::parse::<usize>)
+                    .transpose()?
+                    .unwrap_or(10)
+                    .clamp(1, 100)
+            };
+            match choose_worker_session(client, &mut scripted_input, limit).await? {
+                SessionPickerInput::Selected(session_id) => {
+                    active_session_id = session_id;
+                    println!("session={active_session_id}");
+                }
+                SessionPickerInput::Command(command) => pending_line = Some(command),
+                SessionPickerInput::Cancelled => {}
+                SessionPickerInput::Invalid => unreachable!("picker retries invalid input"),
+            }
+        } else if let Some(session_id) = line.strip_prefix("/session resume ") {
+            let session_id = session_id.trim();
+            let session = client
+                .call(WorkerOperation::SessionGet {
+                    session_id: session_id.into(),
+                })
+                .await?;
+            if session.is_null() {
+                return Err(format!("session not found: {session_id}").into());
+            }
+            active_session_id = session_id.into();
+            println!("session={active_session_id}");
+        } else if line.starts_with('/') {
+            println!("unknown terminal command: {line}; use /help");
+        } else {
+            let (prompt, explicit_skills) = resolve_skill_mentions(line, &skill_names);
+            if prompt.is_empty() {
+                println!("Add a message after the @skill name.");
+                continue;
+            }
+            let mut observer =
+                TerminalStreamObserver::with_preferences(StreamTarget::Stdout, preferences.clone());
+            let result = client
+                .run_model(
+                    WorkerOperation::RunModel {
+                        role: "primary".into(),
+                        instructions: "You are Colossus.".into(),
+                        prompt,
+                        max_turns: None,
+                        session_id: Some(active_session_id.clone()),
+                        explicit_skills,
+                        sticky_skills: sticky_skills.clone(),
+                    },
+                    &mut observer,
+                )
+                .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("run failed; terminal input remains available: {error}");
+                    continue;
+                }
+            };
+            observer.finish_response(&result.output)?;
+            client.call(WorkerOperation::Drain).await?;
         }
     }
     Ok(())
@@ -5359,9 +4805,7 @@ async fn worker_repl(
 
 async fn choose_worker_session(
     client: &WorkerClient,
-    editor: &mut Reedline,
-    prompt: &dyn Prompt,
-    scripted_input: &mut Option<io::StdinLock<'_>>,
+    scripted_input: &mut dyn BufRead,
     limit: usize,
 ) -> Result<SessionPickerInput, Box<dyn Error>> {
     let mut sessions = serde_json::from_value::<Vec<colossus_contracts::SessionSummary>>(
@@ -5387,11 +4831,14 @@ async fn choose_worker_session(
             session.message_count
         );
     }
-    println!("Enter a number or exact session id (blank cancels; /command returns to the REPL).");
+    println!(
+        "Enter a number or exact session id (blank cancels; /command returns to the terminal)."
+    );
     loop {
-        let Signal::Success(choice) = read_repl_signal(editor, prompt, scripted_input)? else {
+        let mut choice = String::new();
+        if scripted_input.read_line(&mut choice)? == 0 {
             return Ok(SessionPickerInput::Cancelled);
-        };
+        }
         let parsed = parse_session_picker_input(&choice, &sessions);
         if parsed != SessionPickerInput::Invalid {
             return Ok(parsed);
@@ -5424,7 +4871,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[tokio::main]
 async fn runtime_main() -> Result<(), Box<dyn Error>> {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) if error.kind() == ErrorKind::MissingSubcommand => {
+            let mut arguments = std::env::args_os().collect::<Vec<_>>();
+            arguments.push("tui".into());
+            Cli::parse_from(arguments)
+        }
+        Err(error) => error.exit(),
+    };
     set_output_mode(cli.output);
     if matches!(cli.command, Command::SandboxHelper) {
         colossus_sandbox::run_helper_stdio()?;
@@ -5452,8 +4907,13 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
             shutdown: false,
             status: false,
         } => {
-            let approvals = approval_provider(&cli.command, cli.approval_mode);
-            let server = WorkerServer::open(&config, approvals)?;
+            let mode = match cli.approval_mode.unwrap_or(ApprovalMode::Ask) {
+                ApprovalMode::Deny => WorkerApprovalMode::Deny,
+                ApprovalMode::Ask => WorkerApprovalMode::Ask,
+                ApprovalMode::RiskAuto => WorkerApprovalMode::RiskAuto,
+                ApprovalMode::FullAccess => WorkerApprovalMode::FullAccess,
+            };
+            let server = WorkerServer::open_with_mode(&config, mode)?;
             eprintln!("worker listening on {}", server.endpoint());
             server.serve().await?;
             return Ok(());
@@ -5470,27 +4930,67 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
         }
         _ => {}
     }
-    if dispatch_to_worker_if_active(&config, &cli.config, &cli.command, cli.approval_mode).await? {
+    if dispatch_to_worker_if_active(
+        &config,
+        &cli.config,
+        &cli.command,
+        cli.approval_mode,
+        cli.no_alt_screen,
+    )
+    .await?
+    {
         return Ok(());
     }
-    let approvals = approval_provider(&cli.command, cli.approval_mode);
+    let interactive_tui = matches!(&cli.command, Command::Tui { .. })
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal();
+    if interactive_tui && cli.output == OutputMode::Json {
+        return Err(
+            "interactive --output json is not supported; omit it for the TUI or redirect line-mode input"
+                .into(),
+        );
+    }
+    let prompt_router = interactive_tui.then(|| Arc::new(tui_host::TuiPromptRouter::default()));
+    let configured_approval = cli.approval_mode.unwrap_or(ApprovalMode::Ask);
+    let approvals: Arc<dyn ApprovalProvider> = if let Some(router) = prompt_router.as_ref()
+        && matches!(
+            configured_approval,
+            ApprovalMode::Ask | ApprovalMode::RiskAuto
+        ) {
+        Arc::new(tui_host::TuiApprovalProvider {
+            router: Arc::clone(router),
+            risk_auto: configured_approval == ApprovalMode::RiskAuto,
+        })
+    } else {
+        approval_provider(&cli.command, cli.approval_mode)
+    };
     let user_prompts: Option<Arc<dyn UserPromptProvider>> =
-        (matches!(&cli.command, Command::Repl { .. }) && io::stdin().is_terminal()).then(|| {
-            Arc::new(TerminalUserPrompt {
+        if let Some(router) = prompt_router.as_ref() {
+            Some(Arc::new(tui_host::TuiUserPromptProvider {
+                router: Arc::clone(router),
+            }))
+        } else if matches!(&cli.command, Command::Tui { .. }) && io::stdin().is_terminal() {
+            Some(Arc::new(TerminalUserPrompt {
                 lock: Mutex::new(()),
-            }) as Arc<dyn UserPromptProvider>
-        });
-    let runtime = Runtime::open_with_interfaces(&config, approvals, user_prompts)?;
+            }))
+        } else {
+            None
+        };
+    let runtime = Arc::new(Runtime::open_with_interfaces(
+        &config,
+        approvals,
+        user_prompts,
+    )?);
     match cli.command {
         Command::Config(_) => unreachable!("handled before runtime construction"),
         Command::Preferences(command) => match command.command {
             PreferencesAction::Show => print_json(&runtime.presentation_preferences()?)?,
             PreferencesAction::History { limit } => {
-                print_json(&runtime.repl_history(limit.clamp(1, REPL_HISTORY_CAPACITY))?)?
+                print_json(&runtime.terminal_history(limit.clamp(1, TERMINAL_HISTORY_CAPACITY))?)?
             }
             PreferencesAction::Reset => print_json(
                 &runtime
-                    .save_presentation_preferences(ReplPreferences::default())
+                    .save_presentation_preferences(TerminalPreferences::default())
                     .await?,
             )?,
         },
@@ -6311,16 +5811,36 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
             let result = runtime.echo(&message).await?;
             println!("{}", String::from_utf8_lossy(&result.bytes));
         }
-        Command::Repl { session, resume } => {
+        Command::Tui { session, resume } if interactive_tui => {
             let themes = ThemeLibrary::load_for_config(&cli.config)?;
-            repl(
-                &runtime,
-                session,
-                resume,
-                cli.approval_mode.unwrap_or(ApprovalMode::Ask),
-                &themes,
+            let router = prompt_router
+                .clone()
+                .ok_or_else(|| cli_error("interactive prompt router is unavailable"))?;
+            let host = Arc::new(tui_host::EmbeddedInteractiveHost::new(
+                Arc::clone(&runtime),
+                themes,
+                router,
+                configured_approval,
+            ));
+            run_tui(
+                host,
+                TuiOptions {
+                    bootstrap: BootstrapRequest {
+                        session_id: session,
+                        resume_latest: resume,
+                    },
+                    screen_mode: if cli.no_alt_screen {
+                        ScreenMode::Inline
+                    } else {
+                        ScreenMode::Alternate
+                    },
+                },
             )
-            .await?
+            .await?;
+        }
+        Command::Tui { session, resume } => {
+            let themes = ThemeLibrary::load_for_config(&cli.config)?;
+            line_runner(&runtime, session, resume, configured_approval, &themes).await?
         }
         Command::Worker {
             once,
@@ -6354,11 +5874,6 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_composer_metrics() -> Arc<Mutex<ComposerMetrics>> {
-        Arc::new(Mutex::new(ComposerMetrics::default()))
-    }
-
     fn session_summary(id: &str) -> SessionSummary {
         SessionSummary {
             id: id.into(),
@@ -6414,7 +5929,7 @@ mod tests {
             OutputMode::Auto,
             false,
             80,
-            ReplPreferences::default(),
+            TerminalPreferences::default(),
         )
         .expect("redirected output");
         assert_eq!(
@@ -6427,7 +5942,7 @@ mod tests {
             OutputMode::Auto,
             true,
             80,
-            ReplPreferences::default(),
+            TerminalPreferences::default(),
         )
         .expect("terminal output");
         assert!(terminal.contains("Name"));
@@ -6439,7 +5954,7 @@ mod tests {
             OutputMode::Json,
             true,
             80,
-            ReplPreferences::default(),
+            TerminalPreferences::default(),
         )
         .expect("explicit json");
         assert_eq!(
@@ -6449,11 +5964,12 @@ mod tests {
     }
 
     #[test]
-    fn repl_completion_catalog_includes_commands_and_discovered_skills() {
+    fn terminal_completion_catalog_includes_commands_and_discovered_skills() {
         let themes = ThemeLibrary::default();
         let values =
-            repl_completion_values(&["skill-creator".into(), "repo-review".into()], &themes);
+            terminal_completion_values(&["skill-creator".into(), "repo-review".into()], &themes);
         assert!(values.contains(&"/help".into()));
+        assert!(values.contains(&"/tui prefs".into()));
         assert!(values.contains(&"/workflow status".into()));
         assert!(values.contains(&"/theme hacker".into()));
         assert!(values.contains(&"/theme preview high_contrast".into()));
@@ -6472,139 +5988,16 @@ mod tests {
     }
 
     #[test]
-    fn repl_typeahead_uses_commands_skills_and_history_without_hinting_mid_buffer() {
-        let themes = ThemeLibrary::default();
-        let preferences = ReplPreferences::default();
-        let completions = repl_completion_values(&["repo-review".into()], &themes);
-        let mut hinter = ColossusHinter::new(completions, &preferences);
-        let mut history = FileBackedHistory::new(10).expect("history");
-        history
-            .save(HistoryItem::from_command_line(
-                "Reply with exactly: connected",
-            ))
-            .expect("save history");
+    fn tui_parses_with_the_global_inline_flag_and_repl_is_rejected() {
+        let tui =
+            Cli::try_parse_from(["colossus", "tui", "--no-alt-screen"]).expect("explicit TUI");
+        assert!(tui.no_alt_screen);
+        assert!(matches!(tui.command, Command::Tui { .. }));
 
-        let command = "/session res";
-        assert_eq!(
-            hinter.handle(command, command.len(), &history, false, ""),
-            "ume"
-        );
-        assert_eq!(hinter.complete_hint(), "ume");
-        assert_eq!(hinter.next_hint_token(), "ume");
-
-        let styled_command = hinter.handle(command, command.len(), &history, true, "");
-        assert!(styled_command.contains("\u{1b}["));
-        assert!(styled_command.contains("ume"));
-        assert_eq!(hinter.complete_hint(), "ume");
-
-        let skill = "@repo";
-        assert_eq!(
-            hinter.handle(skill, skill.len(), &history, false, ""),
-            "-review"
-        );
-
-        let prior_prompt = "Reply with ex";
-        assert_eq!(
-            hinter.handle(prior_prompt, prior_prompt.len(), &history, false, ""),
-            "actly: connected"
-        );
-        assert_eq!(hinter.handle(prior_prompt, 5, &history, false, ""), "");
-
-        let hacker = ReplPreferences {
-            theme: ThemeName::Hacker,
-            ..ReplPreferences::default()
-        };
-        let mut hacker_hinter = ColossusHinter::new(repl_completion_values(&[], &themes), &hacker);
-        let hacker_hint = hacker_hinter.handle(command, command.len(), &history, true, "");
-        assert!(hacker_hint.contains("38;2;63;191;106"));
-        assert_ne!(styled_command, hacker_hint);
-    }
-
-    #[test]
-    fn repl_prompt_renders_cached_runtime_and_presentation_status() {
-        let state = ReplPromptState {
-            context: Some(ContextStatus {
-                session_id: "019f4ddd-113e-73b3-a7f4-97fb9af1cab4".into(),
-                message_count: 12,
-                raw_token_estimate: 1_400,
-                token_estimate: 1_024,
-                context_window_tokens: 131_072,
-                threshold_tokens: 100_000,
-                target_tokens: 75_000,
-                active_snapshot_id: None,
-                compacted: false,
-                auto_compaction: true,
-            }),
-            work: Some(WorkStateSnapshot {
-                session_id: "019f4ddd-113e-73b3-a7f4-97fb9af1cab4".into(),
-                tasks: Vec::new(),
-                open_task_count: 0,
-                active_decisions: Vec::new(),
-                actionable_plans: Vec::new(),
-                current_goals: Vec::new(),
-                current_subagents: Vec::new(),
-            }),
-            route: Some(ProviderRoute {
-                role: "primary".into(),
-                profile: "openrouter".into(),
-                provider: "open_ai_compatible".into(),
-                model: "openrouter/free".into(),
-            }),
-            last_status: "ok".into(),
-        };
-        let preferences = ReplPreferences {
-            multiline: true,
-            show_reasoning: true,
-            ..ReplPreferences::default()
-        };
-        let prompt = ColossusPrompt::new(
-            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
-            &state,
-            &preferences,
-            "ask",
-            test_composer_metrics(),
-        );
-
-        assert_eq!(prompt.render_prompt_left(), "Colossus 019f4ddd");
-        let right = prompt.render_prompt_right_for_width(240);
-        assert!(right.contains("primary:openrouter/free@openrouter"));
-        assert!(right.contains("ctx=1024/131072 msgs=12"));
-        assert!(right.contains("work=0/0"));
-        assert!(right.contains("approval=ask"));
-        assert!(right.contains("stream=on events=compact reasoning=on status=ok"));
-        assert!(right.contains("pos=1:1 chars=0 lines=1"));
-        assert_eq!(prompt.render_prompt_indicator(PromptEditMode::Emacs), " · ");
-        assert_eq!(prompt.render_prompt_multiline_indicator(), " … ");
-    }
-
-    #[test]
-    fn repl_prompt_collapses_right_status_before_it_can_touch_the_draft() {
-        let metrics = Arc::new(Mutex::new(ComposerMetrics {
-            cursor_line: 1,
-            cursor_column: 8,
-            chars: 7,
-            lines: 1,
-        }));
-        let prompt = ColossusPrompt::new(
-            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
-            &ReplPromptState {
-                last_status: "error".into(),
-                ..ReplPromptState::new()
-            },
-            &ReplPreferences::default(),
-            "ask",
-            metrics,
-        );
-
-        let right = prompt.render_prompt_right_for_width(80);
-        assert_eq!(right, "error 1:8");
-        let occupied = prompt.left.chars().count()
-            + prompt.indicator.chars().count()
-            + 7
-            + 2
-            + right.chars().count();
-        assert!(occupied <= 80);
-        assert_eq!(prompt.render_prompt_right_for_width(30), "");
+        let error = Cli::try_parse_from(["colossus", "--no-alt-screen", "repl", "--resume"])
+            .err()
+            .expect("removed REPL command");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]
@@ -6671,128 +6064,5 @@ mod tests {
             parse_theme_picker_input("99", &names),
             ThemePickerInput::Invalid
         );
-    }
-
-    #[test]
-    fn prompt_cache_is_invalidated_only_by_status_affecting_lines() {
-        assert!(repl_line_changes_status("hello"));
-        assert!(repl_line_changes_status("/session new"));
-        assert!(repl_line_changes_status("/context compact"));
-        assert!(repl_line_changes_status("/workflow list"));
-        assert!(!repl_line_changes_status("/help"));
-        assert!(!repl_line_changes_status("/theme plain"));
-        assert!(!repl_line_changes_status("/tools"));
-    }
-
-    #[test]
-    fn builtin_theme_commands_drive_reedline_prompt_colors() {
-        let mut preferences = ReplPreferences::default();
-        let themes = ThemeLibrary::default();
-        assert_eq!(
-            handle_presentation_command("/theme hacker", &mut preferences, &themes)
-                .expect("hacker theme"),
-            PresentationCommandResult::Save
-        );
-        assert_eq!(preferences.theme, ThemeName::Hacker);
-        let prompt = ColossusPrompt::new(
-            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
-            &ReplPromptState::new(),
-            &preferences,
-            "ask",
-            test_composer_metrics(),
-        );
-        assert_ne!(prompt.get_prompt_color(), CrosstermColor::Reset);
-        assert_ne!(prompt.get_indicator_color(), CrosstermColor::Reset);
-
-        assert_eq!(
-            handle_presentation_command("/theme plain", &mut preferences, &themes)
-                .expect("plain alias"),
-            PresentationCommandResult::Save
-        );
-        assert_eq!(preferences.theme, ThemeName::Mono);
-        let mono = ColossusPrompt::new(
-            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
-            &ReplPromptState::new(),
-            &preferences,
-            "ask",
-            test_composer_metrics(),
-        );
-        assert_eq!(mono.get_prompt_color(), CrosstermColor::Reset);
-    }
-
-    #[test]
-    fn custom_theme_snapshot_drives_prompt_identity_indicators_and_colors() {
-        let directory = tempfile::tempdir().expect("directory");
-        fs::write(
-            directory.path().join("ocean.json"),
-            r##"{
-              "schemaVersion": 1,
-              "name": "ocean",
-              "title": "Ocean",
-              "caret": ">>",
-              "continuation": "||",
-              "prompt": {"left": "#010203", "indicator": "#040506"}
-            }"##,
-        )
-        .expect("theme");
-        let themes = ThemeLibrary::load(&[directory.path().to_path_buf()]).expect("library");
-        let mut preferences = ReplPreferences::default();
-        assert_eq!(
-            handle_presentation_command("/theme ocean", &mut preferences, &themes)
-                .expect("custom theme"),
-            PresentationCommandResult::Save
-        );
-        assert_eq!(preferences.theme_name(), "ocean");
-        let prompt = ColossusPrompt::new(
-            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
-            &ReplPromptState::new(),
-            &preferences,
-            "ask",
-            test_composer_metrics(),
-        );
-        assert_eq!(prompt.render_prompt_left(), "Ocean 019f4ddd");
-        assert_eq!(
-            prompt.render_prompt_indicator(PromptEditMode::Emacs),
-            " >> "
-        );
-        assert_eq!(prompt.render_prompt_multiline_indicator(), " || ");
-        assert_eq!(
-            prompt.get_prompt_color(),
-            CrosstermColor::Rgb { r: 1, g: 2, b: 3 }
-        );
-        assert_eq!(
-            prompt.get_indicator_color(),
-            CrosstermColor::Rgb { r: 4, g: 5, b: 6 }
-        );
-    }
-
-    #[test]
-    fn composer_highlighter_updates_unicode_cursor_and_draft_metrics_before_prompt_render() {
-        let metrics = test_composer_metrics();
-        let highlighter = ComposerHighlighter {
-            metrics: Arc::clone(&metrics),
-        };
-        let draft = "hé\nthere";
-        let cursor = "hé\nt".len();
-        assert_eq!(highlighter.highlight(draft, cursor).raw_string(), draft);
-        assert_eq!(
-            *metrics.lock().expect("metrics"),
-            ComposerMetrics {
-                cursor_line: 2,
-                cursor_column: 2,
-                chars: 8,
-                lines: 2,
-            }
-        );
-
-        let prompt = ColossusPrompt::new(
-            "019f4ddd-113e-73b3-a7f4-97fb9af1cab4",
-            &ReplPromptState::new(),
-            &ReplPreferences::default(),
-            "ask",
-            metrics,
-        );
-        let right = prompt.render_prompt_right_for_width(240);
-        assert!(right.contains("pos=2:2 chars=8 lines=2"));
     }
 }

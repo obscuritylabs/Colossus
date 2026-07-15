@@ -294,7 +294,7 @@ sandbox:
     assert!(installed.is_file());
     assert_eq!(
         fs::metadata(&installed).expect("installed metadata").len(),
-        fs::metadata(source_binary).expect("source metadata").len()
+        fs::metadata(&artifact).expect("staged metadata").len()
     );
 
     let version = command(&installed, &root)

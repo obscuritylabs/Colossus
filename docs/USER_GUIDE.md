@@ -1,6 +1,6 @@
 # User Guide
 
-This guide covers the active Rust CLI and REPL. All examples assume an installed
+This guide covers the active Rust CLI and terminal UI. All examples assume an installed
 `colossus` binary and a strict `.colossus/config.yaml` initialized for the current
 repository.
 
@@ -41,13 +41,18 @@ approval obligations; none can override a policy deny or add sandbox capabilitie
 `risk-auto` reviews eligible `shell.run` requests and auto-proves only a strict
 low-risk/allow result; all other assessments require a prompt.
 
-## REPL
+## Terminal UI
 
 ```bash
-colossus --config .colossus/config.yaml repl
-colossus --config .colossus/config.yaml repl --resume
-colossus --config .colossus/config.yaml repl --session SESSION_ID
+colossus --config .colossus/config.yaml
+colossus --config .colossus/config.yaml tui --resume
+colossus --config .colossus/config.yaml tui --session SESSION_ID
+colossus --config .colossus/config.yaml --no-alt-screen tui
 ```
+
+The removed `colossus repl` alias is no longer accepted. The default alternate screen
+protects native scrollback; `--no-alt-screen` uses an inline viewport, and Zellij selects
+inline mode automatically.
 
 Useful commands include:
 
@@ -70,31 +75,34 @@ Useful commands include:
 /exit
 ```
 
-`/resume` opens a numbered session picker. Enter a listed number or exact ID, leave the
-line blank to cancel, or enter another slash command to leave the picker and run that
-command. The right-side REPL status automatically collapses as the prompt grows so it
-does not overwrite typed input in narrower terminals.
+`/resume` opens a focused session overlay. Enter a listed number or exact ID, or press
+Esc/submit a blank answer to cancel. The durable transcript remains scrollable above a
+pinned composer and stable width-aware footer; narrower terminals hide optional footer
+fields instead of moving or overwriting input.
 
-The REPL displays fish-style inline type-ahead from prior prompts, slash commands, theme
+The TUI displays fish-style inline type-ahead from prior prompts, slash commands, theme
 names, and installed `@skills`. Suggestions use each theme's low-emphasis color plus dim
 italic styling so typed text and the cursor position remain clear. Press Right Arrow to
-accept the full suggestion, or press Tab to open the complete matching command, theme,
-or skill menu. The
-`/session resume` command opens the same picker as `/resume`; unknown slash commands stay
-inside the REPL and are never sent to the model.
+accept the full suggestion, or press Tab to advance matching commands, themes, and skills.
+The `/session resume` command opens the same picker as `/resume`; unknown slash commands
+stay inside the terminal command parser and are never sent to the model.
 
-When the agent uses `user.ask`, the current foreground turn pauses while the input card
-is visible. Type an answer and press Enter, or submit a blank line to cancel the question.
-The REPL resumes after the tool result returns to the model. Use a workflow
-`wait_for_input` step when the run must wait durably without occupying the foreground
-REPL turn.
+When the agent uses `user.ask` or policy requires approval, a modal takes focus without
+discarding the current draft. Type an answer and press Enter, choose an exact option, or
+press Esc/submit a blank answer to fail closed. The run resumes after the one-use answer
+returns through the embedded or authenticated-worker bridge. Use workflow
+`wait_for_input` when a run must wait durably without an attached interactive client.
 
 `/help` is grouped by task, and Tab completes slash commands and installed `@skill`
 names. Put one or more known skill names at the beginning of a message to apply them to
 that turn, for example `@repo-review Review the current changes`.
 
-Slash commands render human tables/cards by default, including explicit empty states.
-Start the REPL with `--output json` only when diagnostic JSON is intentionally needed.
+The composer remains usable during a run and accepts up to eight queued turns. Successful
+completion starts the next turn; failure or cancellation pauses the queue for operator
+confirmation. PageUp/PageDown scroll the transcript, End returns to live output, Ctrl-R
+searches encrypted history, Ctrl-C clears a draft/cancels a modal/requests cooperative run
+cancellation, and Ctrl-D exits only while idle with an empty draft. Interactive
+`--output json` is rejected; redirect stdin to use the compatible line runner and JSON.
 
 Presentation is local durable state, not model context:
 
@@ -111,12 +119,12 @@ Presentation is local durable state, not model context:
 /reasoning off
 /transcript compact
 /multiline toggle
-/repl save
+/tui save
 ```
 
 Normal `stream=on` responses are buffered and rendered as Markdown; `stream=raw` emits
 provider text immediately, and `stream=off` suppresses intermediate stream output.
-Redirected output remains control-sequence-free. REPL history and preferences are
+Redirected output remains control-sequence-free. Terminal history and preferences are
 encrypted journal records.
 
 `/theme` opens a numbered picker. Enter a number or theme name to apply and save it,
@@ -308,7 +316,7 @@ colossus --config .colossus/config.yaml worker --shutdown
 colossus --config .colossus/config.yaml worker --once
 ```
 
-CLI and REPL operations auto-discover a healthy worker. Authentication or protocol
+CLI and TUI operations auto-discover a healthy worker. Authentication or protocol
 failure is surfaced and never downgraded to embedded execution; only an unavailable
 endpoint permits embedded fallback.
 

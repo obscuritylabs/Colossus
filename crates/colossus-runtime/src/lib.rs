@@ -8,7 +8,7 @@ use colossus_audit::{
 };
 use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
-    Actor, ActorType, AgentRunResult, BundleInstallation, BundleMaterialization,
+    Actor, ActorType, AgentRunOutcome, AgentRunResult, BundleInstallation, BundleMaterialization,
     BundleSigningKeyInfo, ContextSnapshot, ContextStatus, CredentialReference, DecisionOutcome,
     DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
     ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunResult, GoalStatus,
@@ -17,13 +17,13 @@ use colossus_contracts::{
     NewEvent, PackInstallation, PackVerification, PlanRecord, PlanStatus, PlanStep,
     PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness,
     ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
-    QuarantinedEffectResult, ReplPreferences, ResearchClaim, ResearchDepth, ResearchRun,
-    ResearchSource, ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary,
-    SessionMessage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
+    QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
+    ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
+    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
     SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
     SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
-    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
-    UserPromptRequest, WorkStateSnapshot,
+    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall,
+    ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -57,10 +57,13 @@ use colossus_ports::{
     EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider,
     MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
     PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
-    ResearchRepository, RiskEvaluationError, RiskEvaluator, RunEventObserver, SessionRepository,
-    SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry, UserPromptProvider,
-    WorkRepository, WorkflowRepository,
+    ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl, RunEventObserver,
+    SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
+    UserPromptProvider, WorkRepository, WorkflowRepository,
 };
+
+const SESSION_MESSAGE_PAGE_LIMIT: usize = 100;
+const SESSION_MESSAGE_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
     JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
@@ -1260,7 +1263,7 @@ fn read_optional(path: Option<&PathBuf>) -> Result<Option<Vec<u8>>, RuntimeError
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum PresentationOperation {
-    Save { preferences: ReplPreferences },
+    Save { preferences: TerminalPreferences },
     AppendHistory { entry: String },
 }
 
@@ -3383,16 +3386,16 @@ impl Runtime {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Reconstruct the current canonical REPL presentation profile.
-    pub fn presentation_preferences(&self) -> Result<ReplPreferences, RuntimeError> {
+    /// Reconstruct the current canonical terminal presentation profile.
+    pub fn presentation_preferences(&self) -> Result<TerminalPreferences, RuntimeError> {
         self.presentation.load().map_err(Into::into)
     }
 
     /// Persist a complete presentation profile through policy, permit, and audit boundaries.
     pub async fn save_presentation_preferences(
         &self,
-        preferences: ReplPreferences,
-    ) -> Result<ReplPreferences, RuntimeError> {
+        preferences: TerminalPreferences,
+    ) -> Result<TerminalPreferences, RuntimeError> {
         let operation = PresentationOperation::Save { preferences };
         let action = operation.action();
         let mut request = effect_request(
@@ -3411,13 +3414,13 @@ impl Runtime {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Reconstruct newest encrypted REPL history entries in chronological order.
-    pub fn repl_history(&self, limit: usize) -> Result<Vec<String>, RuntimeError> {
+    /// Reconstruct newest encrypted terminal-history entries in chronological order.
+    pub fn terminal_history(&self, limit: usize) -> Result<Vec<String>, RuntimeError> {
         self.presentation.list_history(limit).map_err(Into::into)
     }
 
-    /// Append one REPL history entry through policy, permit, and audit boundaries.
-    pub async fn append_repl_history(&self, entry: &str) -> Result<String, RuntimeError> {
+    /// Append one terminal-history entry through policy, permit, and audit boundaries.
+    pub async fn append_terminal_history(&self, entry: &str) -> Result<String, RuntimeError> {
         let operation = PresentationOperation::AppendHistory {
             entry: entry.into(),
         };
@@ -3437,6 +3440,18 @@ impl Runtime {
             .await?;
         serde_json::from_slice(&result.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Compatibility alias for callers using the original interactive surface name.
+    #[deprecated(note = "use Runtime::terminal_history")]
+    pub fn repl_history(&self, limit: usize) -> Result<Vec<String>, RuntimeError> {
+        self.terminal_history(limit)
+    }
+
+    /// Compatibility alias for callers using the original interactive surface name.
+    #[deprecated(note = "use Runtime::append_terminal_history")]
+    pub async fn append_repl_history(&self, entry: &str) -> Result<String, RuntimeError> {
+        self.append_terminal_history(entry).await
     }
 
     /// Create a durable empty session.
@@ -3476,6 +3491,23 @@ impl Runtime {
     /// Reconstruct append-only messages for an exact session.
     pub fn session_messages(&self, id: &str) -> Result<Vec<SessionMessage>, RuntimeError> {
         self.sessions.list_messages(id).map_err(Into::into)
+    }
+
+    /// Reconstruct a bounded page of canonical session messages newest-first by cursor.
+    pub fn session_messages_page(
+        &self,
+        id: &str,
+        before_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<SessionMessagePage, RuntimeError> {
+        self.sessions
+            .list_messages_page(
+                id,
+                before_sequence,
+                limit.clamp(1, SESSION_MESSAGE_PAGE_LIMIT),
+                SESSION_MESSAGE_PAGE_MAX_BYTES,
+            )
+            .map_err(Into::into)
     }
 
     /// Show active context budget and canonical-history size for one session.
@@ -4450,6 +4482,56 @@ impl Runtime {
             observer,
         ))
         .await
+    }
+
+    /// Execute a normal run with ordered events and cooperative cancellation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_model_with_skills_stream_controlled(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, RuntimeError> {
+        let composition = self.skill_composer.compose(
+            instructions,
+            prompt,
+            explicit_skills,
+            sticky_skills,
+            self.skills_enabled,
+            &self.tools.list_specs(),
+        )?;
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<Vec<_>>();
+
+        let run = self.agent.run_in_session_with_skills_stream_controlled(
+            role,
+            &composition.instructions,
+            prompt,
+            max_turns.unwrap_or(self.agent_max_turns),
+            session_id,
+            &active,
+            observer,
+            control,
+        );
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.subagent_notify.notified() => {
+                    self.drain_subagents().await?;
+                }
+                result = &mut run => return result.map_err(Into::into),
+            }
+        }
     }
 
     /// Execute structurally read-only Plan Mode with only inspection, task, and plan tools.
@@ -9792,8 +9874,8 @@ mod tests {
         EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope,
         MemoryStatus, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord,
         PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ProviderRoute, ProviderTurn,
-        QuarantinedEffectResult, ReplPreferences, RiskLevel, RiskRecommendation, SubagentStatus,
-        TaskStatus, ToolCall,
+        QuarantinedEffectResult, RiskLevel, RiskRecommendation, SubagentStatus, TaskStatus,
+        TerminalPreferences, ToolCall,
     };
     use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
     use colossus_policy::{
@@ -9925,9 +10007,9 @@ mod tests {
         let executor = PresentationEffectExecutor {
             repository: Arc::clone(&repository),
         };
-        let preferences = ReplPreferences {
+        let preferences = TerminalPreferences {
             theme: colossus_contracts::ThemeName::HighContrast,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         };
         let operation = PresentationOperation::Save {
             preferences: preferences.clone(),
@@ -9953,7 +10035,7 @@ mod tests {
         assert!(denied_gateway.execute(request(), &executor).await.is_err());
         assert_eq!(
             repository.load().expect("unchanged"),
-            ReplPreferences::default()
+            TerminalPreferences::default()
         );
 
         let allowed_gateway = EffectGateway::new(

@@ -9,14 +9,37 @@ use colossus_contracts::{
     IntegrationConnection, KeyDecision, MemoryRecord, ModelMessage, ModelRequest,
     ModelToolDefinition, NewEvent, PackInstallation, PackStatus, PlanRecord, PlanStatus,
     PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderEvent,
-    ProviderRoute, ProviderTurn, PublisherTrust, ReplPreferences, ResearchClaim, ResearchRun,
-    ResearchSource, RunEventEnvelope, SessionMessage, SessionSummary, SignedCheckpoint,
-    SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, ToolCall,
-    ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun,
+    ProviderRoute, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun, ResearchSource,
+    RunEventEnvelope, SessionMessage, SessionMessagePage, SessionSummary, SignedCheckpoint,
+    SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
+    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
+    WorkflowDefinition, WorkflowRun,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use thiserror::Error;
+
+/// Cloneable cooperative cancellation signal shared by interfaces and the agent loop.
+#[derive(Clone, Default)]
+pub struct RunControl {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl RunControl {
+    /// Request cancellation at the next safe application boundary.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Return whether cancellation has been requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
 
 /// Journal and repository failure.
 #[derive(Debug, Error)]
@@ -376,6 +399,52 @@ pub trait SessionRepository: Send + Sync {
 
     /// Reconstruct every append-only message in sequence order.
     fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError>;
+
+    /// Return a bounded chronological page ending before an optional sequence.
+    fn list_messages_page(
+        &self,
+        session_id: &str,
+        before_sequence: Option<u64>,
+        limit: usize,
+        max_bytes: usize,
+    ) -> Result<SessionMessagePage, StoreError> {
+        let messages = self.list_messages(session_id)?;
+        let upper = before_sequence.unwrap_or(u64::MAX);
+        let mut page = Vec::new();
+        let mut bytes = 0_usize;
+        for message in messages
+            .iter()
+            .rev()
+            .filter(|message| message.sequence < upper)
+        {
+            let encoded = serde_json::to_vec(message)
+                .map_err(|error| StoreError::Adapter(error.to_string()))?;
+            if encoded.len() > max_bytes {
+                return Err(StoreError::Adapter(format!(
+                    "session message {} exceeds the bounded page size",
+                    message.sequence
+                )));
+            }
+            if page.len() == limit.max(1) || (!page.is_empty() && bytes + encoded.len() > max_bytes)
+            {
+                break;
+            }
+            bytes = bytes.saturating_add(encoded.len());
+            page.push(message.clone());
+        }
+        page.reverse();
+        let before_sequence = page.first().map(|message| message.sequence);
+        let has_more = before_sequence.is_some_and(|first| {
+            messages
+                .iter()
+                .any(|message| message.sequence < first && message.sequence < upper)
+        });
+        Ok(SessionMessagePage {
+            messages: page,
+            before_sequence,
+            has_more,
+        })
+    }
 }
 
 /// Canonical immutable context snapshots and explicit activation history.
@@ -405,19 +474,19 @@ pub trait ContextRepository: Send + Sync {
 /// Canonical event-sourced presentation preference repository.
 pub trait PresentationRepository: Send + Sync {
     /// Reconstruct the current preference profile or defaults before its first mutation.
-    fn load(&self) -> Result<ReplPreferences, StoreError>;
+    fn load(&self) -> Result<TerminalPreferences, StoreError>;
 
     /// Append one complete replacement profile through optimistic concurrency.
     fn save(
         &self,
-        preferences: ReplPreferences,
+        preferences: TerminalPreferences,
         actor: Actor,
-    ) -> Result<ReplPreferences, StoreError>;
+    ) -> Result<TerminalPreferences, StoreError>;
 
-    /// Reconstruct the newest bounded submitted REPL entries in chronological order.
+    /// Reconstruct the newest bounded terminal submissions in chronological order.
     fn list_history(&self, limit: usize) -> Result<Vec<String>, StoreError>;
 
-    /// Append one encrypted REPL history entry, deduplicating consecutive submissions.
+    /// Append one encrypted terminal-history entry, deduplicating consecutive submissions.
     fn append_history(&self, entry: String, actor: Actor) -> Result<String, StoreError>;
 }
 

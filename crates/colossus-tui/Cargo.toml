@@ -1,0 +1,25 @@
+[package]
+name = "colossus-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+colossus-contracts.workspace = true
+colossus-ports.workspace = true
+colossus-presentation.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+portable-pty.workspace = true
+serde_json.workspace = true
+vt100.workspace = true
+
+[lints]
+workspace = true

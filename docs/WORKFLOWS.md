@@ -94,5 +94,5 @@ colossus --config .colossus/config.yaml worker --once
 ```
 
 The worker claims only queued runs, owns the canonical writer lease, and exposes the same
-authenticated application API used by CLI/REPL. Waiting or interrupted runs are never
+authenticated application API used by CLI/TUI. Waiting or interrupted runs are never
 silently drained as new work.

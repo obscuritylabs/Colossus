@@ -223,7 +223,7 @@ sandbox:
     );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 3);
+    assert_eq!(status["protocol_version"], 4);
 
     let route = run(binary, &config, &["models", "route", "primary"]);
     assert!(
@@ -551,43 +551,43 @@ sandbox:
         serde_json::from_slice(&integrations.stdout).expect("integrations JSON");
     assert_eq!(integrations.as_array().map(Vec::len), Some(0));
 
-    let repl = run_with_input(
+    let terminal = run_with_input(
         binary,
         &config,
-        &["repl", "--session", session_id],
-        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/theme preview ocean\n/theme validate\n/theme scaffold midnight\n/theme ocean\n/theme\np 5\n\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/repl prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n/session\n/session resume\n1\n/session show\n/exit\n",
+        &["tui", "--session", session_id],
+        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/theme preview ocean\n/theme validate\n/theme scaffold midnight\n/theme ocean\n/theme\np 5\n\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/tui prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n/session\n/session resume\n1\n/session show\n/exit\n",
     );
     assert!(
-        repl.status.success(),
+        terminal.status.success(),
         "stderr={}\nstdout={}",
-        String::from_utf8_lossy(&repl.stderr),
-        String::from_utf8_lossy(&repl.stdout)
+        String::from_utf8_lossy(&terminal.stderr),
+        String::from_utf8_lossy(&terminal.stdout)
     );
-    let repl_stdout = String::from_utf8_lossy(&repl.stdout);
-    let repl_stderr = String::from_utf8_lossy(&repl.stderr);
-    assert!(repl_stdout.contains("Colossus Rust REPL via authenticated worker"));
-    assert!(repl_stdout.contains(session_id));
-    assert!(repl_stdout.contains("[work] session="));
-    assert!(repl_stdout.contains("[context] session="));
-    assert!(repl_stdout.contains("tasks-through-worker"));
-    assert!(repl_stdout.contains("Stream mode"));
-    assert!(repl_stdout.contains("off"));
-    assert!(repl_stdout.contains("Name"));
-    assert!(repl_stdout.contains("ocean"));
-    assert!(repl_stdout.contains("Source hash"));
-    assert!(repl_stdout.contains("Active theme: ocean"));
-    assert!(repl_stdout.contains("Custom theme search locations"));
-    assert!(repl_stdout.contains("Hacker theme preview"));
-    assert!(repl_stdout.contains("Theme library valid"));
-    assert!(repl_stdout.contains("Custom theme scaffold: midnight"));
-    assert!(repl_stdout.contains("does not write this file"));
-    assert!(!repl_stdout.contains("{\"names\""));
-    assert!(repl_stdout.contains("recoverable: invalid presentation command"));
-    assert!(repl_stdout.contains("global_sequence"));
-    assert!(!repl_stdout.contains("not yet available through worker IPC"));
-    assert!(!repl_stdout.contains("unknown REPL command"));
-    assert!(!repl_stdout.contains("\x1b[2K"));
-    assert!(!repl_stderr.contains("\x1b[2K"));
+    let terminal_stdout = String::from_utf8_lossy(&terminal.stdout);
+    let terminal_stderr = String::from_utf8_lossy(&terminal.stderr);
+    assert!(terminal_stdout.contains("Colossus Rust line runner via authenticated worker"));
+    assert!(terminal_stdout.contains(session_id));
+    assert!(terminal_stdout.contains("[work] session="));
+    assert!(terminal_stdout.contains("[context] session="));
+    assert!(terminal_stdout.contains("tasks-through-worker"));
+    assert!(terminal_stdout.contains("Stream mode"));
+    assert!(terminal_stdout.contains("off"));
+    assert!(terminal_stdout.contains("Name"));
+    assert!(terminal_stdout.contains("ocean"));
+    assert!(terminal_stdout.contains("Source hash"));
+    assert!(terminal_stdout.contains("Active theme: ocean"));
+    assert!(terminal_stdout.contains("Custom theme search locations"));
+    assert!(terminal_stdout.contains("Hacker theme preview"));
+    assert!(terminal_stdout.contains("Theme library valid"));
+    assert!(terminal_stdout.contains("Custom theme scaffold: midnight"));
+    assert!(terminal_stdout.contains("does not write this file"));
+    assert!(!terminal_stdout.contains("{\"names\""));
+    assert!(terminal_stdout.contains("recoverable: invalid presentation command"));
+    assert!(terminal_stdout.contains("global_sequence"));
+    assert!(!terminal_stdout.contains("not yet available through worker IPC"));
+    assert!(!terminal_stdout.contains("unknown terminal command"));
+    assert!(!terminal_stdout.contains("\x1b[2K"));
+    assert!(!terminal_stderr.contains("\x1b[2K"));
 
     let history = run(
         binary,
@@ -599,7 +599,8 @@ sandbox:
         "{}",
         String::from_utf8_lossy(&history.stderr)
     );
-    let history: Vec<String> = serde_json::from_slice(&history.stdout).expect("REPL history JSON");
+    let history: Vec<String> =
+        serde_json::from_slice(&history.stdout).expect("terminal history JSON");
     assert!(history.iter().any(|entry| entry == "tasks-through-worker"));
     assert!(history.iter().any(|entry| entry == "/theme hacker"));
     assert!(history.iter().any(|entry| entry == "/theme ocean"));
@@ -760,21 +761,21 @@ steps:
     let embedded: Value = serde_json::from_slice(&embedded.stdout).expect("fallback JSON");
     assert_eq!(embedded["output"], "embedded-fallback");
 
-    let embedded_repl = run_with_input(
+    let embedded_terminal = run_with_input(
         binary,
         &config,
-        &["repl", "--session", session_id],
-        "/repl reset\n/session show\n/session resume\n/session\n/session bogus\n/work\n/exit\n",
+        &["tui", "--session", session_id],
+        "/tui reset\n/session show\n/session resume\n/session\n/session bogus\n/work\n/exit\n",
     );
     assert!(
-        embedded_repl.status.success(),
+        embedded_terminal.status.success(),
         "{}",
-        String::from_utf8_lossy(&embedded_repl.stderr)
+        String::from_utf8_lossy(&embedded_terminal.stderr)
     );
-    let embedded_stdout = String::from_utf8_lossy(&embedded_repl.stdout);
+    let embedded_stdout = String::from_utf8_lossy(&embedded_terminal.stdout);
     assert!(embedded_stdout.contains(session_id));
     assert!(embedded_stdout.contains("Current work"));
-    assert!(embedded_stdout.contains("unknown REPL command: /session bogus"));
+    assert!(embedded_stdout.contains("unknown terminal command: /session bogus"));
 
     let embedded_history = run(
         binary,
@@ -784,7 +785,7 @@ steps:
     assert!(embedded_history.status.success());
     let embedded_history: Vec<String> =
         serde_json::from_slice(&embedded_history.stdout).expect("embedded history JSON");
-    assert!(embedded_history.iter().any(|entry| entry == "/repl reset"));
+    assert!(embedded_history.iter().any(|entry| entry == "/tui reset"));
     assert_eq!(embedded_history.last().map(String::as_str), Some("/exit"));
 
     let reset_preferences = run(binary, &config, &["preferences", "show"]);

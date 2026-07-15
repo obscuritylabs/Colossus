@@ -90,7 +90,7 @@ mutations, receives a verified result, and can resume the same session later.
 
 ### 4.2 Interactive Operator
 
-The user works in a persistent REPL, changes model roles and display preferences, manages
+The user works in a persistent terminal UI, changes model roles and display preferences, manages
 tasks and decisions, reviews context usage, and switches sessions without restarting the
 application.
 
@@ -123,8 +123,9 @@ inspect hashes, audit records, and package contents without network access.
 | TOOL-01 | Brokered tool system | P0 | Schemas, permissions, policy, approvals, execution, and audit run in order. |
 | SAFE-01 | Policy and approval modes | P0 | `deny`, `ask`, `risk-auto`, and `full-access` preserve exact safety semantics. |
 | STATE-01 | Durable sessions and run history | P0 | Sessions and events survive restarts and can be resumed. |
-| UX-01 | One-shot CLI and interactive REPL | P0 | Both surfaces use the same application behavior and event stream. |
-| UX-02 | Human-first terminal presentation | P1 | Interactive CLI and REPL surfaces restore the Python 0.5 semantic cards, Markdown, tables, guided choices, completion, and transcript behavior without weakening structured automation output. |
+| UX-01 | One-shot CLI and interactive TUI | P0 | Both surfaces use the same application behavior and event stream; the superseded `repl` alias is removed. |
+| UX-02 | Human-first terminal presentation | P1 | Interactive CLI and TUI surfaces restore the Python 0.5 semantic cards, Markdown, tables, guided choices, completion, and transcript behavior without weakening structured automation output. |
+| UX-03 | Responsive terminal UI | P1 | A Ratatui TUI owns terminal rendering, restores the durable transcript, pins the composer and footer, keeps input responsive during runs, and bridges approvals, questions, and cancellation identically in embedded and worker modes. |
 | CTX-01 | Context composition and compaction | P1 | Raw history is retained while provider input stays within budget. |
 | WORK-01 | Tasks, decisions, memories, and plans | P1 | Long-running work state is persisted and inspectable. |
 | MEM-01 | Canonical memory and disposable indexes | P1 | Memory lifecycle state remains authoritative and usable while lexical or semantic indexes lag or rebuild. |
@@ -159,7 +160,7 @@ infrastructure may compose implementations but must not own product behavior
   integration contracts.
 - Adapters interact with model APIs, subprocesses, filesystems, databases, HTTP, MCP,
   package resources, and audit sinks.
-- CLI and REPL surfaces collect input and render typed output only. They MUST NOT contain
+- CLI and terminal UI surfaces collect input and render typed output only. They MUST NOT contain
   provider calls, tool execution, policy decisions, or persistence logic.
 
 Dependency direction MUST point inward. A boundary test SHOULD fail the build if domain
@@ -415,7 +416,7 @@ audit labels, and retention obligations.
 `full-access` MUST NOT expand workspace roots, grant missing network implementations,
 change tool schemas, bypass deterministic denies, or make unknown tools executable.
 
-One-shot runs default to deny unless approval prompting is requested. Interactive REPL
+One-shot runs default to deny unless approval prompting is requested. Interactive TUI
 sessions default to ask.
 
 ### 11.2 Deterministic Policy
@@ -583,27 +584,27 @@ Run statuses are `queued`, `running`, `waiting`, `completed`, `failed`, `cancell
 and `interrupted`. State is reconstructed from the journal. Recovery marks abandoned
 attempts interrupted or unknown rather than rerunning them. The application API exposes
 definition validation/registration plus start, get, list, input, resume, cancel, and
-drain. CLI, REPL, an embedded API, and an optional single-writer worker all invoke that
+drain. CLI, TUI, an embedded API, and an optional single-writer worker all invoke that
 same application layer.
 
 When the worker is active it owns the canonical writer lease. Local clients MUST
 authenticate the server before disclosing operation content, authenticate every request
 and ordered response frame, bind requests to a single connection, reject replay and
 stale timestamps, and bound framing before allocation. Unix sockets are owner-only;
-Windows named pipes implement the same logical contract. Supported CLI/REPL operations
+Windows named pipes implement the same logical contract. Supported CLI/TUI operations
 auto-discover the worker and fall back to the embedded runtime only when no authenticated
 worker is active.
 
-Worker routing covers model runs, core REPL turns, sessions, workflows, audit and runtime
+Worker routing covers model runs, core TUI turns, sessions, workflows, audit and runtime
 diagnostics, context and telemetry, plus canonical tasks, decisions, plans, goals,
 subagents, memories, and memory-index maintenance. Approval mode belongs to the worker
 process; a client-side approval override MUST fail rather than silently change authority.
 Research, skills, packs, bundles, integrations, MCP, process, and network commands use
 typed operations too; `@path` JSON and other file-backed inputs are read by the worker
 through the normal filesystem permission boundary rather than by the client.
-When a worker is active, the REPL routes its implemented session, context, work,
+When a worker is active, the TUI routes its implemented session, context, work,
 workflow, research, telemetry, skill, pack, bundle, integration, MCP, audit, projection,
-and tool commands through those same typed operations. Embedded and worker REPLs also
+and tool commands through those same typed operations. Embedded and worker TUI hosts also
 accept line-oriented stdin without requiring a terminal.
 
 ## 13. Goal Mode
@@ -693,7 +694,7 @@ A skill is prompt/context data with a manifest, instructions, trigger words, req
 tools, permission labels, offline compatibility, source, and optional resources.
 
 - Skill precedence and user override behavior are deterministic.
-- Skills may be activated by explicit option, sticky REPL state, or prompt mention.
+- Skills may be activated by explicit option, sticky TUI state, or prompt mention.
 - Required tools are validated against the active catalog but never auto-approved.
 - Resource access is read-only, active-skill-scoped, path-safe, regular-file-only, and
   bounded.
@@ -756,7 +757,7 @@ Default telemetry output is metadata-only and MUST NOT reveal raw prompts, hidde
 reasoning, credentials, or raw tool output. Detailed event replay remains bounded and
 uses the same redaction rules as normal traces.
 
-## 18. CLI And REPL Surface
+## 18. CLI And Terminal UI Surface
 
 ### 18.1 Global Options
 
@@ -770,7 +771,7 @@ reference, HTTP environment-trust toggle, and shell completion.
 - `run`: normal turn, plan creation, approved-plan execution, or plan-to-goal handoff.
 - `goal`: bounded autonomous goal loop.
 - `research`: deep research with persisted cited output.
-- `repl`: interactive session.
+- `tui`: interactive session and non-TTY line runner; the former `repl` alias is removed.
 - `config`: initialize and show strict configuration.
 - `skills`: list, create, validate, and install.
 - `tools`: list the active catalog.
@@ -784,20 +785,20 @@ reference, HTTP environment-trust toggle, and shell completion.
 - `integrations`: list, show, connect, disconnect, and import OpenAPI.
 - `packs`: lifecycle, validation, verification, and trust operations.
 
-### 18.3 REPL Commands
+### 18.3 Terminal UI Commands
 
-The REPL includes:
+The TUI includes:
 
 - Runtime: `/model`, `/agent`, `/tools`, `/workspace`, `/status`, `/clear`, `/exit`.
 - Sessions/context: `/resume`, `/sessions`, `/session`, `/context`, `/compact`.
 - Rendering: `/stream`, `/events`, `/reasoning`, `/transcript`, `/multiline`, `/trace`.
-- Preferences/themes: `/theme`, `/repl`.
+- Preferences/themes: `/theme` and `/tui`.
 - Work state: `/tasks`, `/decision`, `/decisions`, `/memory`, `/memories`.
 - Workflows: `/plan`, `/goal`, `/research`, `/agents`.
 - Extensions: `/skill`, `/skills`, `/integrations`, `/packs`.
 - Discovery: `/help`.
 
-The REPL persists display preferences for theme, multiline composition, streaming mode,
+The TUI persists display preferences for theme, multiline composition, streaming mode,
 event detail, transcript density, and reasoning-summary visibility. Preferences affect
 rendering only and MUST NOT change provider, policy, tool, or approval behavior.
 Submitted input history MUST be encrypted in the authoritative journal and persisted
@@ -819,7 +820,35 @@ completion, and theme-aware ghost text. Direct selection saves immediately. Scaf
 MUST emit a strict template without writing from the interface, and validation MUST report
 the already loaded bounded library.
 
-### 18.4 Rendering
+### 18.4 TUI Ownership And Interaction
+
+`colossus` and `colossus tui` launch the interactive TUI when stdin and stdout are TTYs.
+The former `colossus repl` alias is removed. Non-TTY stdin uses the bounded line runner
+and preserves explicit JSON output; interactive JSON is
+rejected with guidance. Alternate-screen mode is the default, except that Zellij uses an
+inline viewport; `--no-alt-screen` always selects inline mode.
+
+Exactly one event loop owns terminal writes. The layout keeps a scrollable durable
+transcript above an optional activity row, dynamically sized composer, and stable
+width-aware footer. The composer remains usable while a run is active and queues at most
+eight future turns. Approval and `user.ask` prompts use explicit focus-taking overlays
+without overwriting the draft. Blank, cancelled, disconnected, timed-out, malformed, or
+replayed responses fail closed.
+
+Transcript restoration MUST exclude system messages, correlate canonical tool results
+with assistant tool calls, and load no more than 100 messages or 2 MiB per page. Resize
+reflows retained presentation documents without erasing transcript history. Autoscroll
+occurs only at the live edge; scrolled-up operators retain position and receive a bounded
+new-item count until returning with End.
+
+Ctrl-C clears a draft, cancels a modal, or requests cooperative run cancellation in that
+order. Cancellation prevents the next provider or tool effect from starting, lets an
+already-started effect reach an auditable terminal state, and appends durable cancelled
+tool results for remaining calls. Worker protocol v4 authenticates and sequences
+bidirectional approval, `user.ask`, and cancellation frames; version mismatch identifies
+that the worker must be restarted.
+
+### 18.5 Rendering
 
 - Compact, verbose, and off event modes are supported.
 - Interactive terminal output is human-first. Stable JSON remains available explicitly
@@ -855,7 +884,7 @@ the already loaded bounded library.
   semantic labels, and activity frames while redirected output remains ANSI-free.
 - Loopback-live Responses and OpenAI-compatible terminal acceptance MUST cover streamed
   tool calls, continuation, final output, redirected ANSI safety, and credential
-  non-disclosure; compatible execution MUST cover CLI, REPL, and worker surfaces.
+  non-disclosure; compatible execution MUST cover CLI, TUI, and worker surfaces.
 
 ## 19. Configuration And Local Storage
 
@@ -963,7 +992,7 @@ Exit gate: a clean checkout can smoke test offline and complete a multi-turn too
 
 ### Milestone 2: Durable Interactive Work
 
-Deliver REPL, session resume, semantic rendering, preferences/themes, tasks, decisions,
+Deliver the TUI, session resume, semantic rendering, preferences/themes, tasks, decisions,
 memories, plans, context budgets, snapshots, and automatic compaction.
 
 Exit gate: a long session can compact, restart, resume, and preserve raw history and
@@ -1060,16 +1089,29 @@ the resulting signed evidence and six native archives.
   parity. Interactive output contains no raw JSON by default; explicit or redirected JSON
   remains stable, bounded, redacted, and ANSI-free. The executable parity matrix is
   documented in [Terminal UX](TERMINAL_UX.md).
-- [x] Embedded and worker REPL history has bounded hydration, encrypted permit-bound
+- [x] Embedded and worker terminal history has bounded hydration, encrypted permit-bound
   persistence, restart parity, consecutive deduplication, and redacted audit envelopes.
 - [x] Built-in theme palettes cover prompt, assistant, semantic event, and activity-frame
   styling without emitting ANSI sequences to redirected output.
 - [x] Bounded JSON/TOML custom themes have strict parsing, immutable source-hash-bound
   preference snapshots, embedded/worker parity, restart reconstruction, and ANSI-free
   redirected output.
-- [x] Reedline prompt repaint reports Unicode-aware cursor/draft metrics without
-  per-keystroke state effects, and loopback-live Responses/compatible streamed tool loops
-  pass CLI, REPL, worker, ANSI-safety, continuation, and credential non-disclosure checks.
+- [x] Terminal editing keeps Unicode-aware cursor/draft state interface-local without
+  per-keystroke effects, and loopback-live Responses/compatible streamed tool loops pass
+  CLI, TUI/line-runner, worker, ANSI-safety, continuation, and credential non-disclosure checks.
+- [x] UX-03 replaces the former interactive line editor with one Ratatui terminal owner and a
+  pinned composer/footer; durable transcript paging, resize reflow, live-edge scrolling,
+  background input, an eight-turn queue, overlays, Unicode editing, completion, encrypted
+  history, custom themes, inline/alternate-screen restoration, and minimum-size behavior
+  pass reducer, `TestBackend`, PTY, hostile-control-input, and terminal-restoration tests.
+- [x] The TUI transcript is borderless and uses theme-aware speaker, status, glyph, and
+  indentation cues without relying on color alone. Semantic documents retain cards for
+  one-shot compatibility while transcript rendering prevents recursively nested card chrome.
+- [x] Embedded and worker TUI paths render equivalent typed documents and bridge approval,
+  `user.ask`, and cooperative cancellation through authenticated protocol-v4 one-use
+  frames. Cancellation tests prove no later effect begins, remaining tool results stay
+  reconstructable, unknown outcomes remain auditable, and stale workers report explicit
+  restart guidance.
 - [x] Telemetry derives correct duration and counts from persisted event timestamps.
 - [x] Provider, embedding/Chroma, MCP, integration, pack, and signed-bundle adapters keep
   environment credentials as references through policy and resolve them only inside

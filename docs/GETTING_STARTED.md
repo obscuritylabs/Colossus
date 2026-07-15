@@ -51,10 +51,12 @@ store for mandatory journal/signing keys; headless deployments can explicitly co
 environment key references instead. Rust never silently writes plaintext canonical
 state.
 
-## Start The REPL
+## Start The Terminal UI
 
 ```bash
-colossus --config .colossus/config.yaml repl
+colossus --config .colossus/config.yaml
+# Equivalent explicit form:
+colossus --config .colossus/config.yaml tui
 ```
 
 Useful first commands:
@@ -67,10 +69,12 @@ Useful first commands:
 /exit
 ```
 
-The Reedline REPL supports durable sessions, encrypted history, streamed assistant/tool
-events, multiline input, cursor/draft status, themes, workflows, goals, research,
-memories, grouped help, slash and `@skill` completion, human tables/cards, Markdown, and
-authenticated-worker routing.
+The Ratatui interface restores durable session messages into a scrollable transcript and
+keeps the composer pinned at the bottom while model and tool work continues. It supports
+encrypted history, streamed assistant/tool events, multiline input, themes, workflows,
+goals, research, memories, slash and `@skill` completion, semantic cards, Markdown,
+approval/input overlays, queued turns, and authenticated-worker routing. The removed
+`colossus repl` alias is no longer part of the public CLI.
 
 ## Choose A Workspace
 
@@ -79,17 +83,17 @@ repository you want to operate on, while passing an absolute config path:
 
 ```bash
 cd ../my-project
-colossus --config /absolute/path/to/.colossus/config.yaml repl
+colossus --config /absolute/path/to/.colossus/config.yaml
 ```
 
-Restart the REPL from another directory to change the active repository scope.
+Restart the TUI from another directory to change the active repository scope.
 Filesystem, Git, patch, repository-context, and process effects still require matching
 absolute filesystem/executable grants in YAML; changing the process workspace never
 expands policy.
 
 ## Understand Approvals
 
-One-shot commands default to `deny`; the REPL defaults to `ask`. Approval modes
+One-shot commands default to `deny`; the interactive TUI defaults to `ask`. Approval modes
 satisfy policy obligations but never add actions, filesystem roots, executable identities,
 or network origins:
 

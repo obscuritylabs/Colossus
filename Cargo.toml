@@ -26,6 +26,7 @@ members = [
     "crates/colossus-packs",
     "crates/colossus-workflow",
     "crates/colossus-presentation",
+    "crates/colossus-tui",
     "crates/colossus-runtime",
     "crates/colossus-worker",
     "crates/colossus-cli",
@@ -62,12 +63,11 @@ jsonschema = "0.33.0"
 keyring = "4.1.4"
 nono = { version = "=0.67.1", default-features = false }
 rappct = "=0.13.3"
-nu-ansi-term = "0.50.3"
 redb = "4.1.0"
 regex = "1.13.0"
 rmcp = { version = "=2.2.0", default-features = false }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
-reedline = "0.49.0"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "macros"] }
 sysinfo = { version = "=0.39.5", default-features = false, features = ["system"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }
@@ -83,6 +83,8 @@ toml = "1.1.2"
 uuid = { version = "1.23.4", features = ["serde", "v7"] }
 url = "2.5.8"
 unicode-width = "0.2.2"
+portable-pty = "0.9.0"
+vt100 = "0.16.2"
 windows-sys = "=0.61.2"
 
 colossus-contracts = { version = "=0.6.0", path = "crates/colossus-contracts" }
@@ -114,6 +116,7 @@ colossus-runtime = { version = "=0.6.0", path = "crates/colossus-runtime" }
 colossus-worker = { version = "=0.6.0", path = "crates/colossus-worker" }
 colossus-workflow = { version = "=0.6.0", path = "crates/colossus-workflow" }
 colossus-presentation = { version = "=0.6.0", path = "crates/colossus-presentation" }
+colossus-tui = { version = "=0.6.0", path = "crates/colossus-tui" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

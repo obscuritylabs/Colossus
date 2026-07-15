@@ -351,9 +351,9 @@ data: {"id":"chat-final","choices":[],"usage":{"prompt_tokens":11,"completion_to
 data: [DONE]
 
 "#;
-    let repl_answer = r#"data: {"id":"chat-repl","choices":[{"index":0,"delta":{"content":"repl-"},"finish_reason":null}]}
+    let terminal_answer = r#"data: {"id":"chat-terminal","choices":[{"index":0,"delta":{"content":"terminal-"},"finish_reason":null}]}
 
-data: {"id":"chat-repl","choices":[{"index":0,"delta":{"content":"connected"},"finish_reason":"stop"}]}
+data: {"id":"chat-terminal","choices":[{"index":0,"delta":{"content":"connected"},"finish_reason":"stop"}]}
 
 data: [DONE]
 
@@ -369,7 +369,7 @@ data: [DONE]
         first_tool_call,
         second_tool_call,
         final_answer,
-        repl_answer,
+        terminal_answer,
         worker_answer,
     ])
 }
@@ -462,7 +462,7 @@ data: [DONE]
 }
 
 #[test]
-fn compatible_provider_streams_tool_use_and_repl_output_through_terminal_surfaces() {
+fn compatible_provider_streams_tool_use_and_tui_output_through_terminal_surfaces() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
@@ -583,30 +583,32 @@ sandbox:
             .is_some_and(|seconds| seconds > 0.0)
     );
 
-    let mut repl = command(binary, &config);
-    repl.arg("repl")
+    let mut terminal = command(binary, &config);
+    terminal
+        .arg("tui")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut repl = repl.spawn().expect("spawn REPL");
-    repl.stdin
+    let mut terminal = terminal.spawn().expect("spawn terminal line runner");
+    terminal
+        .stdin
         .take()
-        .expect("REPL stdin")
+        .expect("terminal stdin")
         .write_all(b"/session bogus\n/session resume\n1\nReply from the live endpoint.\n/exit\n")
-        .expect("write REPL script");
-    let repl = repl.wait_with_output().expect("REPL output");
+        .expect("write terminal script");
+    let terminal = terminal.wait_with_output().expect("terminal output");
     assert!(
-        repl.status.success(),
+        terminal.status.success(),
         "stdout={}\nstderr={}",
-        String::from_utf8_lossy(&repl.stdout),
-        String::from_utf8_lossy(&repl.stderr)
+        String::from_utf8_lossy(&terminal.stdout),
+        String::from_utf8_lossy(&terminal.stderr)
     );
-    let repl_output = String::from_utf8_lossy(&repl.stdout);
-    assert!(repl_output.contains("Colossus Rust 0.6.0."));
-    assert!(repl_output.contains("unknown REPL command: /session bogus"));
-    assert!(repl_output.contains("Choose a session to resume:"));
-    assert!(repl_output.contains("repl-connected"));
-    assert!(!repl_output.contains("\x1b["));
+    let terminal_output = String::from_utf8_lossy(&terminal.stdout);
+    assert!(terminal_output.contains("Colossus Rust 0.6.0."));
+    assert!(terminal_output.contains("unknown terminal command: /session bogus"));
+    assert!(terminal_output.contains("Choose a session to resume:"));
+    assert!(terminal_output.contains("terminal-connected"));
+    assert!(!terminal_output.contains("\x1b["));
 
     let worker = command(binary, &config)
         .arg("worker")

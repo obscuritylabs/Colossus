@@ -6,7 +6,7 @@ use colossus_contracts::{
     ToolCall, ToolResult, WorkStateSnapshot,
 };
 pub use colossus_contracts::{
-    EventDisplayMode, ReplPreferences, StreamDisplayMode, ThemeName, TranscriptDensity,
+    EventDisplayMode, StreamDisplayMode, TerminalPreferences, ThemeName, TranscriptDensity,
 };
 use colossus_ports::{EventJournal, PresentationRepository, StoreError};
 use directories::BaseDirs;
@@ -23,8 +23,10 @@ use std::{
 use thiserror::Error;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+// Persisted compatibility identifier; changing it would orphan existing preferences.
 const PREFERENCES_STREAM: &str = "presentation:repl";
 const PREFERENCES_UPDATED: &str = "presentation.preferences.updated.v1";
+
 const HISTORY_STREAM: &str = "presentation:history";
 const HISTORY_APPENDED: &str = "presentation.history.appended.v1";
 const MAX_HISTORY_ENTRIES: usize = 1_000;
@@ -109,6 +111,42 @@ pub enum PresentationBlock {
 pub struct PresentationDocument {
     /// Ordered blocks to render.
     pub blocks: Vec<PresentationBlock>,
+}
+
+/// One backend-neutral styled span ready for a terminal UI adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StyledSpan {
+    /// Sanitized released text.
+    pub content: String,
+    /// Theme-resolved text style without terminal escape sequences.
+    pub style: ThemeTextStyle,
+}
+
+/// One backend-neutral styled terminal line.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StyledLine {
+    /// Ordered spans composing this visual line.
+    pub spans: Vec<StyledSpan>,
+}
+
+impl StyledLine {
+    /// Create a line with one sanitized span.
+    pub fn from_span(content: impl Into<String>, style: ThemeTextStyle) -> Self {
+        Self {
+            spans: vec![StyledSpan {
+                content: content.into(),
+                style,
+            }],
+        }
+    }
+
+    /// Return the visible text without terminal control sequences.
+    pub fn plain_text(&self) -> String {
+        self.spans
+            .iter()
+            .map(|span| span.content.as_str())
+            .collect()
+    }
 }
 
 impl PresentationDocument {
@@ -356,14 +394,459 @@ fn human_json_value(value: &Value) -> String {
 
 /// Width-aware human terminal renderer for presentation documents.
 pub struct TerminalDocumentRenderer {
-    preferences: ReplPreferences,
+    preferences: TerminalPreferences,
     width: usize,
     color: bool,
 }
 
+/// Width-aware presentation renderer that emits backend-neutral styled lines.
+pub struct StyledDocumentRenderer {
+    preferences: TerminalPreferences,
+    width: usize,
+    surface: StyledRenderSurface,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum StyledRenderSurface {
+    #[default]
+    Document,
+    Transcript,
+}
+
+impl StyledDocumentRenderer {
+    /// Build a renderer for one immutable preference snapshot and viewport width.
+    pub fn new(preferences: TerminalPreferences, width: usize) -> Self {
+        Self {
+            preferences,
+            width: width.clamp(20, 240),
+            surface: StyledRenderSurface::Document,
+        }
+    }
+
+    /// Build a renderer for a TUI transcript where semantic hierarchy is expressed with
+    /// colored headings and indentation instead of recursively nested borders.
+    pub fn for_transcript(preferences: TerminalPreferences, width: usize) -> Self {
+        Self {
+            preferences,
+            width: width.clamp(20, 240),
+            surface: StyledRenderSurface::Transcript,
+        }
+    }
+
+    /// Render a retained semantic document for a terminal UI backend.
+    pub fn render(&self, document: &PresentationDocument) -> Vec<StyledLine> {
+        let renderer = TerminalDocumentRenderer::new(self.preferences.clone(), self.width);
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        if self.surface == StyledRenderSurface::Transcript {
+            return self.render_transcript_document(document, &renderer, palette);
+        }
+        let mut lines = Vec::new();
+        for block in &document.blocks {
+            let rendered = renderer.render_block(block, self.width);
+            if !lines.is_empty()
+                && !rendered.is_empty()
+                && lines
+                    .last()
+                    .is_some_and(|line: &StyledLine| !line.spans.is_empty())
+                && !matches!(block, PresentationBlock::Blank)
+            {
+                lines.push(StyledLine::default());
+            }
+            let style = palette.style_for_block(block);
+            lines.extend(rendered.into_iter().map(|line| {
+                if line.is_empty() {
+                    StyledLine::default()
+                } else {
+                    StyledLine::from_span(line, style)
+                }
+            }));
+        }
+        while lines.last().is_some_and(|line| line.spans.is_empty()) {
+            lines.pop();
+        }
+        lines
+    }
+
+    fn render_transcript_document(
+        &self,
+        document: &PresentationDocument,
+        renderer: &TerminalDocumentRenderer,
+        palette: TerminalPalette,
+    ) -> Vec<StyledLine> {
+        let mut lines = Vec::new();
+        for block in &document.blocks {
+            let rendered = self.render_transcript_block(renderer, palette, block, self.width, None);
+            if !lines.is_empty()
+                && !rendered.is_empty()
+                && lines
+                    .last()
+                    .is_some_and(|line: &StyledLine| !line.spans.is_empty())
+                && !matches!(block, PresentationBlock::Blank)
+            {
+                lines.push(StyledLine::default());
+            }
+            lines.extend(rendered);
+        }
+        while lines.last().is_some_and(|line| line.spans.is_empty()) {
+            lines.pop();
+        }
+        lines
+    }
+
+    fn render_transcript_block(
+        &self,
+        renderer: &TerminalDocumentRenderer,
+        palette: TerminalPalette,
+        block: &PresentationBlock,
+        width: usize,
+        inherited_accent: Option<ThemeTextStyle>,
+    ) -> Vec<StyledLine> {
+        match block {
+            PresentationBlock::Card { title, tone, body } => {
+                let accent = if *tone == PresentationTone::Neutral {
+                    palette.section_style()
+                } else {
+                    palette.tone_style(*tone)
+                };
+                let mut title_style = accent;
+                title_style.bold = true;
+                title_style.dim = false;
+                let marker = match tone {
+                    PresentationTone::Neutral => "◆",
+                    PresentationTone::Success => "✓",
+                    PresentationTone::Warning => "!",
+                    PresentationTone::Error => "×",
+                    PresentationTone::Thinking => "…",
+                    PresentationTone::Tool => "›",
+                };
+                let title = truncate_width(
+                    &sanitize_terminal_text(title),
+                    width.saturating_sub(2).max(1),
+                );
+                let mut lines = vec![StyledLine {
+                    spans: vec![
+                        StyledSpan {
+                            content: format!("{marker} "),
+                            style: accent,
+                        },
+                        StyledSpan {
+                            content: title,
+                            style: title_style,
+                        },
+                    ],
+                }];
+                for child in body {
+                    if lines.len() > 1
+                        && !matches!(child, PresentationBlock::Blank)
+                        && lines.last().is_some_and(|line| !line.spans.is_empty())
+                    {
+                        lines.push(StyledLine::default());
+                    }
+                    let rendered = self.render_transcript_block(
+                        renderer,
+                        palette,
+                        child,
+                        width.saturating_sub(2).max(20),
+                        Some(accent),
+                    );
+                    lines.extend(rendered.into_iter().map(|mut line| {
+                        if !line.spans.is_empty() {
+                            line.spans.insert(
+                                0,
+                                StyledSpan {
+                                    content: "  ".into(),
+                                    style: accent,
+                                },
+                            );
+                        }
+                        line
+                    }));
+                }
+                lines
+            }
+            PresentationBlock::KeyValue(entries) => {
+                self.render_transcript_key_values(entries, width, palette, inherited_accent)
+            }
+            PresentationBlock::Table(table) => {
+                self.render_transcript_collection(table, width, palette, inherited_accent)
+            }
+            _ => {
+                let style = palette.style_for_block(block);
+                renderer
+                    .render_block(block, width)
+                    .into_iter()
+                    .map(|line| {
+                        if line.is_empty() {
+                            StyledLine::default()
+                        } else {
+                            StyledLine::from_span(line, style)
+                        }
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    fn render_transcript_key_values(
+        &self,
+        entries: &[(String, String)],
+        width: usize,
+        palette: TerminalPalette,
+        inherited_accent: Option<ThemeTextStyle>,
+    ) -> Vec<StyledLine> {
+        if entries.is_empty() {
+            return vec![StyledLine::from_span("No details.", palette.meta_style())];
+        }
+        let maximum_label_width = entries
+            .iter()
+            .map(|(label, _)| display_width(&sanitize_terminal_text(label)))
+            .max()
+            .unwrap_or(1);
+        let label_width = maximum_label_width.min((width / 3).clamp(8, 20));
+        let value_width = width.saturating_sub(label_width + 2).max(8);
+        let stacked = width < 36 || value_width < 12;
+        let mut label_style = inherited_accent.unwrap_or_else(|| palette.meta_style());
+        label_style.bold = true;
+        label_style.dim = false;
+        let value_style = palette.assistant_style();
+        let mut lines = Vec::new();
+        for (label, value) in entries {
+            let label = sanitize_terminal_text(label);
+            let value = sanitize_terminal_text(value);
+            if stacked {
+                lines.push(StyledLine::from_span(label, label_style));
+                lines.extend(
+                    wrap_text(&value, width.saturating_sub(2).max(8))
+                        .into_iter()
+                        .map(|value| StyledLine {
+                            spans: vec![
+                                StyledSpan {
+                                    content: "  ".into(),
+                                    style: label_style,
+                                },
+                                StyledSpan {
+                                    content: value,
+                                    style: value_style,
+                                },
+                            ],
+                        }),
+                );
+                continue;
+            }
+            let label = truncate_width(&label, label_width);
+            let padding = label_width.saturating_sub(display_width(&label));
+            let values = wrap_text(&value, value_width);
+            for (index, value) in values.into_iter().enumerate() {
+                lines.push(StyledLine {
+                    spans: vec![
+                        StyledSpan {
+                            content: if index == 0 {
+                                format!("{label}{}", " ".repeat(padding))
+                            } else {
+                                " ".repeat(label_width)
+                            },
+                            style: label_style,
+                        },
+                        StyledSpan {
+                            content: "  ".into(),
+                            style: palette.meta_style(),
+                        },
+                        StyledSpan {
+                            content: value,
+                            style: value_style,
+                        },
+                    ],
+                });
+            }
+        }
+        lines
+    }
+
+    fn render_transcript_collection(
+        &self,
+        table: &PresentationTable,
+        width: usize,
+        palette: TerminalPalette,
+        inherited_accent: Option<ThemeTextStyle>,
+    ) -> Vec<StyledLine> {
+        if table.rows.is_empty() {
+            return wrap_text(&sanitize_terminal_text(&table.empty_message), width)
+                .into_iter()
+                .map(|line| StyledLine::from_span(line, palette.meta_style()))
+                .collect();
+        }
+        let column_count = table
+            .headers
+            .len()
+            .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
+        let headers = (0..column_count)
+            .map(|index| {
+                table.headers.get(index).map_or_else(
+                    || format!("Field {}", index + 1),
+                    |header| sanitize_terminal_text(header),
+                )
+            })
+            .collect::<Vec<_>>();
+        let primary_index = collection_primary_index(&headers);
+        let status_index = collection_status_index(&headers);
+        let mut primary_style = inherited_accent.unwrap_or_else(|| palette.section_style());
+        primary_style.bold = true;
+        primary_style.dim = false;
+        let meta_style = palette.meta_style();
+        let metadata_style = palette.assistant_style();
+        let mut lines = Vec::new();
+        for (row_index, row) in table.rows.iter().enumerate() {
+            let primary = row
+                .get(primary_index)
+                .map(|value| sanitize_terminal_text(value))
+                .filter(|value| !value.trim().is_empty() && value != "—")
+                .unwrap_or_else(|| format!("Item {}", row_index + 1));
+            let status = status_index.and_then(|index| {
+                row.get(index).and_then(|value| {
+                    collection_status(&headers[index], &sanitize_terminal_text(value), palette)
+                })
+            });
+            let status_width = status
+                .as_ref()
+                .map_or(0, |(label, _, _)| display_width(label) + 4);
+            let primary = truncate_width(&primary, width.saturating_sub(status_width + 2).max(8));
+            let mut spans = vec![
+                StyledSpan {
+                    content: "• ".into(),
+                    style: inherited_accent.unwrap_or_else(|| palette.section_style()),
+                },
+                StyledSpan {
+                    content: primary,
+                    style: primary_style,
+                },
+            ];
+            if let Some((label, marker, style)) = status {
+                spans.extend([
+                    StyledSpan {
+                        content: "  ".into(),
+                        style: meta_style,
+                    },
+                    StyledSpan {
+                        content: format!("{marker} {label}"),
+                        style,
+                    },
+                ]);
+            }
+            lines.push(StyledLine { spans });
+
+            let metadata = row
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| {
+                    *index != primary_index
+                        && status_index != Some(*index)
+                        && headers.get(*index).is_none_or(|header| header != "#")
+                })
+                .filter_map(|(index, value)| {
+                    let value = sanitize_terminal_text(value);
+                    (!value.trim().is_empty() && value != "—").then(|| {
+                        format!(
+                            "{}: {value}",
+                            headers
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_else(|| format!("Field {}", index + 1))
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if !metadata.is_empty() {
+                lines.extend(
+                    wrap_text(&metadata, width.saturating_sub(2).max(8))
+                        .into_iter()
+                        .map(|line| StyledLine {
+                            spans: vec![
+                                StyledSpan {
+                                    content: "  ".into(),
+                                    style: meta_style,
+                                },
+                                StyledSpan {
+                                    content: line,
+                                    style: metadata_style,
+                                },
+                            ],
+                        }),
+                );
+            }
+        }
+        lines
+    }
+}
+
+fn collection_primary_index(headers: &[String]) -> usize {
+    for preferred in [
+        "name", "title", "id", "path", "tool", "server", "model", "value",
+    ] {
+        if let Some(index) = headers
+            .iter()
+            .position(|header| header.eq_ignore_ascii_case(preferred))
+        {
+            return index;
+        }
+    }
+    headers
+        .iter()
+        .position(|header| {
+            !matches!(
+                header.to_ascii_lowercase().as_str(),
+                "status" | "active" | "enabled" | "trusted" | "state" | "#"
+            )
+        })
+        .unwrap_or(0)
+}
+
+fn collection_status_index(headers: &[String]) -> Option<usize> {
+    ["status", "state", "active", "enabled", "trusted"]
+        .into_iter()
+        .find_map(|preferred| {
+            headers
+                .iter()
+                .position(|header| header.eq_ignore_ascii_case(preferred))
+        })
+}
+
+fn collection_status(
+    header: &str,
+    value: &str,
+    palette: TerminalPalette,
+) -> Option<(String, &'static str, ThemeTextStyle)> {
+    let value = value.trim();
+    if value.is_empty() || value == "—" {
+        return None;
+    }
+    let header = header.to_ascii_lowercase();
+    let normalized = value.to_ascii_lowercase();
+    let label: String = match (header.as_str(), normalized.as_str()) {
+        ("active", "yes") => "active".into(),
+        ("active", "no") => "inactive".into(),
+        ("enabled", "yes") => "enabled".into(),
+        ("enabled", "no") => "disabled".into(),
+        ("trusted", "yes") => "trusted".into(),
+        ("trusted", "no") => "untrusted".into(),
+        _ => value.into(),
+    };
+    let semantic = label.to_ascii_lowercase();
+    let (marker, style) = match semantic.as_str() {
+        "active" | "ready" | "ok" | "healthy" | "completed" | "connected" | "enabled"
+        | "trusted" | "running" => ("✓", palette.tone_style(PresentationTone::Success)),
+        "failed" | "error" | "denied" | "blocked" | "cancelled" => ("×", palette.error_style()),
+        "waiting" | "queued" | "pending" | "paused" | "draft" | "interrupted" | "unknown"
+        | "untrusted" => ("!", palette.warning_style()),
+        "inactive" | "disabled" => ("·", palette.meta_style()),
+        _ => ("·", palette.meta_style()),
+    };
+    Some((label, marker, style))
+}
+
 impl TerminalDocumentRenderer {
     /// Build a renderer for one immutable presentation preference snapshot.
-    pub fn new(preferences: ReplPreferences, width: usize) -> Self {
+    pub fn new(preferences: TerminalPreferences, width: usize) -> Self {
         Self {
             preferences,
             width: width.clamp(40, 240),
@@ -1071,7 +1554,7 @@ fn render_inline(value: &str, palette: TerminalPalette, color: bool) -> String {
     rendered
 }
 
-/// Terminal RGB value shared by Reedline prompts and semantic transcript palettes.
+/// Terminal RGB value shared by interactive prompts and semantic transcript palettes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RgbColor {
     /// Red channel.
@@ -1227,7 +1710,7 @@ impl TerminalPalette {
                 success: TextStyle::color(RgbColor::new(158, 206, 106)),
                 warning: TextStyle::color(RgbColor::new(255, 223, 93)).bold(),
                 error: TextStyle::color(RgbColor::new(255, 95, 95)).bold(),
-                meta: TextStyle::color(RgbColor::new(127, 135, 144)).dim(),
+                meta: TextStyle::color(RgbColor::new(174, 184, 194)),
                 spinner_frames: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
             },
             ThemeName::Mono => Self {
@@ -1272,7 +1755,7 @@ impl TerminalPalette {
                 success: TextStyle::color(RgbColor::new(159, 215, 122)),
                 warning: TextStyle::color(RgbColor::new(255, 223, 93)).bold(),
                 error: TextStyle::color(RgbColor::new(255, 95, 95)).bold(),
-                meta: TextStyle::color(RgbColor::new(184, 139, 106)).dim(),
+                meta: TextStyle::color(RgbColor::new(220, 174, 136)),
                 spinner_frames: &[
                     "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█", "▉", "▊", "▋", "▌", "▍", "▎",
                 ],
@@ -1289,14 +1772,14 @@ impl TerminalPalette {
                 success: TextStyle::color(RgbColor::new(0, 255, 102)),
                 warning: TextStyle::color(RgbColor::new(255, 215, 95)).bold(),
                 error: TextStyle::color(RgbColor::new(255, 95, 95)).bold(),
-                meta: TextStyle::color(RgbColor::new(63, 191, 106)).dim(),
+                meta: TextStyle::color(RgbColor::new(112, 222, 146)),
                 spinner_frames: &["░", "▒", "▓", "█", "▓", "▒"],
             },
         }
     }
 
     /// Resolve a built-in palette or an immutable custom snapshot.
-    pub fn for_preferences(preferences: &ReplPreferences) -> Self {
+    pub fn for_preferences(preferences: &TerminalPreferences) -> Self {
         preferences
             .custom_theme
             .as_ref()
@@ -1344,6 +1827,73 @@ impl TerminalPalette {
     /// Metadata style used for low-emphasis terminal affordances such as type-ahead.
     pub fn meta_style(self) -> ThemeTextStyle {
         self.meta.into()
+    }
+
+    /// Assistant transcript style.
+    pub fn assistant_style(self) -> ThemeTextStyle {
+        self.assistant.into()
+    }
+
+    /// Operator/user transcript style derived from the prompt identity color.
+    pub fn user_style(self) -> ThemeTextStyle {
+        let mut style: ThemeTextStyle = self.meta.into();
+        style.foreground = self.prompt_left.map(Into::into);
+        style.bold = true;
+        style.dim = false;
+        style
+    }
+
+    /// Neutral semantic-section accent used to break up transcript hierarchy.
+    pub fn section_style(self) -> ThemeTextStyle {
+        let mut style = self.user_style();
+        style.italic = false;
+        style
+    }
+
+    /// Active background-operation style.
+    pub fn activity_style(self) -> ThemeTextStyle {
+        self.activity.into()
+    }
+
+    /// Tool and integration transcript style.
+    pub fn tool_style(self) -> ThemeTextStyle {
+        self.tool.into()
+    }
+
+    /// Warning and attention style.
+    pub fn warning_style(self) -> ThemeTextStyle {
+        self.warning.into()
+    }
+
+    /// Error and denial style.
+    pub fn error_style(self) -> ThemeTextStyle {
+        self.error.into()
+    }
+
+    /// Theme-resolved style for one semantic presentation tone.
+    pub fn tone_style(self, tone: PresentationTone) -> ThemeTextStyle {
+        match tone {
+            PresentationTone::Neutral => self.assistant,
+            PresentationTone::Success => self.success,
+            PresentationTone::Warning => self.warning,
+            PresentationTone::Error => self.error,
+            PresentationTone::Thinking => self.thinking,
+            PresentationTone::Tool => self.tool,
+        }
+        .into()
+    }
+
+    fn style_for_block(self, block: &PresentationBlock) -> ThemeTextStyle {
+        match block {
+            PresentationBlock::Card { tone, .. } => return self.tone_style(*tone),
+            PresentationBlock::Table(_)
+            | PresentationBlock::KeyValue(_)
+            | PresentationBlock::Prompt { .. } => self.meta,
+            PresentationBlock::Code { .. } | PresentationBlock::Diff(_) => self.tool,
+            PresentationBlock::Text(_) | PresentationBlock::Markdown(_) => self.assistant,
+            PresentationBlock::Blank => TextStyle::plain(),
+        }
+        .into()
     }
 
     /// Render the theme's bounded spinner frame for one elapsed duration.
@@ -1729,8 +2279,8 @@ impl ThemeLibrary {
     pub fn preview_preferences(
         &self,
         name: &str,
-        current: &ReplPreferences,
-    ) -> Result<ReplPreferences, PresentationError> {
+        current: &TerminalPreferences,
+    ) -> Result<TerminalPreferences, PresentationError> {
         let mut preview = current.clone();
         self.select(name, &mut preview)?;
         Ok(preview)
@@ -1817,7 +2367,7 @@ impl ThemeLibrary {
                     content: scaffold.content.clone(),
                 },
                 PresentationBlock::Markdown(
-                    "The REPL does **not** write this file. Save it deliberately, restart Colossus, then run `/theme validate` and `/theme NAME`.".into(),
+                    "The TUI does **not** write this file. Save it deliberately, restart Colossus, then run `/theme validate` and `/theme NAME`.".into(),
                 ),
             ],
         })
@@ -1850,7 +2400,7 @@ impl ThemeLibrary {
     pub fn select(
         &self,
         name: &str,
-        preferences: &mut ReplPreferences,
+        preferences: &mut TerminalPreferences,
     ) -> Result<(), PresentationError> {
         let normalized = normalize_theme_name(name)?;
         if let Some(theme) = ThemeName::parse(&normalized) {
@@ -2292,7 +2842,7 @@ fn builtin_snapshot(theme: ThemeName) -> CustomTheme {
     }
 }
 
-fn validate_preferences(preferences: &ReplPreferences) -> Result<(), StoreError> {
+fn validate_preferences(preferences: &TerminalPreferences) -> Result<(), StoreError> {
     if preferences.schema_version != 1 {
         return Err(StoreError::Adapter("schema_version must be 1".into()));
     }
@@ -2324,17 +2874,17 @@ pub struct EventSourcedPresentationRepository {
 }
 
 impl EventSourcedPresentationRepository {
-    /// Bind the global REPL presentation profile to the authoritative journal.
+    /// Bind the global terminal presentation profile to the authoritative journal.
     pub fn new(journal: Arc<dyn EventJournal>) -> Self {
         Self { journal }
     }
 }
 
 impl PresentationRepository for EventSourcedPresentationRepository {
-    fn load(&self) -> Result<ReplPreferences, StoreError> {
+    fn load(&self) -> Result<TerminalPreferences, StoreError> {
         let events = self.journal.read_stream(PREFERENCES_STREAM)?;
         let Some(event) = events.last() else {
-            return Ok(ReplPreferences::default());
+            return Ok(TerminalPreferences::default());
         };
         if event.event_type != PREFERENCES_UPDATED {
             return Err(StoreError::Verification(
@@ -2342,7 +2892,7 @@ impl PresentationRepository for EventSourcedPresentationRepository {
             ));
         }
         let payload = self.journal.decrypt_payload(event)?;
-        let preferences: ReplPreferences = serde_json::from_value(
+        let preferences: TerminalPreferences = serde_json::from_value(
             payload
                 .get("preferences")
                 .cloned()
@@ -2355,9 +2905,9 @@ impl PresentationRepository for EventSourcedPresentationRepository {
 
     fn save(
         &self,
-        preferences: ReplPreferences,
+        preferences: TerminalPreferences,
         actor: Actor,
-    ) -> Result<ReplPreferences, StoreError> {
+    ) -> Result<TerminalPreferences, StoreError> {
         validate_preferences(&preferences)?;
         let expected_stream_version =
             u64::try_from(self.journal.read_stream(PREFERENCES_STREAM)?.len())
@@ -2452,13 +3002,13 @@ fn validate_history_entry(entry: &str) -> Result<(), StoreError> {
 
 /// Pure semantic renderer over already released contracts.
 pub struct SemanticRenderer {
-    preferences: ReplPreferences,
+    preferences: TerminalPreferences,
     color: bool,
 }
 
 impl SemanticRenderer {
     /// Create a renderer for one immutable preference snapshot.
-    pub fn new(preferences: ReplPreferences) -> Self {
+    pub fn new(preferences: TerminalPreferences) -> Self {
         Self {
             preferences,
             color: false,
@@ -2516,62 +3066,7 @@ impl SemanticRenderer {
         if self.preferences.transcript_density == TranscriptDensity::Compact {
             return summary;
         }
-        let mut body = vec![PresentationBlock::KeyValue(vec![
-            ("Session".into(), state.session_id.clone()),
-            (
-                "Tasks".into(),
-                format!(
-                    "{} open / {} total",
-                    state.open_task_count,
-                    state.tasks.len()
-                ),
-            ),
-            (
-                "Active decisions".into(),
-                state.active_decisions.len().to_string(),
-            ),
-            (
-                "Actionable plans".into(),
-                state.actionable_plans.len().to_string(),
-            ),
-            ("Goals".into(), state.current_goals.len().to_string()),
-            (
-                "Subagents".into(),
-                state.current_subagents.len().to_string(),
-            ),
-        ])];
-        let mut work = PresentationTable::new(
-            ["Kind", "ID", "Status", "Summary"],
-            "No active tasks or goals.",
-        );
-        for task in state.tasks.iter().filter(|task| {
-            !matches!(
-                task.status,
-                colossus_contracts::TaskStatus::Completed
-                    | colossus_contracts::TaskStatus::Cancelled
-            )
-        }) {
-            work.push_row([
-                "Task".into(),
-                task.id.clone(),
-                format!("{:?}", task.status).to_ascii_lowercase(),
-                task.title.clone(),
-            ]);
-        }
-        for goal in &state.current_goals {
-            work.push_row([
-                "Goal".into(),
-                goal.id.clone(),
-                format!("{:?}", goal.status).to_ascii_lowercase(),
-                goal.objective.clone(),
-            ]);
-        }
-        body.push(PresentationBlock::Table(work));
-        self.render_document(PresentationDocument::from_block(PresentationBlock::Card {
-            title: "Current work".into(),
-            tone: PresentationTone::Neutral,
-            body,
-        }))
+        self.render_document(work_state_document(state))
     }
 
     /// Render context budget and compaction state.
@@ -2589,36 +3084,7 @@ impl SemanticRenderer {
         if self.preferences.transcript_density == TranscriptDensity::Compact {
             return summary;
         }
-        self.render_document(PresentationDocument::from_block(PresentationBlock::Card {
-            title: "Context".into(),
-            tone: if status.compacted {
-                PresentationTone::Warning
-            } else {
-                PresentationTone::Neutral
-            },
-            body: vec![PresentationBlock::KeyValue(vec![
-                ("Session".into(), status.session_id.clone()),
-                ("Messages".into(), status.message_count.to_string()),
-                (
-                    "Tokens".into(),
-                    format!(
-                        "{} / {}",
-                        status.token_estimate, status.context_window_tokens
-                    ),
-                ),
-                (
-                    "Compacted".into(),
-                    if status.compacted { "yes" } else { "no" }.into(),
-                ),
-                (
-                    "Snapshot".into(),
-                    status
-                        .active_snapshot_id
-                        .clone()
-                        .unwrap_or_else(|| "—".into()),
-                ),
-            ])],
-        }))
+        self.render_document(context_status_document(status))
     }
 
     /// Render one already policy-released provider event.
@@ -2687,6 +3153,35 @@ impl SemanticRenderer {
                 call,
                 elapsed_seconds,
             } => self.render_tool_started(*turn, call, *elapsed_seconds),
+            RunEvent::ToolCancelled {
+                turn,
+                call,
+                elapsed_seconds,
+            } => Ok(Some(
+                if self.preferences.transcript_density == TranscriptDensity::Comfortable {
+                    self.render_document(PresentationDocument::from_block(
+                        PresentationBlock::Card {
+                            title: format!("Cancelled {}", call.name),
+                            tone: PresentationTone::Warning,
+                            body: vec![PresentationBlock::KeyValue(vec![
+                                ("Turn".into(), turn.to_string()),
+                                ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
+                                (
+                                    "Reason".into(),
+                                    "operator cancelled before the effect began".into(),
+                                ),
+                            ])],
+                        },
+                    ))
+                } else {
+                    format!(
+                        "{} cancelled {} turn={} elapsed={elapsed_seconds:.2}s",
+                        self.label("tool"),
+                        call.name,
+                        turn
+                    )
+                },
+            )),
             RunEvent::ToolCompleted {
                 turn,
                 result,
@@ -2741,6 +3236,89 @@ impl SemanticRenderer {
         }
     }
 
+    /// Build a retained semantic document for one transcript-worthy run event.
+    ///
+    /// Live deltas, final assistant text, phases, and tool-start activity are handled by
+    /// their dedicated TUI rows. Everything returned here can be reflowed after resize.
+    pub fn run_event_document(
+        &self,
+        event: &RunEvent,
+        call: Option<&ToolCall>,
+    ) -> Option<PresentationDocument> {
+        if self.preferences.stream_mode == StreamDisplayMode::Raw {
+            return None;
+        }
+        match event {
+            RunEvent::Provider {
+                event: ProviderEvent::ReasoningSummary { summary },
+            } if self.preferences.show_reasoning => {
+                Some(PresentationDocument::from_block(PresentationBlock::Card {
+                    title: "Thinking".into(),
+                    tone: PresentationTone::Thinking,
+                    body: vec![PresentationBlock::Markdown(summary.clone())],
+                }))
+            }
+            RunEvent::Provider {
+                event: ProviderEvent::Usage { usage },
+            } if self.preferences.events_mode == EventDisplayMode::Verbose => Some(
+                PresentationDocument::from_block(PresentationBlock::KeyValue(vec![
+                    ("Input tokens".into(), usage.input_tokens.to_string()),
+                    ("Output tokens".into(), usage.output_tokens.to_string()),
+                    ("Total tokens".into(), usage.total_tokens.to_string()),
+                ])),
+            ),
+            RunEvent::ToolCompleted {
+                result,
+                duration_seconds,
+                ..
+            } if self.preferences.events_mode != EventDisplayMode::Off || result.exit_code != 0 => {
+                Some(tool_result_document(result, *duration_seconds, call))
+            }
+            RunEvent::ToolCancelled {
+                turn,
+                call,
+                elapsed_seconds,
+            } => Some(PresentationDocument::from_block(PresentationBlock::Card {
+                title: format!("Cancelled {}", call.name),
+                tone: PresentationTone::Warning,
+                body: vec![PresentationBlock::KeyValue(vec![
+                    ("Turn".into(), turn.to_string()),
+                    ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
+                    (
+                        "Reason".into(),
+                        "operator cancelled before the effect began".into(),
+                    ),
+                ])],
+            })),
+            RunEvent::Error {
+                code,
+                message,
+                recoverable,
+                turn,
+                elapsed_seconds,
+            } => Some(PresentationDocument::from_block(PresentationBlock::Card {
+                title: "Run error".into(),
+                tone: PresentationTone::Error,
+                body: vec![
+                    PresentationBlock::KeyValue(vec![
+                        ("Code".into(), code.clone()),
+                        (
+                            "Recoverable".into(),
+                            if *recoverable { "yes" } else { "no" }.into(),
+                        ),
+                        (
+                            "Turn".into(),
+                            turn.map_or_else(|| "—".into(), |value| value.to_string()),
+                        ),
+                        ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
+                    ]),
+                    PresentationBlock::Markdown(message.clone()),
+                ],
+            })),
+            _ => None,
+        }
+    }
+
     /// Render a correlated run event, including bounded provenance in verbose mode.
     pub fn run_event_envelope(
         &self,
@@ -2773,6 +3351,8 @@ impl SemanticRenderer {
             RunPhase::Preparing => "preparing",
             RunPhase::WaitingForModel => "waiting_for_model",
             RunPhase::Responding => "responding",
+            RunPhase::Cancelling => "cancelling",
+            RunPhase::Cancelled => "cancelled",
             RunPhase::Completed => "completed",
         };
         match self.preferences.events_mode {
@@ -2882,55 +3462,11 @@ impl SemanticRenderer {
             summarize_value(&parsed, family.keys())
         };
         if self.preferences.transcript_density == TranscriptDensity::Comfortable {
-            let mut body = vec![PresentationBlock::KeyValue(vec![
-                ("Status".into(), status.replace('_', " ")),
-                ("Duration".into(), format!("{duration_seconds:.2}s")),
-                ("Exit".into(), result.exit_code.to_string()),
-            ])];
-            if failed {
-                if let Some(message) = parsed.pointer("/error/message").and_then(Value::as_str) {
-                    body.push(PresentationBlock::Markdown(message.into()));
-                } else {
-                    body.push(tool_output_block(
-                        &result.name,
-                        &parsed,
-                        call.map(|call| &call.arguments),
-                    ));
-                }
-            } else {
-                body.push(tool_output_block(
-                    &result.name,
-                    &parsed,
-                    call.map(|call| &call.arguments),
-                ));
-            }
-            let context = call
-                .and_then(|call| tool_call_context(call, family))
-                .map(|value| format!(" · {}", bounded_text(&value, 60)))
-                .unwrap_or_default();
-            let document = PresentationDocument::from_block(PresentationBlock::Card {
-                title: format!(
-                    "{} {}{}",
-                    if failed {
-                        "Failed"
-                    } else if pending {
-                        "Pending"
-                    } else {
-                        "Completed"
-                    },
-                    result.name,
-                    context,
-                ),
-                tone: if failed {
-                    PresentationTone::Error
-                } else if pending {
-                    PresentationTone::Warning
-                } else {
-                    PresentationTone::Success
-                },
-                body,
-            });
-            return Ok(Some(self.render_document(document)));
+            return Ok(Some(self.render_document(tool_result_document(
+                result,
+                duration_seconds,
+                call,
+            ))));
         }
         let rendered = match self.preferences.events_mode {
             EventDisplayMode::Verbose => format!(
@@ -2996,6 +3532,172 @@ impl SemanticRenderer {
         }
         .map_err(|error| PresentationError::Invalid(error.to_string()))
     }
+}
+
+/// Build the canonical semantic card for one released tool result.
+///
+/// Terminal strings and the Ratatui transcript consume this same retained document so
+/// source previews, process streams, diffs, tables, and failures reflow on resize.
+pub fn tool_result_document(
+    result: &ToolResult,
+    duration_seconds: f64,
+    call: Option<&ToolCall>,
+) -> PresentationDocument {
+    let parsed = serde_json::from_str::<Value>(&result.output)
+        .unwrap_or_else(|_| Value::String(result.output.clone()));
+    let lifecycle_status = parsed.get("status").and_then(Value::as_str);
+    let pending =
+        result.name == "agent.result" && matches!(lifecycle_status, Some("queued" | "running"));
+    let failed_child =
+        result.name == "agent.result" && matches!(lifecycle_status, Some("failed" | "interrupted"));
+    let failed = result.exit_code != 0 || failed_child;
+    let recoverable = parsed
+        .pointer("/error/recoverable")
+        .and_then(Value::as_bool);
+    let status = if pending {
+        lifecycle_status.unwrap_or("pending")
+    } else if failed {
+        if recoverable == Some(true) {
+            "recoverable_error"
+        } else {
+            "failed"
+        }
+    } else {
+        "ok"
+    };
+    let mut body = vec![PresentationBlock::KeyValue(vec![
+        ("Status".into(), status.replace('_', " ")),
+        ("Duration".into(), format!("{duration_seconds:.2}s")),
+        ("Exit".into(), result.exit_code.to_string()),
+    ])];
+    if failed && let Some(message) = parsed.pointer("/error/message").and_then(Value::as_str) {
+        body.push(PresentationBlock::Markdown(message.into()));
+    } else {
+        body.push(tool_output_block(
+            &result.name,
+            &parsed,
+            call.map(|call| &call.arguments),
+        ));
+    }
+    let context = call
+        .and_then(|call| tool_call_context(call, ToolFamily::from_name(&result.name)))
+        .map(|value| format!(" · {}", bounded_text(&value, 60)))
+        .unwrap_or_default();
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: format!(
+            "{} {}{}",
+            if failed {
+                "Failed"
+            } else if pending {
+                "Pending"
+            } else {
+                "Completed"
+            },
+            result.name,
+            context,
+        ),
+        tone: if failed {
+            PresentationTone::Error
+        } else if pending {
+            PresentationTone::Warning
+        } else {
+            PresentationTone::Success
+        },
+        body,
+    })
+}
+
+/// Build the canonical semantic work-state document for terminal and TUI backends.
+pub fn work_state_document(state: &WorkStateSnapshot) -> PresentationDocument {
+    let mut body = vec![PresentationBlock::KeyValue(vec![
+        ("Session".into(), state.session_id.clone()),
+        (
+            "Tasks".into(),
+            format!(
+                "{} open / {} total",
+                state.open_task_count,
+                state.tasks.len()
+            ),
+        ),
+        (
+            "Active decisions".into(),
+            state.active_decisions.len().to_string(),
+        ),
+        (
+            "Actionable plans".into(),
+            state.actionable_plans.len().to_string(),
+        ),
+        ("Goals".into(), state.current_goals.len().to_string()),
+        (
+            "Subagents".into(),
+            state.current_subagents.len().to_string(),
+        ),
+    ])];
+    let mut work = PresentationTable::new(
+        ["Kind", "ID", "Status", "Summary"],
+        "No active tasks or goals.",
+    );
+    for task in state.tasks.iter().filter(|task| {
+        !matches!(
+            task.status,
+            colossus_contracts::TaskStatus::Completed | colossus_contracts::TaskStatus::Cancelled
+        )
+    }) {
+        work.push_row([
+            "Task".into(),
+            task.id.clone(),
+            format!("{:?}", task.status).to_ascii_lowercase(),
+            task.title.clone(),
+        ]);
+    }
+    for goal in &state.current_goals {
+        work.push_row([
+            "Goal".into(),
+            goal.id.clone(),
+            format!("{:?}", goal.status).to_ascii_lowercase(),
+            goal.objective.clone(),
+        ]);
+    }
+    body.push(PresentationBlock::Table(work));
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Current work".into(),
+        tone: PresentationTone::Neutral,
+        body,
+    })
+}
+
+/// Build the canonical semantic context-status document for terminal and TUI backends.
+pub fn context_status_document(status: &ContextStatus) -> PresentationDocument {
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Context".into(),
+        tone: if status.compacted {
+            PresentationTone::Warning
+        } else {
+            PresentationTone::Neutral
+        },
+        body: vec![PresentationBlock::KeyValue(vec![
+            ("Session".into(), status.session_id.clone()),
+            ("Messages".into(), status.message_count.to_string()),
+            (
+                "Tokens".into(),
+                format!(
+                    "{} / {}",
+                    status.token_estimate, status.context_window_tokens
+                ),
+            ),
+            (
+                "Compacted".into(),
+                if status.compacted { "yes" } else { "no" }.into(),
+            ),
+            (
+                "Snapshot".into(),
+                status
+                    .active_snapshot_id
+                    .clone()
+                    .unwrap_or_else(|| "—".into()),
+            ),
+        ])],
+    })
 }
 
 fn tool_output_block(name: &str, output: &Value, arguments: Option<&Value>) -> PresentationBlock {
@@ -3288,9 +3990,9 @@ mod tests {
     use super::{
         EventDisplayMode, EventSourcedPresentationRepository, MAX_CUSTOM_THEMES,
         MAX_THEME_FILE_BYTES, PresentationBlock, PresentationDocument, PresentationTable,
-        PresentationTone, ReplPreferences, SemanticRenderer, StreamDisplayMode,
-        TerminalDocumentRenderer, TerminalPalette, ThemeLibrary, ThemeName, TranscriptDensity,
-        display_width, document_from_json,
+        PresentationTone, SemanticRenderer, StreamDisplayMode, StyledDocumentRenderer,
+        TerminalDocumentRenderer, TerminalPalette, TerminalPreferences, ThemeLibrary, ThemeName,
+        TranscriptDensity, display_width, document_from_json,
     };
     use colossus_contracts::{
         Actor, ActorType, ProviderEvent, ProviderUsage, RunEvent, RunEventEnvelope, RunPhase,
@@ -3323,7 +4025,7 @@ mod tests {
             ],
         };
         let rendered =
-            TerminalDocumentRenderer::new(ReplPreferences::default(), 64).render(&document);
+            TerminalDocumentRenderer::new(TerminalPreferences::default(), 64).render(&document);
         assert!(rendered.contains("Result"));
         assert!(rendered.contains("• first"));
         assert!(rendered.contains("fn main() {}"));
@@ -3332,14 +4034,14 @@ mod tests {
         assert!(rendered.contains("+new"));
         assert!(rendered.lines().all(|line| display_width(line) <= 64));
         for width in [60, 80, 120, 160] {
-            let rendered =
-                TerminalDocumentRenderer::new(ReplPreferences::default(), width).render(&document);
+            let rendered = TerminalDocumentRenderer::new(TerminalPreferences::default(), width)
+                .render(&document);
             assert!(
                 rendered.lines().all(|line| display_width(line) <= width),
                 "width {width}"
             );
         }
-        let colored = TerminalDocumentRenderer::new(ReplPreferences::default(), 64)
+        let colored = TerminalDocumentRenderer::new(TerminalPreferences::default(), 64)
             .with_color(true)
             .render(&PresentationDocument::from_block(
                 PresentationBlock::Markdown("A **bold** value and `code`.".into()),
@@ -3347,6 +4049,100 @@ mod tests {
         assert!(colored.contains("\x1b["));
         assert!(!colored.contains("**"));
         assert!(!colored.contains('`'));
+    }
+
+    #[test]
+    fn transcript_documents_flatten_card_and_detail_chrome_into_colored_hierarchy() {
+        let document = PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Colossus terminal".into(),
+            tone: PresentationTone::Neutral,
+            body: vec![
+                PresentationBlock::Text("Type a message to run the agent.".into()),
+                PresentationBlock::KeyValue(vec![
+                    ("Send".into(), "Enter sends".into()),
+                    ("Scroll".into(), "PageUp and PageDown".into()),
+                ]),
+                PresentationBlock::Card {
+                    title: "Nested warning".into(),
+                    tone: PresentationTone::Warning,
+                    body: vec![PresentationBlock::Text("Still one visual level.".into())],
+                },
+            ],
+        });
+        let lines = StyledDocumentRenderer::for_transcript(TerminalPreferences::default(), 80)
+            .render(&document);
+        let rendered = lines
+            .iter()
+            .map(super::StyledLine::plain_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("◆ Colossus terminal"), "{rendered}");
+        assert!(rendered.contains("Send"), "{rendered}");
+        assert!(rendered.contains("Enter sends"), "{rendered}");
+        assert!(rendered.contains("Scroll"), "{rendered}");
+        assert!(rendered.contains("! Nested warning"), "{rendered}");
+        assert!(!rendered.contains(['┌', '┐', '└', '┘']), "{rendered}");
+        let heading = lines.first().expect("semantic heading");
+        assert_eq!(heading.spans.len(), 2);
+        assert!(heading.spans[1].style.bold);
+        let details = lines
+            .iter()
+            .find(|line| line.plain_text().contains("Enter sends"))
+            .expect("detail line");
+        assert_ne!(
+            heading.spans[0].style,
+            details.spans.last().expect("detail value").style
+        );
+    }
+
+    #[test]
+    fn transcript_collections_render_as_readable_borderless_scan_rows() {
+        let document = document_from_json(
+            &serde_json::json!([
+                {
+                    "active": true,
+                    "name": "coding",
+                    "description": "Implement and verify scoped software changes with repository evidence.",
+                    "version": "0.1.0",
+                    "source": "bundled:coding"
+                },
+                {
+                    "active": false,
+                    "name": "offline-dev",
+                    "description": "Prefer credential-free and network-free verification paths.",
+                    "version": "0.1.0",
+                    "source": "bundled:offline-dev"
+                }
+            ]),
+            Some("Skills"),
+        );
+        let lines = StyledDocumentRenderer::for_transcript(TerminalPreferences::default(), 56)
+            .render(&document);
+        let rendered = lines
+            .iter()
+            .map(super::StyledLine::plain_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("◆ Skills"), "{rendered}");
+        assert!(rendered.contains("• coding  ✓ active"), "{rendered}");
+        assert!(rendered.contains("• offline-dev  · inactive"), "{rendered}");
+        assert!(rendered.contains("Description: Implement"), "{rendered}");
+        assert!(
+            !rendered.contains(['┌', '┐', '└', '┘', '│', '─']),
+            "{rendered}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| display_width(&line.plain_text()) <= 56),
+            "{rendered}"
+        );
+        let metadata = lines
+            .iter()
+            .find(|line| line.plain_text().contains("Description: Implement"))
+            .expect("readable metadata line");
+        assert!(!metadata.spans.last().expect("metadata span").style.dim);
     }
 
     #[test]
@@ -3360,7 +4156,7 @@ mod tests {
             ))],
         });
         let rendered =
-            TerminalDocumentRenderer::new(ReplPreferences::default(), 40).render(&document);
+            TerminalDocumentRenderer::new(TerminalPreferences::default(), 40).render(&document);
         assert!(!rendered.contains('\u{1b}'));
         assert!(!rendered.contains('\u{7}'));
         assert!(!rendered.contains('\u{200b}'));
@@ -3369,7 +4165,7 @@ mod tests {
         let mut wide_table =
             PresentationTable::new((0..20).map(|index| format!("Column {index}")), "No rows.");
         wide_table.push_row((0..20).map(|index| format!("value-{index}")));
-        let rendered = TerminalDocumentRenderer::new(ReplPreferences::default(), 40).render(
+        let rendered = TerminalDocumentRenderer::new(TerminalPreferences::default(), 40).render(
             &PresentationDocument::from_block(PresentationBlock::Table(wide_table)),
         );
         assert!(rendered.contains("columns omitted"));
@@ -3382,14 +4178,14 @@ mod tests {
             {"id": "task-1", "title": "Build UX", "status": "running", "internal": {"x": 1}},
             {"id": "task-2", "title": "Test UX", "status": "queued", "internal": {"x": 2}}
         ]);
-        let rendered = TerminalDocumentRenderer::new(ReplPreferences::default(), 90)
+        let rendered = TerminalDocumentRenderer::new(TerminalPreferences::default(), 90)
             .render(&document_from_json(&values, Some("Tasks")));
         assert!(rendered.contains("Tasks"));
         assert!(rendered.contains("Status"));
         assert!(rendered.contains("Build UX"));
         assert!(!rendered.contains("internal"));
 
-        let details = TerminalDocumentRenderer::new(ReplPreferences::default(), 80).render(
+        let details = TerminalDocumentRenderer::new(TerminalPreferences::default(), 80).render(
             &document_from_json(
                 &serde_json::json!({"status": "ready", "id": "worker-1", "active": true}),
                 None,
@@ -3400,7 +4196,7 @@ mod tests {
         assert!(details.contains("Active"));
         assert!(details.contains("yes"));
 
-        let run = TerminalDocumentRenderer::new(ReplPreferences::default(), 80).render(
+        let run = TerminalDocumentRenderer::new(TerminalPreferences::default(), 80).render(
             &document_from_json(
                 &serde_json::json!({
                     "run_id": "run-1",
@@ -3418,7 +4214,7 @@ mod tests {
 
     #[test]
     fn comfortable_semantics_render_specialized_tool_and_error_cards() {
-        let renderer = SemanticRenderer::new(ReplPreferences::default());
+        let renderer = SemanticRenderer::new(TerminalPreferences::default());
         let search = renderer
             .run_event(&RunEvent::ToolCompleted {
                 turn: 1,
@@ -3551,16 +4347,16 @@ mod tests {
         let repository = EventSourcedPresentationRepository::new(Arc::clone(&journal));
         assert_eq!(
             repository.load().expect("defaults"),
-            ReplPreferences::default()
+            TerminalPreferences::default()
         );
-        let preferences = ReplPreferences {
+        let preferences = TerminalPreferences {
             theme: ThemeName::HighContrast,
             multiline: true,
             stream_mode: StreamDisplayMode::Off,
             events_mode: EventDisplayMode::Verbose,
             show_reasoning: false,
             transcript_density: TranscriptDensity::Compact,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         };
         repository
             .save(
@@ -3575,9 +4371,9 @@ mod tests {
         assert_eq!(restarted.load().expect("load"), preferences);
         let events = journal.read_stream("presentation:repl").expect("events");
         assert_eq!(events[0].event_type, "presentation.preferences.updated.v1");
-        let invalid = ReplPreferences {
+        let invalid = TerminalPreferences {
             schema_version: 2,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         };
         assert!(
             restarted
@@ -3610,15 +4406,15 @@ mod tests {
             current_goals: Vec::new(),
             current_subagents: Vec::new(),
         };
-        let compact = SemanticRenderer::new(ReplPreferences {
+        let compact = SemanticRenderer::new(TerminalPreferences {
             transcript_density: TranscriptDensity::Compact,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         });
         assert_eq!(
             compact.work_state(&state),
             "[work] session=session-1 tasks=0/0 decisions=0 plans=0 goals=0 agents=0"
         );
-        let comfortable = SemanticRenderer::new(ReplPreferences::default());
+        let comfortable = SemanticRenderer::new(TerminalPreferences::default());
         let rendered = comfortable.work_state(&state);
         assert!(rendered.contains("Current work"));
         assert!(rendered.contains("session-1"));
@@ -3627,11 +4423,11 @@ mod tests {
 
     #[test]
     fn provider_events_respect_reasoning_events_and_theme_independently() {
-        let renderer = SemanticRenderer::new(ReplPreferences {
+        let renderer = SemanticRenderer::new(TerminalPreferences {
             theme: ThemeName::HighContrast,
             events_mode: EventDisplayMode::Off,
             show_reasoning: true,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         });
         let reasoning = renderer
             .provider_event(&ProviderEvent::ReasoningSummary {
@@ -3652,10 +4448,10 @@ mod tests {
             None
         );
 
-        let verbose = SemanticRenderer::new(ReplPreferences {
+        let verbose = SemanticRenderer::new(TerminalPreferences {
             theme: ThemeName::Mono,
             events_mode: EventDisplayMode::Verbose,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         });
         assert_eq!(
             verbose
@@ -3690,7 +4486,7 @@ mod tests {
 
     #[test]
     fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
-        let renderer = SemanticRenderer::new(ReplPreferences::default());
+        let renderer = SemanticRenderer::new(TerminalPreferences::default());
         let input_wait = renderer
             .run_event(&RunEvent::ToolStarted {
                 turn: 1,
@@ -3753,9 +4549,9 @@ mod tests {
         assert!(completed.contains("1.25s"));
         assert!(completed.contains("README.md"));
 
-        let quiet = SemanticRenderer::new(ReplPreferences {
+        let quiet = SemanticRenderer::new(TerminalPreferences {
             events_mode: EventDisplayMode::Off,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         });
         assert!(
             quiet
@@ -3846,11 +4642,11 @@ mod tests {
             ),
         ];
         for mode in [EventDisplayMode::Compact, EventDisplayMode::Verbose] {
-            let renderer = SemanticRenderer::new(ReplPreferences {
+            let renderer = SemanticRenderer::new(TerminalPreferences {
                 events_mode: mode,
                 show_reasoning: true,
                 transcript_density: TranscriptDensity::Compact,
-                ..ReplPreferences::default()
+                ..TerminalPreferences::default()
             });
             for (event, compact_visible) in &provider_events {
                 let rendered = renderer
@@ -3950,9 +4746,9 @@ mod tests {
             ThemeName::Carrot,
             ThemeName::Hacker,
         ] {
-            let preferences = ReplPreferences {
+            let preferences = TerminalPreferences {
                 theme,
-                ..ReplPreferences::default()
+                ..TerminalPreferences::default()
             };
             let event = RunEvent::Phase {
                 phase: RunPhase::Preparing,
@@ -3984,9 +4780,9 @@ mod tests {
                 theme.as_str()
             );
         }
-        let assistant = SemanticRenderer::new(ReplPreferences {
+        let assistant = SemanticRenderer::new(TerminalPreferences {
             theme: ThemeName::Hacker,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         })
         .with_color(true)
         .assistant_text("connected");
@@ -4050,7 +4846,7 @@ bold = true
                 "ocean",
             ]
         );
-        let mut preferences = ReplPreferences::default();
+        let mut preferences = TerminalPreferences::default();
         library
             .select("OCEAN", &mut preferences)
             .expect("select ocean");
@@ -4087,7 +4883,7 @@ bold = true
         fs::create_dir(&themes).expect("themes");
         let library = ThemeLibrary::load(std::slice::from_ref(&themes)).expect("library");
 
-        let rendered = TerminalDocumentRenderer::new(ReplPreferences::default(), 160)
+        let rendered = TerminalDocumentRenderer::new(TerminalPreferences::default(), 160)
             .render(&library.status_document("default"));
 
         assert!(rendered.contains("Themes"));
@@ -4106,7 +4902,7 @@ bold = true
         let library = ThemeLibrary::default();
         for name in ["default", "mono", "high_contrast", "carrot", "hacker"] {
             let preferences = library
-                .preview_preferences(name, &ReplPreferences::default())
+                .preview_preferences(name, &TerminalPreferences::default())
                 .expect("preview preferences");
             let document = library.preview_document(name).expect("preview document");
             for width in [60, 80, 120, 160] {
@@ -4223,7 +5019,7 @@ bold = true
         )
         .expect("theme");
         let library = ThemeLibrary::load(std::slice::from_ref(&themes)).expect("library");
-        let mut preferences = ReplPreferences::default();
+        let mut preferences = TerminalPreferences::default();
         library.select("stable", &mut preferences).expect("select");
         let selected_hash = preferences
             .custom_theme

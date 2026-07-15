@@ -30,8 +30,9 @@ configuration or SQLite state. Python 0.5 remains frozen at `python-v0.5.0` and 
 - Hash-pinned YAML workflows support durable queueing, bounded control flow, waits,
   idempotent retries, explicit compensation, subworkflows, cancellation, and restart
   recovery.
-- The authenticated worker and embedded runtime expose the same application API. CLI
-  and Reedline REPL code only parse input and render released results.
+- The authenticated worker and embedded runtime expose the same application API. The
+  Ratatui surface owns only editing/layout and renders released typed documents from an
+  `InteractiveHost`; protocol-v4 prompts and cancellation preserve the same boundaries.
 
 The detailed behavioral contract and acceptance evidence live in
 [Feature Inventory](FEATURE_INVENTORY.md) and
@@ -50,7 +51,7 @@ cargo run -p colossus-cli --bin colossus -- run 'Reply with exactly: ok'
 Start the interactive surface:
 
 ```bash
-cargo run -p colossus-cli --bin colossus -- repl
+cargo run -p colossus-cli --bin colossus
 ```
 
 Run the required local implementation checks:

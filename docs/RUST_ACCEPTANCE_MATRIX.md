@@ -11,10 +11,11 @@ contract remains [Feature Inventory](FEATURE_INVENTORY.md); security invariants 
 | STORE-01 | Passing foundation | shared in-memory/redb journal and repository suites; projection/outbox positions; writer lease; authenticated worker IPC; Tantivy and permit-bound Chroma conformance; audit-export retry/recovery | PostgreSQL and additional adapters |
 | MEM-01 | Passing P1 | canonical lifecycle and scope filtering; Tantivy rebuild/fallback; Chroma candidate projection; local and OpenAI-compatible embeddings; lag, backoff, and unknown-outcome recovery | broader hosted Chroma/version coverage |
 | FLOW-01 | Passing P1 | strict YAML/hash trust; bounded control flow; waits; idempotent retry; compensation; subworkflows; cancellation; restart and process-kill recovery; worker routing | P2 schedules, webhooks, repository events, and subscriptions |
-| PROV-01 | Passing P0 | echo, Responses, and compatible adapters; normalized streaming/tool/usage contracts; post-release gating; late credential resolution; malformed-call recovery; CLI/REPL/worker continuation tests | broader hosted provider/version coverage |
+| PROV-01 | Passing P0 | echo, Responses, and compatible adapters; normalized streaming/tool/usage contracts; post-release gating; late credential resolution; malformed-call recovery; CLI/TUI/worker continuation tests | broader hosted provider/version coverage |
 | TOOL-01 | Passing P1 | strict configured catalog; schema-before-policy rejection; filesystem, Git, shell, work, plan/goal, patch, repo, subagent, context, skill, MCP, integration, and presentation acceptance | future tools and endpoint-specific suites |
 | AGENT-01 | Passing P1 | durable lifecycle and recovery; configured concurrency; recursive-delegation denial; foreground scheduler wake; same-turn parent result acceptance | future distributed schedulers |
-| UX-02 | Passing P1 | frozen Python 0.5 parity inventory; bounded presentation documents; terminal Markdown, semantic cards, source/process/diff previews, human list/detail tables, grouped stateful help, slash/theme/`@skill` completion, guided session and theme choices, five-theme visual snapshots, output-mode and embedded/worker acceptance | future TUI and additional semantic presentation adapters |
+| UX-02 | Passing P1 | frozen Python 0.5 parity inventory; bounded presentation documents; terminal Markdown, semantic cards, source/process/diff previews, human list/detail tables, grouped stateful help, slash/theme/`@skill` completion, guided session and theme choices, five-theme visual snapshots, output-mode and embedded/worker acceptance | additional semantic presentation adapters as new features are added |
+| UX-03 | Passing P1 | Ratatui terminal ownership; durable paged transcript and semantic-document reflow; pinned composer/footer; reducer and five-size/five-theme `TestBackend` suites; PTY history-preservation, resize, inline, and terminal-restoration regressions; embedded/worker host parity; authenticated worker-v4 approval, input, and cancellation frames; cooperative cancellation gates | release-platform rerun at the pull-request gate |
 | DIST-01 | Passing P2 foundation | clean-prefix native installers; signed bundle trust/tamper/reproducibility tests; installed echo and encrypted audit smoke without Cargo, credentials, or network; green six-target `v0.6.0` release run | future distribution adapters and signed offline collections |
 | CUTOVER-DOC | Passing | Rust-only root/package/CLI/config/state contract; published examples parsed by executable documentation tests | keep examples synchronized |
 
@@ -28,6 +29,8 @@ Primary evidence locations:
 - `crates/colossus-memory/src/lib.rs` and `crates/colossus-memory-chroma/src/lib.rs`
 - `crates/colossus-cli/tests/` for terminal, worker, provider, sandbox, distribution,
   and documentation acceptance
+- `crates/colossus-tui/src/lib.rs` and `crates/colossus-tui/tests/pty.rs` for the
+  terminal reducer, visual fixtures, transcript preservation, and terminal restoration
 - `docs/TERMINAL_UX.md` for the frozen Python reference and UX-02 parity matrix
 - `crates/colossus-fuzzing/src/lib.rs` for stable corpus regression and fuzz targets
 

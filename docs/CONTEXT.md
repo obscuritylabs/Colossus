@@ -39,7 +39,7 @@ colossus --config .colossus/config.yaml context list SESSION_ID
 colossus --config .colossus/config.yaml context restore SESSION_ID SNAPSHOT_ID
 ```
 
-In the REPL:
+In the TUI:
 
 ```text
 /context status

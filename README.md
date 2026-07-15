@@ -29,7 +29,7 @@ With an installed binary:
 ```bash
 colossus --config .colossus/config.yaml config init
 colossus --config .colossus/config.yaml run "Reply with exactly: connected"
-colossus --config .colossus/config.yaml repl
+colossus --config .colossus/config.yaml
 ```
 
 To operate on another repository, start Colossus from that repository and pass an
@@ -48,8 +48,9 @@ not expand configured policy or sandbox grants.
   recovery mode, redacted audit views, and durable external evidence export.
 - Canonical redb repositories, disposable projections, Tantivy lexical memory, optional
   Chroma semantic memory, and an authenticated worker over local IPC.
-- Human-first CLI and REPL output with Markdown, semantic cards, width-aware tables,
-  grouped help, completions, themes, and automatic JSON preservation for pipes.
+- A responsive Ratatui terminal UI with a durable scrollable transcript, pinned composer,
+  semantic Markdown/cards, overlays, completions, themes, and automatic JSON preservation
+  for redirected line mode.
 
 ## Documentation
 
