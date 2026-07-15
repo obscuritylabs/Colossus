@@ -66,11 +66,12 @@ See [Getting Started](GETTING_STARTED.md), [User Guide](USER_GUIDE.md), and
 
 ## Release And Remaining Scope
 
-The repository-root cutover and pull-request security gate are complete. A final
-`v0.6.0` release still requires the explicit six-target artifact workflow to build,
-install, and smoke-test macOS, static Linux, and Windows arm64/x64 archives. Ordinary
-`main` pushes intentionally run the inexpensive validation path; the full matrix belongs
-to pull requests and release validation.
+The repository-root cutover is complete. The exact `v0.6.0` source revision passed the
+explicit cutover workflow, including build, clean installation, and smoke tests for macOS,
+static Linux, and Windows arm64/x64. The published release includes all six archives,
+checksums, an SPDX inventory, the publisher identity, verification evidence, and a signed
+multi-platform offline bundle. Ordinary `main` pushes continue to run the inexpensive
+validation path; the full matrix belongs to pull requests and explicit release validation.
 
 P2 remains intentionally open: schedules, webhooks, repository/event subscriptions,
 PostgreSQL event storage, external WORM audit anchors, and additional adapters. These are
