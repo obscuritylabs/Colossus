@@ -256,14 +256,31 @@ fn exact_file(directory: &Path, name: &str) -> Result<Option<PathBuf>, StoreErro
 }
 
 fn split_frontmatter(text: &str) -> Result<(BTreeMap<String, String>, String), StoreError> {
-    let Some(rest) = text.strip_prefix("---\n") else {
+    let mut lines = text.split_inclusive('\n');
+    let Some(opening) = lines.next() else {
         return Ok((BTreeMap::new(), text.into()));
     };
-    let Some((header, body)) = rest.split_once("\n---") else {
+    if line_content(opening) != "---" {
+        return Ok((BTreeMap::new(), text.into()));
+    }
+    let header_start = opening.len();
+    let mut offset = header_start;
+    let mut bounds = None;
+    for line in lines {
+        let closing_start = offset;
+        offset += line.len();
+        if line_content(line) == "---" {
+            bounds = Some((closing_start, offset));
+            break;
+        }
+    }
+    let Some((header_end, body_start)) = bounds else {
         return Err(StoreError::Adapter(
             "skill frontmatter is not terminated".into(),
         ));
     };
+    let header = &text[header_start..header_end];
+    let body = &text[body_start..];
     let mut values = BTreeMap::new();
     for line in header.lines() {
         let Some((name, value)) = line.split_once(':') else {
@@ -274,6 +291,11 @@ fn split_frontmatter(text: &str) -> Result<(BTreeMap<String, String>, String), S
         }
     }
     Ok((values, body.trim_start_matches(['\r', '\n']).into()))
+}
+
+fn line_content(line: &str) -> &str {
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    line.strip_suffix('\r').unwrap_or(line)
 }
 
 fn unquote(value: &str) -> String {
@@ -1338,7 +1360,7 @@ pub fn content_hash(content: &[u8]) -> String {
 mod tests {
     use super::{
         FilesystemSkillRepository, SkillAuthoringService, SkillComposer, SkillResourceService,
-        SkillRoot, content_hash,
+        SkillRoot, content_hash, split_frontmatter,
     };
     use colossus_contracts::ToolSpec;
     use colossus_ports::SkillRepository;
@@ -1594,15 +1616,16 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_only_protocol_skill_loads_without_manifest() {
+    fn protocol_skill_frontmatter_is_line_ending_independent() {
         let directory = tempdir().expect("tempdir");
-        let root = directory.path().join("skills/frontmatter");
-        fs::create_dir_all(&root).expect("directory");
-        fs::write(
-            root.join("skill.md"),
-            "---\nname: frontmatter\ndescription: Protocol skill\n---\nUse it safely.\n",
-        )
-        .expect("skill");
+        for (name, newline) in [("frontmatter-lf", "\n"), ("frontmatter-crlf", "\r\n")] {
+            let root = directory.path().join("skills").join(name);
+            fs::create_dir_all(&root).expect("directory");
+            let content = format!(
+                "---{newline}name: {name}{newline}description: Protocol skill{newline}---{newline}Use it safely.{newline}"
+            );
+            fs::write(root.join("skill.md"), content).expect("skill");
+        }
         let repository = FilesystemSkillRepository::new(
             vec![SkillRoot {
                 path: directory.path().join("skills"),
@@ -1612,11 +1635,23 @@ mod tests {
             Vec::new(),
         )
         .expect("repository");
-        let skill = repository
-            .get_skill("frontmatter")
-            .expect("get")
-            .expect("skill");
-        assert_eq!(skill.manifest.version, "0.1.0");
-        assert_eq!(skill.instructions, "Use it safely.\n");
+        let lf = repository
+            .get_skill("frontmatter-lf")
+            .expect("get LF")
+            .expect("LF skill");
+        let crlf = repository
+            .get_skill("frontmatter-crlf")
+            .expect("get CRLF")
+            .expect("CRLF skill");
+        assert_eq!(lf.manifest.version, "0.1.0");
+        assert_eq!(crlf.manifest.version, "0.1.0");
+        assert_eq!(lf.manifest.description, crlf.manifest.description);
+        assert_eq!(lf.instructions, "Use it safely.\n");
+        assert_eq!(crlf.instructions, "Use it safely.\r\n");
+
+        assert!(
+            split_frontmatter("---\r\nname: malformed\r\n---suffix\r\nBody\r\n").is_err(),
+            "a look-alike closing marker must not terminate frontmatter"
+        );
     }
 }
