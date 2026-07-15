@@ -975,16 +975,16 @@ A reconstruction is complete only when all applicable checks pass:
 
 Cutover note (2026-07-14): Rust 0.6.0 is promoted to the repository root, the Python
 runtime/package is removed from `main`, and the pull-request security gate is green.
-Release-only boxes remain open until the explicit six-target artifact workflow passes;
-ordinary `main` pushes intentionally do not duplicate that expensive matrix.
+The [final cutover run](https://github.com/obscuritylabs/Colossus/actions/runs/29379377810)
+passed on source revision `8b4950141e053b79df1e02ed32f3f967e15a1c18`, and the
+[v0.6.0 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.6.0) contains
+the resulting signed evidence and six native archives.
 
-- [ ] Offline install and echo smoke test require no provider credentials or network.
-  Native archive installers now require no Cargo or Python; clean-prefix install,
-  echo-agent, and encrypted audit verification pass locally on Unix and are wired into
-  every Unix/Windows native release job. Signed bundles also materialize reproducibly,
-  verify publisher/key trust and copied bytes, install only the exact current target into
-  a clean prefix, then pass echo and encrypted audit verification. This remains open
-  until the remote six-target installer/bundle matrix is green.
+- [x] Offline install and echo smoke test require no provider credentials or network.
+  All six release jobs installed their native archive into a clean prefix and passed
+  credential-free echo plus encrypted audit verification. The published signed offline
+  bundle independently passed signature, extracted-copy, clean-install, echo, and audit
+  verification with the committed publisher identity.
 - [x] One loopback-live compatible-provider CLI run streams released text across SSE
   deltas, completes two sequential tool turns, preserves both tool results in provider
   continuation requests, and returns final output, distinct run/session IDs, durable
@@ -1073,15 +1073,13 @@ ordinary `main` pushes intentionally do not duplicate that expensive matrix.
   after synced non-idempotent/idempotent primary effects, after a synced compensation, and
   immediately after durable step completion, plus parallel sibling replay, linked-child
   intent repair, and child-first nested recovery without duplicate execution.
-- [ ] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
+- [x] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
   network escapes on each supported platform.
-  The complete structured-result OCI escape/recovery suite passes locally on Podman 5.8.5
-  arm64. Mandatory macOS/Linux arm64/x64 native tests and Windows arm64/x64
-  AppContainer/Job Object tests are wired. Windows covers filesystem/traversal,
-  environment, process-tree, timeout, process-count, memory, authenticated exact-origin
-  forwarding, missing/wrong proxy credentials, unlisted origins, raw-loopback bypass,
-  WFP cleanup, and credential redaction. The first green native x64/arm64 execution
-  matrix remains acceptance evidence.
+  The final cutover run passed native macOS/Linux arm64/x64 isolation, Windows arm64/x64
+  AppContainer and Job Object isolation, and live OCI/OPA security. Coverage includes
+  filesystem traversal and symlinks, environment, process trees, time and resource
+  limits, authenticated exact-origin forwarding, unlisted destinations, raw-loopback
+  bypass, cleanup, and credential redaction.
 - [x] Production and independent fuzz dependency graphs enforce locked registry sources,
   explicit licenses and versions, banned crates, and warnings-denied RustSec audits.
 - [x] Active installation, configuration, user, tool, context, skill, integration,
@@ -1089,22 +1087,19 @@ ordinary `main` pushes intentionally do not duplicate that expensive matrix.
   YAML/CLI/state contract; executable acceptance parses published examples, validates the
   workflow definition, confirms documented command routes, and rejects Python-era
   operator signatures.
-- [ ] Formatting, warnings-denied lint, workspace tests, fuzzing, dependency/license and
+- [x] Formatting, warnings-denied lint, workspace tests, fuzzing, dependency/license and
   vulnerability policy, and macOS/Linux/Windows arm64/x64 release smoke tests pass.
-  The six-target native runner/build/execute/package matrix is implemented. A fail-closed
-  `rust-cutover-gate` now aggregates the workspace, portability, native sandbox, Windows
-  runtime, fuzz, supply-chain, release, Chroma, and live-security jobs, and a Rust contract
-  test pins its dependencies and platform matrices. This remains open until one remote run
-  makes that aggregate gate green.
+  The final hosted `rust-cutover-gate` passed all 19 required jobs, including the complete
+  workspace, bounded fuzzing, production and fuzz supply-chain policy, both pinned Chroma
+  versions, live OCI/OPA security, native sandbox/runtime matrices, and all six native
+  build/install/package jobs.
 - [x] Strict configuration rejects unknown fields, preserves only credential/key references
   in `config show`, and proves raw unknown secret fields never appear in CLI diagnostics.
-- [ ] Unit, integration, boundary, security, type, lint, and packaging checks pass.
-  The complete local Rust workspace, independent fuzz harness, dependency/license,
-  vulnerability, native installer, signed-bundle, and host-native sandbox gates pass in the
-  current checkout through `release/verify-local-cutover.sh`. Real OPA 1.16.2, pinned
-  Chroma 1.5.8/1.5.9, and digest-pinned Docker OCI acceptance also pass locally. The first
-  green hosted `rust-cutover-gate` remains required before this cross-platform check can
-  close.
+- [x] Unit, integration, boundary, security, type, lint, and packaging checks pass.
+  Local formatting, warnings-denied Clippy, and full workspace tests passed before merge.
+  The exact merged revision then passed the fail-closed hosted cutover gate, clean native
+  installation on all six targets, signed-bundle verification, current/previous Chroma,
+  live OPA/mTLS and OCI security, and the published offline installed-runtime smoke test.
 
 ## 24. Explicitly Deferred Product Decisions
 
