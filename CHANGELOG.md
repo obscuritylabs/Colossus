@@ -50,6 +50,8 @@ include breaking changes while the public API is still settling.
 - Hardened authenticated worker IPC and Windows named-pipe retries so canonical response
   payloads remain authenticated under contention without weakening timeout behavior on
   other platforms.
+- Parsed protocol-skill frontmatter identically with LF or CRLF line endings so native
+  Windows archive and signed-bundle installations load the bundled skill library.
 
 ### Removed
 
