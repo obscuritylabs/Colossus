@@ -13,7 +13,9 @@ contract remains [Feature Inventory](FEATURE_INVENTORY.md); security invariants 
 | FLOW-01 | Passing P1 | strict YAML/hash trust; bounded control flow; waits; idempotent retry; compensation; subworkflows; cancellation; restart and process-kill recovery; worker routing | P2 schedules, webhooks, repository events, and subscriptions |
 | PROV-01 | Passing P0 | echo, Responses, and compatible adapters; normalized streaming/tool/usage contracts; post-release gating; late credential resolution; malformed-call recovery; CLI/REPL/worker continuation tests | broader hosted provider/version coverage |
 | TOOL-01 | Passing P1 | strict configured catalog; schema-before-policy rejection; filesystem, Git, shell, work, plan/goal, patch, repo, subagent, context, skill, MCP, integration, and presentation acceptance | future tools and endpoint-specific suites |
-| DIST-01 | Local foundation passing | clean-prefix native installers; signed bundle trust/tamper/reproducibility tests; installed echo and encrypted audit smoke without Cargo, credentials, or network | one explicit six-target release artifact run |
+| AGENT-01 | Passing P1 | durable lifecycle and recovery; configured concurrency; recursive-delegation denial; foreground scheduler wake; same-turn parent result acceptance | future distributed schedulers |
+| UX-02 | Passing P1 | frozen Python 0.5 parity inventory; bounded presentation documents; terminal Markdown, semantic cards, source/process/diff previews, human list/detail tables, grouped stateful help, slash/theme/`@skill` completion, guided session and theme choices, five-theme visual snapshots, output-mode and embedded/worker acceptance | future TUI and additional semantic presentation adapters |
+| DIST-01 | Passing P2 foundation | clean-prefix native installers; signed bundle trust/tamper/reproducibility tests; installed echo and encrypted audit smoke without Cargo, credentials, or network; green six-target `v0.6.0` release run | future distribution adapters and signed offline collections |
 | CUTOVER-DOC | Passing | Rust-only root/package/CLI/config/state contract; published examples parsed by executable documentation tests | keep examples synchronized |
 
 Primary evidence locations:
@@ -26,6 +28,7 @@ Primary evidence locations:
 - `crates/colossus-memory/src/lib.rs` and `crates/colossus-memory-chroma/src/lib.rs`
 - `crates/colossus-cli/tests/` for terminal, worker, provider, sandbox, distribution,
   and documentation acceptance
+- `docs/TERMINAL_UX.md` for the frozen Python reference and UX-02 parity matrix
 - `crates/colossus-fuzzing/src/lib.rs` for stable corpus regression and fuzz targets
 
 The pull-request gate runs the expensive cross-platform/security suites. Ordinary

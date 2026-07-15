@@ -99,6 +99,11 @@ approval provider, tool executor, context preparation, and journal. Child reques
 definitions remove `agent.delegate`; the executor also rejects delegation whenever
 `ExecutionContext.subagent_id` is present. Running jobs found at startup become
 `interrupted` and are never silently retried.
+Successful model calls to `agent.delegate` notify the owning runtime scheduler and yield
+the parent turn. The bounded scheduler claims and completes the child before the parent
+continues to `agent.result`, so CLI, REPL, worker, and embedded API runs share the same
+foreground delegation behavior. Manual application/CLI queue creation remains durable
+and is executed through the explicit drain operation.
 
 `colossus-memory` separates canonical lifecycle state from disposable retrieval. Memory
 create/update/archive/supersede events remain authoritative in the encrypted journal.
@@ -428,9 +433,12 @@ identities and resolved custom-theme snapshots. `ThemeLibrary` performs bounded,
 strict JSON/TOML configuration loading; selection persists an immutable palette plus
 source hash through `PresentationRepository` rather than retaining a mutable file
 reference. Both supply Reedline prompt colors, semantic ANSI styles, assistant styling,
-and bounded activity frames. ANSI emission is selected only by the terminal interface
-after an `IsTerminal` check; the renderer defaults to unstyled text so workers, pipes,
-logs, and embedded callers cannot receive accidental control sequences.
+bounded activity frames, theme-aware type-ahead, and visual preview documents. The
+theme picker remains interface-only, while scaffold output is a validated template that
+never writes a file from the terminal surface. ANSI emission is selected only by the
+terminal interface after an `IsTerminal` check; the renderer defaults to unstyled text
+so workers, pipes, logs, and embedded callers cannot receive accidental control
+sequences.
 
 ## Telemetry And Observability
 

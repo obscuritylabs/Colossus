@@ -43,11 +43,13 @@ colossus --config .colossus/config.yaml run "hello"
 colossus --config .colossus/config.yaml audit verify
 ```
 
-The run result is JSON containing `run_id`, `session_id`, `profile: "echo"`,
-`output: "hello"`, event count, and elapsed time. `config init` uses the OS
-credential store for mandatory journal/signing keys; headless deployments can explicitly
-configure environment key references instead. Rust never silently writes plaintext
-canonical state.
+On a terminal, the run result is a Markdown-capable human card. When redirected, the
+same command emits JSON containing `run_id`, `session_id`, `profile: "echo"`,
+`output: "hello"`, event count, and elapsed time. Use `--output human` or
+`--output json` to override automatic selection. `config init` uses the OS credential
+store for mandatory journal/signing keys; headless deployments can explicitly configure
+environment key references instead. Rust never silently writes plaintext canonical
+state.
 
 ## Start The REPL
 
@@ -67,7 +69,8 @@ Useful first commands:
 
 The Reedline REPL supports durable sessions, encrypted history, streamed assistant/tool
 events, multiline input, cursor/draft status, themes, workflows, goals, research,
-memories, and authenticated-worker routing.
+memories, grouped help, slash and `@skill` completion, human tables/cards, Markdown, and
+authenticated-worker routing.
 
 ## Choose A Workspace
 

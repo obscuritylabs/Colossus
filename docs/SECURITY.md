@@ -582,6 +582,11 @@ Running subagent jobs that outlive a process are marked `interrupted` on startup
 than resumed from a half-open provider stream. Queued jobs remain runnable when a runtime
 with a configured subagent runner starts.
 
+A successful model delegation wakes the runtime scheduler, but does not bypass it. The
+same serialized drain, configured concurrency bound, lifecycle effects, provider gateway,
+and post-effect release rules execute the child. A scheduler notification is not retry
+authority: interrupted jobs remain interrupted until an explicit requeue.
+
 ## Model-Assisted Risk Review
 
 `shell.run` is reviewed by the `risk_evaluator` model role only in `risk-auto`. Review

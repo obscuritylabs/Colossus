@@ -48,6 +48,8 @@ not expand configured policy or sandbox grants.
   recovery mode, redacted audit views, and durable external evidence export.
 - Canonical redb repositories, disposable projections, Tantivy lexical memory, optional
   Chroma semantic memory, and an authenticated worker over local IPC.
+- Human-first CLI and REPL output with Markdown, semantic cards, width-aware tables,
+  grouped help, completions, themes, and automatic JSON preservation for pipes.
 
 ## Documentation
 
@@ -55,6 +57,7 @@ not expand configured policy or sandbox grants.
 - [User Guide](docs/USER_GUIDE.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Built-in Tools](docs/TOOLS.md)
+- [Terminal UX](docs/TERMINAL_UX.md)
 - [Workflows](docs/WORKFLOWS.md)
 - [Integrations](docs/INTEGRATIONS.md)
 - [Security Model](docs/SECURITY.md)

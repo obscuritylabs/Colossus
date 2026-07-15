@@ -96,11 +96,13 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    future::Future,
     path::{Path, PathBuf},
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 use thiserror::Error;
+use tokio::sync::{Mutex as TokioMutex, Notify};
 use tokio::task::JoinSet;
 use url::Url;
 use uuid::Uuid;
@@ -1920,6 +1922,8 @@ pub struct Runtime {
     agent: Arc<AgentService>,
     agent_max_turns: u16,
     subagent_max_concurrent: usize,
+    subagent_notify: Arc<Notify>,
+    subagent_drain_lock: TokioMutex<()>,
     tools: Arc<dyn ToolRegistry>,
     filesystem_executor: Arc<FilesystemExecutor>,
     process_executor: Arc<SandboxProcessExecutor>,
@@ -2569,9 +2573,15 @@ impl Runtime {
         } else {
             context_tool_executor
         };
-        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(DiscoverableToolExecutor {
-            registry: Arc::clone(&tool_registry),
-            inner: interface_tool_executor,
+        let discoverable_tool_executor: Arc<dyn ToolExecutor> =
+            Arc::new(DiscoverableToolExecutor {
+                registry: Arc::clone(&tool_registry),
+                inner: interface_tool_executor,
+            });
+        let subagent_notify = Arc::new(Notify::new());
+        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(SubagentSchedulingToolExecutor {
+            notify: Arc::clone(&subagent_notify),
+            inner: discoverable_tool_executor,
         });
         let agent = Arc::new(
             AgentService::new(
@@ -2630,6 +2640,8 @@ impl Runtime {
             agent,
             agent_max_turns: config.agent.max_turns,
             subagent_max_concurrent: config.subagents.max_concurrent,
+            subagent_notify,
+            subagent_drain_lock: TokioMutex::new(()),
             tools: tool_registry,
             filesystem_executor,
             process_executor,
@@ -4306,6 +4318,22 @@ impl Runtime {
         Ok(readiness)
     }
 
+    async fn run_with_subagent_scheduling<F>(&self, run: F) -> Result<AgentRunResult, RuntimeError>
+    where
+        F: Future<Output = Result<AgentRunResult, AgentError>>,
+    {
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.subagent_notify.notified() => {
+                    self.drain_subagents().await?;
+                }
+                result = &mut run => return result.map_err(Into::into),
+            }
+        }
+    }
+
     /// Execute the shared durable bounded provider/tool loop.
     pub async fn run_model(
         &self,
@@ -4375,17 +4403,15 @@ impl Runtime {
             .iter()
             .map(|skill| skill.name.clone())
             .collect::<Vec<_>>();
-        self.agent
-            .run_in_session_with_skills(
-                role,
-                &composition.instructions,
-                prompt,
-                max_turns.unwrap_or(self.agent_max_turns),
-                session_id,
-                &active,
-            )
-            .await
-            .map_err(Into::into)
+        self.run_with_subagent_scheduling(self.agent.run_in_session_with_skills(
+            role,
+            &composition.instructions,
+            prompt,
+            max_turns.unwrap_or(self.agent_max_turns),
+            session_id,
+            &active,
+        ))
+        .await
     }
 
     /// Execute a normal run and forward only policy-released provider events.
@@ -4414,18 +4440,16 @@ impl Runtime {
             .iter()
             .map(|skill| skill.name.clone())
             .collect::<Vec<_>>();
-        self.agent
-            .run_in_session_with_skills_stream(
-                role,
-                &composition.instructions,
-                prompt,
-                max_turns.unwrap_or(self.agent_max_turns),
-                session_id,
-                &active,
-                observer,
-            )
-            .await
-            .map_err(Into::into)
+        self.run_with_subagent_scheduling(self.agent.run_in_session_with_skills_stream(
+            role,
+            &composition.instructions,
+            prompt,
+            max_turns.unwrap_or(self.agent_max_turns),
+            session_id,
+            &active,
+            observer,
+        ))
+        .await
     }
 
     /// Execute structurally read-only Plan Mode with only inspection, task, and plan tools.
@@ -4538,8 +4562,7 @@ impl Runtime {
             .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        self.agent
-            .run_approved_plan(
+        self.run_with_subagent_scheduling(self.agent.run_approved_plan(
                 role,
                 "Execute the canonical approved plan using normal tools and policy. Preserve plan lineage and do not expand its scope.",
                 &prompt,
@@ -4547,9 +4570,8 @@ impl Runtime {
                 &consumed.session_id,
                 &consumed.id,
                 &run_id,
-            )
+            ))
             .await
-            .map_err(Into::into)
     }
 
     /// Run bounded autonomous iterations using the normal agent, session, policy, and tools.
@@ -4613,8 +4635,7 @@ impl Runtime {
                 )
             };
             let result = self
-                .agent
-                .run_goal_iteration(
+                .run_with_subagent_scheduling(self.agent.run_goal_iteration(
                     role,
                     &instructions,
                     &prompt,
@@ -4622,7 +4643,7 @@ impl Runtime {
                     session_id,
                     &current.id,
                     current.source_plan_id.as_deref(),
-                )
+                ))
                 .await?;
             iterations.push(GoalIterationResult {
                 iteration,
@@ -4732,6 +4753,7 @@ impl Runtime {
 
     /// Drain queued jobs with bounded local concurrency using normal child agent runs.
     pub async fn drain_subagents(&self) -> Result<SubagentQueueStatus, RuntimeError> {
+        let _drain_guard = self.subagent_drain_lock.lock().await;
         loop {
             let queued = self
                 .work
@@ -5982,6 +6004,30 @@ fn structural_symbol(line: &str) -> Option<Value> {
         "name": name,
         "text": bounded_tool_text(trimmed, 300),
     }))
+}
+
+struct SubagentSchedulingToolExecutor {
+    notify: Arc<Notify>,
+    inner: Arc<dyn ToolExecutor>,
+}
+
+#[async_trait]
+impl ToolExecutor for SubagentSchedulingToolExecutor {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        let delegated = call.name == "agent.delegate";
+        let result = self.inner.execute(call, context).await?;
+        if delegated && result.exit_code == 0 {
+            self.notify.notify_one();
+            // Give the owning runtime turn a scheduling point before the parent asks for
+            // the child result or emits a final answer based only on the queued snapshot.
+            tokio::task::yield_now().await;
+        }
+        Ok(result)
+    }
 }
 
 struct DiscoverableToolExecutor {

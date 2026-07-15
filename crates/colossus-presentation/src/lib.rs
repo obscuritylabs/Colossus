@@ -21,6 +21,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const PREFERENCES_STREAM: &str = "presentation:repl";
 const PREFERENCES_UPDATED: &str = "presentation.preferences.updated.v1";
@@ -39,6 +40,1035 @@ pub enum PresentationError {
     /// Released content could not be rendered safely.
     #[error("presentation rendering failed: {0}")]
     Invalid(String),
+}
+
+/// Visual meaning applied by a human terminal renderer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PresentationTone {
+    /// Informational or neutral content.
+    #[default]
+    Neutral,
+    /// Successful completed work.
+    Success,
+    /// Content that needs operator attention.
+    Warning,
+    /// Failed or denied work.
+    Error,
+    /// Model reasoning summary content.
+    Thinking,
+    /// Tool or integration activity.
+    Tool,
+}
+
+/// One bounded semantic block in a human presentation document.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PresentationBlock {
+    /// Plain released text.
+    Text(String),
+    /// Released Markdown rendered by the terminal backend.
+    Markdown(String),
+    /// One prompt-shaped sample rendered with the active prompt palette.
+    Prompt {
+        /// Left prompt identity.
+        left: String,
+        /// Prompt indicator or caret.
+        indicator: String,
+        /// Example draft text.
+        input: String,
+        /// Optional right-side status.
+        right: Option<String>,
+    },
+    /// Width-aware rows and intentional columns.
+    Table(PresentationTable),
+    /// A titled semantic status or result card.
+    Card {
+        /// Short card title.
+        title: String,
+        /// Visual meaning of the card.
+        tone: PresentationTone,
+        /// Nested bounded content.
+        body: Vec<Self>,
+    },
+    /// One labeled detail list.
+    KeyValue(Vec<(String, String)>),
+    /// A source or process-output block.
+    Code {
+        /// Optional language or stream label.
+        language: Option<String>,
+        /// Released bounded content.
+        content: String,
+    },
+    /// A unified diff whose line kinds remain visually distinct.
+    Diff(String),
+    /// Intentional vertical separation.
+    Blank,
+}
+
+/// Semantic terminal output independent of ANSI, terminal width, or transport.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PresentationDocument {
+    /// Ordered blocks to render.
+    pub blocks: Vec<PresentationBlock>,
+}
+
+impl PresentationDocument {
+    /// Create an empty document.
+    pub const fn new() -> Self {
+        Self { blocks: Vec::new() }
+    }
+
+    /// Create a document containing one block.
+    pub fn from_block(block: PresentationBlock) -> Self {
+        Self {
+            blocks: vec![block],
+        }
+    }
+
+    /// Append one block.
+    pub fn push(&mut self, block: PresentationBlock) {
+        self.blocks.push(block);
+    }
+
+    /// Return whether the document contains no visible blocks.
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+}
+
+/// Intentional columns and bounded rows for human terminal output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PresentationTable {
+    /// Column headings.
+    pub headers: Vec<String>,
+    /// Data rows. Missing trailing cells render as empty values.
+    pub rows: Vec<Vec<String>>,
+    /// Message used instead of an empty border when no rows exist.
+    pub empty_message: String,
+}
+
+impl PresentationTable {
+    /// Create a table with an explicit empty-state message.
+    pub fn new(
+        headers: impl IntoIterator<Item = impl Into<String>>,
+        empty: impl Into<String>,
+    ) -> Self {
+        Self {
+            headers: headers.into_iter().map(Into::into).collect(),
+            rows: Vec::new(),
+            empty_message: empty.into(),
+        }
+    }
+
+    /// Append one row.
+    pub fn push_row(&mut self, row: impl IntoIterator<Item = impl Into<String>>) {
+        self.rows.push(row.into_iter().map(Into::into).collect());
+    }
+}
+
+/// Convert already released structured data into a human-first terminal document.
+///
+/// Arrays of records become tables, individual records become labeled details, and scalar
+/// collections retain a stable index. This is intentionally presentation-only: callers keep
+/// JSON as the machine-readable transport and opt into this document at the terminal boundary.
+pub fn document_from_json(value: &Value, title: Option<&str>) -> PresentationDocument {
+    let block = json_block(value);
+    let block = match title {
+        Some(title) => PresentationBlock::Card {
+            title: title.into(),
+            tone: PresentationTone::Neutral,
+            body: vec![block],
+        },
+        None => block,
+    };
+    PresentationDocument::from_block(block)
+}
+
+fn json_block(value: &Value) -> PresentationBlock {
+    match value {
+        Value::Array(values) if values.iter().all(Value::is_object) => {
+            PresentationBlock::Table(json_record_table(values))
+        }
+        Value::Array(values) => {
+            let mut table = PresentationTable::new(["#", "Value"], "No items.");
+            for (index, value) in values.iter().enumerate() {
+                table.push_row([(index + 1).to_string(), human_json_value(value)]);
+            }
+            PresentationBlock::Table(table)
+        }
+        Value::Object(object) => {
+            if let Some(output) = object.get("output").and_then(Value::as_str)
+                && (object.contains_key("run_id")
+                    || object.contains_key("model")
+                    || object.contains_key("role"))
+            {
+                let details = ordered_json_keys(object)
+                    .into_iter()
+                    .filter(|key| *key != "output")
+                    .filter_map(|key| {
+                        object
+                            .get(key)
+                            .map(|value| (human_field_name(key), human_json_value(value)))
+                    })
+                    .collect();
+                PresentationBlock::Card {
+                    title: "Agent response".into(),
+                    tone: PresentationTone::Success,
+                    body: vec![
+                        PresentationBlock::Markdown(output.into()),
+                        PresentationBlock::KeyValue(details),
+                    ],
+                }
+            } else {
+                PresentationBlock::KeyValue(
+                    ordered_json_keys(object)
+                        .into_iter()
+                        .filter_map(|key| {
+                            object
+                                .get(key)
+                                .map(|value| (human_field_name(key), human_json_value(value)))
+                        })
+                        .collect(),
+                )
+            }
+        }
+        Value::String(value) => PresentationBlock::Markdown(value.clone()),
+        _ => PresentationBlock::Text(human_json_value(value)),
+    }
+}
+
+fn json_record_table(values: &[Value]) -> PresentationTable {
+    let objects = values
+        .iter()
+        .filter_map(Value::as_object)
+        .collect::<Vec<_>>();
+    let mut keys = Vec::<&str>::new();
+    for preferred in [
+        "active",
+        "status",
+        "name",
+        "title",
+        "id",
+        "text",
+        "objective",
+        "content",
+        "summary",
+        "description",
+        "path",
+        "kind",
+        "version",
+        "type",
+        "role",
+        "model",
+        "message_count",
+        "updated_at",
+        "created_at",
+    ] {
+        if objects.iter().any(|object| object.contains_key(preferred)) {
+            keys.push(preferred);
+        }
+    }
+    for object in &objects {
+        for key in object.keys() {
+            if keys.len() == 5 {
+                break;
+            }
+            if !keys.contains(&key.as_str()) && json_column_worthy(object.get(key)) {
+                keys.push(key);
+            }
+        }
+        if keys.len() == 5 {
+            break;
+        }
+    }
+    keys.truncate(5);
+    if keys.is_empty() {
+        keys.push("value");
+    }
+    let mut table =
+        PresentationTable::new(keys.iter().map(|key| human_field_name(key)), "No items.");
+    for object in objects {
+        table.push_row(
+            keys.iter()
+                .map(|key| object.get(*key).map_or_else(String::new, human_json_value)),
+        );
+    }
+    table
+}
+
+fn ordered_json_keys(object: &serde_json::Map<String, Value>) -> Vec<&str> {
+    let mut keys = Vec::with_capacity(object.len());
+    for preferred in [
+        "status",
+        "name",
+        "title",
+        "id",
+        "version",
+        "description",
+        "message",
+        "reason",
+    ] {
+        if object.contains_key(preferred) {
+            keys.push(preferred);
+        }
+    }
+    for key in object.keys().map(String::as_str) {
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+fn json_column_worthy(value: Option<&Value>) -> bool {
+    value.is_some_and(|value| {
+        value.is_null() || value.is_boolean() || value.is_number() || value.is_string()
+    })
+}
+
+fn human_field_name(value: &str) -> String {
+    let mut rendered = value.replace(['_', '-'], " ");
+    if let Some(first) = rendered.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    rendered
+}
+
+fn human_json_value(value: &Value) -> String {
+    match value {
+        Value::Null => "—".into(),
+        Value::Bool(true) => "yes".into(),
+        Value::Bool(false) => "no".into(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(values) if values.is_empty() => "None".into(),
+        Value::Array(values) if values.iter().all(Value::is_string) && values.len() <= 4 => values
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Value::Array(values) => format!("{} items", values.len()),
+        Value::Object(values) if values.is_empty() => "None".into(),
+        Value::Object(values) => serde_json::to_string(values)
+            .map(|value| bounded_text(&value, COMPACT_PREVIEW_CHARS))
+            .unwrap_or_else(|_| format!("{} fields", values.len())),
+    }
+}
+
+/// Width-aware human terminal renderer for presentation documents.
+pub struct TerminalDocumentRenderer {
+    preferences: ReplPreferences,
+    width: usize,
+    color: bool,
+}
+
+impl TerminalDocumentRenderer {
+    /// Build a renderer for one immutable presentation preference snapshot.
+    pub fn new(preferences: ReplPreferences, width: usize) -> Self {
+        Self {
+            preferences,
+            width: width.clamp(40, 240),
+            color: false,
+        }
+    }
+
+    /// Enable ANSI styling after the caller has confirmed an interactive terminal.
+    pub const fn with_color(mut self, color: bool) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Render one document into bounded terminal text.
+    pub fn render(&self, document: &PresentationDocument) -> String {
+        let mut lines = Vec::new();
+        for block in &document.blocks {
+            let mut rendered = self.render_block(block, self.width);
+            if !lines.is_empty()
+                && !rendered.is_empty()
+                && lines.last().is_some_and(|line: &String| !line.is_empty())
+                && !matches!(block, PresentationBlock::Blank)
+            {
+                lines.push(String::new());
+            }
+            lines.append(&mut rendered);
+        }
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
+    fn render_block(&self, block: &PresentationBlock, width: usize) -> Vec<String> {
+        match block {
+            PresentationBlock::Text(text) => wrap_text(&sanitize_terminal_text(text), width),
+            PresentationBlock::Markdown(markdown) => self.render_markdown(markdown, width),
+            PresentationBlock::Prompt {
+                left,
+                indicator,
+                input,
+                right,
+            } => self.render_prompt(left, indicator, input, right.as_deref(), width),
+            PresentationBlock::Table(table) => self.render_table(table, width),
+            PresentationBlock::Card { title, tone, body } => {
+                self.render_card(title, *tone, body, width)
+            }
+            PresentationBlock::KeyValue(entries) => {
+                let mut table = PresentationTable::new(["Field", "Value"], "No details.");
+                for (key, value) in entries {
+                    table.push_row([key, value]);
+                }
+                self.render_table(&table, width)
+            }
+            PresentationBlock::Code { language, content } => {
+                self.render_code(language.as_deref(), content, width)
+            }
+            PresentationBlock::Diff(diff) => self.render_diff(diff, width),
+            PresentationBlock::Blank => vec![String::new()],
+        }
+    }
+
+    fn render_prompt(
+        &self,
+        left: &str,
+        indicator: &str,
+        input: &str,
+        right: Option<&str>,
+        width: usize,
+    ) -> Vec<String> {
+        let left = sanitize_terminal_text(left);
+        let indicator = sanitize_terminal_text(indicator);
+        let left = truncate_width(
+            &left,
+            width.saturating_sub(display_width(&indicator) + 4).max(1),
+        );
+        let input = sanitize_terminal_text(input);
+        let right = right.map(sanitize_terminal_text);
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        let prompt_style = palette
+            .prompt_left
+            .map_or_else(TextStyle::plain, TextStyle::color);
+        let indicator_style = palette
+            .indicator
+            .map_or_else(TextStyle::plain, TextStyle::color);
+        let right_style = palette
+            .prompt_right
+            .map_or_else(TextStyle::plain, TextStyle::color);
+        let fixed_width = display_width(&left) + display_width(&indicator) + 2;
+        let visible_right = right
+            .as_deref()
+            .filter(|right| fixed_width + display_width(right) + 10 <= width);
+        let right_width = visible_right.map_or(0, |right| display_width(right) + 1);
+        let input = truncate_width(
+            &input,
+            width.saturating_sub(fixed_width + right_width).max(1),
+        );
+        let left_width = fixed_width + display_width(&input);
+        let gap = visible_right.map_or(0, |right| {
+            width
+                .saturating_sub(left_width + display_width(right))
+                .max(1)
+        });
+        let mut rendered = format!(
+            "{} {} {}",
+            prompt_style.paint(&left, self.color),
+            indicator_style.paint(&indicator, self.color),
+            palette.assistant.paint(&input, self.color),
+        );
+        if let Some(right) = visible_right {
+            rendered.push_str(&" ".repeat(gap));
+            rendered.push_str(&right_style.paint(right, self.color));
+        }
+        vec![rendered]
+    }
+
+    fn render_card(
+        &self,
+        title: &str,
+        tone: PresentationTone,
+        body: &[PresentationBlock],
+        width: usize,
+    ) -> Vec<String> {
+        let inner_width = width.saturating_sub(4).max(20);
+        let title = truncate_width(&sanitize_terminal_text(title), inner_width);
+        let border_style = self.style_for_tone(tone);
+        let top_fill = inner_width
+            .saturating_add(1)
+            .saturating_sub(UnicodeWidthStr::width(title.as_str()));
+        let mut lines = vec![format!(
+            "{}",
+            border_style.paint(&format!("┌─{title}{}┐", "─".repeat(top_fill)), self.color)
+        )];
+        let mut body_lines = Vec::new();
+        for block in body {
+            if !body_lines.is_empty() && !matches!(block, PresentationBlock::Blank) {
+                body_lines.push(String::new());
+            }
+            body_lines.extend(self.render_block(block, inner_width));
+        }
+        if body_lines.is_empty() {
+            body_lines.push(String::new());
+        }
+        for line in body_lines {
+            let raw_width = display_width(&line);
+            let padding = inner_width.saturating_sub(raw_width);
+            lines.push(format!(
+                "{} {}{} {}",
+                border_style.paint("│", self.color),
+                line,
+                " ".repeat(padding),
+                border_style.paint("│", self.color)
+            ));
+        }
+        lines.push(border_style.paint(&format!("└{}┘", "─".repeat(inner_width + 2)), self.color));
+        lines
+    }
+
+    fn render_table(&self, table: &PresentationTable, width: usize) -> Vec<String> {
+        if table.rows.is_empty() {
+            return wrap_text(&sanitize_terminal_text(&table.empty_message), width);
+        }
+        let original_columns = table
+            .headers
+            .len()
+            .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
+        let columns = original_columns.min(width.saturating_sub(1) / 4).max(1);
+        let available = width.saturating_sub(columns * 3 + 1);
+        let minimum = (available / columns).clamp(1, 4);
+        let mut widths = (0..columns)
+            .map(|index| {
+                table
+                    .headers
+                    .get(index)
+                    .into_iter()
+                    .chain(table.rows.iter().filter_map(|row| row.get(index)))
+                    .flat_map(|cell| {
+                        sanitize_terminal_text(cell)
+                            .lines()
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .map(|line| UnicodeWidthStr::width(line.as_str()))
+                    .max()
+                    .unwrap_or(minimum)
+                    .max(minimum)
+            })
+            .collect::<Vec<_>>();
+        while widths.iter().sum::<usize>() > available {
+            let Some((index, _)) = widths.iter().enumerate().max_by_key(|(_, value)| **value)
+            else {
+                break;
+            };
+            if widths[index] == minimum {
+                break;
+            }
+            widths[index] -= 1;
+        }
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        let border = |left: char, middle: char, right: char| {
+            let mut value = String::new();
+            value.push(left);
+            for (index, column_width) in widths.iter().enumerate() {
+                value.push_str(&"─".repeat(column_width + 2));
+                value.push(if index + 1 == columns { right } else { middle });
+            }
+            palette.meta.paint(&value, self.color)
+        };
+        let mut lines = vec![border('┌', '┬', '┐')];
+        if !table.headers.is_empty() {
+            lines.extend(self.render_table_row(&table.headers, &widths, palette.tool));
+            lines.push(border('├', '┼', '┤'));
+        }
+        for (row_index, row) in table.rows.iter().enumerate() {
+            lines.extend(self.render_table_row(row, &widths, TextStyle::plain()));
+            if row_index + 1 != table.rows.len() {
+                lines.push(border('├', '┼', '┤'));
+            }
+        }
+        lines.push(border('└', '┴', '┘'));
+        if original_columns > columns {
+            lines.push(palette.meta.paint(
+                &format!("… {} columns omitted", original_columns - columns),
+                self.color,
+            ));
+        }
+        lines
+    }
+
+    fn render_table_row(
+        &self,
+        cells: &[String],
+        widths: &[usize],
+        style: TextStyle,
+    ) -> Vec<String> {
+        let wrapped = widths
+            .iter()
+            .enumerate()
+            .map(|(index, width)| {
+                wrap_text(
+                    &sanitize_terminal_text(cells.get(index).map_or("", String::as_str)),
+                    *width,
+                )
+            })
+            .collect::<Vec<_>>();
+        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        (0..height)
+            .map(|line_index| {
+                let mut line = palette.meta.paint("│", self.color);
+                for (index, width) in widths.iter().enumerate() {
+                    let cell = wrapped[index].get(line_index).map_or("", String::as_str);
+                    let padding = width.saturating_sub(display_width(cell));
+                    line.push(' ');
+                    line.push_str(&style.paint(cell, self.color));
+                    line.push_str(&" ".repeat(padding + 1));
+                    line.push_str(&palette.meta.paint("│", self.color));
+                }
+                line
+            })
+            .collect()
+    }
+
+    fn render_markdown(&self, markdown: &str, width: usize) -> Vec<String> {
+        let markdown = sanitize_terminal_text(markdown);
+        let source = markdown.lines().collect::<Vec<_>>();
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        let mut lines = Vec::new();
+        let mut index = 0;
+        while index < source.len() {
+            let line = source[index];
+            if line.trim_start().starts_with("```") {
+                let language = line.trim().trim_start_matches("```").trim();
+                let mut content = Vec::new();
+                index += 1;
+                while index < source.len() && !source[index].trim_start().starts_with("```") {
+                    content.push(source[index]);
+                    index += 1;
+                }
+                lines.extend(self.render_code(
+                    (!language.is_empty()).then_some(language),
+                    &content.join("\n"),
+                    width,
+                ));
+            } else if is_markdown_table_header(&source, index) {
+                let headers = markdown_cells(source[index]);
+                let mut table = PresentationTable::new(headers, "No rows.");
+                index += 2;
+                while index < source.len()
+                    && source[index].contains('|')
+                    && !source[index].trim().is_empty()
+                {
+                    table.push_row(markdown_cells(source[index]));
+                    index += 1;
+                }
+                index = index.saturating_sub(1);
+                lines.extend(self.render_table(&table, width));
+            } else if let Some((level, heading)) = markdown_heading(line) {
+                if !lines.is_empty() && lines.last().is_some_and(|value: &String| !value.is_empty())
+                {
+                    lines.push(String::new());
+                }
+                let style = if level == 1 {
+                    palette.assistant.bold()
+                } else {
+                    palette.tool.bold()
+                };
+                lines.extend(
+                    wrap_text(heading, width)
+                        .into_iter()
+                        .map(|value| style.paint(&render_inline_plain(&value), self.color)),
+                );
+            } else if let Some(item) = markdown_list_item(line) {
+                let prefix = if item.0.is_empty() { "• " } else { item.0 };
+                let available = width.saturating_sub(display_width(prefix)).max(8);
+                let wrapped = wrap_text(item.1, available);
+                for (item_index, value) in wrapped.into_iter().enumerate() {
+                    let marker = if item_index == 0 {
+                        prefix
+                    } else {
+                        &" ".repeat(display_width(prefix))
+                    };
+                    lines.push(format!(
+                        "{}{}",
+                        palette.tool.paint(marker, self.color),
+                        render_inline(&value, palette, self.color)
+                    ));
+                }
+            } else if let Some(quote) = line.trim_start().strip_prefix('>') {
+                let wrapped = wrap_text(quote.trim_start(), width.saturating_sub(2));
+                lines.extend(wrapped.into_iter().map(|value| {
+                    format!(
+                        "{} {}",
+                        palette.meta.paint("│", self.color),
+                        palette.meta.paint(&render_inline_plain(&value), self.color)
+                    )
+                }));
+            } else if line.trim().is_empty() {
+                if lines.last().is_some_and(|value: &String| !value.is_empty()) {
+                    lines.push(String::new());
+                }
+            } else {
+                lines.extend(
+                    wrap_text(line, width)
+                        .into_iter()
+                        .map(|value| render_inline(&value, palette, self.color)),
+                );
+            }
+            index += 1;
+        }
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        lines
+    }
+
+    fn render_code(&self, language: Option<&str>, content: &str, width: usize) -> Vec<String> {
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        let inner = width.saturating_sub(4).max(12);
+        let label = language.map_or_else(|| "code".into(), sanitize_terminal_text);
+        let mut lines = vec![palette.meta.paint(&format!("┌─ {label}"), self.color)];
+        let content = sanitize_terminal_text(content);
+        let numbered = language.is_some_and(|language| language.contains(" · "));
+        let source_lines = content.lines().collect::<Vec<_>>();
+        let line_count = source_lines.len().max(1);
+        let number_width = line_count.to_string().len();
+        if content.is_empty() {
+            lines.push(format!("{} ", palette.meta.paint("│", self.color)));
+        } else {
+            for index in bounded_line_indexes(source_lines.len(), 20, 8) {
+                let Some(index) = index else {
+                    let omitted = source_lines.len().saturating_sub(28);
+                    lines.push(format!(
+                        "{} {}",
+                        palette.meta.paint("│", self.color),
+                        palette
+                            .meta
+                            .paint(&format!("… {omitted} lines omitted …"), self.color)
+                    ));
+                    continue;
+                };
+                let prefix = if numbered {
+                    format!("{:>number_width$} │ ", index + 1)
+                } else {
+                    String::new()
+                };
+                let value = truncate_width(
+                    source_lines[index],
+                    inner.saturating_sub(display_width(&prefix)),
+                );
+                lines.push(format!(
+                    "{} {}{}",
+                    palette.meta.paint("│", self.color),
+                    palette.meta.paint(&prefix, self.color),
+                    palette.assistant.paint(&value, self.color)
+                ));
+            }
+        }
+        lines.push(
+            palette
+                .meta
+                .paint(&format!("└{}", "─".repeat(inner + 2)), self.color),
+        );
+        lines
+    }
+
+    fn render_diff(&self, diff: &str, width: usize) -> Vec<String> {
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        let diff = sanitize_terminal_text(diff);
+        let source_lines = diff.lines().collect::<Vec<_>>();
+        bounded_line_indexes(source_lines.len(), 80, 20)
+            .into_iter()
+            .map(|index| {
+                let Some(index) = index else {
+                    return palette.meta.paint(
+                        &format!(
+                            "… {} diff lines omitted …",
+                            source_lines.len().saturating_sub(100)
+                        ),
+                        self.color,
+                    );
+                };
+                let line = source_lines[index];
+                let value = truncate_width(line, width);
+                let style = if value.starts_with('+') && !value.starts_with("+++") {
+                    palette.success
+                } else if value.starts_with('-') && !value.starts_with("---") {
+                    palette.error
+                } else if value.starts_with("@@") {
+                    palette.tool
+                } else {
+                    palette.meta
+                };
+                style.paint(&value, self.color)
+            })
+            .collect()
+    }
+
+    fn style_for_tone(&self, tone: PresentationTone) -> TextStyle {
+        let palette = TerminalPalette::for_preferences(&self.preferences);
+        match tone {
+            PresentationTone::Neutral => palette.meta,
+            PresentationTone::Success => palette.success,
+            PresentationTone::Warning => palette.warning,
+            PresentationTone::Error => palette.error,
+            PresentationTone::Thinking => palette.thinking,
+            PresentationTone::Tool => palette.tool,
+        }
+    }
+}
+
+fn bounded_line_indexes(count: usize, head: usize, tail: usize) -> Vec<Option<usize>> {
+    if count <= head.saturating_add(tail) {
+        return (0..count).map(Some).collect();
+    }
+    (0..head)
+        .map(Some)
+        .chain(std::iter::once(None))
+        .chain((count - tail..count).map(Some))
+        .collect()
+}
+
+fn sanitize_terminal_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| {
+            matches!(character, '\n' | '\t')
+                || (!character.is_control()
+                    && !matches!(character, '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{feff}'))
+        })
+        .collect()
+}
+
+fn display_width(value: &str) -> usize {
+    UnicodeWidthStr::width(strip_ansi_for_width(value).as_str())
+}
+
+fn strip_ansi_for_width(value: &str) -> String {
+    let mut clean = String::new();
+    let mut bytes = value.chars().peekable();
+    while let Some(character) = bytes.next() {
+        if character == '\u{1b}' && bytes.peek() == Some(&'[') {
+            bytes.next();
+            for next in bytes.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+        } else {
+            clean.push(character);
+        }
+    }
+    clean
+}
+
+fn truncate_width(value: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= width {
+        return value.to_owned();
+    }
+    let target = width.saturating_sub(1);
+    let mut current = 0;
+    let mut rendered = String::new();
+    for character in value.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if current + character_width > target {
+            break;
+        }
+        rendered.push(character);
+        current += character_width;
+    }
+    rendered.push('…');
+    rendered
+}
+
+fn wrap_text(value: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rendered = Vec::new();
+    for source_line in value.lines() {
+        if source_line.is_empty() {
+            rendered.push(String::new());
+            continue;
+        }
+        let mut line = String::new();
+        for word in source_line.split_whitespace() {
+            let separator = usize::from(!line.is_empty());
+            if display_width(&line) + separator + display_width(word) <= width {
+                if separator == 1 {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                continue;
+            }
+            if !line.is_empty() {
+                rendered.push(line);
+                line = String::new();
+            }
+            let mut remainder = word;
+            while display_width(remainder) > width {
+                let (chunk, consumed) = split_width_prefix(remainder, width);
+                rendered.push(chunk.into());
+                remainder = &remainder[consumed..];
+            }
+            line.push_str(remainder);
+        }
+        rendered.push(line);
+    }
+    if rendered.is_empty() {
+        rendered.push(String::new());
+    }
+    rendered
+}
+
+fn split_width_prefix(value: &str, width: usize) -> (&str, usize) {
+    let mut current = 0;
+    let mut consumed = 0;
+    for (index, character) in value.char_indices() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if current + character_width > width && consumed > 0 {
+            break;
+        }
+        current += character_width;
+        consumed = index + character.len_utf8();
+        if current >= width {
+            break;
+        }
+    }
+    if consumed == 0 {
+        consumed = value.chars().next().map_or(0, char::len_utf8);
+    }
+    (&value[..consumed], consumed)
+}
+
+fn markdown_heading(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start();
+    let level = trimmed
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    (level > 0 && level <= 6 && trimmed.as_bytes().get(level) == Some(&b' '))
+        .then(|| (level, trimmed[level + 1..].trim()))
+}
+
+fn markdown_list_item(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim_start();
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(value) = trimmed.strip_prefix(marker) {
+            return Some(("", value));
+        }
+    }
+    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0 && trimmed.get(digits..digits + 2) == Some(". ") {
+        return Some((&trimmed[..digits + 2], &trimmed[digits + 2..]));
+    }
+    None
+}
+
+fn is_markdown_table_header(lines: &[&str], index: usize) -> bool {
+    lines.get(index).is_some_and(|line| line.contains('|'))
+        && lines.get(index + 1).is_some_and(|line| {
+            let cells = markdown_cells(line);
+            !cells.is_empty()
+                && cells.iter().all(|cell| {
+                    let cell = cell.trim().trim_matches(':');
+                    cell.len() >= 3 && cell.chars().all(|character| character == '-')
+                })
+        })
+}
+
+fn markdown_cells(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| render_inline_plain(cell.trim()))
+        .collect()
+}
+
+fn render_inline_plain(value: &str) -> String {
+    let mut rendered = value.replace("**", "").replace("__", "").replace('`', "");
+    rendered = rendered.replace(['*', '_'], "");
+    while let Some(start) = rendered.find('[') {
+        let Some(label_end) = rendered[start + 1..]
+            .find("](")
+            .map(|value| start + 1 + value)
+        else {
+            break;
+        };
+        let url_start = label_end + 2;
+        let Some(url_end) = rendered[url_start..]
+            .find(')')
+            .map(|value| url_start + value)
+        else {
+            break;
+        };
+        let replacement = format!(
+            "{} ({})",
+            &rendered[start + 1..label_end],
+            &rendered[url_start..url_end]
+        );
+        rendered.replace_range(start..=url_end, &replacement);
+    }
+    rendered
+}
+
+fn render_inline(value: &str, palette: TerminalPalette, color: bool) -> String {
+    if !color {
+        return render_inline_plain(value);
+    }
+    let mut rendered = String::new();
+    let mut remaining = value;
+    while !remaining.is_empty() {
+        if let Some(content) = remaining.strip_prefix("**")
+            && let Some(end) = content.find("**")
+        {
+            rendered.push_str(&palette.assistant.bold().paint(&content[..end], true));
+            remaining = &content[end + 2..];
+            continue;
+        }
+        if let Some(content) = remaining.strip_prefix("__")
+            && let Some(end) = content.find("__")
+        {
+            rendered.push_str(&palette.assistant.bold().paint(&content[..end], true));
+            remaining = &content[end + 2..];
+            continue;
+        }
+        if let Some(content) = remaining.strip_prefix('`')
+            && let Some(end) = content.find('`')
+        {
+            rendered.push_str(&palette.tool.paint(&content[..end], true));
+            remaining = &content[end + 1..];
+            continue;
+        }
+        if let Some(content) = remaining.strip_prefix('*')
+            && let Some(end) = content.find('*')
+        {
+            rendered.push_str(&palette.assistant.italic().paint(&content[..end], true));
+            remaining = &content[end + 1..];
+            continue;
+        }
+        if let Some(content) = remaining.strip_prefix('_')
+            && let Some(end) = content.find('_')
+        {
+            rendered.push_str(&palette.assistant.italic().paint(&content[..end], true));
+            remaining = &content[end + 1..];
+            continue;
+        }
+        if let Some(label) = remaining.strip_prefix('[')
+            && let Some(label_end) = label.find("](")
+        {
+            let url = &label[label_end + 2..];
+            if let Some(url_end) = url.find(')') {
+                rendered.push_str(&palette.assistant.paint(&label[..label_end], true));
+                rendered.push_str(&palette.meta.paint(&format!(" ({})", &url[..url_end]), true));
+                remaining = &url[url_end + 1..];
+                continue;
+            }
+        }
+        let next = remaining
+            .char_indices()
+            .skip(1)
+            .find(|(_, character)| matches!(character, '*' | '`' | '[' | '_'))
+            .map_or(remaining.len(), |(index, _)| index);
+        rendered.push_str(&palette.assistant.paint(&remaining[..next], true));
+        remaining = &remaining[next..];
+    }
+    rendered
 }
 
 /// Terminal RGB value shared by Reedline prompts and semantic transcript palettes.
@@ -311,6 +1341,11 @@ impl TerminalPalette {
         self.continuation
     }
 
+    /// Metadata style used for low-emphasis terminal affordances such as type-ahead.
+    pub fn meta_style(self) -> ThemeTextStyle {
+        self.meta.into()
+    }
+
     /// Render the theme's bounded spinner frame for one elapsed duration.
     pub fn activity_frame(self, elapsed_seconds: f64, color: bool) -> String {
         let index = ((elapsed_seconds.max(0.0) * 10.0) as usize) % self.spinner_frames.len();
@@ -441,6 +1476,19 @@ pub struct ThemeLibraryStatus {
     pub directories: Vec<PathBuf>,
 }
 
+/// Validated custom-theme template that can be saved by an operator.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ThemeScaffold {
+    /// Canonical custom theme identity.
+    pub name: String,
+    /// Suggested config-adjacent destination.
+    pub suggested_path: Option<PathBuf>,
+    /// Template serialization format.
+    pub format: String,
+    /// Strict schema-v1 template content.
+    pub content: String,
+}
+
 /// Strict data-only custom-theme library loaded during trusted configuration bootstrap.
 #[derive(Clone, Debug, Default)]
 pub struct ThemeLibrary {
@@ -548,6 +1596,233 @@ impl ThemeLibrary {
         }
     }
 
+    /// Build the human-first theme library view used by interactive terminal surfaces.
+    pub fn status_document(&self, selected: &str) -> PresentationDocument {
+        let mut themes = PresentationTable::new(
+            ["#", "Active", "Theme", "Type", "Character"],
+            "No terminal themes are available.",
+        );
+        for (index, name) in self.names().into_iter().enumerate() {
+            themes.push_row([
+                (index + 1).to_string(),
+                if name == selected { "yes" } else { "" }.into(),
+                name.clone(),
+                if ThemeName::parse(&name).is_some() {
+                    "Built-in"
+                } else {
+                    "Custom"
+                }
+                .into(),
+                theme_character(&name).into(),
+            ]);
+        }
+
+        let mut directories = PresentationTable::new(
+            ["#", "Custom theme folder"],
+            "No custom theme folders are configured.",
+        );
+        for (index, directory) in self.directories.iter().enumerate() {
+            directories.push_row([(index + 1).to_string(), directory.display().to_string()]);
+        }
+
+        PresentationDocument {
+            blocks: vec![
+                PresentationBlock::Markdown(format!(
+                    "# Themes\n\nActive theme: **{selected}**\n\nChoose a number or name to apply a theme. Use `p NUMBER` or `/theme preview NAME` to inspect one without changing your selection."
+                )),
+                PresentationBlock::Table(themes),
+                PresentationBlock::Card {
+                    title: "Custom theme search locations".into(),
+                    tone: PresentationTone::Neutral,
+                    body: vec![PresentationBlock::Table(directories)],
+                },
+            ],
+        }
+    }
+
+    /// Build a complete visual sample for one theme without selecting it.
+    pub fn preview_document(&self, name: &str) -> Result<PresentationDocument, PresentationError> {
+        let theme = self.preview(name)?;
+        let built_in = ThemeName::parse(&theme.name).is_some();
+        let prompt_title = if built_in {
+            "Colossus"
+        } else {
+            theme.title.as_str()
+        };
+        let mut metadata = PresentationTable::new(["Field", "Value"], "No theme metadata.");
+        for (field, value) in [
+            ("Name", theme.name.clone()),
+            ("Type", if built_in { "Built-in" } else { "Custom" }.into()),
+            ("Base", theme.base.as_str().into()),
+            ("Spinner", format!("{:?}", theme.spinner)),
+        ] {
+            metadata.push_row([field, value.as_str()]);
+        }
+        if !built_in {
+            metadata.push_row(["Source hash", theme.source_hash.as_str()]);
+        }
+
+        Ok(PresentationDocument {
+            blocks: vec![
+                PresentationBlock::Markdown(format!(
+                    "# {} theme preview\n\nThis is a preview only; your active theme has not changed.",
+                    human_field_name(&theme.name)
+                )),
+                PresentationBlock::Prompt {
+                    left: format!("{prompt_title} 019f-theme"),
+                    indicator: if built_in { "›".into() } else { theme.caret.clone() },
+                    input: "Ask Colossus to review this change".into(),
+                    right: Some("primary:openrouter status=ready".into()),
+                },
+                PresentationBlock::Table(metadata),
+                PresentationBlock::Card {
+                    title: "Assistant".into(),
+                    tone: PresentationTone::Neutral,
+                    body: vec![PresentationBlock::Markdown(
+                        "## Markdown sample\n\nThe theme styles **answers**, `inline code`, links, and lists.\n\n- Clear hierarchy\n- Readable content".into(),
+                    )],
+                },
+                PresentationBlock::Card {
+                    title: "Thinking".into(),
+                    tone: PresentationTone::Thinking,
+                    body: vec![PresentationBlock::Markdown(
+                        "_Reviewing the relevant files and constraints…_".into(),
+                    )],
+                },
+                PresentationBlock::Card {
+                    title: "Completed filesystem.read".into(),
+                    tone: PresentationTone::Tool,
+                    body: vec![PresentationBlock::KeyValue(vec![
+                        ("Status".into(), "ok".into()),
+                        ("Duration".into(), "0.42s".into()),
+                    ])],
+                },
+                PresentationBlock::Card {
+                    title: "Approval required".into(),
+                    tone: PresentationTone::Warning,
+                    body: vec![PresentationBlock::Text(
+                        "This effect needs your confirmation before it runs.".into(),
+                    )],
+                },
+                PresentationBlock::Card {
+                    title: "Completed".into(),
+                    tone: PresentationTone::Success,
+                    body: vec![PresentationBlock::Text(
+                        "The requested work finished successfully.".into(),
+                    )],
+                },
+                PresentationBlock::Card {
+                    title: "Needs attention".into(),
+                    tone: PresentationTone::Error,
+                    body: vec![PresentationBlock::Text(
+                        "A denied or failed effect is visually distinct.".into(),
+                    )],
+                },
+                PresentationBlock::Diff(
+                    "@@ -1,2 +1,2 @@\n-old terminal output\n+human-first terminal output".into(),
+                ),
+            ],
+        })
+    }
+
+    /// Resolve temporary preferences for a visual preview without mutating the caller.
+    pub fn preview_preferences(
+        &self,
+        name: &str,
+        current: &ReplPreferences,
+    ) -> Result<ReplPreferences, PresentationError> {
+        let mut preview = current.clone();
+        self.select(name, &mut preview)?;
+        Ok(preview)
+    }
+
+    /// Build a human validation summary for the already loaded strict library.
+    pub fn validation_document(&self) -> PresentationDocument {
+        let custom_count = self.custom.len();
+        PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Theme library valid".into(),
+            tone: PresentationTone::Success,
+            body: vec![
+                PresentationBlock::KeyValue(vec![
+                    ("Built-in themes".into(), "5".into()),
+                    ("Custom themes".into(), custom_count.to_string()),
+                    ("Maximum custom themes".into(), MAX_CUSTOM_THEMES.to_string()),
+                    (
+                        "Maximum file size".into(),
+                        format!("{} KiB", MAX_THEME_FILE_BYTES / 1024),
+                    ),
+                ]),
+                PresentationBlock::Markdown(
+                    "Every discovered JSON/TOML theme passed the strict schema, identity, color, size, collision, and symlink checks.".into(),
+                ),
+            ],
+        })
+    }
+
+    /// Build a concise confirmation after a theme preference is durably saved.
+    pub fn selection_document(&self, selected: &str) -> PresentationDocument {
+        PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Theme applied".into(),
+            tone: PresentationTone::Success,
+            body: vec![
+                PresentationBlock::KeyValue(vec![
+                    ("Theme".into(), selected.into()),
+                    ("Saved".into(), "yes".into()),
+                ]),
+                PresentationBlock::Markdown(format!(
+                    "Use `/theme preview {selected}` for the complete visual sample."
+                )),
+            ],
+        })
+    }
+
+    /// Produce a strict TOML starter without writing through the terminal interface.
+    pub fn scaffold(&self, name: &str) -> Result<ThemeScaffold, PresentationError> {
+        let name = normalize_theme_name(name)?;
+        if ThemeName::parse(&name).is_some() || self.custom.contains_key(&name) {
+            return Err(PresentationError::Invalid(format!(
+                "theme identity already exists: {name}"
+            )));
+        }
+        let content = format!(
+            "schemaVersion = 1\nname = \"{name}\"\nbase = \"default\"\ntitle = \"Colossus\"\ncaret = \"›\"\ncontinuation = \"…\"\nspinner = \"dots\"\n\n[prompt]\nleft = \"#5FD7FF\"\nright = \"#7F8790\"\nindicator = \"#5FD7FF\"\ncontinuation = \"#7F8790\"\n\n[styles.tool]\nforeground = \"#58A6FF\"\nbold = true\n\n[styles.meta]\nforeground = \"#7F8790\"\ndim = true\n"
+        );
+        Ok(ThemeScaffold {
+            suggested_path: self
+                .directories
+                .first()
+                .map(|directory| directory.join(format!("{name}.toml"))),
+            name,
+            format: "toml".into(),
+            content,
+        })
+    }
+
+    /// Render one scaffold with explicit no-write and restart guidance.
+    pub fn scaffold_document(scaffold: &ThemeScaffold) -> PresentationDocument {
+        let destination = scaffold.suggested_path.as_ref().map_or_else(
+            || "a configured theme folder".into(),
+            |path| path.display().to_string(),
+        );
+        PresentationDocument::from_block(PresentationBlock::Card {
+            title: format!("Custom theme scaffold: {}", scaffold.name),
+            tone: PresentationTone::Neutral,
+            body: vec![
+                PresentationBlock::KeyValue(vec![
+                    ("Suggested path".into(), destination),
+                    ("Format".into(), scaffold.format.clone()),
+                ]),
+                PresentationBlock::Code {
+                    language: Some("toml".into()),
+                    content: scaffold.content.clone(),
+                },
+                PresentationBlock::Markdown(
+                    "The REPL does **not** write this file. Save it deliberately, restart Colossus, then run `/theme validate` and `/theme NAME`.".into(),
+                ),
+            ],
+        })
+    }
+
     /// Deterministic built-in and custom identities.
     pub fn names(&self) -> Vec<String> {
         ["default", "mono", "high_contrast", "carrot", "hacker"]
@@ -590,6 +1865,17 @@ impl ThemeLibrary {
         })?;
         preferences.select_custom_theme(theme);
         Ok(())
+    }
+}
+
+fn theme_character(name: &str) -> &'static str {
+    match ThemeName::parse(name) {
+        Some(ThemeName::Default) => "Balanced blue",
+        Some(ThemeName::Mono) => "Color-free",
+        Some(ThemeName::HighContrast) => "Strong contrast",
+        Some(ThemeName::Carrot) => "Warm orange",
+        Some(ThemeName::Hacker) => "Green terminal",
+        None => "Custom palette",
     }
 }
 
@@ -1230,32 +2516,67 @@ impl SemanticRenderer {
         if self.preferences.transcript_density == TranscriptDensity::Compact {
             return summary;
         }
-        let mut lines = vec![summary];
-        lines.extend(
-            state
-                .tasks
-                .iter()
-                .filter(|task| {
-                    !matches!(
-                        task.status,
-                        colossus_contracts::TaskStatus::Completed
-                            | colossus_contracts::TaskStatus::Cancelled
-                    )
-                })
-                .map(|task| format!("  task [{}] {}", task.id, task.title)),
+        let mut body = vec![PresentationBlock::KeyValue(vec![
+            ("Session".into(), state.session_id.clone()),
+            (
+                "Tasks".into(),
+                format!(
+                    "{} open / {} total",
+                    state.open_task_count,
+                    state.tasks.len()
+                ),
+            ),
+            (
+                "Active decisions".into(),
+                state.active_decisions.len().to_string(),
+            ),
+            (
+                "Actionable plans".into(),
+                state.actionable_plans.len().to_string(),
+            ),
+            ("Goals".into(), state.current_goals.len().to_string()),
+            (
+                "Subagents".into(),
+                state.current_subagents.len().to_string(),
+            ),
+        ])];
+        let mut work = PresentationTable::new(
+            ["Kind", "ID", "Status", "Summary"],
+            "No active tasks or goals.",
         );
-        lines.extend(
-            state
-                .current_goals
-                .iter()
-                .map(|goal| format!("  goal [{}] {}", goal.id, goal.objective)),
-        );
-        lines.join("\n")
+        for task in state.tasks.iter().filter(|task| {
+            !matches!(
+                task.status,
+                colossus_contracts::TaskStatus::Completed
+                    | colossus_contracts::TaskStatus::Cancelled
+            )
+        }) {
+            work.push_row([
+                "Task".into(),
+                task.id.clone(),
+                format!("{:?}", task.status).to_ascii_lowercase(),
+                task.title.clone(),
+            ]);
+        }
+        for goal in &state.current_goals {
+            work.push_row([
+                "Goal".into(),
+                goal.id.clone(),
+                format!("{:?}", goal.status).to_ascii_lowercase(),
+                goal.objective.clone(),
+            ]);
+        }
+        body.push(PresentationBlock::Table(work));
+        self.render_document(PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Current work".into(),
+            tone: PresentationTone::Neutral,
+            body,
+        }))
     }
 
     /// Render context budget and compaction state.
     pub fn context_status(&self, status: &ContextStatus) -> String {
-        format!(
+        let summary = format!(
             "{} session={} messages={} tokens={}/{} compacted={} snapshot={}",
             self.label("context"),
             status.session_id,
@@ -1264,7 +2585,40 @@ impl SemanticRenderer {
             status.context_window_tokens,
             status.compacted,
             status.active_snapshot_id.as_deref().unwrap_or("none")
-        )
+        );
+        if self.preferences.transcript_density == TranscriptDensity::Compact {
+            return summary;
+        }
+        self.render_document(PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Context".into(),
+            tone: if status.compacted {
+                PresentationTone::Warning
+            } else {
+                PresentationTone::Neutral
+            },
+            body: vec![PresentationBlock::KeyValue(vec![
+                ("Session".into(), status.session_id.clone()),
+                ("Messages".into(), status.message_count.to_string()),
+                (
+                    "Tokens".into(),
+                    format!(
+                        "{} / {}",
+                        status.token_estimate, status.context_window_tokens
+                    ),
+                ),
+                (
+                    "Compacted".into(),
+                    if status.compacted { "yes" } else { "no" }.into(),
+                ),
+                (
+                    "Snapshot".into(),
+                    status
+                        .active_snapshot_id
+                        .clone()
+                        .unwrap_or_else(|| "—".into()),
+                ),
+            ])],
+        }))
     }
 
     /// Render one already policy-released provider event.
@@ -1281,7 +2635,17 @@ impl SemanticRenderer {
         let rendered = match event {
             ProviderEvent::ModelDelta { .. } | ProviderEvent::FinalOutput { .. } => None,
             ProviderEvent::ReasoningSummary { summary } if self.preferences.show_reasoning => {
-                Some(format!("{} {summary}", self.label("thinking")))
+                if self.preferences.transcript_density == TranscriptDensity::Comfortable {
+                    Some(self.render_document(PresentationDocument::from_block(
+                        PresentationBlock::Card {
+                            title: "Thinking".into(),
+                            tone: PresentationTone::Thinking,
+                            body: vec![PresentationBlock::Markdown(summary.clone())],
+                        },
+                    )))
+                } else {
+                    Some(format!("{} {summary}", self.label("thinking")))
+                }
             }
             ProviderEvent::ReasoningSummary { .. } => None,
             ProviderEvent::ToolCallRequested { .. } => None,
@@ -1328,24 +2692,52 @@ impl SemanticRenderer {
                 result,
                 duration_seconds,
                 elapsed_seconds,
-            } => self.render_tool_completed(*turn, result, *duration_seconds, *elapsed_seconds),
+            } => {
+                self.render_tool_completed(*turn, result, *duration_seconds, *elapsed_seconds, None)
+            }
             RunEvent::Error {
                 code,
                 message,
                 recoverable,
                 turn,
                 elapsed_seconds,
-            } => Ok(Some(self.with_detail(
-                format!(
-                    "{} code={} recoverable={} turn={} elapsed={:.2}s",
-                    self.label("error"),
-                    code,
-                    if *recoverable { "yes" } else { "no" },
-                    turn.map_or_else(|| "none".into(), |value| value.to_string()),
-                    elapsed_seconds,
-                ),
-                Some(bounded_text(message, COMPACT_PREVIEW_CHARS)),
-            ))),
+            } => {
+                if self.preferences.transcript_density == TranscriptDensity::Comfortable {
+                    Ok(Some(self.render_document(
+                        PresentationDocument::from_block(PresentationBlock::Card {
+                            title: "Run error".into(),
+                            tone: PresentationTone::Error,
+                            body: vec![
+                                PresentationBlock::KeyValue(vec![
+                                    ("Code".into(), code.clone()),
+                                    (
+                                        "Recoverable".into(),
+                                        if *recoverable { "yes" } else { "no" }.into(),
+                                    ),
+                                    (
+                                        "Turn".into(),
+                                        turn.map_or_else(|| "—".into(), |value| value.to_string()),
+                                    ),
+                                    ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
+                                ]),
+                                PresentationBlock::Markdown(message.clone()),
+                            ],
+                        }),
+                    )))
+                } else {
+                    Ok(Some(self.with_detail(
+                        format!(
+                            "{} code={} recoverable={} turn={} elapsed={:.2}s",
+                            self.label("error"),
+                            code,
+                            if *recoverable { "yes" } else { "no" },
+                            turn.map_or_else(|| "none".into(), |value| value.to_string()),
+                            elapsed_seconds,
+                        ),
+                        Some(bounded_text(message, COMPACT_PREVIEW_CHARS)),
+                    )))
+                }
+            }
         }
     }
 
@@ -1404,6 +2796,18 @@ impl SemanticRenderer {
         call: &ToolCall,
         elapsed_seconds: f64,
     ) -> Result<Option<String>, PresentationError> {
+        if call.name == "user.ask" {
+            return Ok(Some(match self.preferences.events_mode {
+                EventDisplayMode::Verbose => format!(
+                    "{} waiting name=user.ask call_id={} turn={turn}",
+                    self.label("input"),
+                    call.call_id
+                ),
+                EventDisplayMode::Compact | EventDisplayMode::Off => {
+                    format!("{} user.ask waiting for your answer", self.label("input"))
+                }
+            }));
+        }
         if self.preferences.events_mode == EventDisplayMode::Off {
             return Ok(Some(format!(
                 "{} using {} elapsed={elapsed_seconds:.2}s",
@@ -1441,6 +2845,7 @@ impl SemanticRenderer {
         result: &ToolResult,
         duration_seconds: f64,
         elapsed_seconds: f64,
+        call: Option<&ToolCall>,
     ) -> Result<Option<String>, PresentationError> {
         let parsed = serde_json::from_str::<Value>(&result.output)
             .unwrap_or_else(|_| Value::String(result.output.clone()));
@@ -1448,11 +2853,18 @@ impl SemanticRenderer {
         let recoverable = parsed
             .pointer("/error/recoverable")
             .and_then(Value::as_bool);
-        let failed = result.exit_code != 0 || parsed.get("error").is_some();
+        let lifecycle_status = parsed.get("status").and_then(Value::as_str);
+        let pending =
+            result.name == "agent.result" && matches!(lifecycle_status, Some("queued" | "running"));
+        let failed_child = result.name == "agent.result"
+            && matches!(lifecycle_status, Some("failed" | "interrupted"));
+        let failed = result.exit_code != 0 || failed_child;
         if self.preferences.events_mode == EventDisplayMode::Off && !failed {
             return Ok(None);
         }
-        let status = if failed {
+        let status = if pending {
+            lifecycle_status.unwrap_or("pending")
+        } else if failed {
             if recoverable == Some(true) {
                 "recoverable_error"
             } else {
@@ -1469,6 +2881,57 @@ impl SemanticRenderer {
         } else {
             summarize_value(&parsed, family.keys())
         };
+        if self.preferences.transcript_density == TranscriptDensity::Comfortable {
+            let mut body = vec![PresentationBlock::KeyValue(vec![
+                ("Status".into(), status.replace('_', " ")),
+                ("Duration".into(), format!("{duration_seconds:.2}s")),
+                ("Exit".into(), result.exit_code.to_string()),
+            ])];
+            if failed {
+                if let Some(message) = parsed.pointer("/error/message").and_then(Value::as_str) {
+                    body.push(PresentationBlock::Markdown(message.into()));
+                } else {
+                    body.push(tool_output_block(
+                        &result.name,
+                        &parsed,
+                        call.map(|call| &call.arguments),
+                    ));
+                }
+            } else {
+                body.push(tool_output_block(
+                    &result.name,
+                    &parsed,
+                    call.map(|call| &call.arguments),
+                ));
+            }
+            let context = call
+                .and_then(|call| tool_call_context(call, family))
+                .map(|value| format!(" · {}", bounded_text(&value, 60)))
+                .unwrap_or_default();
+            let document = PresentationDocument::from_block(PresentationBlock::Card {
+                title: format!(
+                    "{} {}{}",
+                    if failed {
+                        "Failed"
+                    } else if pending {
+                        "Pending"
+                    } else {
+                        "Completed"
+                    },
+                    result.name,
+                    context,
+                ),
+                tone: if failed {
+                    PresentationTone::Error
+                } else if pending {
+                    PresentationTone::Warning
+                } else {
+                    PresentationTone::Success
+                },
+                body,
+            });
+            return Ok(Some(self.render_document(document)));
+        }
         let rendered = match self.preferences.events_mode {
             EventDisplayMode::Verbose => format!(
                 "{} complete name={} call_id={} turn={} status={} exit={} duration={duration_seconds:.2}s elapsed={elapsed_seconds:.2}s output={}",
@@ -1494,6 +2957,19 @@ impl SemanticRenderer {
         Ok(Some(rendered))
     }
 
+    /// Render a tool completion with its matching request context for richer source and process
+    /// cards. Callers must supply the already released call paired by its opaque call ID.
+    pub fn tool_completed_with_call(
+        &self,
+        turn: u16,
+        result: &ToolResult,
+        duration_seconds: f64,
+        elapsed_seconds: f64,
+        call: Option<&ToolCall>,
+    ) -> Result<Option<String>, PresentationError> {
+        self.render_tool_completed(turn, result, duration_seconds, elapsed_seconds, call)
+    }
+
     fn with_detail(&self, summary: String, detail: Option<String>) -> String {
         let Some(detail) = detail else {
             return summary;
@@ -1505,6 +2981,12 @@ impl SemanticRenderer {
         }
     }
 
+    fn render_document(&self, document: PresentationDocument) -> String {
+        TerminalDocumentRenderer::new(self.preferences.clone(), 100)
+            .with_color(self.color)
+            .render(&document)
+    }
+
     /// Render generic released structured output according to transcript density.
     pub fn structured(&self, value: &Value) -> Result<String, PresentationError> {
         if self.preferences.transcript_density == TranscriptDensity::Compact {
@@ -1514,6 +2996,150 @@ impl SemanticRenderer {
         }
         .map_err(|error| PresentationError::Invalid(error.to_string()))
     }
+}
+
+fn tool_output_block(name: &str, output: &Value, arguments: Option<&Value>) -> PresentationBlock {
+    if let Some(diff) = output.get("diff").and_then(Value::as_str) {
+        let (additions, deletions) = diff_counts(diff);
+        let title = output
+            .get("path")
+            .and_then(Value::as_str)
+            .map_or_else(|| "Changes".into(), |path| format!("Changes · {path}"));
+        return PresentationBlock::Card {
+            title,
+            tone: PresentationTone::Tool,
+            body: vec![
+                PresentationBlock::KeyValue(vec![
+                    ("Added".into(), additions.to_string()),
+                    ("Removed".into(), deletions.to_string()),
+                ]),
+                PresentationBlock::Diff(diff.into()),
+            ],
+        };
+    }
+    if (name == "git.diff" || name == "git.show" || name.ends_with(".diff"))
+        && let Some(diff) = output
+            .as_str()
+            .or_else(|| output.get("stdout").and_then(Value::as_str))
+            .or_else(|| output.get("diff").and_then(Value::as_str))
+            .or_else(|| output.get("output").and_then(Value::as_str))
+    {
+        return PresentationBlock::Diff(diff.into());
+    }
+    if matches!(
+        ToolFamily::from_name(name),
+        ToolFamily::Shell | ToolFamily::Git
+    ) {
+        let stdout = output.get("stdout").and_then(Value::as_str);
+        let stderr = output.get("stderr").and_then(Value::as_str);
+        let mut body = Vec::new();
+        if let Some(stdout) = stdout.filter(|value| !value.is_empty()) {
+            body.push(PresentationBlock::Code {
+                language: Some("stdout".into()),
+                content: stdout.into(),
+            });
+        }
+        if let Some(stderr) = stderr.filter(|value| !value.is_empty()) {
+            body.push(PresentationBlock::Code {
+                language: Some("stderr".into()),
+                content: stderr.into(),
+            });
+        }
+        if body.len() == 1 {
+            return body.remove(0);
+        }
+        if !body.is_empty() {
+            return PresentationBlock::Card {
+                title: "Process output".into(),
+                tone: PresentationTone::Neutral,
+                body,
+            };
+        }
+    }
+    if let Some(records) = [
+        "entries",
+        "matches",
+        "results",
+        "sources",
+        "tasks",
+        "decisions",
+        "plans",
+        "goals",
+        "memories",
+        "sessions",
+        "tools",
+        "resources",
+    ]
+    .iter()
+    .find_map(|key| output.get(*key).filter(|value| value.is_array()))
+    {
+        return json_block(records);
+    }
+    if let Some(text) = output.as_str() {
+        return if matches!(ToolFamily::from_name(name), ToolFamily::Files) {
+            PresentationBlock::Code {
+                language: Some(source_label(arguments)),
+                content: text.into(),
+            }
+        } else {
+            PresentationBlock::Markdown(text.into())
+        };
+    }
+    json_block(output)
+}
+
+fn tool_call_context(call: &ToolCall, family: ToolFamily) -> Option<String> {
+    if matches!(family, ToolFamily::Shell)
+        && let Some(arguments) = call.arguments.get("argv").and_then(Value::as_array)
+    {
+        let command = arguments
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !command.is_empty() {
+            return Some(format!("$ {command}"));
+        }
+    }
+    summarize_value(&call.arguments, family.keys())
+}
+
+fn diff_counts(diff: &str) -> (usize, usize) {
+    diff.lines().fold((0, 0), |(additions, deletions), line| {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            (additions + 1, deletions)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            (additions, deletions + 1)
+        } else {
+            (additions, deletions)
+        }
+    })
+}
+
+fn source_label(arguments: Option<&Value>) -> String {
+    let Some(path) = arguments
+        .and_then(|value| find_key(value, "path", 0))
+        .and_then(Value::as_str)
+    else {
+        return "file".into();
+    };
+    let language = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| match extension.to_ascii_lowercase().as_str() {
+            "rs" => "rust",
+            "py" => "python",
+            "js" | "mjs" | "cjs" => "javascript",
+            "ts" | "tsx" => "typescript",
+            "md" => "markdown",
+            "yaml" | "yml" => "yaml",
+            "json" => "json",
+            "toml" => "toml",
+            "sh" | "bash" | "zsh" => "shell",
+            _ => "file",
+        })
+        .unwrap_or("file");
+    format!("{language} · {path}")
 }
 
 #[derive(Clone, Copy)]
@@ -1661,8 +3287,10 @@ fn scalar_summary(value: &Value) -> String {
 mod tests {
     use super::{
         EventDisplayMode, EventSourcedPresentationRepository, MAX_CUSTOM_THEMES,
-        MAX_THEME_FILE_BYTES, ReplPreferences, SemanticRenderer, StreamDisplayMode,
-        TerminalPalette, ThemeLibrary, ThemeName, TranscriptDensity,
+        MAX_THEME_FILE_BYTES, PresentationBlock, PresentationDocument, PresentationTable,
+        PresentationTone, ReplPreferences, SemanticRenderer, StreamDisplayMode,
+        TerminalDocumentRenderer, TerminalPalette, ThemeLibrary, ThemeName, TranscriptDensity,
+        display_width, document_from_json,
     };
     use colossus_contracts::{
         Actor, ActorType, ProviderEvent, ProviderUsage, RunEvent, RunEventEnvelope, RunPhase,
@@ -1671,8 +3299,251 @@ mod tests {
     use colossus_ports::{EventJournal, PresentationRepository, ToolRegistry};
     use colossus_testkit::{InMemoryEventJournal, assert_presentation_repository_conformance};
     use colossus_tools::{StaticToolRegistry, builtin_names};
-    use std::{fs, sync::Arc};
+    use std::{fs, path::PathBuf, sync::Arc};
     use tempfile::tempdir;
+
+    #[test]
+    fn terminal_documents_render_markdown_tables_cards_and_diff_within_width() {
+        let mut items = PresentationTable::new(["Name", "Status"], "No tools available.");
+        items.push_row(["filesystem.read", "ready"]);
+        let document = PresentationDocument {
+            blocks: vec![
+                PresentationBlock::Markdown(
+                    "# Result\n\nA **useful** answer.\n\n- first\n- second\n\n```rust\nfn main() {}\n```"
+                        .into(),
+                ),
+                PresentationBlock::Table(items),
+                PresentationBlock::Card {
+                    title: "Git changes".into(),
+                    tone: PresentationTone::Success,
+                    body: vec![PresentationBlock::Diff(
+                        "@@ -1 +1 @@\n-old\n+new".into(),
+                    )],
+                },
+            ],
+        };
+        let rendered =
+            TerminalDocumentRenderer::new(ReplPreferences::default(), 64).render(&document);
+        assert!(rendered.contains("Result"));
+        assert!(rendered.contains("• first"));
+        assert!(rendered.contains("fn main() {}"));
+        assert!(rendered.contains("filesystem.read"));
+        assert!(rendered.contains("Git changes"));
+        assert!(rendered.contains("+new"));
+        assert!(rendered.lines().all(|line| display_width(line) <= 64));
+        for width in [60, 80, 120, 160] {
+            let rendered =
+                TerminalDocumentRenderer::new(ReplPreferences::default(), width).render(&document);
+            assert!(
+                rendered.lines().all(|line| display_width(line) <= width),
+                "width {width}"
+            );
+        }
+        let colored = TerminalDocumentRenderer::new(ReplPreferences::default(), 64)
+            .with_color(true)
+            .render(&PresentationDocument::from_block(
+                PresentationBlock::Markdown("A **bold** value and `code`.".into()),
+            ));
+        assert!(colored.contains("\x1b["));
+        assert!(!colored.contains("**"));
+        assert!(!colored.contains('`'));
+    }
+
+    #[test]
+    fn terminal_documents_sanitize_untrusted_controls_and_bound_unicode_width() {
+        let document = PresentationDocument::from_block(PresentationBlock::Card {
+            title: "unsafe\u{1b}[31m\u{200b}".into(),
+            tone: PresentationTone::Warning,
+            body: vec![PresentationBlock::Text(format!(
+                "wide 界界界 and a-very-long-unbroken-value-that-must-wrap \u{1b}]8;;https://example.test\u{7}{}\u{1b}]8;;\u{7}",
+                "oversized ".repeat(1_000)
+            ))],
+        });
+        let rendered =
+            TerminalDocumentRenderer::new(ReplPreferences::default(), 40).render(&document);
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(!rendered.contains('\u{7}'));
+        assert!(!rendered.contains('\u{200b}'));
+        assert!(rendered.lines().all(|line| display_width(line) <= 40));
+
+        let mut wide_table =
+            PresentationTable::new((0..20).map(|index| format!("Column {index}")), "No rows.");
+        wide_table.push_row((0..20).map(|index| format!("value-{index}")));
+        let rendered = TerminalDocumentRenderer::new(ReplPreferences::default(), 40).render(
+            &PresentationDocument::from_block(PresentationBlock::Table(wide_table)),
+        );
+        assert!(rendered.contains("columns omitted"));
+        assert!(rendered.lines().all(|line| display_width(line) <= 40));
+    }
+
+    #[test]
+    fn structured_json_becomes_intentional_human_tables_and_details() {
+        let values = serde_json::json!([
+            {"id": "task-1", "title": "Build UX", "status": "running", "internal": {"x": 1}},
+            {"id": "task-2", "title": "Test UX", "status": "queued", "internal": {"x": 2}}
+        ]);
+        let rendered = TerminalDocumentRenderer::new(ReplPreferences::default(), 90)
+            .render(&document_from_json(&values, Some("Tasks")));
+        assert!(rendered.contains("Tasks"));
+        assert!(rendered.contains("Status"));
+        assert!(rendered.contains("Build UX"));
+        assert!(!rendered.contains("internal"));
+
+        let details = TerminalDocumentRenderer::new(ReplPreferences::default(), 80).render(
+            &document_from_json(
+                &serde_json::json!({"status": "ready", "id": "worker-1", "active": true}),
+                None,
+            ),
+        );
+        assert!(details.contains("Status"));
+        assert!(details.contains("ready"));
+        assert!(details.contains("Active"));
+        assert!(details.contains("yes"));
+
+        let run = TerminalDocumentRenderer::new(ReplPreferences::default(), 80).render(
+            &document_from_json(
+                &serde_json::json!({
+                    "run_id": "run-1",
+                    "model": "openrouter/free",
+                    "output": "## Connected\n\n- yes"
+                }),
+                None,
+            ),
+        );
+        assert!(run.contains("Agent response"));
+        assert!(run.contains("Connected"));
+        assert!(run.contains("• yes"));
+        assert!(!run.contains("##"));
+    }
+
+    #[test]
+    fn comfortable_semantics_render_specialized_tool_and_error_cards() {
+        let renderer = SemanticRenderer::new(ReplPreferences::default());
+        let search = renderer
+            .run_event(&RunEvent::ToolCompleted {
+                turn: 1,
+                result: ToolResult {
+                    call_id: "call-search".into(),
+                    name: "filesystem.search".into(),
+                    output: serde_json::json!({
+                        "matches": [
+                            {"path": "src/main.rs", "line": 42, "text": "fn main()"}
+                        ]
+                    })
+                    .to_string(),
+                    exit_code: 0,
+                },
+                duration_seconds: 0.2,
+                elapsed_seconds: 0.4,
+            })
+            .expect("render search")
+            .expect("visible search");
+        assert!(search.contains("Completed filesystem.search"));
+        assert!(search.contains("src/main.rs"));
+        assert!(search.contains("fn main()"));
+        assert!(!search.contains("\"matches\""));
+
+        let pending_subagent = renderer
+            .run_event(&RunEvent::ToolCompleted {
+                turn: 1,
+                result: ToolResult {
+                    call_id: "call-agent-result".into(),
+                    name: "agent.result".into(),
+                    output: serde_json::json!({
+                        "id": "agent-1",
+                        "status": "queued",
+                        "error": ""
+                    })
+                    .to_string(),
+                    exit_code: 0,
+                },
+                duration_seconds: 0.1,
+                elapsed_seconds: 0.2,
+            })
+            .expect("render pending subagent")
+            .expect("visible pending subagent");
+        assert!(pending_subagent.contains("Pending agent.result"));
+        assert!(pending_subagent.contains("queued"));
+        assert!(!pending_subagent.contains("Failed agent.result"));
+
+        let process = renderer
+            .run_event(&RunEvent::ToolCompleted {
+                turn: 1,
+                result: ToolResult {
+                    call_id: "call-shell".into(),
+                    name: "shell.run".into(),
+                    output: serde_json::json!({"stdout": "ok\n", "stderr": "warning\n"})
+                        .to_string(),
+                    exit_code: 0,
+                },
+                duration_seconds: 0.1,
+                elapsed_seconds: 0.2,
+            })
+            .expect("render process")
+            .expect("visible process");
+        assert!(process.contains("stdout"));
+        assert!(process.contains("stderr"));
+        assert!(process.contains("warning"));
+
+        let source = renderer
+            .tool_completed_with_call(
+                1,
+                &ToolResult {
+                    call_id: "call-read".into(),
+                    name: "filesystem.read".into(),
+                    output: "fn main() {}\nprintln!(\"ready\");".into(),
+                    exit_code: 0,
+                },
+                0.1,
+                0.2,
+                Some(&ToolCall {
+                    call_id: "call-read".into(),
+                    name: "filesystem.read".into(),
+                    arguments: serde_json::json!({"path": "src/main.rs"}),
+                }),
+            )
+            .expect("render source")
+            .expect("visible source");
+        assert!(source.contains("rust · src/main.rs"));
+        assert!(source.contains("1 │ fn main() {}"));
+        assert!(source.contains("path=src/main.rs"));
+
+        let edit = renderer
+            .run_event(&RunEvent::ToolCompleted {
+                turn: 1,
+                result: ToolResult {
+                    call_id: "call-edit".into(),
+                    name: "patch.apply".into(),
+                    output: serde_json::json!({
+                        "path": "src/main.rs",
+                        "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-old\n+new"
+                    })
+                    .to_string(),
+                    exit_code: 0,
+                },
+                duration_seconds: 0.1,
+                elapsed_seconds: 0.2,
+            })
+            .expect("render edit")
+            .expect("visible edit");
+        assert!(edit.contains("Changes · src/main.rs"));
+        assert!(edit.contains("Added"));
+        assert!(edit.contains("Removed"));
+        assert!(edit.contains("+new"));
+
+        let error = renderer
+            .run_event(&RunEvent::Error {
+                code: "provider_unavailable".into(),
+                message: "Try another profile.".into(),
+                recoverable: true,
+                turn: Some(2),
+                elapsed_seconds: 1.5,
+            })
+            .expect("render error")
+            .expect("visible error");
+        assert!(error.contains("Run error"));
+        assert!(error.contains("Try another profile."));
+    }
 
     #[test]
     fn preferences_reconstruct_from_immutable_events_and_validate_schema() {
@@ -1748,11 +3619,10 @@ mod tests {
             "[work] session=session-1 tasks=0/0 decisions=0 plans=0 goals=0 agents=0"
         );
         let comfortable = SemanticRenderer::new(ReplPreferences::default());
-        assert!(
-            comfortable
-                .work_state(&state)
-                .starts_with("[work] session=session-1")
-        );
+        let rendered = comfortable.work_state(&state);
+        assert!(rendered.contains("Current work"));
+        assert!(rendered.contains("session-1"));
+        assert!(rendered.contains("No active tasks or goals."));
     }
 
     #[test]
@@ -1763,14 +3633,14 @@ mod tests {
             show_reasoning: true,
             ..ReplPreferences::default()
         });
-        assert_eq!(
-            renderer
-                .provider_event(&ProviderEvent::ReasoningSummary {
-                    summary: "safe summary".into(),
-                })
-                .expect("reasoning"),
-            Some("THINKING: safe summary".into())
-        );
+        let reasoning = renderer
+            .provider_event(&ProviderEvent::ReasoningSummary {
+                summary: "safe summary".into(),
+            })
+            .expect("reasoning")
+            .expect("visible reasoning");
+        assert!(reasoning.contains("Thinking"));
+        assert!(reasoning.contains("safe summary"));
         assert_eq!(
             renderer
                 .provider_event(&ProviderEvent::ToolCallRequested {
@@ -1821,6 +3691,20 @@ mod tests {
     #[test]
     fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
         let renderer = SemanticRenderer::new(ReplPreferences::default());
+        let input_wait = renderer
+            .run_event(&RunEvent::ToolStarted {
+                turn: 1,
+                call: ToolCall {
+                    call_id: "call-user-ask".into(),
+                    name: "user.ask".into(),
+                    arguments: serde_json::json!({"question": "What should I remember?"}),
+                },
+                elapsed_seconds: 0.25,
+            })
+            .expect("render input wait")
+            .expect("visible input wait");
+        assert_eq!(input_wait, "[input] user.ask waiting for your answer");
+
         for (name, label) in [
             ("filesystem.read", "[file]"),
             ("shell.run", "[shell]"),
@@ -1865,8 +3749,9 @@ mod tests {
             })
             .expect("render")
             .expect("visible");
-        assert!(completed.contains("duration=1.25s"));
-        assert!(completed.contains("path=README.md"));
+        assert!(completed.contains("Duration"));
+        assert!(completed.contains("1.25s"));
+        assert!(completed.contains("README.md"));
 
         let quiet = SemanticRenderer::new(ReplPreferences {
             events_mode: EventDisplayMode::Off,
@@ -1905,7 +3790,7 @@ mod tests {
             })
             .expect("error")
             .expect("visible error");
-        assert!(recoverable.contains("status=recoverable_error"));
+        assert!(recoverable.contains("recoverable error"));
         let phase = quiet
             .run_event(&RunEvent::Phase {
                 phase: RunPhase::WaitingForModel,
@@ -2193,6 +4078,92 @@ bold = true
         let preview = library.preview("ember").expect("preview ember");
         assert_eq!(preview.base, ThemeName::Carrot);
         assert_eq!(preview.spinner, colossus_contracts::ThemeSpinner::Aesthetic);
+    }
+
+    #[test]
+    fn theme_library_status_is_a_readable_semantic_view() {
+        let directory = tempdir().expect("directory");
+        let themes = directory.path().join("themes");
+        fs::create_dir(&themes).expect("themes");
+        let library = ThemeLibrary::load(std::slice::from_ref(&themes)).expect("library");
+
+        let rendered = TerminalDocumentRenderer::new(ReplPreferences::default(), 160)
+            .render(&library.status_document("default"));
+
+        assert!(rendered.contains("Themes"));
+        assert!(rendered.contains("Active theme: default"));
+        assert!(rendered.contains("Active"));
+        assert!(rendered.contains("high_contrast"));
+        assert!(rendered.contains("Built-in"));
+        assert!(rendered.contains("Custom theme search locations"));
+        assert!(rendered.contains(&themes.display().to_string()));
+        assert!(!rendered.contains("{\"names\""));
+        assert!(!rendered.contains("\u{1b}["));
+    }
+
+    #[test]
+    fn every_builtin_theme_preview_is_visual_bounded_and_ansi_safe() {
+        let library = ThemeLibrary::default();
+        for name in ["default", "mono", "high_contrast", "carrot", "hacker"] {
+            let preferences = library
+                .preview_preferences(name, &ReplPreferences::default())
+                .expect("preview preferences");
+            let document = library.preview_document(name).expect("preview document");
+            for width in [60, 80, 120, 160] {
+                let rendered =
+                    TerminalDocumentRenderer::new(preferences.clone(), width).render(&document);
+                assert!(rendered.contains("theme preview"), "{name}:\n{rendered}");
+                assert!(rendered.contains(name), "{name}:\n{rendered}");
+                assert!(rendered.contains("Colossus 019f-theme"));
+                assert!(rendered.contains("Approval required"));
+                assert!(rendered.contains("Needs attention"));
+                assert!(rendered.contains("human-first terminal output"));
+                assert!(!rendered.contains("\u{1b}["));
+                assert!(
+                    rendered.lines().all(|line| display_width(line) <= width),
+                    "{name} exceeded width {width}:\n{rendered}"
+                );
+            }
+            let colored = TerminalDocumentRenderer::new(preferences, 100)
+                .with_color(true)
+                .render(&document);
+            if name == "mono" {
+                assert!(!colored.contains("38;2;"));
+            } else {
+                assert!(colored.contains("38;2;"), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn theme_scaffold_is_strict_valid_and_does_not_write_the_suggested_file() {
+        let directory = tempdir().expect("directory");
+        let themes = directory.path().join("themes");
+        fs::create_dir(&themes).expect("themes");
+        let library = ThemeLibrary::load(std::slice::from_ref(&themes)).expect("library");
+        let scaffold = library.scaffold("Night-Sky").expect("scaffold");
+        let suggested = scaffold.suggested_path.clone().expect("suggested path");
+        assert_eq!(scaffold.name, "night_sky");
+        assert_eq!(suggested, themes.join("night_sky.toml"));
+        assert!(!suggested.exists());
+        assert!(scaffold.content.contains("schemaVersion = 1"));
+        assert!(scaffold.content.contains("name = \"night_sky\""));
+
+        fs::write(&suggested, &scaffold.content).expect("write test scaffold");
+        let reloaded = ThemeLibrary::load(std::slice::from_ref(&themes)).expect("valid scaffold");
+        assert!(reloaded.names().contains(&"night_sky".into()));
+        assert!(library.scaffold("default").is_err());
+    }
+
+    #[test]
+    fn bundled_ocean_example_remains_a_valid_custom_theme() {
+        let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("examples/themes");
+        let library = ThemeLibrary::load(&[examples]).expect("example theme library");
+        let ocean = library.preview("ocean").expect("ocean example");
+        assert_eq!(ocean.base, ThemeName::Default);
+        assert_eq!(ocean.title, "Colossus Ocean");
     }
 
     #[test]

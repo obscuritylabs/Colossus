@@ -482,6 +482,9 @@ sandbox:
         &["memories", "supersede", memory_id, "worker IPC replacement"],
     );
     assert!(superseded.status.success());
+    let superseded: Value =
+        serde_json::from_slice(&superseded.stdout).expect("superseded memory JSON");
+    assert_eq!(superseded[1]["text"], "worker IPC replacement");
 
     let research = run(
         binary,
@@ -552,7 +555,7 @@ sandbox:
         binary,
         &config,
         &["repl", "--session", session_id],
-        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/theme preview ocean\n/theme ocean\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/repl prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n1\n/session show\n/exit\n",
+        "/theme mono\n/theme carrot\n/theme hacker\n/theme high-contrast\n/theme preview ocean\n/theme validate\n/theme scaffold midnight\n/theme ocean\n/theme\np 5\n\n/events off\n/transcript compact\n/stream off\n/reasoning off\n/multiline on\n/stream invalid\n/repl prefs\n/sessions\n/work\ntasks-through-worker\n/tasks\n/decisions\n/plans\n/goals\n/agents\n/agents drain\n/memories\n/memory search worker\n/research list\n/telemetry\n/telemetry metrics\n/skills\n/packs list\n/packs trust list\n/integrations\n/mcp servers\n/mcp tools\n/context status\n/context list\n/workflow list\n/audit verify\n/projection status\n/tools\n/session show\n/resume 5\n/session\n/session resume\n1\n/session show\n/exit\n",
     );
     assert!(
         repl.status.success(),
@@ -564,13 +567,21 @@ sandbox:
     let repl_stderr = String::from_utf8_lossy(&repl.stderr);
     assert!(repl_stdout.contains("Colossus Rust REPL via authenticated worker"));
     assert!(repl_stdout.contains(session_id));
-    assert!(repl_stdout.contains("worker IPC replacement"));
     assert!(repl_stdout.contains("[work] session="));
     assert!(repl_stdout.contains("[context] session="));
     assert!(repl_stdout.contains("tasks-through-worker"));
-    assert!(repl_stdout.contains(r#""stream_mode": "off""#));
-    assert!(repl_stdout.contains(r#""name": "ocean""#));
-    assert!(repl_stdout.contains(r#""sourceHash": ""#));
+    assert!(repl_stdout.contains("Stream mode"));
+    assert!(repl_stdout.contains("off"));
+    assert!(repl_stdout.contains("Name"));
+    assert!(repl_stdout.contains("ocean"));
+    assert!(repl_stdout.contains("Source hash"));
+    assert!(repl_stdout.contains("Active theme: ocean"));
+    assert!(repl_stdout.contains("Custom theme search locations"));
+    assert!(repl_stdout.contains("Hacker theme preview"));
+    assert!(repl_stdout.contains("Theme library valid"));
+    assert!(repl_stdout.contains("Custom theme scaffold: midnight"));
+    assert!(repl_stdout.contains("does not write this file"));
+    assert!(!repl_stdout.contains("{\"names\""));
     assert!(repl_stdout.contains("recoverable: invalid presentation command"));
     assert!(repl_stdout.contains("global_sequence"));
     assert!(!repl_stdout.contains("not yet available through worker IPC"));
@@ -753,7 +764,7 @@ steps:
         binary,
         &config,
         &["repl", "--session", session_id],
-        "/repl reset\n/session show\n/work\n/exit\n",
+        "/repl reset\n/session show\n/session resume\n/session\n/session bogus\n/work\n/exit\n",
     );
     assert!(
         embedded_repl.status.success(),
@@ -762,7 +773,8 @@ steps:
     );
     let embedded_stdout = String::from_utf8_lossy(&embedded_repl.stdout);
     assert!(embedded_stdout.contains(session_id));
-    assert!(embedded_stdout.contains("[work] session="));
+    assert!(embedded_stdout.contains("Current work"));
+    assert!(embedded_stdout.contains("unknown REPL command: /session bogus"));
 
     let embedded_history = run(
         binary,

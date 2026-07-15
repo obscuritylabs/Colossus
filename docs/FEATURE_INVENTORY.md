@@ -124,6 +124,7 @@ inspect hashes, audit records, and package contents without network access.
 | SAFE-01 | Policy and approval modes | P0 | `deny`, `ask`, `risk-auto`, and `full-access` preserve exact safety semantics. |
 | STATE-01 | Durable sessions and run history | P0 | Sessions and events survive restarts and can be resumed. |
 | UX-01 | One-shot CLI and interactive REPL | P0 | Both surfaces use the same application behavior and event stream. |
+| UX-02 | Human-first terminal presentation | P1 | Interactive CLI and REPL surfaces restore the Python 0.5 semantic cards, Markdown, tables, guided choices, completion, and transcript behavior without weakening structured automation output. |
 | CTX-01 | Context composition and compaction | P1 | Raw history is retained while provider input stays within budget. |
 | WORK-01 | Tasks, decisions, memories, and plans | P1 | Long-running work state is persisted and inspectable. |
 | MEM-01 | Canonical memory and disposable indexes | P1 | Memory lifecycle state remains authoritative and usable while lexical or semantic indexes lag or rebuild. |
@@ -641,6 +642,8 @@ Required statuses are `queued`, `running`, `completed`, `failed`, `cancelled`, a
   context, state, and audit paths.
 - Child tool catalogs MUST remove nested delegation to prevent recursive job trees.
 - Queued jobs are scheduled only while capacity is available.
+- Successful foreground `agent.delegate` calls wake the bounded scheduler so
+  `agent.result` can receive the completed child output during the same parent turn.
 - Running jobs left by a stopped process are marked interrupted at startup.
 - Failed, cancelled, and interrupted jobs can be requeued; completed jobs cannot.
 - Users can list jobs, inspect queue status and result previews, drain with an optional
@@ -809,11 +812,31 @@ fields, duplicate identities, and built-in name collisions. Selecting a custom t
 MUST persist the fully resolved palette and source hash so later source mutation or
 deletion cannot silently change the reconstructed preference. Embedded and worker REPLs
 MUST expose identical list, preview, selection, restart, and ANSI-free redirected-output
-behavior.
+behavior. The interactive theme library MUST render as an intentional theme table with
+the active selection and readable custom-theme search locations, never as nested JSON.
+It MUST support a numbered picker, non-mutating full semantic previews, dynamic theme-name
+completion, and theme-aware ghost text. Direct selection saves immediately. Scaffolding
+MUST emit a strict template without writing from the interface, and validation MUST report
+the already loaded bounded library.
 
 ### 18.4 Rendering
 
 - Compact, verbose, and off event modes are supported.
+- Interactive terminal output is human-first. Stable JSON remains available explicitly
+  and remains the automatic format for redirected machine output, but an interactive
+  command MUST NOT dump raw JSON unless the operator requests it.
+- Assistant answers, plans, research reports, and released child-agent output render as
+  bounded terminal Markdown. Buffered Markdown renders only after a complete released
+  answer; raw streaming remains available as an explicit preference.
+- List surfaces use width-aware semantic tables, single-record surfaces use labeled
+  detail cards, and empty states explain the result instead of printing `[]` or `null`.
+- Semantic presentation preserves the useful Python 0.5 behavior at
+  `python-v0.5.0`: file/source previews with line numbers, styled diffs, separated
+  process stdout/stderr, Git status, work/context/repository/skill/research/integration
+  summaries, approval/risk/error cards, and bounded generic fallback output.
+- `/help` is grouped and includes current display state. Slash commands and active skill
+  mentions are discoverable through completion; session and user-input choices use
+  guided labeled selection while exact IDs and free-form answers remain available.
 - Assistant output can stream without corrupting prompt input or semantic event output.
 - Tool results use semantic renderers for files, shell, git, work state, context, repo,
   skills, web/search, MCP, traces, integrations, packs, and generic structured output.
@@ -822,6 +845,9 @@ behavior.
 - Safe reasoning summaries can be toggled independently from tool/activity events.
 - Errors clearly identify whether they are recoverable.
 - Long-running activity shows current phase/action and elapsed time.
+- `user.ask` pauses only the current foreground agent turn, renders a stable input card
+  with answer/cancellation guidance, and MUST NOT continue repainting an activity spinner
+  over the operator's input. Durable non-blocking waits use workflow `wait_for_input`.
 - Interactive prompts show a 1-based cursor line/column and Unicode-aware draft
   character/line counts without per-keystroke application, worker, policy, or journal
   operations.
@@ -1021,12 +1047,19 @@ the resulting signed evidence and six native archives.
   atomically consumes each approved plan exactly once through either a fixed-id direct
   agent run or a plan-linked Goal Mode run.
 - [x] Goal Mode stops correctly on complete, blocked, error, or budget exhaustion.
-- [x] Subagents respect configured concurrency, cannot delegate recursively, and can be
-  cancelled or resumed after interruption.
+- [x] Subagents respect configured concurrency, cannot delegate recursively, wake the
+  scheduler during foreground model delegation, return completed results to the same
+  parent turn, and can be cancelled or resumed after interruption.
 - [x] Research records planned queries, lane decisions, source labels, worker progress,
   citations, synthesis choice, and limitations.
 - [x] Compact and verbose renderers cover every normalized run/provider event variant and
   every built-in tool in the strict catalog, including redirected ANSI-free acceptance.
+- [x] UX-02 restores the Python 0.5 human terminal contract: terminal Markdown, semantic
+  cards, source/diff/process previews, list/detail tables, grouped stateful help, slash and
+  skill completion, guided choices, comfortable/compact transcripts, and embedded/worker
+  parity. Interactive output contains no raw JSON by default; explicit or redirected JSON
+  remains stable, bounded, redacted, and ANSI-free. The executable parity matrix is
+  documented in [Terminal UX](TERMINAL_UX.md).
 - [x] Embedded and worker REPL history has bounded hydration, encrypted permit-bound
   persistence, restart parity, consecutive deduplication, and redacted audit envelopes.
 - [x] Built-in theme palettes cover prompt, assistant, semantic event, and activity-frame

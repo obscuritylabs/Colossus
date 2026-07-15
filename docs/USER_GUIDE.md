@@ -16,9 +16,18 @@ colossus --config .colossus/config.yaml run --role research_worker \
   "Collect repository evidence"
 ```
 
-`run` prints a stable JSON result. `--stream` writes policy-released deltas and events to
-stderr while preserving JSON on stdout. Every run creates or attaches to a durable
-session and records the provider/effect lifecycle in the encrypted journal.
+On a terminal, `run` renders a human response card with Markdown. When stdout is piped or
+redirected, it emits the stable JSON result used by automation. `--stream` writes
+policy-released deltas and events to stderr while preserving the selected result format
+on stdout. Every run creates or attaches to a durable session and records the
+provider/effect lifecycle in the encrypted journal.
+
+Override output selection globally when needed:
+
+```bash
+colossus --output human tools list
+colossus --output json sessions list | jq .
+```
 
 Global approval mode precedes the subcommand:
 
@@ -61,12 +70,42 @@ Useful commands include:
 /exit
 ```
 
+`/resume` opens a numbered session picker. Enter a listed number or exact ID, leave the
+line blank to cancel, or enter another slash command to leave the picker and run that
+command. The right-side REPL status automatically collapses as the prompt grows so it
+does not overwrite typed input in narrower terminals.
+
+The REPL displays fish-style inline type-ahead from prior prompts, slash commands, theme
+names, and installed `@skills`. Suggestions use each theme's low-emphasis color plus dim
+italic styling so typed text and the cursor position remain clear. Press Right Arrow to
+accept the full suggestion, or press Tab to open the complete matching command, theme,
+or skill menu. The
+`/session resume` command opens the same picker as `/resume`; unknown slash commands stay
+inside the REPL and are never sent to the model.
+
+When the agent uses `user.ask`, the current foreground turn pauses while the input card
+is visible. Type an answer and press Enter, or submit a blank line to cancel the question.
+The REPL resumes after the tool result returns to the model. Use a workflow
+`wait_for_input` step when the run must wait durably without occupying the foreground
+REPL turn.
+
+`/help` is grouped by task, and Tab completes slash commands and installed `@skill`
+names. Put one or more known skill names at the beginning of a message to apply them to
+that turn, for example `@repo-review Review the current changes`.
+
+Slash commands render human tables/cards by default, including explicit empty states.
+Start the REPL with `--output json` only when diagnostic JSON is intentionally needed.
+
 Presentation is local durable state, not model context:
 
 ```text
 /theme
-/theme preview ocean
-/theme save ocean
+/theme list
+/theme hacker
+/theme preview high_contrast
+/theme validate
+/theme scaffold night_sky
+/theme reset
 /events compact
 /stream on
 /reasoning off
@@ -75,8 +114,22 @@ Presentation is local durable state, not model context:
 /repl save
 ```
 
+Normal `stream=on` responses are buffered and rendered as Markdown; `stream=raw` emits
+provider text immediately, and `stream=off` suppresses intermediate stream output.
 Redirected output remains control-sequence-free. REPL history and preferences are
 encrypted journal records.
+
+`/theme` opens a numbered picker. Enter a number or theme name to apply and save it,
+enter `p NUMBER` to inspect the complete prompt/Markdown/tool/approval/error/diff sample,
+or leave the line blank to cancel. `/theme NAME` is the direct form and also saves
+immediately; a separate save command is unnecessary.
+
+Custom themes are strict JSON or TOML files. `/theme scaffold NAME` prints a validated
+TOML starter and its suggested config-adjacent path without writing a file from the
+terminal interface. The bundled [Ocean example](../examples/themes/ocean.toml) can also
+be copied into `.colossus/themes/`. Restart Colossus after adding a file, then run
+`/theme validate` before selecting it. Theme loading rejects unknown fields, invalid
+colors, oversized libraries, symlinks, duplicate names, and built-in name collisions.
 
 ## Sessions And Context
 
@@ -134,6 +187,12 @@ colossus --config .colossus/config.yaml agents drain
 Goal iterations and subagent turns reuse the ordinary provider, tool, policy, context,
 and journal services. Interrupted effects become unknown; they are never silently
 replayed.
+
+When a model calls `agent.delegate`, Colossus wakes the bounded scheduler immediately.
+The child runs through the configured `subagent_default` role, and the parent can read
+its completed output with `agent.result` before answering. Manually queued jobs continue
+to wait for `agents drain` or a worker drain. A queued/running result is displayed as
+pending rather than failed.
 
 ## Memories
 

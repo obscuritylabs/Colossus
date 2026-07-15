@@ -23,6 +23,7 @@ retained on `python-v0.5.0` and `python-legacy`.
 - [Skills](SKILLS.md)
 - [Packs](PACKS.md)
 - [Context Compaction](CONTEXT.md)
+- [Terminal UX](TERMINAL_UX.md)
 - [Offline and Airgapped Operation](OFFLINE_AIRGAP.md)
 - [Offline Bundle Format](BUNDLE_FORMAT.md)
 
