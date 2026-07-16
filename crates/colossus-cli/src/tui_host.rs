@@ -993,9 +993,48 @@ impl EmbeddedInteractiveHost {
                 Some("Workflow schedule dispatches"),
             );
         }
+        if arguments == "webhook list" {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .list_webhooks(100)
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow webhooks"),
+            );
+        }
+        if let Some(webhook_id) = arguments.strip_prefix("webhook show ") {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .get_webhook(webhook_id.trim())
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow webhook"),
+            );
+        }
+        if let Some(webhook_id) = arguments.strip_prefix("webhook enable ") {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .set_webhook_enabled(webhook_id.trim(), true)
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow webhook enabled"),
+            );
+        }
+        if let Some(webhook_id) = arguments.strip_prefix("webhook disable ") {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .set_webhook_enabled(webhook_id.trim(), false)
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow webhook disabled"),
+            );
+        }
         Err(
-            "/workflow expects list, status RUN_ID, or schedule list|show|enable|disable|tick"
-                .into(),
+            "/workflow expects list, status RUN_ID, schedule list|show|enable|disable|tick, or webhook list|show|enable|disable".into(),
         )
     }
 
@@ -1824,8 +1863,24 @@ impl WorkerInteractiveHost {
                     }
                 } else if arguments == "schedule tick" {
                     WorkerOperation::WorkflowScheduleTick { at: None }
+                } else if arguments == "webhook list" {
+                    WorkerOperation::WorkflowWebhookList { limit: 100 }
+                } else if let Some(webhook_id) = arguments.strip_prefix("webhook show ") {
+                    WorkerOperation::WorkflowWebhookShow {
+                        webhook_id: webhook_id.trim().into(),
+                    }
+                } else if let Some(webhook_id) = arguments.strip_prefix("webhook enable ") {
+                    WorkerOperation::WorkflowWebhookSetEnabled {
+                        webhook_id: webhook_id.trim().into(),
+                        enabled: true,
+                    }
+                } else if let Some(webhook_id) = arguments.strip_prefix("webhook disable ") {
+                    WorkerOperation::WorkflowWebhookSetEnabled {
+                        webhook_id: webhook_id.trim().into(),
+                        enabled: false,
+                    }
                 } else {
-                    return Err("/workflow expects list, status RUN_ID, or schedule list|show|enable|disable|tick".into());
+                    return Err("/workflow expects list, status RUN_ID, schedule list|show|enable|disable|tick, or webhook list|show|enable|disable".into());
                 };
                 self.document(operation, Some("Workflow")).await
             }

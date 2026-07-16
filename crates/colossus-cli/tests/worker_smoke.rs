@@ -1,6 +1,8 @@
 //! Cross-process single-writer worker and authenticated local IPC acceptance.
 
+use hmac::{Hmac, Mac as _};
 use serde_json::Value;
+use sha2::Sha256;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::{
@@ -15,6 +17,7 @@ use tempfile::tempdir;
 
 const JOURNAL_KEY: &str = "5555555555555555555555555555555555555555555555555555555555555555";
 const SIGNING_KEY: &str = "6666666666666666666666666666666666666666666666666666666666666666";
+const WEBHOOK_SECRET: &str = "worker-webhook-secret-with-at-least-thirty-two-bytes";
 #[cfg(not(windows))]
 const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(windows)]
@@ -42,11 +45,28 @@ fn command(binary: &Path, config: &Path) -> Command {
         .arg(config)
         .env("COLOSSUS_WORKER_TEST_JOURNAL_KEY", JOURNAL_KEY)
         .env("COLOSSUS_WORKER_TEST_SIGNING_KEY", SIGNING_KEY)
+        .env("COLOSSUS_WORKER_TEST_WEBHOOK_SECRET", WEBHOOK_SECRET)
         .env(
             "COLOSSUS_THEME_DIR",
             config.parent().expect("config parent").join("themes"),
         );
     command
+}
+
+fn webhook_timestamp() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("webhook timestamp")
+}
+
+fn webhook_signature(timestamp: &str, delivery_id: &str, body: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(WEBHOOK_SECRET.as_bytes()).expect("HMAC key");
+    mac.update(timestamp.as_bytes());
+    mac.update(b"\n");
+    mac.update(delivery_id.as_bytes());
+    mac.update(b"\n");
+    mac.update(body.as_bytes());
+    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
 
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
@@ -172,7 +192,7 @@ storage:
     anchor_path: {anchor}
 policy:
   kind: built_in
-  allow_actions: [filesystem.read, process.spawn, research.run, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.update, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild]
+  allow_actions: [filesystem.read, process.spawn, research.run, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.update, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, workflow.webhook.ingest]
   approval_actions: [plan.approve_request]
   require_post_effect: true
 workflows:
@@ -659,7 +679,6 @@ metadata:
   description: Worker IPC smoke
 inputs:
   type: object
-  required: [message]
   properties:
     message: { type: string }
 outputs:
@@ -686,6 +705,103 @@ steps:
     );
     let registered: Value = serde_json::from_slice(&registered.stdout).expect("registered JSON");
     assert_eq!(registered["registered"], true);
+
+    let worker_webhook = run(
+        binary,
+        &config,
+        &[
+            "workflow",
+            "webhook",
+            "create",
+            "worker-smoke",
+            "smoke",
+            "1.0.0",
+            "--secret-reference",
+            "env:COLOSSUS_WORKER_TEST_WEBHOOK_SECRET",
+        ],
+    );
+    assert!(
+        worker_webhook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&worker_webhook.stderr)
+    );
+    let worker_webhook: Value =
+        serde_json::from_slice(&worker_webhook.stdout).expect("worker webhook JSON");
+    assert_eq!(worker_webhook["webhook_id"], "worker-smoke");
+    assert_eq!(worker_webhook["enabled"], true);
+
+    let disabled = run(
+        binary,
+        &config,
+        &["workflow", "webhook", "disable", "worker-smoke"],
+    );
+    assert!(disabled.status.success());
+    let disabled: Value = serde_json::from_slice(&disabled.stdout).expect("disabled webhook JSON");
+    assert_eq!(disabled["enabled"], false);
+    let enabled = run(
+        binary,
+        &config,
+        &["workflow", "webhook", "enable", "worker-smoke"],
+    );
+    assert!(enabled.status.success());
+
+    let worker_timestamp = webhook_timestamp();
+    let worker_delivery_id = "worker-delivery-1";
+    let worker_body = r#"{"message":"worker webhook"}"#;
+    let worker_signature = webhook_signature(&worker_timestamp, worker_delivery_id, worker_body);
+    let worker_delivery = run(
+        binary,
+        &config,
+        &[
+            "workflow",
+            "webhook",
+            "ingest",
+            "worker-smoke",
+            "--delivery-id",
+            worker_delivery_id,
+            "--timestamp",
+            &worker_timestamp,
+            "--signature",
+            &worker_signature,
+            "--header",
+            "x-source=worker-smoke",
+            "--body",
+            worker_body,
+        ],
+    );
+    assert!(
+        worker_delivery.status.success(),
+        "{}",
+        String::from_utf8_lossy(&worker_delivery.stderr)
+    );
+    let worker_delivery: Value =
+        serde_json::from_slice(&worker_delivery.stdout).expect("worker delivery JSON");
+    assert_eq!(
+        worker_delivery["delivery"]["delivery_id"],
+        worker_delivery_id
+    );
+    assert_eq!(worker_delivery["run"]["status"], "queued");
+    let replay = run(
+        binary,
+        &config,
+        &[
+            "workflow",
+            "webhook",
+            "ingest",
+            "worker-smoke",
+            "--delivery-id",
+            worker_delivery_id,
+            "--timestamp",
+            &worker_timestamp,
+            "--signature",
+            &worker_signature,
+            "--body",
+            worker_body,
+        ],
+    );
+    assert!(!replay.status.success());
+    assert!(String::from_utf8_lossy(&replay.stderr).contains("already accepted"));
+
     let workflow_run = run(
         binary,
         &config,
@@ -782,11 +898,68 @@ steps:
         })
     }));
     assert!(!audit_text.contains("tasks-through-worker"));
+    assert!(!audit_text.contains(WEBHOOK_SECRET));
+    assert!(!audit_text.contains(&worker_signature));
 
     let embedded = run(binary, &config, &["run", "embedded-fallback"]);
     assert!(embedded.status.success());
     let embedded: Value = serde_json::from_slice(&embedded.stdout).expect("fallback JSON");
     assert_eq!(embedded["output"], "embedded-fallback");
+
+    let embedded_webhook = run(
+        binary,
+        &config,
+        &[
+            "workflow",
+            "webhook",
+            "create",
+            "embedded-smoke",
+            "smoke",
+            "1.0.0",
+            "--secret-reference",
+            "env:COLOSSUS_WORKER_TEST_WEBHOOK_SECRET",
+        ],
+    );
+    assert!(
+        embedded_webhook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&embedded_webhook.stderr)
+    );
+    let embedded_timestamp = webhook_timestamp();
+    let embedded_delivery_id = "embedded-delivery-1";
+    let embedded_body = r#"{"message":"embedded webhook"}"#;
+    let embedded_signature =
+        webhook_signature(&embedded_timestamp, embedded_delivery_id, embedded_body);
+    let embedded_delivery = run(
+        binary,
+        &config,
+        &[
+            "workflow",
+            "webhook",
+            "ingest",
+            "embedded-smoke",
+            "--delivery-id",
+            embedded_delivery_id,
+            "--timestamp",
+            &embedded_timestamp,
+            "--signature",
+            &embedded_signature,
+            "--body",
+            embedded_body,
+        ],
+    );
+    assert!(
+        embedded_delivery.status.success(),
+        "{}",
+        String::from_utf8_lossy(&embedded_delivery.stderr)
+    );
+    let embedded_delivery: Value =
+        serde_json::from_slice(&embedded_delivery.stdout).expect("embedded delivery JSON");
+    assert_eq!(
+        embedded_delivery["delivery"]["delivery_id"],
+        embedded_delivery_id
+    );
+    assert_eq!(embedded_delivery["run"]["status"], "queued");
 
     let embedded_terminal = run_with_input(
         binary,

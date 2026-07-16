@@ -44,8 +44,10 @@ and the ordinary Rust formatting, Clippy, and workspace test gates.
   enable/disable state, skip/fire-once misfire behavior, deterministic next-fire and run
   identity, atomic schedule/run queueing, worker/embedded routing, and process-kill
   recovery.
-- Add authenticated webhook ingestion whose body, headers, size, replay window, and
-  workflow binding cross the ordinary effect/policy/audit boundary.
+- **Complete:** authenticated HMAC-SHA256 webhook bindings with late credential
+  resolution, bounded body/header/replay validation, exact-delivery idempotency,
+  definition-hash trust, ordinary effect/policy/audit routing, atomic delivery/run
+  queueing, worker/embedded parity, and a loopback-only HTTP adapter.
 - Add repository/event subscriptions with durable cursor/checkpoint state and explicit
   at-least-once delivery plus workflow idempotency behavior.
 - Route trigger-created runs through the existing queue, definition-hash pinning,

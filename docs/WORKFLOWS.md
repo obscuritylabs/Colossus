@@ -121,6 +121,70 @@ one-second coordinated drain; `worker --once` does the same once. The explicit
 `workflow schedule tick` command only evaluates and queues due runs, leaving execution
 to the ordinary worker or workflow drain path.
 
+## Authenticated Webhooks
+
+Webhooks bind an identifier and late-resolved HMAC secret reference to an exact
+registered workflow hash. The referenced environment variable must contain at least 32
+bytes; its value is never stored in configuration or the journal.
+
+```bash
+export COLOSSUS_RELEASE_WEBHOOK_SECRET='replace-with-at-least-32-random-bytes'
+colossus --config .colossus/config.yaml workflow webhook create release-hook \
+  release 1.0.0 --secret-reference env:COLOSSUS_RELEASE_WEBHOOK_SECRET \
+  --replay-window-seconds 300 --max-body-bytes 65536
+colossus --config .colossus/config.yaml workflow webhook list
+colossus --config .colossus/config.yaml workflow webhook show release-hook
+colossus --config .colossus/config.yaml workflow webhook disable release-hook
+colossus --config .colossus/config.yaml workflow webhook enable release-hook
+```
+
+The sender signs these exact bytes with HMAC-SHA256:
+
+```text
+TIMESTAMP + "\n" + DELIVERY_ID + "\n" + EXACT_RAW_JSON_BODY
+```
+
+The signature is lowercase hexadecimal, optionally prefixed by `sha256=`. Timestamp is
+UTC RFC3339 with `Z`; a delivery identifier can be accepted only once. To exercise the
+same ingress path without HTTP:
+
+```bash
+colossus --config .colossus/config.yaml workflow webhook ingest release-hook \
+  --delivery-id delivery-0001 --timestamp 2026-08-01T02:00:00Z \
+  --signature 'sha256=LOWERCASE_HEX_HMAC' --header x-event=release \
+  --body '{"branch":"main"}'
+```
+
+Webhook runs receive an envelope rather than the raw body as their top-level input:
+
+```json
+{
+  "body": {"branch": "main"},
+  "delivery_id": "delivery-0001",
+  "headers": {"x-event": "release"},
+  "timestamp": "2026-08-01T02:00:00Z"
+}
+```
+
+The workflow input schema must declare or otherwise allow that envelope. Authentication,
+replay, body/header bounds, definition trust, and schema validation occur before the
+ordinary `workflow.webhook.ingest` policy request. Acceptance and its deterministic
+queued run commit atomically; execution still follows the normal worker queue and every
+effect inside the workflow remains independently authorized.
+
+For a trusted local reverse proxy, run the bounded loopback listener:
+
+```bash
+colossus --config .colossus/config.yaml workflow webhook serve \
+  --bind 127.0.0.1:8787
+```
+
+Send POST requests to `/v1/workflow-webhooks/WEBHOOK_ID` with `Content-Length`,
+`X-Colossus-Delivery-Id`, `X-Colossus-Timestamp`, and `X-Colossus-Signature` headers.
+The listener deliberately has no public bind, TLS, chunked transfer, or rate limiter;
+deploy those at the reverse proxy. It automatically routes through the authenticated
+worker when one is active and otherwise uses the embedded runtime.
+
 ## Worker Execution
 
 ```bash

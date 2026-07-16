@@ -23,7 +23,7 @@ use colossus_contracts::{
     SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
     SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
     SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall,
-    ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
+    ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -2125,6 +2125,7 @@ impl Runtime {
                     "patch.preview",
                     "presentation.preferences.update",
                     "presentation.history.append",
+                    "workflow.webhook.ingest",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
@@ -3317,6 +3318,43 @@ impl Runtime {
     /// Exact workflow definition repository for list/show surfaces.
     pub fn workflow_repository(&self) -> Arc<dyn WorkflowRepository> {
         Arc::clone(&self.workflow_repository)
+    }
+
+    /// Resolve a persisted webhook credential reference at the last responsible moment and ingest.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ingest_workflow_webhook(
+        &self,
+        webhook_id: &str,
+        delivery_id: &str,
+        timestamp: &str,
+        signature: &str,
+        headers: BTreeMap<String, String>,
+        body: &[u8],
+    ) -> Result<WorkflowWebhookDispatch, RuntimeError> {
+        let webhook = self.workflows.get_webhook(webhook_id)?;
+        let variable = webhook
+            .secret_reference
+            .strip_prefix("env:")
+            .ok_or_else(|| {
+                RuntimeError::Config("webhook credential reference is invalid".into())
+            })?;
+        let secret = std::env::var(variable).map_err(|_| {
+            RuntimeError::Config(format!(
+                "webhook credential environment variable {variable} is unavailable"
+            ))
+        })?;
+        self.workflows
+            .ingest_webhook(
+                webhook_id,
+                delivery_id,
+                timestamp,
+                signature,
+                headers,
+                body,
+                secret.as_bytes(),
+            )
+            .await
+            .map_err(Into::into)
     }
 
     /// Current session snapshots served by the disposable session projection.
@@ -9788,7 +9826,10 @@ impl EffectExecutor for WorkflowControlExecutor {
         request: &EffectRequest,
         _permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        if request.action != "workflow.start" {
+        if !matches!(
+            request.action.as_str(),
+            "workflow.start" | "workflow.webhook.ingest"
+        ) {
             return Err(ExecutionError::Failed(
                 "workflow control executor received an unsupported action".into(),
             ));
@@ -9829,6 +9870,7 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
         );
         request.capabilities = vec!["workflow.execute".into()];
         request.idempotency_id = effect.idempotency;
+        request.credential_references = effect.credential_references;
         request.context = ExecutionContext {
             correlation_id: effect.run_id.clone(),
             run_id: Some(effect.run_id.clone()),
@@ -9840,7 +9882,7 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
         };
         let executor: &dyn EffectExecutor = match request.action.as_str() {
             "provider.echo" => &EchoExecutor,
-            "workflow.start" => &WorkflowControlExecutor,
+            "workflow.start" | "workflow.webhook.ingest" => &WorkflowControlExecutor,
             _ => &UnavailableExecutor,
         };
         match self.gateway.execute(request, executor).await {
@@ -9959,6 +10001,7 @@ mod tests {
                     action: "workflow.start".into(),
                     content: json!({"workflow": "child", "version": "1.0.0", "inputs": {}}),
                     idempotency: Some(format!("call-{compensation}")),
+                    credential_references: Vec::new(),
                     run_id: "parent-run".into(),
                     step_id: if compensation {
                         "rollback-child".into()
@@ -9996,6 +10039,56 @@ mod tests {
                 "workflow-compensation-step:rollback-child"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn webhook_ingress_uses_gateway_with_a_credential_reference_only() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("workflow.webhook.ingest", DecisionOutcome::Allow),
+            ),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["workflow.execute".into()]),
+            [45_u8; 32],
+        );
+        GatewayWorkflowEffects {
+            gateway: Arc::new(gateway),
+        }
+        .run(WorkflowEffect {
+            kind: "workflow".into(),
+            action: "workflow.webhook.ingest".into(),
+            content: json!({"body_sha256": "digest", "body": {"event": "push"}}),
+            idempotency: Some("webhook:hook:delivery".into()),
+            credential_references: vec![CredentialReference {
+                reference: "env:COLOSSUS_WEBHOOK_SECRET".into(),
+                value_hash: Some("key-digest".into()),
+            }],
+            run_id: "webhook-run".into(),
+            step_id: "$webhook".into(),
+            definition_step_id: "$webhook".into(),
+            workflow_hash: "workflow-digest".into(),
+            attempt: 1,
+            compensation: false,
+        })
+        .await
+        .expect("authorized webhook ingress");
+
+        let requested = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .find(|event| event.event_type == "effect.requested.v1")
+            .expect("requested event");
+        let payload = journal.decrypt_payload(&requested).expect("payload");
+        assert_eq!(payload["action"], "workflow.webhook.ingest");
+        assert_eq!(
+            payload["credential_references"][0]["reference"],
+            "env:COLOSSUS_WEBHOOK_SECRET"
+        );
+        assert!(!payload.to_string().contains("actual-secret-value"));
     }
 
     #[tokio::test]

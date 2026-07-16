@@ -32,12 +32,15 @@ use std::{
     error::Error,
     fs,
     io::{self, BufRead, IsTerminal as _, Write as _},
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU8, Ordering},
     },
 };
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::{TcpListener, TcpStream};
 
 #[derive(Parser)]
 #[command(
@@ -169,6 +172,10 @@ const TERMINAL_COMPLETIONS: &[&str] = &[
     "/workflow schedule enable",
     "/workflow schedule disable",
     "/workflow schedule tick",
+    "/workflow webhook list",
+    "/workflow webhook show",
+    "/workflow webhook enable",
+    "/workflow webhook disable",
     "/audit verify",
     "/projection status",
     "/tools",
@@ -1041,6 +1048,11 @@ enum WorkflowAction {
         #[command(subcommand)]
         command: WorkflowScheduleAction,
     },
+    /// Create, inspect, control, or ingest authenticated workflow webhooks.
+    Webhook {
+        #[command(subcommand)]
+        command: WorkflowWebhookAction,
+    },
     /// Show a reconstructed run.
     Status { run_id: String },
     /// Resume a waiting or interrupted run.
@@ -1089,6 +1101,64 @@ enum WorkflowScheduleAction {
     Tick {
         #[arg(long)]
         at: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkflowWebhookAction {
+    /// Create a hash-pinned HMAC-SHA256 webhook binding.
+    Create {
+        webhook_id: String,
+        name: String,
+        version: String,
+        /// Late-bound HMAC secret reference, such as env:COLOSSUS_WEBHOOK_SECRET.
+        #[arg(long)]
+        secret_reference: String,
+        /// Maximum accepted signed-delivery age in seconds (60 through 3600).
+        #[arg(long, default_value_t = 300)]
+        replay_window_seconds: u64,
+        /// Maximum accepted raw JSON body size in bytes (1 through 1048576).
+        #[arg(long, default_value_t = 1024 * 1024)]
+        max_body_bytes: u64,
+        /// Create the webhook disabled.
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// List persisted webhook bindings in deterministic identifier order.
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one exact persisted webhook binding.
+    Show { webhook_id: String },
+    /// Enable one webhook after rechecking pinned workflow trust.
+    Enable { webhook_id: String },
+    /// Disable one webhook without deleting its audit history.
+    Disable { webhook_id: String },
+    /// Authenticate and durably ingest one JSON delivery.
+    Ingest {
+        webhook_id: String,
+        /// Sender-supplied replay identifier.
+        #[arg(long)]
+        delivery_id: String,
+        /// Sender-supplied signed UTC RFC3339 timestamp.
+        #[arg(long)]
+        timestamp: String,
+        /// HMAC-SHA256 signature (`sha256=<hex>`).
+        #[arg(long)]
+        signature: String,
+        /// Lowercase application HEADER=VALUE entry; repeat as needed.
+        #[arg(long = "header")]
+        headers: Vec<String>,
+        /// Inline JSON or @path to the exact JSON body bytes.
+        #[arg(long)]
+        body: String,
+    },
+    /// Serve authenticated deliveries over loopback HTTP.
+    Serve {
+        /// Loopback socket address exposed to a trusted reverse proxy.
+        #[arg(long, default_value = "127.0.0.1:8787")]
+        bind: SocketAddr,
     },
 }
 
@@ -2519,6 +2589,259 @@ fn parse_environment(entries: Vec<String>) -> Result<BTreeMap<String, String>, B
     Ok(environment)
 }
 
+fn parse_headers(entries: Vec<String>) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
+    let mut headers = BTreeMap::new();
+    for entry in entries {
+        let (name, value) = entry
+            .split_once('=')
+            .ok_or_else(|| format!("header entry must be NAME=VALUE: {entry}"))?;
+        if name.is_empty() || headers.insert(name.into(), value.into()).is_some() {
+            return Err(format!("header name is empty or duplicated: {name}").into());
+        }
+    }
+    Ok(headers)
+}
+
+const MAX_WEBHOOK_HTTP_HEADER_BYTES: usize = 64 * 1024;
+const MAX_WEBHOOK_HTTP_BODY_BYTES: usize = 1024 * 1024;
+
+struct WebhookHttpDelivery {
+    webhook_id: String,
+    delivery_id: String,
+    timestamp: String,
+    signature: String,
+    headers: BTreeMap<String, String>,
+    body: Vec<u8>,
+}
+
+enum WebhookIngressBackend<'a> {
+    Runtime(&'a Runtime),
+    Worker(&'a WorkerClient),
+}
+
+impl WebhookIngressBackend<'_> {
+    async fn ingest(&self, delivery: WebhookHttpDelivery) -> Result<Value, Box<dyn Error>> {
+        match self {
+            Self::Runtime(runtime) => Ok(serde_json::to_value(
+                runtime
+                    .ingest_workflow_webhook(
+                        &delivery.webhook_id,
+                        &delivery.delivery_id,
+                        &delivery.timestamp,
+                        &delivery.signature,
+                        delivery.headers,
+                        &delivery.body,
+                    )
+                    .await?,
+            )?),
+            Self::Worker(client) => Ok(client
+                .call(WorkerOperation::WorkflowWebhookIngest {
+                    webhook_id: delivery.webhook_id,
+                    delivery_id: delivery.delivery_id,
+                    timestamp: delivery.timestamp,
+                    signature: delivery.signature,
+                    headers: delivery.headers,
+                    body_source: String::from_utf8(delivery.body)
+                        .map_err(|_| "webhook JSON body must be UTF-8")?,
+                })
+                .await?),
+        }
+    }
+}
+
+async fn serve_workflow_webhooks(
+    bind: SocketAddr,
+    backend: WebhookIngressBackend<'_>,
+) -> Result<(), Box<dyn Error>> {
+    if !bind.ip().is_loopback() {
+        return Err("workflow webhook listener must bind to a loopback address".into());
+    }
+    let listener = TcpListener::bind(bind).await?;
+    eprintln!(
+        "workflow webhook listener ready on http://{}/v1/workflow-webhooks/WEBHOOK_ID",
+        listener.local_addr()?
+    );
+    loop {
+        let (mut stream, _) = tokio::select! {
+            accepted = listener.accept() => accepted?,
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                return Ok(());
+            }
+        };
+        let response = match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            read_webhook_http_delivery(&mut stream),
+        )
+        .await
+        {
+            Ok(Ok(delivery)) => match backend.ingest(delivery).await {
+                Ok(value) => webhook_http_response(202, "Accepted", &value),
+                Err(error) => {
+                    eprintln!("workflow webhook delivery rejected: {error}");
+                    webhook_http_response(
+                        400,
+                        "Bad Request",
+                        &json!({"accepted": false, "error": "delivery rejected"}),
+                    )
+                }
+            },
+            Ok(Err(error)) => webhook_http_response(
+                400,
+                "Bad Request",
+                &json!({"accepted": false, "error": error.to_string()}),
+            ),
+            Err(_) => webhook_http_response(
+                408,
+                "Request Timeout",
+                &json!({"accepted": false, "error": "request timed out"}),
+            ),
+        };
+        let _ = stream.write_all(&response).await;
+        let _ = stream.shutdown().await;
+    }
+}
+
+async fn read_webhook_http_delivery(
+    stream: &mut TcpStream,
+) -> Result<WebhookHttpDelivery, Box<dyn Error>> {
+    let mut bytes = Vec::new();
+    let header_end = loop {
+        if let Some(position) = find_bytes(&bytes, b"\r\n\r\n") {
+            break position + 4;
+        }
+        if bytes.len() >= MAX_WEBHOOK_HTTP_HEADER_BYTES {
+            return Err("webhook HTTP headers exceed 65536 bytes".into());
+        }
+        let mut buffer = [0_u8; 4096];
+        let read = stream.read(&mut buffer).await?;
+        if read == 0 {
+            return Err("webhook HTTP request ended before its headers".into());
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    };
+    if header_end > MAX_WEBHOOK_HTTP_HEADER_BYTES {
+        return Err("webhook HTTP headers exceed 65536 bytes".into());
+    }
+    let (_, content_length) = parse_webhook_http_head(&bytes[..header_end])?;
+    if content_length == 0 || content_length > MAX_WEBHOOK_HTTP_BODY_BYTES {
+        return Err("webhook HTTP body must contain 1..=1048576 bytes".into());
+    }
+    let expected = header_end
+        .checked_add(content_length)
+        .ok_or("webhook HTTP request size overflow")?;
+    while bytes.len() < expected {
+        let mut buffer = [0_u8; 8192];
+        let read = stream.read(&mut buffer).await?;
+        if read == 0 {
+            return Err("webhook HTTP body ended before Content-Length bytes".into());
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if bytes.len() > expected {
+            return Err("webhook HTTP request contains bytes after its declared body".into());
+        }
+    }
+    parse_webhook_http_request(&bytes)
+}
+
+fn parse_webhook_http_head(
+    bytes: &[u8],
+) -> Result<(BTreeMap<String, String>, usize), Box<dyn Error>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "webhook HTTP headers must be UTF-8")?;
+    let mut lines = text.strip_suffix("\r\n\r\n").unwrap_or(text).split("\r\n");
+    let request_line = lines.next().ok_or("webhook HTTP request line is absent")?;
+    let parts = request_line.split_whitespace().collect::<Vec<_>>();
+    if parts.len() != 3 || parts[0] != "POST" || parts[2] != "HTTP/1.1" {
+        return Err("webhook listener requires POST over HTTP/1.1".into());
+    }
+    if !parts[1].starts_with("/v1/workflow-webhooks/") || parts[1].contains(['?', '#']) {
+        return Err("webhook HTTP path must be /v1/workflow-webhooks/WEBHOOK_ID".into());
+    }
+    let mut headers = BTreeMap::new();
+    for line in lines {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or("webhook HTTP header is malformed")?;
+        let name = name.to_ascii_lowercase();
+        if name.is_empty()
+            || headers
+                .insert(name.clone(), value.trim().to_owned())
+                .is_some()
+        {
+            return Err(format!("webhook HTTP header is empty or duplicated: {name}").into());
+        }
+    }
+    if headers.contains_key("transfer-encoding") {
+        return Err("chunked webhook HTTP requests are not accepted".into());
+    }
+    let content_length = headers
+        .get("content-length")
+        .ok_or("webhook HTTP Content-Length is required")?
+        .parse::<usize>()
+        .map_err(|_| "webhook HTTP Content-Length is invalid")?;
+    Ok((headers, content_length))
+}
+
+fn parse_webhook_http_request(bytes: &[u8]) -> Result<WebhookHttpDelivery, Box<dyn Error>> {
+    let header_end = find_bytes(bytes, b"\r\n\r\n")
+        .map(|position| position + 4)
+        .ok_or("webhook HTTP header delimiter is absent")?;
+    let (mut headers, content_length) = parse_webhook_http_head(&bytes[..header_end])?;
+    if bytes.len() != header_end + content_length {
+        return Err("webhook HTTP body does not match Content-Length".into());
+    }
+    let request_line = std::str::from_utf8(&bytes[..header_end])?
+        .split("\r\n")
+        .next()
+        .ok_or("webhook HTTP request line is absent")?;
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("webhook HTTP path is absent")?;
+    let webhook_id = path
+        .strip_prefix("/v1/workflow-webhooks/")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .ok_or("webhook HTTP identifier is invalid")?
+        .to_owned();
+    let delivery_id = headers
+        .remove("x-colossus-delivery-id")
+        .ok_or("x-colossus-delivery-id is required")?;
+    let timestamp = headers
+        .remove("x-colossus-timestamp")
+        .ok_or("x-colossus-timestamp is required")?;
+    let signature = headers
+        .remove("x-colossus-signature")
+        .ok_or("x-colossus-signature is required")?;
+    for transport in ["connection", "content-length", "host"] {
+        headers.remove(transport);
+    }
+    Ok(WebhookHttpDelivery {
+        webhook_id,
+        delivery_id,
+        timestamp,
+        signature,
+        headers,
+        body: bytes[header_end..].to_vec(),
+    })
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn webhook_http_response(status: u16, reason: &str, value: &Value) -> Vec<u8> {
+    let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{\"accepted\":false}".to_vec());
+    let mut response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(&body);
+    response
+}
+
 fn memory_scope(
     scope: MemoryScopeArg,
     scope_id: Option<String>,
@@ -2659,6 +2982,70 @@ async fn workflow_command(
                     None => runtime.workflows().tick_schedules_now()?,
                 };
                 print_json(&dispatches)?;
+            }
+        },
+        WorkflowAction::Webhook { command } => match command {
+            WorkflowWebhookAction::Create {
+                webhook_id,
+                name,
+                version,
+                secret_reference,
+                replay_window_seconds,
+                max_body_bytes,
+                disabled,
+            } => print_json(&runtime.workflows().create_webhook(
+                &webhook_id,
+                &name,
+                &version,
+                &secret_reference,
+                replay_window_seconds,
+                max_body_bytes,
+                !disabled,
+            )?)?,
+            WorkflowWebhookAction::List { limit } => {
+                print_json(&runtime.workflows().list_webhooks(limit.clamp(1, 10_000))?)?;
+            }
+            WorkflowWebhookAction::Show { webhook_id } => {
+                print_json(&runtime.workflows().get_webhook(&webhook_id)?)?;
+            }
+            WorkflowWebhookAction::Enable { webhook_id } => {
+                print_json(&runtime.workflows().set_webhook_enabled(&webhook_id, true)?)?;
+            }
+            WorkflowWebhookAction::Disable { webhook_id } => {
+                print_json(
+                    &runtime
+                        .workflows()
+                        .set_webhook_enabled(&webhook_id, false)?,
+                )?;
+            }
+            WorkflowWebhookAction::Ingest {
+                webhook_id,
+                delivery_id,
+                timestamp,
+                signature,
+                headers,
+                body,
+            } => {
+                let body = if let Some(path) = body.strip_prefix('@') {
+                    runtime.read_text_file(path).await?
+                } else {
+                    body
+                };
+                print_json(
+                    &runtime
+                        .ingest_workflow_webhook(
+                            &webhook_id,
+                            &delivery_id,
+                            &timestamp,
+                            &signature,
+                            parse_headers(headers)?,
+                            body.as_bytes(),
+                        )
+                        .await?,
+                )?;
+            }
+            WorkflowWebhookAction::Serve { bind } => {
+                serve_workflow_webhooks(bind, WebhookIngressBackend::Runtime(runtime)).await?;
             }
         },
         WorkflowAction::Status { run_id } => {
@@ -3508,6 +3895,13 @@ async fn dispatch_to_worker_if_active(
             Ok(true)
         }
         Command::Workflow(command) => {
+            if let WorkflowAction::Webhook {
+                command: WorkflowWebhookAction::Serve { bind },
+            } = &command.command
+            {
+                serve_workflow_webhooks(*bind, WebhookIngressBackend::Worker(&client)).await?;
+                return Ok(true);
+            }
             let operation = match &command.command {
                 WorkflowAction::Validate { path } => WorkerOperation::WorkflowValidate {
                     path: path.to_string_lossy().into_owned(),
@@ -3573,6 +3967,63 @@ async fn dispatch_to_worker_if_active(
                     }
                     WorkflowScheduleAction::Tick { at } => {
                         WorkerOperation::WorkflowScheduleTick { at: at.clone() }
+                    }
+                },
+                WorkflowAction::Webhook { command } => match command {
+                    WorkflowWebhookAction::Create {
+                        webhook_id,
+                        name,
+                        version,
+                        secret_reference,
+                        replay_window_seconds,
+                        max_body_bytes,
+                        disabled,
+                    } => WorkerOperation::WorkflowWebhookCreate {
+                        webhook_id: webhook_id.clone(),
+                        name: name.clone(),
+                        version: version.clone(),
+                        secret_reference: secret_reference.clone(),
+                        replay_window_seconds: *replay_window_seconds,
+                        max_body_bytes: *max_body_bytes,
+                        enabled: !*disabled,
+                    },
+                    WorkflowWebhookAction::List { limit } => {
+                        WorkerOperation::WorkflowWebhookList { limit: *limit }
+                    }
+                    WorkflowWebhookAction::Show { webhook_id } => {
+                        WorkerOperation::WorkflowWebhookShow {
+                            webhook_id: webhook_id.clone(),
+                        }
+                    }
+                    WorkflowWebhookAction::Enable { webhook_id } => {
+                        WorkerOperation::WorkflowWebhookSetEnabled {
+                            webhook_id: webhook_id.clone(),
+                            enabled: true,
+                        }
+                    }
+                    WorkflowWebhookAction::Disable { webhook_id } => {
+                        WorkerOperation::WorkflowWebhookSetEnabled {
+                            webhook_id: webhook_id.clone(),
+                            enabled: false,
+                        }
+                    }
+                    WorkflowWebhookAction::Ingest {
+                        webhook_id,
+                        delivery_id,
+                        timestamp,
+                        signature,
+                        headers,
+                        body,
+                    } => WorkerOperation::WorkflowWebhookIngest {
+                        webhook_id: webhook_id.clone(),
+                        delivery_id: delivery_id.clone(),
+                        timestamp: timestamp.clone(),
+                        signature: signature.clone(),
+                        headers: parse_headers(headers.clone())?,
+                        body_source: body.clone(),
+                    },
+                    WorkflowWebhookAction::Serve { .. } => {
+                        unreachable!("webhook serve is handled before operation routing")
                     }
                 },
                 WorkflowAction::Status { run_id } => WorkerOperation::WorkflowStatus {
@@ -6163,6 +6614,7 @@ mod tests {
         assert!(values.contains(&"/workflow status".into()));
         assert!(values.contains(&"/workflow schedule list".into()));
         assert!(values.contains(&"/workflow schedule tick".into()));
+        assert!(values.contains(&"/workflow webhook list".into()));
         assert!(values.contains(&"/theme hacker".into()));
         assert!(values.contains(&"/theme preview high_contrast".into()));
         assert!(values.contains(&"@skill-creator".into()));
@@ -6227,6 +6679,101 @@ mod tests {
         assert_eq!(misfire, WorkflowScheduleMisfireArg::Skip);
         assert!(disabled);
         assert_eq!(starts_at.as_deref(), Some("2026-01-01T12:00:00Z"));
+    }
+
+    #[test]
+    fn workflow_webhook_cli_parses_creation_and_delivery_contracts() {
+        let create = Cli::try_parse_from([
+            "colossus",
+            "workflow",
+            "webhook",
+            "create",
+            "github-main",
+            "smoke",
+            "1.0.0",
+            "--secret-reference",
+            "env:COLOSSUS_WEBHOOK_SECRET",
+            "--replay-window-seconds",
+            "600",
+            "--max-body-bytes",
+            "4096",
+        ])
+        .expect("workflow webhook create command");
+        assert!(matches!(
+            create.command,
+            Command::Workflow(WorkflowCommand {
+                command: WorkflowAction::Webhook {
+                    command: WorkflowWebhookAction::Create {
+                        webhook_id,
+                        replay_window_seconds: 600,
+                        max_body_bytes: 4096,
+                        ..
+                    }
+                }
+            }) if webhook_id == "github-main"
+        ));
+
+        let ingest = Cli::try_parse_from([
+            "colossus",
+            "workflow",
+            "webhook",
+            "ingest",
+            "github-main",
+            "--delivery-id",
+            "delivery-1",
+            "--timestamp",
+            "2026-07-16T12:00:00Z",
+            "--signature",
+            "sha256=abcd",
+            "--header",
+            "content-type=application/json",
+            "--body",
+            r#"{"event":"push"}"#,
+        ])
+        .expect("workflow webhook ingest command");
+        assert!(matches!(
+            ingest.command,
+            Command::Workflow(WorkflowCommand {
+                command: WorkflowAction::Webhook {
+                    command: WorkflowWebhookAction::Ingest {
+                        delivery_id,
+                        headers,
+                        ..
+                    }
+                }
+            }) if delivery_id == "delivery-1" && headers == vec!["content-type=application/json"]
+        ));
+    }
+
+    #[test]
+    fn workflow_webhook_http_parser_is_bounded_and_strips_auth_headers() {
+        let body = br#"{"event":"push"}"#;
+        let request = format!(
+            "POST /v1/workflow-webhooks/github-main HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nContent-Type: application/json\r\nX-Colossus-Delivery-Id: delivery-1\r\nX-Colossus-Timestamp: 2026-07-16T12:00:00Z\r\nX-Colossus-Signature: sha256={}\r\nX-Github-Event: push\r\n\r\n{}",
+            body.len(),
+            "a".repeat(64),
+            String::from_utf8_lossy(body),
+        );
+        let delivery = parse_webhook_http_request(request.as_bytes()).expect("webhook request");
+        assert_eq!(delivery.webhook_id, "github-main");
+        assert_eq!(delivery.delivery_id, "delivery-1");
+        assert_eq!(delivery.body, body);
+        assert_eq!(delivery.headers.get("x-github-event"), Some(&"push".into()));
+        assert!(!delivery.headers.contains_key("x-colossus-signature"));
+        assert!(!delivery.headers.contains_key("content-length"));
+
+        let duplicate = request.replacen(
+            "Host: 127.0.0.1\r\n",
+            "Host: 127.0.0.1\r\nHost: duplicate\r\n",
+            1,
+        );
+        assert!(parse_webhook_http_request(duplicate.as_bytes()).is_err());
+        let chunked = request.replacen(
+            "Content-Length:",
+            "Transfer-Encoding: chunked\r\nContent-Length:",
+            1,
+        );
+        assert!(parse_webhook_http_request(chunked.as_bytes()).is_err());
     }
 
     #[test]

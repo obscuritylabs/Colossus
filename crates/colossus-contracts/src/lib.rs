@@ -2836,6 +2836,8 @@ pub enum WorkflowStep {
 pub enum WorkflowTriggerKind {
     /// A persisted cadence schedule queued the run.
     Schedule,
+    /// An authenticated persisted webhook queued the run.
+    Webhook,
 }
 
 /// Behavior when more than one schedule occurrence is already due.
@@ -2914,6 +2916,62 @@ pub struct WorkflowScheduleDispatch {
     pub run_id: Option<String>,
     /// Bounded fail-closed detail for blocked schedules.
     pub reason: Option<String>,
+}
+
+/// Canonical persisted authenticated workflow webhook reconstructed from journal events.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowWebhook {
+    /// Stable operator-selected webhook identifier.
+    pub webhook_id: String,
+    /// Pinned workflow name.
+    pub workflow_name: String,
+    /// Pinned workflow version.
+    pub workflow_version: String,
+    /// Pinned canonical definition hash.
+    pub workflow_hash: String,
+    /// Late-bound credential reference; the secret value is never persisted.
+    pub secret_reference: String,
+    /// Whether authenticated deliveries may queue runs.
+    pub enabled: bool,
+    /// Maximum accepted delivery age in seconds.
+    pub replay_window_seconds: u64,
+    /// Maximum accepted raw request body size in bytes.
+    pub max_body_bytes: u64,
+    /// Bounded fail-closed reason when pinned trust is no longer valid.
+    pub blocked_reason: Option<String>,
+    /// UTC RFC3339 creation timestamp.
+    pub created_at: String,
+    /// UTC RFC3339 last transition timestamp.
+    pub updated_at: String,
+}
+
+/// Canonical receipt for one authenticated webhook delivery.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowWebhookDelivery {
+    /// Webhook that accepted the delivery.
+    pub webhook_id: String,
+    /// Sender-supplied replay identifier.
+    pub delivery_id: String,
+    /// Sender-supplied signed UTC RFC3339 timestamp.
+    pub timestamp: String,
+    /// UTC RFC3339 time at which Colossus accepted the delivery.
+    pub received_at: String,
+    /// SHA-256 digest of the exact raw body bytes.
+    pub body_sha256: String,
+    /// Deterministic queued workflow run identifier.
+    pub run_id: String,
+}
+
+/// Result returned after an authenticated webhook delivery is durably accepted.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowWebhookDispatch {
+    /// Canonical delivery receipt.
+    pub delivery: WorkflowWebhookDelivery,
+    /// Hash-pinned queued workflow run.
+    pub run: WorkflowRun,
 }
 
 /// Durable workflow run projection reconstructed from events.
