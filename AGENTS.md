@@ -6,7 +6,7 @@ This file is the short map. Keep deeper details in `docs/`.
 - Read `docs/SECURITY.md` before changing tools, subprocess execution, policy, audit,
   or bundle handling.
 - Keep `domain` dependency-free.
-- Keep CLI, REPL, and TUI as interfaces only; no model, tool, policy, or state logic
+- Keep CLI and TUI as interfaces only; no model, tool, policy, or state logic
   should live there.
 - Add or update tests for every behavior change.
 - Rust is the active root implementation. Python 0.5 is retained only on

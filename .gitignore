@@ -1,5 +1,7 @@
 target/
 dist/
+site/
+.cache/mdbook/
 .colossus/config.yaml
 .colossus/*.redb*
 .colossus/*memory-index/

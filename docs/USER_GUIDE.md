@@ -134,7 +134,7 @@ immediately; a separate save command is unnecessary.
 
 Custom themes are strict JSON or TOML files. `/theme scaffold NAME` prints a validated
 TOML starter and its suggested config-adjacent path without writing a file from the
-terminal interface. The bundled [Ocean example](../examples/themes/ocean.toml) can also
+terminal interface. The bundled [Ocean example](https://github.com/obscuritylabs/Colossus/blob/main/examples/themes/ocean.toml) can also
 be copied into `.colossus/themes/`. Restart Colossus after adding a file, then run
 `/theme validate` before selecting it. Theme loading rejects unknown fields, invalid
 colors, oversized libraries, symlinks, duplicate names, and built-in name collisions.

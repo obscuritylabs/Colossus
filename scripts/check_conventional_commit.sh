@@ -34,7 +34,7 @@ validate_subject() {
   echo "Found: ${subject:-<empty>}" >&2
   echo "Expected: <type>[optional scope][!]: <description>" >&2
   echo "Allowed types: build, chore, ci, docs, feat, fix, perf, refactor, revert, security, style, test" >&2
-  echo "Examples: feat(repl): add themes | fix: handle denied approvals" >&2
+  echo "Examples: feat(tui): add themes | fix: handle denied approvals" >&2
   return 1
 }
 

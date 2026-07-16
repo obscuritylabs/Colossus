@@ -1,0 +1,91 @@
+name: Documentation
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/docs.yml"
+      - "book.toml"
+      - "docs/**"
+      - "README.md"
+  pull_request:
+    paths:
+      - ".github/workflows/docs.yml"
+      - "book.toml"
+      - "docs/**"
+      - "README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MDBOOK_VERSION: "0.5.4"
+  CARGO_INSTALL_ROOT: ${{ github.workspace }}/.cache/mdbook
+
+jobs:
+  build:
+    name: Build mdBook site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+
+      - name: Cache mdBook
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CARGO_INSTALL_ROOT }}
+          key: mdbook-${{ runner.os }}-${{ env.MDBOOK_VERSION }}
+
+      - name: Install pinned mdBook
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -x "$CARGO_INSTALL_ROOT/bin/mdbook" ]; then
+            cargo install mdbook --version "$MDBOOK_VERSION" --locked --root "$CARGO_INSTALL_ROOT"
+          fi
+
+      - name: Build searchable static documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CARGO_INSTALL_ROOT/bin/mdbook" build
+          test -f site/index.html
+          find site -maxdepth 1 -type f -name 'searchindex*.js' -print -quit | grep -q .
+
+      - name: Configure GitHub Pages
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    name: Deploy GitHub Pages
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy documentation
+        id: deployment
+        uses: actions/deploy-pages@v4

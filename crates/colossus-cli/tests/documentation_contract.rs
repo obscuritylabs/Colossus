@@ -56,6 +56,92 @@ fn read(relative: &str) -> String {
         .unwrap_or_else(|error| panic!("read {relative}: {error}"))
 }
 
+#[test]
+fn static_documentation_site_is_complete_searchable_and_python_free() {
+    let configuration = read("book.toml");
+    for required in [
+        "src = \"docs\"",
+        "build-dir = \"site\"",
+        "create-missing = false",
+        "site-url = \"/Colossus/\"",
+        "edit-url-template = \"https://github.com/obscuritylabs/Colossus/edit/main/{path}\"",
+        "[output.html.search]",
+        "enable = true",
+    ] {
+        assert!(
+            configuration.contains(required),
+            "book.toml is missing {required:?}"
+        );
+    }
+
+    let summary = read("docs/SUMMARY.md");
+    for entry in fs::read_dir(repository_root().join("docs")).expect("read docs directory") {
+        let path = entry.expect("documentation entry").path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if path.extension().and_then(|value| value.to_str()) == Some("md") && name != "SUMMARY.md" {
+            assert!(
+                summary.contains(&format!("]({name})")),
+                "docs/{name} is absent from the published navigation"
+            );
+        }
+    }
+
+    let workflow = read(".github/workflows/docs.yml");
+    for required in [
+        "MDBOOK_VERSION: \"0.5.4\"",
+        "cargo install mdbook --version",
+        "mdbook\" build",
+        "actions/configure-pages@v5",
+        "actions/upload-pages-artifact@v4",
+        "actions/deploy-pages@v4",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "documentation workflow is missing {required:?}"
+        );
+    }
+    for forbidden in ["setup-python", "pip install", "uv run", "pyproject.toml"] {
+        assert!(
+            !workflow.contains(forbidden),
+            "documentation workflow reintroduced Python tooling via {forbidden:?}"
+        );
+    }
+}
+
+#[test]
+fn static_documentation_links_resolve_inside_the_published_source_tree() {
+    let docs = repository_root().join("docs");
+    for entry in fs::read_dir(&docs).expect("read docs directory") {
+        let path = entry.expect("documentation entry").path();
+        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+            continue;
+        }
+        let document = fs::read_to_string(&path).expect("read documentation page");
+        let mut remainder = document.as_str();
+        while let Some((_, after_open)) = remainder.split_once("](") {
+            let Some((target, after_close)) = after_open.split_once(')') else {
+                panic!("{} contains an unterminated Markdown link", path.display());
+            };
+            remainder = after_close;
+            if target.starts_with("https://")
+                || target.starts_with("http://")
+                || target.starts_with("mailto:")
+                || target.starts_with('#')
+            {
+                continue;
+            }
+            let relative = target.split('#').next().expect("relative link target");
+            assert!(
+                docs.join(relative).is_file(),
+                "{} links to missing published source {target:?}",
+                path.display()
+            );
+        }
+    }
+}
+
 fn marked_yaml<'a>(document: &'a str, marker: &str) -> &'a str {
     let start = format!("<!-- {marker}:start -->");
     let end = format!("<!-- {marker}:end -->");
