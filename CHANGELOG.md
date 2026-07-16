@@ -53,6 +53,8 @@ include breaking changes while the public API is still settling.
 - Increased the bounded OCI control-command startup allowance so cold rootless Podman
   initialization does not spuriously fail the same security acceptance suite that
   Docker completes.
+- Reused the production RustSec database for the fuzz lockfile audit, removing a
+  redundant network fetch from the fail-closed supply-chain job.
 
 ### Security
 

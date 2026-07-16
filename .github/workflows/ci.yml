@@ -289,7 +289,7 @@ jobs:
         run: |
           cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
           cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
-          cargo audit -D warnings --file fuzz/Cargo.lock
+          cargo audit --no-fetch -D warnings --file fuzz/Cargo.lock
 
   rust-release-smoke:
     name: Rust release artifact (${{ matrix.target }})
