@@ -32,6 +32,17 @@ cargo run --offline \
   -p colossus-cli --bin colossus -- --version
 ```
 
+To run changing debug binaries without repeated macOS Keychain prompts, use the isolated
+development launcher. It clones the existing config's non-storage settings when present,
+but uses separate environment keys, state, and secure anchor:
+
+```bash
+./scripts/colossus-dev --approval-mode full-access tui
+```
+
+This development state is intentionally separate from `.colossus/config.yaml` and
+`.colossus/state.redb`; deleting or swapping one config does not migrate the other.
+
 ## Initialize And Smoke Test
 
 Create strict configuration beside the fresh Rust state:
