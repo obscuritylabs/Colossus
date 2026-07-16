@@ -1,6 +1,6 @@
 # Rust Runtime Status
 
-Rust 0.6.0 is the active repository-root implementation. It uses Rust 1.96, edition
+Rust 0.7.0 is the active repository-root implementation. It uses Rust 1.96, edition
 2024, strict YAML configuration, and encrypted redb state. It never imports Python
 configuration or SQLite state. Python 0.5 remains frozen at `python-v0.5.0` and on the
 `python-legacy` branch.
