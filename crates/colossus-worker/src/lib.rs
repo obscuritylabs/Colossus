@@ -9,6 +9,7 @@ use colossus_contracts::{
     EffectRequest, GoalStatus, IntegrationAuth, MemoryScope, MemoryStatus, PlanStatus, PlanStep,
     PolicyDecision, ResearchDepth, ResearchSourceKind, RunEventEnvelope, SubagentStatus,
     TaskStatus, TerminalPreferences, UserPromptRequest, UserPromptResponse,
+    WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -897,6 +898,47 @@ pub enum WorkerOperation {
         inputs_source: String,
         /// Leave the run queued for worker drain instead of executing immediately.
         queued: bool,
+    },
+    /// Create one persisted hash-pinned cadence schedule.
+    WorkflowScheduleCreate {
+        /// Stable schedule identifier.
+        schedule_id: String,
+        /// Workflow name.
+        name: String,
+        /// Workflow version.
+        version: String,
+        /// Inline JSON or a server-local `@path` reference.
+        inputs_source: String,
+        /// Fixed bounded cadence in seconds.
+        cadence_seconds: u64,
+        /// Explicit multiple-occurrence behavior.
+        misfire_policy: WorkflowScheduleMisfirePolicy,
+        /// Initial enabled state.
+        enabled: bool,
+        /// Optional UTC RFC3339 first occurrence boundary.
+        starts_at: Option<String>,
+    },
+    /// List persisted workflow schedules.
+    WorkflowScheduleList {
+        /// Maximum schedules.
+        limit: usize,
+    },
+    /// Show one persisted workflow schedule.
+    WorkflowScheduleShow {
+        /// Exact schedule identifier.
+        schedule_id: String,
+    },
+    /// Explicitly enable or disable one persisted schedule.
+    WorkflowScheduleSetEnabled {
+        /// Exact schedule identifier.
+        schedule_id: String,
+        /// Requested enabled state.
+        enabled: bool,
+    },
+    /// Evaluate due workflow schedules against a real or explicit clock.
+    WorkflowScheduleTick {
+        /// Optional UTC RFC3339 clock used for deterministic operation.
+        at: Option<String>,
     },
     /// Reconstruct one workflow run.
     WorkflowStatus {
@@ -1986,6 +2028,11 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::WorkflowList => "workflow_list",
         WorkerOperation::WorkflowShow { .. } => "workflow_show",
         WorkerOperation::WorkflowStart { .. } => "workflow_start",
+        WorkerOperation::WorkflowScheduleCreate { .. } => "workflow_schedule_create",
+        WorkerOperation::WorkflowScheduleList { .. } => "workflow_schedule_list",
+        WorkerOperation::WorkflowScheduleShow { .. } => "workflow_schedule_show",
+        WorkerOperation::WorkflowScheduleSetEnabled { .. } => "workflow_schedule_set_enabled",
+        WorkerOperation::WorkflowScheduleTick { .. } => "workflow_schedule_tick",
         WorkerOperation::WorkflowStatus { .. } => "workflow_status",
         WorkerOperation::WorkflowResume { .. } => "workflow_resume",
         WorkerOperation::WorkflowInput { .. } => "workflow_input",
@@ -2800,6 +2847,54 @@ async fn dispatch(
             };
             Ok(serde_json::to_value(run)?)
         }
+        WorkerOperation::WorkflowScheduleCreate {
+            schedule_id,
+            name,
+            version,
+            inputs_source,
+            cadence_seconds,
+            misfire_policy,
+            enabled,
+            starts_at,
+        } => {
+            let inputs = parse_json_source(runtime, &inputs_source).await?;
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(runtime.workflows().create_schedule(
+                &schedule_id,
+                &name,
+                &version,
+                inputs,
+                cadence_seconds,
+                misfire_policy,
+                enabled,
+                starts_at.as_deref(),
+            )?)?)
+        }
+        WorkerOperation::WorkflowScheduleList { limit } => Ok(serde_json::to_value(
+            runtime.workflows().list_schedules(limit.clamp(1, 10_000))?,
+        )?),
+        WorkerOperation::WorkflowScheduleShow { schedule_id } => Ok(serde_json::to_value(
+            runtime.workflows().get_schedule(&schedule_id)?,
+        )?),
+        WorkerOperation::WorkflowScheduleSetEnabled {
+            schedule_id,
+            enabled,
+        } => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(
+                runtime
+                    .workflows()
+                    .set_schedule_enabled(&schedule_id, enabled)?,
+            )?)
+        }
+        WorkerOperation::WorkflowScheduleTick { at } => {
+            let _guard = maintenance.lock().await;
+            let dispatches = match at {
+                Some(at) => runtime.workflows().tick_schedules_at(&at)?,
+                None => runtime.workflows().tick_schedules_now()?,
+            };
+            Ok(serde_json::to_value(dispatches)?)
+        }
         WorkerOperation::WorkflowStatus { run_id } => {
             Ok(serde_json::to_value(runtime.workflows().get_run(&run_id)?)?)
         }
@@ -2833,6 +2928,7 @@ async fn drain_once(
     maintenance: &tokio::sync::Mutex<()>,
 ) -> Result<Value, WorkerError> {
     let _guard = maintenance.lock().await;
+    let schedules = runtime.workflows().tick_schedules_now()?;
     let workflows = runtime.workflows().drain().await?;
     // Durable execution queues take precedence over disposable projections so
     // a large projection backlog cannot starve queued child work.
@@ -2840,6 +2936,7 @@ async fn drain_once(
     let projections = runtime.drain_projections()?;
     let audit_exports = runtime.drain_audit_exports().await?;
     Ok(json!({
+        "schedules": schedules,
         "workflows": workflows,
         "projections": projections,
         "subagents": subagents,
@@ -3430,6 +3527,41 @@ compile_error!("colossus-worker supports only Unix sockets or Windows named pipe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workflow_schedule_operation_round_trips_the_worker_contract() {
+        let encoded = serde_json::to_value(WorkerOperation::WorkflowScheduleCreate {
+            schedule_id: "nightly".into(),
+            name: "smoke".into(),
+            version: "1.0.0".into(),
+            inputs_source: r#"{"message":"scheduled"}"#.into(),
+            cadence_seconds: 3_600,
+            misfire_policy: WorkflowScheduleMisfirePolicy::Skip,
+            enabled: false,
+            starts_at: Some("2026-01-01T12:00:00Z".into()),
+        })
+        .expect("serialize schedule operation");
+        assert_eq!(encoded["operation"], "workflow_schedule_create");
+        assert_eq!(encoded["misfire_policy"], "skip");
+        let decoded: WorkerOperation =
+            serde_json::from_value(encoded).expect("deserialize schedule operation");
+        let WorkerOperation::WorkflowScheduleCreate {
+            schedule_id,
+            cadence_seconds,
+            misfire_policy,
+            enabled,
+            starts_at,
+            ..
+        } = decoded
+        else {
+            panic!("expected schedule creation operation");
+        };
+        assert_eq!(schedule_id, "nightly");
+        assert_eq!(cadence_seconds, 3_600);
+        assert_eq!(misfire_policy, WorkflowScheduleMisfirePolicy::Skip);
+        assert!(!enabled);
+        assert_eq!(starts_at.as_deref(), Some("2026-01-01T12:00:00Z"));
+    }
 
     #[test]
     fn authenticated_frames_cover_exact_serialized_payload_bytes() {

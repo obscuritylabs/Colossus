@@ -241,6 +241,18 @@ to recreate the same child ID after a crash between link and queue, so recovery 
 duplicates nor orphans the call. The composition root opens fresh YAML config and fresh
 state; it never silently imports the Python SQLite store.
 
+Workflow schedules are canonical journal aggregates behind `WorkflowRepository`. A
+schedule stores a bounded fixed cadence, enable state, misfire policy, validated input
+snapshot, and exact workflow hash. The worker evaluates them under its existing
+maintenance coordination lock before draining queued workflow runs. Due-count and the
+next UTC occurrence are reconstructed arithmetically from durable state and the supplied
+clock; evaluation does not replay an unbounded occurrence loop. For a firing occurrence,
+the schedule transition and deterministically identified `queued` run are appended in
+one journal batch. Definition/hash/call-graph/input trust is checked again at firing and
+explicit enable. Actual invalidation disables the schedule, while repository failures
+surface for retry rather than being persisted as a trust decision. Trigger-created runs
+then use the ordinary claim, policy, approval, effect, and recovery paths.
+
 Runtime execution identity is separate from the static YAML step ID. Root steps retain
 their declared ID, while nested repeated work receives bounded paths such as
 `each[1]/approval` and `parallel.branch[0]/tool`. Journal completion, waiting input,

@@ -9,7 +9,8 @@ use colossus_contracts::{
     ProjectionMutation, ProjectionWorkItem, PublisherTrust, ResearchClaim, ResearchDepth,
     ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus, SignedCheckpoint,
     StreamDisplayMode, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences,
-    ThemeName, ToolSpec, TranscriptDensity, WorkflowDefinition, WorkflowMetadata, WorkflowStep,
+    ThemeName, ToolSpec, TranscriptDensity, WorkflowDefinition, WorkflowMetadata, WorkflowSchedule,
+    WorkflowScheduleMisfirePolicy, WorkflowStep,
 };
 use colossus_ports::{
     AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, MemoryIndex,
@@ -853,6 +854,56 @@ where
     repository
         .register(&definition, "hash-two", "repository:test-changed")
         .expect("definition change");
+    let schedule = WorkflowSchedule {
+        schedule_id: "conformance-daily".into(),
+        workflow_name: "conformance".into(),
+        workflow_version: "1.0.0".into(),
+        workflow_hash: "hash-two".into(),
+        inputs: serde_json::json!({}),
+        cadence_seconds: 86_400,
+        misfire_policy: WorkflowScheduleMisfirePolicy::FireOnce,
+        enabled: true,
+        starts_at: "2026-01-01T00:00:00Z".into(),
+        next_fire_at: "2026-01-01T00:00:00Z".into(),
+        last_scheduled_at: None,
+        last_run_id: None,
+        blocked_reason: None,
+        created_at: "2025-12-31T00:00:00Z".into(),
+        updated_at: "2025-12-31T00:00:00Z".into(),
+    };
+    repository
+        .create_schedule(
+            &schedule,
+            Actor {
+                actor_type: ActorType::User,
+                id: "conformance".into(),
+            },
+        )
+        .expect("create schedule");
+    assert!(
+        repository
+            .create_schedule(
+                &schedule,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "duplicate".into(),
+                },
+            )
+            .is_err(),
+        "schedule identifiers must be unique"
+    );
+    let disabled = repository
+        .set_schedule_enabled(
+            &schedule.schedule_id,
+            false,
+            "2026-01-01T01:00:00Z",
+            Actor {
+                actor_type: ActorType::User,
+                id: "conformance".into(),
+            },
+        )
+        .expect("disable schedule");
+    assert!(!disabled.enabled);
     let reopened = factory();
     assert_eq!(
         reopened
@@ -862,6 +913,16 @@ where
     );
     assert!(reopened.run("missing-run").expect("missing run").is_none());
     assert!(reopened.runs(10).expect("empty runs").is_empty());
+    assert_eq!(
+        reopened
+            .schedule(&schedule.schedule_id)
+            .expect("reconstructed schedule"),
+        Some(disabled.clone())
+    );
+    assert_eq!(
+        reopened.schedules(10).expect("schedule list"),
+        vec![disabled]
+    );
 }
 
 /// Shared position, event-id idempotency, candidate, status, removal, and rebuild checks

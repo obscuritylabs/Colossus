@@ -274,6 +274,18 @@ explicit idempotency strategy. Compensation is definition-declared, uses separat
 identity and audit events, and crosses the effect gateway independently for every action.
 Policy approval of a primary effect never authorizes its compensation.
 
+Persisted workflow schedules are fixed-cadence UTC aggregates with bounded identifiers,
+cadence, count, and input validation. They pin the exact workflow definition hash and
+revalidate the complete call graph and saved input before explicit enable and each due
+dispatch. A missing, changed, or invalid definition disables the schedule with an
+auditable bounded reason; a journal/repository outage fails the tick for retry and MUST
+NOT be converted into a permanent trust decision. Overdue reconstruction is constant-
+time arithmetic. The schedule-fire transition and deterministic queued-run identity are
+one atomic journal batch, preventing crash windows that could advance a schedule without
+its run or queue the same occurrence twice. Schedule creation or firing grants no effect
+authority: the resulting run still crosses the ordinary queue claim, policy, approval,
+permit, quarantine, and unknown-outcome boundaries.
+
 Recovery compares scoped execution ids, so completion of a repeated or parallel sibling
 cannot clear another attempt's uncertainty. An abandoned compensation is explicitly
 phase-labeled and never resumed through the primary workflow path, even if its definition

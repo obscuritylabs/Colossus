@@ -40,8 +40,10 @@ and the ordinary Rust formatting, Clippy, and workspace test gates.
 
 ### 2. Durable Workflow Triggers And Subscriptions
 
-- Add persisted schedule definitions with bounded cadence, enable/disable state,
-  misfire behavior, and deterministic next-fire reconstruction.
+- **Complete:** persisted schedule definitions with bounded fixed cadence,
+  enable/disable state, skip/fire-once misfire behavior, deterministic next-fire and run
+  identity, atomic schedule/run queueing, worker/embedded routing, and process-kill
+  recovery.
 - Add authenticated webhook ingestion whose body, headers, size, replay window, and
   workflow binding cross the ordinary effect/policy/audit boundary.
 - Add repository/event subscriptions with durable cursor/checkpoint state and explicit

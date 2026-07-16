@@ -943,7 +943,60 @@ impl EmbeddedInteractiveHost {
                 Some("Workflow run"),
             );
         }
-        Err("/workflow expects list or status RUN_ID".into())
+        if arguments == "schedule list" {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .list_schedules(100)
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow schedules"),
+            );
+        }
+        if let Some(schedule_id) = arguments.strip_prefix("schedule show ") {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .get_schedule(schedule_id.trim())
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow schedule"),
+            );
+        }
+        if let Some(schedule_id) = arguments.strip_prefix("schedule enable ") {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .set_schedule_enabled(schedule_id.trim(), true)
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow schedule enabled"),
+            );
+        }
+        if let Some(schedule_id) = arguments.strip_prefix("schedule disable ") {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .set_schedule_enabled(schedule_id.trim(), false)
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow schedule disabled"),
+            );
+        }
+        if arguments == "schedule tick" {
+            return self.result(
+                &self
+                    .runtime
+                    .workflows()
+                    .tick_schedules_now()
+                    .map_err(|error| error.to_string())?,
+                Some("Workflow schedule dispatches"),
+            );
+        }
+        Err(
+            "/workflow expects list, status RUN_ID, or schedule list|show|enable|disable|tick"
+                .into(),
+        )
     }
 
     async fn packs_command(&self, arguments: &str) -> Result<HostCommandResult, String> {
@@ -1753,8 +1806,26 @@ impl WorkerInteractiveHost {
                     WorkerOperation::WorkflowStatus {
                         run_id: run_id.trim().into(),
                     }
+                } else if arguments == "schedule list" {
+                    WorkerOperation::WorkflowScheduleList { limit: 100 }
+                } else if let Some(schedule_id) = arguments.strip_prefix("schedule show ") {
+                    WorkerOperation::WorkflowScheduleShow {
+                        schedule_id: schedule_id.trim().into(),
+                    }
+                } else if let Some(schedule_id) = arguments.strip_prefix("schedule enable ") {
+                    WorkerOperation::WorkflowScheduleSetEnabled {
+                        schedule_id: schedule_id.trim().into(),
+                        enabled: true,
+                    }
+                } else if let Some(schedule_id) = arguments.strip_prefix("schedule disable ") {
+                    WorkerOperation::WorkflowScheduleSetEnabled {
+                        schedule_id: schedule_id.trim().into(),
+                        enabled: false,
+                    }
+                } else if arguments == "schedule tick" {
+                    WorkerOperation::WorkflowScheduleTick { at: None }
                 } else {
-                    return Err("/workflow expects list or status RUN_ID".into());
+                    return Err("/workflow expects list, status RUN_ID, or schedule list|show|enable|disable|tick".into());
                 };
                 self.document(operation, Some("Workflow")).await
             }

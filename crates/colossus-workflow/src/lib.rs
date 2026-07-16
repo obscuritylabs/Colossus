@@ -4,7 +4,8 @@ use async_recursion::async_recursion;
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, EventClassification, ExecutionContext, NewEvent, WorkflowDefinition,
-    WorkflowRun, WorkflowStatus, WorkflowStep,
+    WorkflowRun, WorkflowSchedule, WorkflowScheduleDispatch, WorkflowScheduleDispatchStatus,
+    WorkflowScheduleMisfirePolicy, WorkflowStatus, WorkflowStep, WorkflowTriggerKind,
 };
 use colossus_ports::{EventJournal, StoreError, WorkflowRepository};
 use futures::{StreamExt as _, TryStreamExt as _, stream};
@@ -18,6 +19,9 @@ use std::{
     },
 };
 use thiserror::Error;
+use time::{
+    Duration as TimeDuration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339,
+};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -29,6 +33,10 @@ const MAX_WORKFLOW_CALL_DEPTH: usize = 16;
 const MAX_CONDITION_BYTES: usize = 16 * 1024;
 const MAX_CONDITION_TOKENS: usize = 4_096;
 const MAX_CONDITION_DEPTH: usize = 128;
+const MIN_SCHEDULE_CADENCE_SECONDS: u64 = 60;
+const MAX_SCHEDULE_CADENCE_SECONDS: u64 = 31 * 24 * 60 * 60;
+const MAX_WORKFLOW_SCHEDULES: usize = 10_000;
+const MAX_SCHEDULE_ID_BYTES: usize = 128;
 
 /// Workflow validation or durable execution failure.
 #[derive(Debug, Error)]
@@ -929,6 +937,135 @@ impl WorkflowRepository for EventSourcedWorkflowRepository {
             })
             .collect()
     }
+
+    fn create_schedule(
+        &self,
+        schedule: &WorkflowSchedule,
+        actor: Actor,
+    ) -> Result<WorkflowSchedule, StoreError> {
+        let stream_id = schedule_stream(&schedule.schedule_id);
+        if !self.journal.read_stream(&stream_id)?.is_empty() {
+            return Err(StoreError::Adapter(format!(
+                "workflow schedule {} already exists",
+                schedule.schedule_id
+            )));
+        }
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version: 0,
+            classification: EventClassification::Workflow,
+            event_type: "workflow.schedule.registered.v1".into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: schedule.schedule_id.clone(),
+                workflow_id: Some(schedule.schedule_id.clone()),
+                workflow_hash: Some(schedule.workflow_hash.clone()),
+                ..ExecutionContext::default()
+            },
+            payload: json!({"record": schedule}),
+        })?;
+        Ok(schedule.clone())
+    }
+
+    fn set_schedule_enabled(
+        &self,
+        schedule_id: &str,
+        enabled: bool,
+        updated_at: &str,
+        actor: Actor,
+    ) -> Result<WorkflowSchedule, StoreError> {
+        let mut schedule = self
+            .schedule(schedule_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("workflow schedule {schedule_id}")))?;
+        if schedule.enabled == enabled {
+            return Ok(schedule);
+        }
+        schedule.enabled = enabled;
+        schedule.updated_at = updated_at.into();
+        if enabled {
+            schedule.blocked_reason = None;
+        }
+        let stream_id = schedule_stream(schedule_id);
+        let expected_stream_version = u64::try_from(self.journal.read_stream(&stream_id)?.len())
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version,
+            classification: EventClassification::Workflow,
+            event_type: if enabled {
+                "workflow.schedule.enabled.v1"
+            } else {
+                "workflow.schedule.disabled.v1"
+            }
+            .into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: schedule_id.into(),
+                workflow_id: Some(schedule_id.into()),
+                workflow_hash: Some(schedule.workflow_hash.clone()),
+                ..ExecutionContext::default()
+            },
+            payload: json!({"record": &schedule}),
+        })?;
+        Ok(schedule)
+    }
+
+    fn schedule(&self, schedule_id: &str) -> Result<Option<WorkflowSchedule>, StoreError> {
+        fold_schedule(self.journal.as_ref(), schedule_id)
+    }
+
+    fn schedules(&self, limit: usize) -> Result<Vec<WorkflowSchedule>, StoreError> {
+        let mut schedule_ids = BTreeSet::new();
+        for event in self.journal.read_global(1, usize::MAX)? {
+            if event.event_type == "workflow.schedule.registered.v1"
+                && let Some(schedule_id) = event.stream_id.strip_prefix("workflow-schedule:")
+            {
+                schedule_ids.insert(schedule_id.to_owned());
+            }
+        }
+        schedule_ids
+            .into_iter()
+            .take(limit)
+            .map(|schedule_id| {
+                fold_schedule(self.journal.as_ref(), &schedule_id)?.ok_or_else(|| {
+                    StoreError::Verification(format!(
+                        "workflow schedule {schedule_id} cannot be reconstructed"
+                    ))
+                })
+            })
+            .collect()
+    }
+}
+
+fn schedule_stream(schedule_id: &str) -> String {
+    format!("workflow-schedule:{schedule_id}")
+}
+
+fn fold_schedule(
+    journal: &dyn EventJournal,
+    schedule_id: &str,
+) -> Result<Option<WorkflowSchedule>, StoreError> {
+    let events = journal.read_stream(&schedule_stream(schedule_id))?;
+    let Some(last) = events.last() else {
+        return Ok(None);
+    };
+    let payload = journal.decrypt_payload(last)?;
+    let schedule: WorkflowSchedule = serde_json::from_value(
+        payload
+            .get("record")
+            .cloned()
+            .ok_or_else(|| StoreError::Verification("schedule record is absent".into()))?,
+    )
+    .map_err(|error| StoreError::Verification(error.to_string()))?;
+    if schedule.schedule_id != schedule_id {
+        return Err(StoreError::Verification(format!(
+            "schedule stream {schedule_id} contains record {}",
+            schedule.schedule_id
+        )));
+    }
+    Ok(Some(schedule))
 }
 
 fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowRun>, StoreError> {
@@ -952,6 +1089,20 @@ fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowR
             .map(str::to_owned),
         parent_execution_id: start
             .get("parent_execution_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        trigger_kind: start
+            .get("trigger_kind")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| StoreError::Verification(error.to_string()))?,
+        trigger_id: start
+            .get("trigger_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        trigger_occurrence: start
+            .get("trigger_occurrence")
             .and_then(Value::as_str)
             .map(str::to_owned),
         call_depth: start
@@ -1059,6 +1210,106 @@ fn string_field(value: &Value, field: &str) -> Result<String, StoreError> {
         .ok_or_else(|| StoreError::Verification(format!("run field {field} is absent")))
 }
 
+fn parse_schedule_time(value: &str, label: &str) -> Result<OffsetDateTime, WorkflowError> {
+    let parsed = OffsetDateTime::parse(value, &Rfc3339).map_err(|error| {
+        WorkflowError::InvalidDefinition(format!("{label} must be UTC RFC3339: {error}"))
+    })?;
+    if parsed.offset() != UtcOffset::UTC {
+        return Err(WorkflowError::InvalidDefinition(format!(
+            "{label} must use the UTC Z offset"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn format_schedule_time(value: OffsetDateTime) -> Result<String, WorkflowError> {
+    value
+        .to_offset(UtcOffset::UTC)
+        .format(&Rfc3339)
+        .map_err(|error| WorkflowError::InvalidTransition(error.to_string()))
+}
+
+fn add_schedule_occurrences(
+    base: OffsetDateTime,
+    cadence_seconds: u64,
+    occurrences: u64,
+) -> Result<OffsetDateTime, WorkflowError> {
+    let total_seconds = cadence_seconds
+        .checked_mul(occurrences)
+        .ok_or_else(|| WorkflowError::InvalidTransition("schedule cadence overflow".into()))?;
+    let total_seconds = i64::try_from(total_seconds)
+        .map_err(|error| WorkflowError::InvalidTransition(error.to_string()))?;
+    base.checked_add(TimeDuration::seconds(total_seconds))
+        .ok_or_else(|| WorkflowError::InvalidTransition("schedule timestamp overflow".into()))
+}
+
+fn scheduled_run_id(schedule_id: &str, occurrence: &str) -> String {
+    let digest = hex::encode(Sha256::digest(
+        format!("{schedule_id}\0{occurrence}").as_bytes(),
+    ));
+    format!("schedule-{}", digest.chars().take(32).collect::<String>())
+}
+
+fn schedule_event(
+    schedule: &WorkflowSchedule,
+    expected_stream_version: u64,
+    event_type: &str,
+    payload: Value,
+) -> NewEvent {
+    NewEvent {
+        event_version: 1,
+        stream_id: schedule_stream(&schedule.schedule_id),
+        expected_stream_version,
+        classification: EventClassification::Workflow,
+        event_type: event_type.into(),
+        actor: Actor {
+            actor_type: ActorType::Workflow,
+            id: schedule.schedule_id.clone(),
+        },
+        context: ExecutionContext {
+            correlation_id: schedule.schedule_id.clone(),
+            workflow_id: Some(schedule.schedule_id.clone()),
+            workflow_hash: Some(schedule.workflow_hash.clone()),
+            ..ExecutionContext::default()
+        },
+        payload,
+    }
+}
+
+fn scheduled_run_event(schedule: &WorkflowSchedule, run_id: &str, occurrence: &str) -> NewEvent {
+    NewEvent {
+        event_version: 1,
+        stream_id: format!("workflow-run:{run_id}"),
+        expected_stream_version: 0,
+        classification: EventClassification::Workflow,
+        event_type: "workflow.run.queued.v1".into(),
+        actor: Actor {
+            actor_type: ActorType::Workflow,
+            id: schedule.schedule_id.clone(),
+        },
+        context: ExecutionContext {
+            correlation_id: run_id.into(),
+            run_id: Some(run_id.into()),
+            workflow_id: Some(run_id.into()),
+            workflow_hash: Some(schedule.workflow_hash.clone()),
+            ..ExecutionContext::default()
+        },
+        payload: json!({
+            "workflow_name": schedule.workflow_name,
+            "workflow_version": schedule.workflow_version,
+            "workflow_hash": schedule.workflow_hash,
+            "inputs": schedule.inputs,
+            "parent_run_id": Value::Null,
+            "parent_step_id": Value::Null,
+            "parent_execution_id": Value::Null,
+            "trigger_kind": WorkflowTriggerKind::Schedule,
+            "trigger_id": schedule.schedule_id,
+            "trigger_occurrence": occurrence,
+            "call_depth": 1,
+        }),
+    }
+}
+
 /// Policy-controlled workflow effect request handed to the runtime gateway.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkflowEffect {
@@ -1121,6 +1372,10 @@ impl WorkflowService {
         provenance: &str,
     ) -> Result<ValidatedWorkflow, WorkflowError> {
         let validated = validate_definition(yaml)?;
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
         validate_call_graph(self.repository.as_ref(), &validated.definition, false)?;
         self.repository
             .register(&validated.definition, &validated.content_hash, provenance)?;
@@ -1234,6 +1489,344 @@ impl WorkflowService {
     /// List bounded durable runs.
     pub fn list_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>, WorkflowError> {
         self.repository.runs(limit).map_err(Into::into)
+    }
+
+    /// Create one bounded, hash-pinned cadence schedule.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_schedule(
+        &self,
+        schedule_id: &str,
+        workflow_name: &str,
+        workflow_version: &str,
+        inputs: Value,
+        cadence_seconds: u64,
+        misfire_policy: WorkflowScheduleMisfirePolicy,
+        enabled: bool,
+        starts_at: Option<&str>,
+    ) -> Result<WorkflowSchedule, WorkflowError> {
+        let now = OffsetDateTime::now_utc();
+        self.create_schedule_at(
+            schedule_id,
+            workflow_name,
+            workflow_version,
+            inputs,
+            cadence_seconds,
+            misfire_policy,
+            enabled,
+            starts_at,
+            now,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_schedule_at(
+        &self,
+        schedule_id: &str,
+        workflow_name: &str,
+        workflow_version: &str,
+        inputs: Value,
+        cadence_seconds: u64,
+        misfire_policy: WorkflowScheduleMisfirePolicy,
+        enabled: bool,
+        starts_at: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Result<WorkflowSchedule, WorkflowError> {
+        if schedule_id.is_empty()
+            || schedule_id.len() > MAX_SCHEDULE_ID_BYTES
+            || !valid_name(schedule_id)
+        {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "schedule id must contain 1..={MAX_SCHEDULE_ID_BYTES} lowercase letters, digits, dots, or hyphens"
+            )));
+        }
+        if !(MIN_SCHEDULE_CADENCE_SECONDS..=MAX_SCHEDULE_CADENCE_SECONDS).contains(&cadence_seconds)
+        {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "schedule cadence must be between {MIN_SCHEDULE_CADENCE_SECONDS} and {MAX_SCHEDULE_CADENCE_SECONDS} seconds"
+            )));
+        }
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        if self.repository.schedule(schedule_id)?.is_some() {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "workflow schedule {schedule_id} already exists"
+            )));
+        }
+        if self.repository.schedules(MAX_WORKFLOW_SCHEDULES)?.len() >= MAX_WORKFLOW_SCHEDULES {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "workflow schedule limit {MAX_WORKFLOW_SCHEDULES} is exhausted"
+            )));
+        }
+        let (definition, workflow_hash) = self
+            .repository
+            .definition(workflow_name, workflow_version)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("{workflow_name}:{workflow_version}"))
+            })?;
+        validate_call_graph(self.repository.as_ref(), &definition, true)?;
+        validate_instance(&definition.inputs, &inputs, "schedule input")?;
+        let first_fire = match starts_at {
+            Some(starts_at) => parse_schedule_time(starts_at, "schedule start")?,
+            None => add_schedule_occurrences(now, cadence_seconds, 1)?,
+        };
+        let now = format_schedule_time(now)?;
+        let starts_at = format_schedule_time(first_fire)?;
+        let schedule = WorkflowSchedule {
+            schedule_id: schedule_id.into(),
+            workflow_name: workflow_name.into(),
+            workflow_version: workflow_version.into(),
+            workflow_hash,
+            inputs,
+            cadence_seconds,
+            misfire_policy,
+            enabled,
+            starts_at: starts_at.clone(),
+            next_fire_at: starts_at,
+            last_scheduled_at: None,
+            last_run_id: None,
+            blocked_reason: None,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.repository.create_schedule(
+            &schedule,
+            Actor {
+                actor_type: ActorType::User,
+                id: "workflow-schedule-registrar".into(),
+            },
+        )?;
+        Ok(schedule)
+    }
+
+    /// Reconstruct one canonical workflow schedule.
+    pub fn get_schedule(&self, schedule_id: &str) -> Result<WorkflowSchedule, WorkflowError> {
+        self.repository
+            .schedule(schedule_id)?
+            .ok_or_else(|| WorkflowError::NotFound(format!("workflow schedule {schedule_id}")))
+    }
+
+    /// List bounded schedules in deterministic identifier order.
+    pub fn list_schedules(&self, limit: usize) -> Result<Vec<WorkflowSchedule>, WorkflowError> {
+        self.repository
+            .schedules(limit.min(MAX_WORKFLOW_SCHEDULES))
+            .map_err(Into::into)
+    }
+
+    /// Explicitly enable or disable one schedule after rechecking pinned trust.
+    pub fn set_schedule_enabled(
+        &self,
+        schedule_id: &str,
+        enabled: bool,
+    ) -> Result<WorkflowSchedule, WorkflowError> {
+        let now = format_schedule_time(OffsetDateTime::now_utc())?;
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let schedule = self
+            .repository
+            .schedule(schedule_id)?
+            .ok_or_else(|| WorkflowError::NotFound(format!("workflow schedule {schedule_id}")))?;
+        if enabled {
+            let (definition, current_hash) = self
+                .repository
+                .definition(&schedule.workflow_name, &schedule.workflow_version)?
+                .ok_or_else(|| WorkflowError::NotFound(schedule.workflow_name.clone()))?;
+            if current_hash != schedule.workflow_hash {
+                return Err(WorkflowError::InvalidTransition(
+                    "schedule cannot be enabled because its pinned workflow definition changed"
+                        .into(),
+                ));
+            }
+            validate_call_graph(self.repository.as_ref(), &definition, true)?;
+            validate_instance(&definition.inputs, &schedule.inputs, "schedule input")?;
+        }
+        self.repository
+            .set_schedule_enabled(
+                schedule_id,
+                enabled,
+                &now,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "workflow-schedule-operator".into(),
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    /// Evaluate every due schedule against an explicit UTC clock value.
+    pub fn tick_schedules_at(
+        &self,
+        now: &str,
+    ) -> Result<Vec<WorkflowScheduleDispatch>, WorkflowError> {
+        let now = parse_schedule_time(now, "scheduler clock")?;
+        self.tick_schedules(now)
+    }
+
+    /// Evaluate every due schedule using the current UTC clock.
+    pub fn tick_schedules_now(&self) -> Result<Vec<WorkflowScheduleDispatch>, WorkflowError> {
+        self.tick_schedules(OffsetDateTime::now_utc())
+    }
+
+    fn tick_schedules(
+        &self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<WorkflowScheduleDispatch>, WorkflowError> {
+        let now_text = format_schedule_time(now)?;
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let schedules = self.repository.schedules(MAX_WORKFLOW_SCHEDULES)?;
+        let mut dispatches = Vec::new();
+        for mut schedule in schedules.into_iter().filter(|schedule| schedule.enabled) {
+            let next_fire = parse_schedule_time(&schedule.next_fire_at, "next schedule fire")?;
+            if now < next_fire {
+                continue;
+            }
+            let elapsed_seconds = (now - next_fire).whole_seconds();
+            let cadence = i64::try_from(schedule.cadence_seconds)
+                .map_err(|error| WorkflowError::InvalidTransition(error.to_string()))?;
+            let due_count = u64::try_from(elapsed_seconds / cadence + 1)
+                .map_err(|error| WorkflowError::InvalidTransition(error.to_string()))?;
+            let latest_due = add_schedule_occurrences(
+                next_fire,
+                schedule.cadence_seconds,
+                due_count.saturating_sub(1),
+            )?;
+            let latest_due_text = format_schedule_time(latest_due)?;
+
+            let definition = self
+                .repository
+                .definition(&schedule.workflow_name, &schedule.workflow_version)?;
+            let trust_failure = match definition.as_ref() {
+                None => Some("pinned workflow definition is missing"),
+                Some((_, current_hash)) if current_hash != &schedule.workflow_hash => {
+                    Some("pinned workflow definition hash changed")
+                }
+                Some((definition, _)) => {
+                    match validate_call_graph(self.repository.as_ref(), definition, true) {
+                        Err(WorkflowError::Store(error)) => return Err(error.into()),
+                        Err(_) => Some("pinned workflow call graph is no longer valid"),
+                        Ok(()) => match validate_instance(
+                            &definition.inputs,
+                            &schedule.inputs,
+                            "schedule input",
+                        ) {
+                            Err(WorkflowError::Store(error)) => return Err(error.into()),
+                            Err(_) => Some("pinned workflow input is no longer valid"),
+                            Ok(()) => None,
+                        },
+                    }
+                }
+            };
+            if let Some(reason) = trust_failure {
+                schedule.enabled = false;
+                schedule.blocked_reason = Some(reason.into());
+                schedule.updated_at = now_text.clone();
+                let expected_version = self.schedule_version(&schedule.schedule_id)?;
+                self.journal.append(schedule_event(
+                    &schedule,
+                    expected_version,
+                    "workflow.schedule.blocked.v1",
+                    json!({
+                        "record": &schedule,
+                        "reason": reason,
+                        "scheduled_at": latest_due_text,
+                    }),
+                ))?;
+                dispatches.push(WorkflowScheduleDispatch {
+                    schedule_id: schedule.schedule_id.clone(),
+                    status: WorkflowScheduleDispatchStatus::Blocked,
+                    scheduled_at: Some(latest_due_text),
+                    next_fire_at: schedule.next_fire_at.clone(),
+                    missed_occurrences: 0,
+                    run_id: None,
+                    reason: Some(reason.into()),
+                });
+                continue;
+            }
+
+            let next_fire =
+                add_schedule_occurrences(next_fire, schedule.cadence_seconds, due_count)?;
+            let next_fire_text = format_schedule_time(next_fire)?;
+            let skip =
+                due_count > 1 && schedule.misfire_policy == WorkflowScheduleMisfirePolicy::Skip;
+            schedule.next_fire_at = next_fire_text.clone();
+            schedule.last_scheduled_at = Some(latest_due_text.clone());
+            schedule.updated_at = now_text.clone();
+            schedule.blocked_reason = None;
+            let expected_schedule_version = self.schedule_version(&schedule.schedule_id)?;
+            if skip {
+                self.journal.append(schedule_event(
+                    &schedule,
+                    expected_schedule_version,
+                    "workflow.schedule.skipped.v1",
+                    json!({
+                        "record": &schedule,
+                        "scheduled_at": latest_due_text,
+                        "due_occurrences": due_count,
+                        "missed_occurrences": due_count,
+                    }),
+                ))?;
+                dispatches.push(WorkflowScheduleDispatch {
+                    schedule_id: schedule.schedule_id.clone(),
+                    status: WorkflowScheduleDispatchStatus::Skipped,
+                    scheduled_at: Some(latest_due_text),
+                    next_fire_at: next_fire_text,
+                    missed_occurrences: due_count,
+                    run_id: None,
+                    reason: None,
+                });
+                continue;
+            }
+
+            let run_id = scheduled_run_id(&schedule.schedule_id, &latest_due_text);
+            if self.repository.run(&run_id)?.is_some() {
+                return Err(WorkflowError::InvalidTransition(format!(
+                    "deterministic scheduled run {run_id} already exists before its schedule transition"
+                )));
+            }
+            schedule.last_run_id = Some(run_id.clone());
+            let schedule_id = schedule.schedule_id.clone();
+            let run_event = scheduled_run_event(&schedule, &run_id, &latest_due_text);
+            self.journal.append_batch(vec![
+                schedule_event(
+                    &schedule,
+                    expected_schedule_version,
+                    "workflow.schedule.fired.v1",
+                    json!({
+                        "record": &schedule,
+                        "scheduled_at": latest_due_text,
+                        "due_occurrences": due_count,
+                        "missed_occurrences": due_count.saturating_sub(1),
+                        "run_id": run_id,
+                    }),
+                ),
+                run_event,
+            ])?;
+            dispatches.push(WorkflowScheduleDispatch {
+                schedule_id,
+                status: WorkflowScheduleDispatchStatus::Queued,
+                scheduled_at: Some(latest_due_text),
+                next_fire_at: next_fire_text,
+                missed_occurrences: due_count.saturating_sub(1),
+                run_id: Some(run_id),
+                reason: None,
+            });
+        }
+        Ok(dispatches)
+    }
+
+    fn schedule_version(&self, schedule_id: &str) -> Result<u64, StoreError> {
+        u64::try_from(
+            self.journal
+                .read_stream(&schedule_stream(schedule_id))?
+                .len(),
+        )
+        .map_err(|error| StoreError::Adapter(error.to_string()))
     }
 
     /// Supply structured input to a waiting run and resume it.
@@ -2465,10 +3058,14 @@ mod tests {
     use super::{
         Condition, DenyWorkflowEffects, EventSourcedWorkflowRepository, MAX_CONDITION_BYTES,
         MAX_CONDITION_DEPTH, MAX_CONDITION_TOKENS, WorkflowEffect, WorkflowEffectRunner,
-        WorkflowError, WorkflowService, validate_definition,
+        WorkflowError, WorkflowService, parse_schedule_time, validate_definition,
     };
     use async_trait::async_trait;
-    use colossus_contracts::{EventEnvelope, NewEvent, ProjectionWorkItem, SignedCheckpoint};
+    use colossus_contracts::{
+        EventEnvelope, NewEvent, ProjectionWorkItem, SignedCheckpoint,
+        WorkflowScheduleDispatchStatus, WorkflowScheduleMisfirePolicy, WorkflowStatus,
+        WorkflowTriggerKind,
+    };
     use colossus_journal_redb::{Ed25519CheckpointSigner, RedbEventJournal};
     use colossus_ports::{
         EventJournal, KeyProvider, StoreError, VerificationReport, WorkflowRepository,
@@ -2514,6 +3111,236 @@ steps:
         assert_workflow_repository_conformance(|| {
             Box::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)))
         });
+    }
+
+    #[tokio::test]
+    async fn fire_once_schedule_reconstructs_time_and_queues_exactly_once() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            Arc::new(DenyWorkflowEffects),
+        );
+        service
+            .register_definition(SIMPLE, "schedule-test")
+            .expect("register workflow");
+        service
+            .create_schedule_at(
+                "every-minute",
+                "smoke",
+                "1.0.0",
+                json!({"message": "scheduled"}),
+                60,
+                WorkflowScheduleMisfirePolicy::FireOnce,
+                true,
+                Some("2026-01-01T12:00:00Z"),
+                parse_schedule_time("2026-01-01T11:59:00Z", "test clock").expect("test clock"),
+            )
+            .expect("create schedule");
+
+        let dispatches = service
+            .tick_schedules_at("2026-01-01T12:03:10Z")
+            .expect("tick schedule");
+        assert_eq!(dispatches.len(), 1);
+        let dispatch = &dispatches[0];
+        assert_eq!(dispatch.status, WorkflowScheduleDispatchStatus::Queued);
+        assert_eq!(
+            dispatch.scheduled_at.as_deref(),
+            Some("2026-01-01T12:03:00Z")
+        );
+        assert_eq!(dispatch.next_fire_at, "2026-01-01T12:04:00Z");
+        assert_eq!(dispatch.missed_occurrences, 3);
+        let run_id = dispatch.run_id.clone().expect("scheduled run id");
+        assert!(
+            service
+                .tick_schedules_at("2026-01-01T12:03:10Z")
+                .expect("repeat tick")
+                .is_empty(),
+            "the same clock value must not queue the occurrence twice"
+        );
+        let queued = service.get_run(&run_id).expect("queued run");
+        assert_eq!(queued.status, WorkflowStatus::Queued);
+        assert_eq!(queued.trigger_kind, Some(WorkflowTriggerKind::Schedule));
+        assert_eq!(queued.trigger_id.as_deref(), Some("every-minute"));
+        assert_eq!(
+            queued.trigger_occurrence.as_deref(),
+            Some("2026-01-01T12:03:00Z")
+        );
+        let completed = service.drain().await.expect("drain scheduled run");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].status, WorkflowStatus::Completed);
+
+        let reopened = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal))),
+            Arc::new(DenyWorkflowEffects),
+        );
+        let schedule = reopened.get_schedule("every-minute").expect("schedule");
+        assert_eq!(schedule.next_fire_at, "2026-01-01T12:04:00Z");
+        assert_eq!(schedule.last_run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(
+            reopened.get_run(&run_id).expect("reopened run").status,
+            WorkflowStatus::Completed
+        );
+
+        let events = journal.read_global(1, usize::MAX).expect("events");
+        let fired = events
+            .iter()
+            .position(|event| event.event_type == "workflow.schedule.fired.v1")
+            .expect("fired event");
+        assert_eq!(
+            events.get(fired + 1).map(|event| event.event_type.as_str()),
+            Some("workflow.run.queued.v1"),
+            "the schedule transition and queued run must be adjacent in one journal batch"
+        );
+    }
+
+    #[test]
+    fn skip_schedule_drops_backlog_but_fires_the_next_single_occurrence() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            repository,
+            Arc::new(DenyWorkflowEffects),
+        );
+        service
+            .register_definition(SIMPLE, "schedule-test")
+            .expect("register workflow");
+        service
+            .create_schedule_at(
+                "skip-backlog",
+                "smoke",
+                "1.0.0",
+                json!({"message": "scheduled"}),
+                60,
+                WorkflowScheduleMisfirePolicy::Skip,
+                true,
+                Some("2026-01-01T12:00:00Z"),
+                parse_schedule_time("2026-01-01T11:59:00Z", "test clock").expect("test clock"),
+            )
+            .expect("create schedule");
+
+        let skipped = service
+            .tick_schedules_at("2026-01-01T12:03:10Z")
+            .expect("skip backlog");
+        assert_eq!(skipped[0].status, WorkflowScheduleDispatchStatus::Skipped);
+        assert_eq!(skipped[0].missed_occurrences, 4);
+        assert!(skipped[0].run_id.is_none());
+        assert!(service.list_runs(10).expect("runs").is_empty());
+        assert_eq!(
+            service
+                .get_schedule("skip-backlog")
+                .expect("schedule")
+                .next_fire_at,
+            "2026-01-01T12:04:00Z"
+        );
+
+        let due = service
+            .tick_schedules_at("2026-01-01T12:04:30Z")
+            .expect("single due occurrence");
+        assert_eq!(due[0].status, WorkflowScheduleDispatchStatus::Queued);
+        assert_eq!(due[0].missed_occurrences, 0);
+        assert_eq!(due[0].scheduled_at.as_deref(), Some("2026-01-01T12:04:00Z"));
+    }
+
+    #[test]
+    fn changed_definition_blocks_and_disables_due_schedule() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            repository,
+            Arc::new(DenyWorkflowEffects),
+        );
+        service
+            .register_definition(SIMPLE, "schedule-test")
+            .expect("register workflow");
+        service
+            .create_schedule_at(
+                "trust-pinned",
+                "smoke",
+                "1.0.0",
+                json!({"message": "scheduled"}),
+                60,
+                WorkflowScheduleMisfirePolicy::FireOnce,
+                true,
+                Some("2026-01-01T12:00:00Z"),
+                parse_schedule_time("2026-01-01T11:59:00Z", "test clock").expect("test clock"),
+            )
+            .expect("create schedule");
+        service
+            .register_definition(
+                &SIMPLE.replace(
+                    "Offline smoke workflow",
+                    "Changed workflow invalidates schedule trust",
+                ),
+                "schedule-test-change",
+            )
+            .expect("change definition");
+
+        let blocked = service
+            .tick_schedules_at("2026-01-01T12:00:01Z")
+            .expect("tick changed schedule");
+        assert_eq!(blocked[0].status, WorkflowScheduleDispatchStatus::Blocked);
+        assert!(blocked[0].run_id.is_none());
+        let schedule = service.get_schedule("trust-pinned").expect("schedule");
+        assert!(!schedule.enabled);
+        assert_eq!(
+            schedule.blocked_reason.as_deref(),
+            Some("pinned workflow definition hash changed")
+        );
+        assert!(service.list_runs(10).expect("runs").is_empty());
+        assert!(
+            service.set_schedule_enabled("trust-pinned", true).is_err(),
+            "an operator cannot re-enable a schedule whose pinned definition changed"
+        );
+    }
+
+    #[test]
+    fn schedule_validation_rejects_unbounded_cadence_and_non_utc_start() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let service = WorkflowService::new(journal, repository, Arc::new(DenyWorkflowEffects));
+        service
+            .register_definition(SIMPLE, "schedule-test")
+            .expect("register workflow");
+        let now = parse_schedule_time("2026-01-01T11:59:00Z", "test clock").expect("test clock");
+        assert!(
+            service
+                .create_schedule_at(
+                    "too-fast",
+                    "smoke",
+                    "1.0.0",
+                    json!({"message": "scheduled"}),
+                    59,
+                    WorkflowScheduleMisfirePolicy::FireOnce,
+                    true,
+                    None,
+                    now,
+                )
+                .is_err()
+        );
+        assert!(
+            service
+                .create_schedule_at(
+                    "not-utc",
+                    "smoke",
+                    "1.0.0",
+                    json!({"message": "scheduled"}),
+                    60,
+                    WorkflowScheduleMisfirePolicy::FireOnce,
+                    true,
+                    Some("2026-01-01T12:00:00-05:00"),
+                    now,
+                )
+                .is_err()
+        );
     }
 
     const WAITING: &str = r#"
@@ -3785,6 +4612,128 @@ compensation:
             .expect("rollback call");
         assert!(rollback.compensation);
         assert_ne!(rollback.step_id, calls[0].step_id);
+    }
+
+    #[tokio::test]
+    async fn process_kill_after_schedule_batch_recovers_without_duplicate_run() {
+        const CHILD_ENV: &str = "COLOSSUS_WORKFLOW_SCHEDULE_PROCESS_KILL_CHILD";
+        const ROOT_ENV: &str = "COLOSSUS_WORKFLOW_SCHEDULE_PROCESS_KILL_ROOT";
+        const SCHEDULE_ID: &str = "process-kill-schedule";
+        const OCCURRENCE: &str = "2026-01-01T12:00:00Z";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let root = PathBuf::from(
+                std::env::var_os(ROOT_ENV).expect("schedule process-kill child root"),
+            );
+            let durable_journal = process_kill_journal(&root);
+            let repository: Arc<dyn WorkflowRepository> = Arc::new(
+                EventSourcedWorkflowRepository::new(Arc::clone(&durable_journal)),
+            );
+            let service = WorkflowService::new(
+                Arc::clone(&durable_journal),
+                repository,
+                Arc::new(DenyWorkflowEffects),
+            );
+            service
+                .register_definition(SIMPLE, "schedule-process-kill-test")
+                .expect("register scheduled workflow");
+            service
+                .create_schedule_at(
+                    SCHEDULE_ID,
+                    "smoke",
+                    "1.0.0",
+                    json!({"message": "scheduled"}),
+                    60,
+                    WorkflowScheduleMisfirePolicy::FireOnce,
+                    true,
+                    Some(OCCURRENCE),
+                    parse_schedule_time("2026-01-01T11:59:00Z", "test clock").expect("test clock"),
+                )
+                .expect("create schedule");
+            drop(service);
+
+            let journal: Arc<dyn EventJournal> = Arc::new(CrashAfterEventJournal {
+                inner: durable_journal,
+                event_type: "workflow.schedule.fired.v1",
+            });
+            let repository: Arc<dyn WorkflowRepository> =
+                Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+            let service = WorkflowService::new(journal, repository, Arc::new(DenyWorkflowEffects));
+            service
+                .tick_schedules_at("2026-01-01T12:00:01Z")
+                .expect("schedule batch must terminate this process after commit");
+            panic!("schedule process-kill child returned without terminating");
+        }
+
+        let directory = tempdir().expect("schedule process-kill directory");
+        let output = Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                "tests::process_kill_after_schedule_batch_recovers_without_duplicate_run",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env(ROOT_ENV, directory.path())
+            .output()
+            .expect("spawn schedule process-kill child");
+        assert!(
+            !output.status.success(),
+            "schedule process-kill child unexpectedly succeeded: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let journal = process_kill_journal(directory.path());
+        journal
+            .verify()
+            .expect("verify journal after schedule process kill");
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            repository,
+            Arc::new(DenyWorkflowEffects),
+        );
+        let schedule = service.get_schedule(SCHEDULE_ID).expect("reopen schedule");
+        assert_eq!(schedule.next_fire_at, "2026-01-01T12:01:00Z");
+        assert_eq!(schedule.last_scheduled_at.as_deref(), Some(OCCURRENCE));
+        let run_id = schedule.last_run_id.clone().expect("queued scheduled run");
+        let queued = service.get_run(&run_id).expect("reopen scheduled run");
+        assert_eq!(queued.status, WorkflowStatus::Queued);
+        assert_eq!(queued.trigger_kind, Some(WorkflowTriggerKind::Schedule));
+        assert_eq!(queued.trigger_id.as_deref(), Some(SCHEDULE_ID));
+        assert_eq!(queued.trigger_occurrence.as_deref(), Some(OCCURRENCE));
+        assert!(
+            service
+                .tick_schedules_at("2026-01-01T12:00:01Z")
+                .expect("repeat schedule tick")
+                .is_empty(),
+            "recovery must not queue the committed occurrence twice"
+        );
+        let completed = service.drain().await.expect("drain recovered schedule run");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].run_id, run_id);
+        assert_eq!(completed[0].status, WorkflowStatus::Completed);
+        assert_eq!(service.list_runs(10).expect("list runs").len(), 1);
+        journal.verify().expect("verify recovered schedule journal");
+        drop(service);
+        drop(journal);
+
+        let reopened = process_kill_journal(directory.path());
+        reopened.verify().expect("verify reopened schedule journal");
+        let repository = EventSourcedWorkflowRepository::new(reopened);
+        assert_eq!(
+            repository
+                .schedule(SCHEDULE_ID)
+                .expect("reopened schedule")
+                .expect("schedule")
+                .last_run_id
+                .as_deref(),
+            Some(run_id.as_str())
+        );
+        let runs = repository.runs(10).expect("reopened runs");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, WorkflowStatus::Completed);
     }
 
     #[tokio::test]

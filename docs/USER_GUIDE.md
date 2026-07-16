@@ -71,6 +71,7 @@ Useful commands include:
 /memories
 /research QUESTION
 /workflow list
+/workflow schedule list
 /audit verify
 /exit
 ```
@@ -279,11 +280,17 @@ colossus --config .colossus/config.yaml workflow register \
 colossus --config .colossus/config.yaml workflow run release 1.0.0 \
   --inputs '{"branch":"main"}'
 colossus --config .colossus/config.yaml workflow status WORKFLOW_RUN_ID
+colossus --config .colossus/config.yaml workflow schedule create nightly \
+  release 1.0.0 --cadence-seconds 86400 --inputs '{"branch":"main"}'
+colossus --config .colossus/config.yaml workflow schedule list
 ```
 
 Definitions are exact-content hash pinned. A changed file is a new trust identity.
 Effectful retries require an explicit idempotency strategy; recovery records abandoned
-attempts as interrupted or unknown instead of rerunning them.
+attempts as interrupted or unknown instead of rerunning them. Persisted schedules use a
+bounded fixed UTC cadence and explicit skip/fire-once backlog behavior; their schedule
+transition and deterministic queued run commit atomically. See
+[Durable Workflows](WORKFLOWS.md) for the complete schedule lifecycle.
 
 ## Integrations And MCP
 

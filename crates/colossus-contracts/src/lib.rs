@@ -2830,6 +2830,92 @@ pub enum WorkflowStep {
     },
 }
 
+/// Trigger family that created a durable workflow run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowTriggerKind {
+    /// A persisted cadence schedule queued the run.
+    Schedule,
+}
+
+/// Behavior when more than one schedule occurrence is already due.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowScheduleMisfirePolicy {
+    /// Advance beyond every overdue occurrence without queuing a catch-up run.
+    Skip,
+    /// Queue one run for the latest overdue occurrence.
+    FireOnce,
+}
+
+/// Canonical persisted workflow schedule reconstructed from journal events.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowSchedule {
+    /// Stable operator-selected schedule identifier.
+    pub schedule_id: String,
+    /// Pinned workflow name.
+    pub workflow_name: String,
+    /// Pinned workflow version.
+    pub workflow_version: String,
+    /// Pinned canonical definition hash.
+    pub workflow_hash: String,
+    /// Validated input snapshot applied to every occurrence.
+    pub inputs: Value,
+    /// Fixed cadence in seconds.
+    pub cadence_seconds: u64,
+    /// Explicit behavior for multiple overdue occurrences.
+    pub misfire_policy: WorkflowScheduleMisfirePolicy,
+    /// Whether the worker may evaluate the schedule.
+    pub enabled: bool,
+    /// UTC RFC3339 first occurrence boundary.
+    pub starts_at: String,
+    /// UTC RFC3339 next occurrence boundary.
+    pub next_fire_at: String,
+    /// Most recent occurrence boundary evaluated by the scheduler.
+    pub last_scheduled_at: Option<String>,
+    /// Most recent run queued by the scheduler.
+    pub last_run_id: Option<String>,
+    /// Bounded fail-closed reason when pinned trust is no longer valid.
+    pub blocked_reason: Option<String>,
+    /// UTC RFC3339 creation timestamp.
+    pub created_at: String,
+    /// UTC RFC3339 last transition timestamp.
+    pub updated_at: String,
+}
+
+/// Result of evaluating one due workflow schedule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowScheduleDispatchStatus {
+    /// A hash-pinned run was queued atomically with the schedule transition.
+    Queued,
+    /// Overdue occurrences were explicitly skipped.
+    Skipped,
+    /// Definition trust changed or disappeared and the schedule was disabled.
+    Blocked,
+}
+
+/// Bounded scheduler evaluation result returned to workers and operators.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowScheduleDispatch {
+    /// Evaluated schedule identifier.
+    pub schedule_id: String,
+    /// Scheduler outcome.
+    pub status: WorkflowScheduleDispatchStatus,
+    /// Latest due occurrence boundary, when one was evaluated.
+    pub scheduled_at: Option<String>,
+    /// Deterministically reconstructed next occurrence boundary.
+    pub next_fire_at: String,
+    /// Number of due occurrences not represented by a queued run.
+    pub missed_occurrences: u64,
+    /// Deterministic queued run identifier, when applicable.
+    pub run_id: Option<String>,
+    /// Bounded fail-closed detail for blocked schedules.
+    pub reason: Option<String>,
+}
+
 /// Durable workflow run projection reconstructed from events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2848,6 +2934,15 @@ pub struct WorkflowRun {
     pub parent_step_id: Option<String>,
     /// Runtime-scoped parent execution that launched this run.
     pub parent_execution_id: Option<String>,
+    /// Durable trigger family for non-manual runs.
+    #[serde(default)]
+    pub trigger_kind: Option<WorkflowTriggerKind>,
+    /// Schedule, webhook, or subscription identifier that created the run.
+    #[serde(default)]
+    pub trigger_id: Option<String>,
+    /// Exact UTC RFC3339 occurrence or delivery identity.
+    #[serde(default)]
+    pub trigger_occurrence: Option<String>,
     /// One-based workflow call depth.
     pub call_depth: u16,
     /// Durable status.

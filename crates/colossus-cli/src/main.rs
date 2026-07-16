@@ -9,7 +9,7 @@ use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
     MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
     ResearchSourceKind, RunEvent, RunEventEnvelope, SessionSummary, SubagentStatus, TaskStatus,
-    ToolCall, UserPromptRequest, UserPromptResponse,
+    ToolCall, UserPromptRequest, UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{
@@ -164,6 +164,11 @@ const TERMINAL_COMPLETIONS: &[&str] = &[
     "/context restore",
     "/workflow list",
     "/workflow status",
+    "/workflow schedule list",
+    "/workflow schedule show",
+    "/workflow schedule enable",
+    "/workflow schedule disable",
+    "/workflow schedule tick",
     "/audit verify",
     "/projection status",
     "/tools",
@@ -1031,6 +1036,11 @@ enum WorkflowAction {
         #[arg(long)]
         queued: bool,
     },
+    /// Create, inspect, control, or evaluate persisted workflow schedules.
+    Schedule {
+        #[command(subcommand)]
+        command: WorkflowScheduleAction,
+    },
     /// Show a reconstructed run.
     Status { run_id: String },
     /// Resume a waiting or interrupted run.
@@ -1039,6 +1049,62 @@ enum WorkflowAction {
     Input { run_id: String, input: String },
     /// Cancel a non-terminal run.
     Cancel { run_id: String },
+}
+
+#[derive(Subcommand)]
+enum WorkflowScheduleAction {
+    /// Create a hash-pinned fixed-cadence schedule.
+    Create {
+        schedule_id: String,
+        name: String,
+        version: String,
+        /// Fixed cadence in seconds (60 through 2678400).
+        #[arg(long)]
+        cadence_seconds: u64,
+        /// Inline JSON or @path to a JSON document.
+        #[arg(long, default_value = "{}")]
+        inputs: String,
+        /// Behavior when multiple occurrences are overdue.
+        #[arg(long, value_enum, default_value_t = WorkflowScheduleMisfireArg::FireOnce)]
+        misfire: WorkflowScheduleMisfireArg,
+        /// Create the schedule disabled.
+        #[arg(long)]
+        disabled: bool,
+        /// Optional UTC RFC3339 first occurrence; defaults to now plus one cadence.
+        #[arg(long)]
+        starts_at: Option<String>,
+    },
+    /// List persisted schedules in deterministic identifier order.
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one exact persisted schedule.
+    Show { schedule_id: String },
+    /// Enable one schedule after rechecking pinned workflow trust.
+    Enable { schedule_id: String },
+    /// Disable one schedule without deleting its audit history.
+    Disable { schedule_id: String },
+    /// Evaluate due schedules using the real or an explicit UTC clock.
+    Tick {
+        #[arg(long)]
+        at: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum WorkflowScheduleMisfireArg {
+    Skip,
+    FireOnce,
+}
+
+impl From<WorkflowScheduleMisfireArg> for WorkflowScheduleMisfirePolicy {
+    fn from(value: WorkflowScheduleMisfireArg) -> Self {
+        match value {
+            WorkflowScheduleMisfireArg::Skip => Self::Skip,
+            WorkflowScheduleMisfireArg::FireOnce => Self::FireOnce,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -2177,7 +2243,7 @@ fn print_terminal_help(preferences: &TerminalPreferences) {
         ],
         [
             "Runtime",
-            "/workflow list|status · /telemetry · /audit verify · /projection status",
+            "/workflow list|status|schedule · /telemetry · /audit verify · /projection status",
             "Inspect durable runs and runtime health",
         ],
         [
@@ -2544,6 +2610,57 @@ async fn workflow_command(
             };
             print_json(&run)?;
         }
+        WorkflowAction::Schedule { command } => match command {
+            WorkflowScheduleAction::Create {
+                schedule_id,
+                name,
+                version,
+                cadence_seconds,
+                inputs,
+                misfire,
+                disabled,
+                starts_at,
+            } => {
+                let inputs = parse_json_argument(runtime, &inputs).await?;
+                print_json(&runtime.workflows().create_schedule(
+                    &schedule_id,
+                    &name,
+                    &version,
+                    inputs,
+                    cadence_seconds,
+                    misfire.into(),
+                    !disabled,
+                    starts_at.as_deref(),
+                )?)?;
+            }
+            WorkflowScheduleAction::List { limit } => {
+                print_json(&runtime.workflows().list_schedules(limit.clamp(1, 10_000))?)?;
+            }
+            WorkflowScheduleAction::Show { schedule_id } => {
+                print_json(&runtime.workflows().get_schedule(&schedule_id)?)?;
+            }
+            WorkflowScheduleAction::Enable { schedule_id } => {
+                print_json(
+                    &runtime
+                        .workflows()
+                        .set_schedule_enabled(&schedule_id, true)?,
+                )?;
+            }
+            WorkflowScheduleAction::Disable { schedule_id } => {
+                print_json(
+                    &runtime
+                        .workflows()
+                        .set_schedule_enabled(&schedule_id, false)?,
+                )?;
+            }
+            WorkflowScheduleAction::Tick { at } => {
+                let dispatches = match at {
+                    Some(at) => runtime.workflows().tick_schedules_at(&at)?,
+                    None => runtime.workflows().tick_schedules_now()?,
+                };
+                print_json(&dispatches)?;
+            }
+        },
         WorkflowAction::Status { run_id } => {
             print_json(&runtime.workflows().get_run(&run_id)?)?;
         }
@@ -2806,6 +2923,14 @@ async fn line_runner(
             print_terminal_help(&preferences);
         } else if line == "/workflow list" {
             workflow_command(runtime, WorkflowAction::List).await?;
+        } else if line == "/workflow schedule list" {
+            workflow_command(
+                runtime,
+                WorkflowAction::Schedule {
+                    command: WorkflowScheduleAction::List { limit: 100 },
+                },
+            )
+            .await?;
         } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
             workflow_command(
                 runtime,
@@ -3405,6 +3530,50 @@ async fn dispatch_to_worker_if_active(
                     version: version.clone(),
                     inputs_source: inputs.clone(),
                     queued: *queued,
+                },
+                WorkflowAction::Schedule { command } => match command {
+                    WorkflowScheduleAction::Create {
+                        schedule_id,
+                        name,
+                        version,
+                        cadence_seconds,
+                        inputs,
+                        misfire,
+                        disabled,
+                        starts_at,
+                    } => WorkerOperation::WorkflowScheduleCreate {
+                        schedule_id: schedule_id.clone(),
+                        name: name.clone(),
+                        version: version.clone(),
+                        inputs_source: inputs.clone(),
+                        cadence_seconds: *cadence_seconds,
+                        misfire_policy: (*misfire).into(),
+                        enabled: !*disabled,
+                        starts_at: starts_at.clone(),
+                    },
+                    WorkflowScheduleAction::List { limit } => {
+                        WorkerOperation::WorkflowScheduleList { limit: *limit }
+                    }
+                    WorkflowScheduleAction::Show { schedule_id } => {
+                        WorkerOperation::WorkflowScheduleShow {
+                            schedule_id: schedule_id.clone(),
+                        }
+                    }
+                    WorkflowScheduleAction::Enable { schedule_id } => {
+                        WorkerOperation::WorkflowScheduleSetEnabled {
+                            schedule_id: schedule_id.clone(),
+                            enabled: true,
+                        }
+                    }
+                    WorkflowScheduleAction::Disable { schedule_id } => {
+                        WorkerOperation::WorkflowScheduleSetEnabled {
+                            schedule_id: schedule_id.clone(),
+                            enabled: false,
+                        }
+                    }
+                    WorkflowScheduleAction::Tick { at } => {
+                        WorkerOperation::WorkflowScheduleTick { at: at.clone() }
+                    }
                 },
                 WorkflowAction::Status { run_id } => WorkerOperation::WorkflowStatus {
                     run_id: run_id.clone(),
@@ -4263,6 +4432,12 @@ async fn worker_line_runner(
             print_terminal_help(&preferences);
         } else if line == "/workflow list" {
             print_json(&client.call(WorkerOperation::WorkflowList).await?)?;
+        } else if line == "/workflow schedule list" {
+            print_json(
+                &client
+                    .call(WorkerOperation::WorkflowScheduleList { limit: 100 })
+                    .await?,
+            )?;
         } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
             print_json(
                 &client
@@ -5971,6 +6146,8 @@ mod tests {
         assert!(values.contains(&"/help".into()));
         assert!(values.contains(&"/tui prefs".into()));
         assert!(values.contains(&"/workflow status".into()));
+        assert!(values.contains(&"/workflow schedule list".into()));
+        assert!(values.contains(&"/workflow schedule tick".into()));
         assert!(values.contains(&"/theme hacker".into()));
         assert!(values.contains(&"/theme preview high_contrast".into()));
         assert!(values.contains(&"@skill-creator".into()));
@@ -5985,6 +6162,56 @@ mod tests {
         let (prompt, skills) = resolve_skill_mentions("@someone hello", &["repo-review".into()]);
         assert_eq!(prompt, "@someone hello");
         assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn workflow_schedule_cli_parses_the_complete_creation_contract() {
+        let cli = Cli::try_parse_from([
+            "colossus",
+            "workflow",
+            "schedule",
+            "create",
+            "nightly",
+            "smoke",
+            "1.0.0",
+            "--cadence-seconds",
+            "3600",
+            "--inputs",
+            r#"{"message":"scheduled"}"#,
+            "--misfire",
+            "skip",
+            "--disabled",
+            "--starts-at",
+            "2026-01-01T12:00:00Z",
+        ])
+        .expect("workflow schedule command");
+        let Command::Workflow(WorkflowCommand {
+            command:
+                WorkflowAction::Schedule {
+                    command:
+                        WorkflowScheduleAction::Create {
+                            schedule_id,
+                            name,
+                            version,
+                            cadence_seconds,
+                            inputs,
+                            misfire,
+                            disabled,
+                            starts_at,
+                        },
+                },
+        }) = cli.command
+        else {
+            panic!("expected workflow schedule creation command");
+        };
+        assert_eq!(schedule_id, "nightly");
+        assert_eq!(name, "smoke");
+        assert_eq!(version, "1.0.0");
+        assert_eq!(cadence_seconds, 3_600);
+        assert_eq!(inputs, r#"{"message":"scheduled"}"#);
+        assert_eq!(misfire, WorkflowScheduleMisfireArg::Skip);
+        assert!(disabled);
+        assert_eq!(starts_at.as_deref(), Some("2026-01-01T12:00:00Z"));
     }
 
     #[test]
