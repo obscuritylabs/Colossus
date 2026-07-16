@@ -19,6 +19,10 @@ const SIGNING_KEY: &str = "66666666666666666666666666666666666666666666666666666
 const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(windows)]
 const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(windows))]
+const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(windows)]
+const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct ChildGuard(Child);
 
@@ -83,12 +87,18 @@ fn wait_for_worker(binary: &Path, config: &Path, timeout: Duration) {
     panic!("worker endpoint did not become ready: {last_error}");
 }
 
-fn wait_for_exit(child: &mut Child, timeout: Duration) {
+fn wait_for_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
     let deadline = Instant::now() + timeout;
-    while child.try_wait().expect("worker status").is_none() && Instant::now() < deadline {
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("worker status") {
+            return status;
+        }
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(child.try_wait().expect("worker status").is_some());
+    panic!(
+        "worker process {} did not exit within {timeout:?}",
+        child.id()
+    );
 }
 
 #[test]
@@ -724,7 +734,11 @@ steps:
     );
     let shutdown: Value = serde_json::from_slice(&shutdown.stdout).expect("shutdown JSON");
     assert_eq!(shutdown["stopping"], true);
-    wait_for_exit(&mut worker.0, Duration::from_secs(5));
+    let worker_status = wait_for_exit(&mut worker.0, WORKER_SHUTDOWN_TIMEOUT);
+    assert!(
+        worker_status.success(),
+        "worker exited unsuccessfully after shutdown: {worker_status}"
+    );
     #[cfg(unix)]
     assert!(!socket.exists());
 
