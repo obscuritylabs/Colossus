@@ -2492,8 +2492,12 @@ fn oci_command(
         let proxy = format!("http://{proxy_address}");
         environment.insert("HTTP_PROXY".into(), proxy.clone());
         environment.insert("HTTPS_PROXY".into(), proxy.clone());
-        environment.insert("ALL_PROXY".into(), proxy);
+        environment.insert("ALL_PROXY".into(), proxy.clone());
         environment.insert("NO_PROXY".into(), String::new());
+        environment.insert("http_proxy".into(), proxy.clone());
+        environment.insert("https_proxy".into(), proxy.clone());
+        environment.insert("all_proxy".into(), proxy);
+        environment.insert("no_proxy".into(), String::new());
     }
     for (name, value) in &environment {
         command.env(name, value).arg("--env").arg(name);
@@ -2798,12 +2802,25 @@ fn configure_command(command: &mut Command, job: &SandboxJob) {
         .stderr(Stdio::piped());
     if let Some(port) = job.proxy_port {
         let proxy = authenticated_proxy_url(port, job.proxy_credential.as_deref());
-        command
-            .env("HTTP_PROXY", &proxy)
-            .env("HTTPS_PROXY", &proxy)
-            .env("ALL_PROXY", &proxy)
-            .env("NO_PROXY", "");
+        configure_proxy_environment(command, &proxy);
     }
+}
+
+fn configure_proxy_environment(command: &mut Command, proxy: &str) {
+    command
+        .env("HTTP_PROXY", proxy)
+        .env("HTTPS_PROXY", proxy)
+        .env("ALL_PROXY", proxy)
+        .env("NO_PROXY", "");
+    #[cfg(unix)]
+    command
+        // curl deliberately ignores uppercase HTTP_PROXY, so Unix tools need the
+        // conventional lowercase spellings as well. These overwrite any values
+        // supplied by the untrusted process specification.
+        .env("http_proxy", proxy)
+        .env("https_proxy", proxy)
+        .env("all_proxy", proxy)
+        .env("no_proxy", "");
 }
 
 fn authenticated_proxy_url(port: u16, credential: Option<&str>) -> String {
@@ -4189,6 +4206,48 @@ mod tests {
             String::from_utf8(redacted)
                 .expect("UTF-8")
                 .contains("[REDACTED]")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proxy_environment_overrides_both_unix_spellings() {
+        let proxy = "http://colossus:credential@127.0.0.1:42";
+        let mut command = std::process::Command::new("/bin/true");
+        command
+            .env("http_proxy", "http://attacker.invalid")
+            .env("no_proxy", "*");
+        super::configure_proxy_environment(&mut command, proxy);
+        let environment = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ] {
+            assert_eq!(
+                environment.get(name).and_then(Option::as_deref),
+                Some(proxy)
+            );
+        }
+        assert_eq!(
+            environment.get("NO_PROXY").and_then(Option::as_deref),
+            Some("")
+        );
+        assert_eq!(
+            environment.get("no_proxy").and_then(Option::as_deref),
+            Some("")
         );
     }
 

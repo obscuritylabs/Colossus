@@ -55,6 +55,8 @@ include breaking changes while the public API is still settling.
   Docker completes.
 - Reused the production RustSec database for the fuzz lockfile audit, removing a
   redundant network fetch from the fail-closed supply-chain job.
+- Injected both standard Unix proxy-variable spellings for native and OCI sandboxes so
+  clients such as curl use the authenticated allowlist proxy on every release platform.
 
 ### Security
 
