@@ -81,9 +81,10 @@ was built from revision `5cdf9ee14ef33a3e63d72f80494b39b85a1813a4`; its full
 [release validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29465535984)
 passed all native runtime, sandbox, policy, dependency, fuzz, and packaging jobs.
 
-P2 remains intentionally open: webhooks, repository/event subscriptions, PostgreSQL
-event storage, external WORM audit anchors, and additional adapters. These are new
-product work, not hidden blockers in the Rust 0.7 baseline. Persisted workflow schedules
-are complete in the post-0.7 source tree and will ship with the next release.
+P2 remains intentionally open for PostgreSQL event storage, external WORM audit anchors,
+and additional adapters. These are new product work, not hidden blockers in the Rust 0.7
+baseline. Persisted schedules, authenticated webhooks, and durable repository-event
+subscriptions are complete in the post-0.7 source tree and will ship with the next
+release.
 The [Roadmap To 0.8.0](ROADMAP.md) is the current completion index and defines the
 evidence required to close each track.

@@ -10,7 +10,7 @@ use colossus_contracts::{
     ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus, SignedCheckpoint,
     StreamDisplayMode, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences,
     ThemeName, ToolSpec, TranscriptDensity, WorkflowDefinition, WorkflowMetadata, WorkflowSchedule,
-    WorkflowScheduleMisfirePolicy, WorkflowStep, WorkflowWebhook,
+    WorkflowScheduleMisfirePolicy, WorkflowStep, WorkflowSubscription, WorkflowWebhook,
 };
 use colossus_ports::{
     AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, MemoryIndex,
@@ -950,6 +950,54 @@ where
         )
         .expect("disable webhook");
     assert!(!disabled_webhook.enabled);
+    let subscription = WorkflowSubscription {
+        subscription_id: "conformance-events".into(),
+        workflow_name: "conformance".into(),
+        workflow_version: "1.0.0".into(),
+        workflow_hash: "hash-two".into(),
+        event_type: "task.created.v1".into(),
+        stream_prefix: Some("task:".into()),
+        enabled: true,
+        checkpoint: 17,
+        last_event_id: None,
+        last_run_id: None,
+        blocked_reason: None,
+        created_at: "2025-12-31T00:00:00Z".into(),
+        updated_at: "2025-12-31T00:00:00Z".into(),
+    };
+    repository
+        .create_subscription(
+            &subscription,
+            Actor {
+                actor_type: ActorType::User,
+                id: "conformance".into(),
+            },
+        )
+        .expect("create subscription");
+    assert!(
+        repository
+            .create_subscription(
+                &subscription,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "duplicate".into(),
+                },
+            )
+            .is_err(),
+        "subscription identifiers must be unique"
+    );
+    let disabled_subscription = repository
+        .set_subscription_enabled(
+            &subscription.subscription_id,
+            false,
+            "2026-01-01T01:00:00Z",
+            Actor {
+                actor_type: ActorType::User,
+                id: "conformance".into(),
+            },
+        )
+        .expect("disable subscription");
+    assert!(!disabled_subscription.enabled);
     let reopened = factory();
     assert_eq!(
         reopened
@@ -983,6 +1031,22 @@ where
         reopened
             .webhook_delivery(&webhook.webhook_id, "missing-delivery")
             .expect("missing webhook delivery")
+            .is_none()
+    );
+    assert_eq!(
+        reopened
+            .subscription(&subscription.subscription_id)
+            .expect("reconstructed subscription"),
+        Some(disabled_subscription.clone())
+    );
+    assert_eq!(
+        reopened.subscriptions(10).expect("subscription list"),
+        vec![disabled_subscription]
+    );
+    assert!(
+        reopened
+            .subscription_delivery(&subscription.subscription_id, "missing-event")
+            .expect("missing subscription delivery")
             .is_none()
     );
 }

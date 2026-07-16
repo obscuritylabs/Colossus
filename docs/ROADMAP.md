@@ -48,14 +48,18 @@ and the ordinary Rust formatting, Clippy, and workspace test gates.
   resolution, bounded body/header/replay validation, exact-delivery idempotency,
   definition-hash trust, ordinary effect/policy/audit routing, atomic delivery/run
   queueing, worker/embedded parity, and a loopback-only HTTP adapter.
-- Add repository/event subscriptions with durable cursor/checkpoint state and explicit
-  at-least-once delivery plus workflow idempotency behavior.
-- Route trigger-created runs through the existing queue, definition-hash pinning,
+- **Complete:** exact domain-event subscriptions with optional stream-prefix scope,
+  durable global checkpoints, at-least-once source replay, deterministic event/run
+  idempotency, definition/input trust, ordinary policy routing, atomic
+  checkpoint/delivery/run queueing, worker/embedded parity, and process-kill recovery.
+- **Complete:** every trigger-created run routes through the existing hash-pinned queue,
   worker coordination lock, policy, approvals, and recovery rules.
 
-Exit evidence: shared repository conformance, clock-controlled schedule tests, webhook
-authentication/replay/size rejection tests, subscription restart and duplicate-delivery
-tests, worker/embedded parity, and process-kill recovery with no duplicate unsafe effect.
+Exit evidence is present in shared repository conformance, clock-controlled schedule
+tests, webhook authentication/replay/size rejection tests, subscription restart and
+forced duplicate-delivery, filter, schema/trust blocking, and deferred-dispatch isolation
+tests, worker/embedded parity, and separate-process redb process-kill recovery without a
+duplicate run.
 
 ### 3. Replaceable Durable Storage And Audit Export
 

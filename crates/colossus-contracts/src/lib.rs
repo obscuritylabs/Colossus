@@ -2838,6 +2838,8 @@ pub enum WorkflowTriggerKind {
     Schedule,
     /// An authenticated persisted webhook queued the run.
     Webhook,
+    /// A persisted repository-event subscription queued the run.
+    Subscription,
 }
 
 /// Behavior when more than one schedule occurrence is already due.
@@ -2972,6 +2974,88 @@ pub struct WorkflowWebhookDispatch {
     pub delivery: WorkflowWebhookDelivery,
     /// Hash-pinned queued workflow run.
     pub run: WorkflowRun,
+}
+
+/// Canonical persisted repository-event subscription reconstructed from journal events.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowSubscription {
+    /// Stable operator-selected subscription identifier.
+    pub subscription_id: String,
+    /// Pinned workflow name.
+    pub workflow_name: String,
+    /// Pinned workflow version.
+    pub workflow_version: String,
+    /// Pinned canonical definition hash.
+    pub workflow_hash: String,
+    /// Exact versioned domain event name accepted by this subscription.
+    pub event_type: String,
+    /// Optional exact stream prefix used to narrow matching events.
+    pub stream_prefix: Option<String>,
+    /// Whether the worker may evaluate the subscription.
+    pub enabled: bool,
+    /// Highest global journal sequence durably evaluated by this subscription.
+    pub checkpoint: u64,
+    /// Most recent source event durably delivered to a workflow run.
+    pub last_event_id: Option<String>,
+    /// Most recent run queued by this subscription.
+    pub last_run_id: Option<String>,
+    /// Bounded fail-closed reason when trust or input validation is no longer valid.
+    pub blocked_reason: Option<String>,
+    /// UTC RFC3339 creation timestamp.
+    pub created_at: String,
+    /// UTC RFC3339 last transition timestamp.
+    pub updated_at: String,
+}
+
+/// Canonical receipt for one repository event delivered through a subscription.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowSubscriptionDelivery {
+    /// Subscription that accepted the event.
+    pub subscription_id: String,
+    /// Immutable source journal event identifier.
+    pub source_event_id: String,
+    /// Immutable source global journal sequence.
+    pub source_global_sequence: u64,
+    /// UTC RFC3339 time at which Colossus durably queued the run.
+    pub delivered_at: String,
+    /// Deterministic queued workflow run identifier.
+    pub run_id: String,
+}
+
+/// Result of evaluating a persisted repository-event subscription.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowSubscriptionDispatchStatus {
+    /// The source event and deterministic run were committed atomically.
+    Queued,
+    /// Unmatched journal work advanced the durable subscription checkpoint.
+    Checkpointed,
+    /// An already delivered source event was acknowledged without another run.
+    Duplicate,
+    /// Definition trust or the source input envelope failed closed.
+    Blocked,
+    /// Policy or the internal dispatch control effect did not complete; the source remains pending.
+    Deferred,
+}
+
+/// Bounded subscription evaluation result returned to workers and operators.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowSubscriptionDispatch {
+    /// Evaluated subscription identifier.
+    pub subscription_id: String,
+    /// Evaluation outcome.
+    pub status: WorkflowSubscriptionDispatchStatus,
+    /// Highest global journal sequence durably evaluated after the outcome.
+    pub checkpoint: u64,
+    /// Source event identity when a matching event was evaluated.
+    pub source_event_id: Option<String>,
+    /// Deterministic queued run identifier, when applicable.
+    pub run_id: Option<String>,
+    /// Bounded fail-closed detail for blocked or deferred subscriptions.
+    pub reason: Option<String>,
 }
 
 /// Durable workflow run projection reconstructed from events.
