@@ -42,7 +42,7 @@ colossus --config .colossus/config.yaml run --skill coding \
   "Implement the approved plan"
 ```
 
-In the REPL, `/skills`, `/skill use NAME`, `/skill active`, `/skill show NAME`,
+In the TUI, `/skills`, `/skill use NAME`, `/skill active`, `/skill show NAME`,
 `/skill clear`, `/skill resources NAME`, and `/skill read NAME PATH` operate on the same
 runtime service. Full instructions are injected only for active skills. Required tools
 must exist in the active catalog before composition succeeds.

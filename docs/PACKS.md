@@ -42,7 +42,7 @@ If a manifest contains any signature, every signature must be Ed25519, resolve t
 exact publisher/key trust binding, and verify successfully. Invalid or unknown present
 signatures fail closed even when `--allow-untrusted` is supplied.
 
-Inside the REPL, use `/packs list`, `/packs show NAME`, `/packs verify SOURCE`,
+Inside the TUI, use `/packs list`, `/packs show NAME`, `/packs verify SOURCE`,
 `/packs validate SOURCE`, `/packs install SOURCE`, `/packs enable NAME`,
 `/packs disable NAME`, `/packs uninstall NAME`, `/packs call TOOL`, and
 `/packs trust ...`.

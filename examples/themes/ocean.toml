@@ -1,0 +1,43 @@
+schemaVersion = 1
+name = "ocean"
+base = "default"
+title = "Colossus Ocean"
+caret = "›"
+continuation = "…"
+spinner = "arc"
+
+[prompt]
+left = "#5FD7FF"
+right = "#6B8FA3"
+indicator = "#00D7FF"
+continuation = "#4FA3C4"
+
+[styles.assistant]
+foreground = "#D7FFFF"
+
+[styles.activity]
+foreground = "#6B8FA3"
+dim = true
+
+[styles.thinking]
+foreground = "#5FD7FF"
+italic = true
+
+[styles.tool]
+foreground = "#00AFFF"
+bold = true
+
+[styles.success]
+foreground = "#7FD7AF"
+
+[styles.warning]
+foreground = "#FFDF5D"
+bold = true
+
+[styles.error]
+foreground = "#FF5F5F"
+bold = true
+
+[styles.meta]
+foreground = "#6B8FA3"
+dim = true

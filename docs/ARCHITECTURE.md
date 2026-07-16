@@ -99,6 +99,11 @@ approval provider, tool executor, context preparation, and journal. Child reques
 definitions remove `agent.delegate`; the executor also rejects delegation whenever
 `ExecutionContext.subagent_id` is present. Running jobs found at startup become
 `interrupted` and are never silently retried.
+Successful model calls to `agent.delegate` notify the owning runtime scheduler and yield
+the parent turn. The bounded scheduler claims and completes the child before the parent
+continues to `agent.result`, so CLI, TUI, worker, and embedded API runs share the same
+foreground delegation behavior. Manual application/CLI queue creation remains durable
+and is executed through the explicit drain operation.
 
 `colossus-memory` separates canonical lifecycle state from disposable retrieval. Memory
 create/update/archive/supersede events remain authoritative in the encrypted journal.
@@ -187,10 +192,11 @@ stays disabled until its live platform suite passes.
 The strict Rust tool catalog implements the complete required offline surface. Repository
 mapping/search, context reads and mutations, exact patching, and trace export use private
 runtime adapters and the normal policy gateway; `tool.search` and metadata-only
-`trace.show` remain pure bounded computation. `user.ask` is an optional interface port
-injected only for an interactive embedded REPL, so workers, one-shot commands, and
-scripted input cannot unexpectedly read from a terminal. `web.fetch` and `docs.fetch`
-share the permit-bound exact-origin HTTP capability and quarantine path.
+`trace.show` remain pure bounded computation. `user.ask` is an optional trusted interface
+port. Embedded TUI runs bridge it through a one-use overlay; worker-backed TUI runs use
+authenticated protocol-v4 prompt frames. Headless workers, one-shot commands, and
+scripted input cannot fabricate an answer. `web.fetch` and `docs.fetch` share the
+permit-bound exact-origin HTTP capability and quarantine path.
 
 The journal is authoritative. Application state is reconstructed by replay, and redb
 atomically appends events, advances stream/global versions, and queues projection work.
@@ -201,7 +207,7 @@ from journal streams. Reset/rebuild always replays the canonical journal. A cros
 writer lease prevents embedded surfaces and the headless worker from opening concurrent
 redb writers. The long-running worker owns that lease and serves a versioned local
 application protocol over a mode-0600 Unix socket or a Windows named pipe. CLI one-shot
-runs, the worker-aware REPL, session operations, and workflow lifecycle operations
+runs, the worker-backed TUI, session operations, and workflow lifecycle operations
 auto-discover the worker and otherwise use the same runtime in-process. Durable task,
 decision, plan, goal, child-agent, and memory lifecycle commands use that application
 protocol as well. Research, declarative skill, signed pack/bundle, integration, MCP,
@@ -212,9 +218,9 @@ credential reference, re-verifies it against canonical publisher trust, and publ
 atomically. Install re-verifies and selects the compile-platform target convention before
 no-clobber creation in a permitted prefix. Both operations use the same worker routing,
 approval proof, one-use permit, disclosure, and effect lifecycle as other writes.
-The worker-backed REPL exposes the same implemented slash-command operations as embedded
-mode, and both REPL paths accept either an interactive terminal or line-oriented stdin
-for automation and acceptance testing.
+Worker-backed and embedded TUI hosts expose the same typed command and run contracts.
+Non-TTY input selects a separate line-oriented compatibility runner for automation and
+acceptance testing.
 The transport does not contain provider, policy, workflow, or repository logic.
 Independent clients run concurrently, while projection rebuild/drain, memory-index
 maintenance, and queued child work share one worker coordination lock so optimistic
@@ -277,7 +283,7 @@ event and telemetry aggregates its normalized token counts.
 User surfaces must be thin:
 
 - CLI commands compose services and render results.
-- REPL parses slash commands and sends turns to application services.
+- TUI parses interactive commands and sends turns to an `InteractiveHost`.
 
 No user surface owns model calls, tool execution, policy decisions, or persistence.
 
@@ -294,7 +300,7 @@ roles resolve through the `primary` profile.
 Built-in tool specifications and handlers are composed in adapters, then exposed through
 the application `ToolRegistry` and `ToolExecutor` ports. The orchestrator validates tool
 arguments before policy and approval handling, then records policy and completion audit
-events. CLI and REPL code may list or render tools, but must not implement model, tool,
+events. CLI and TUI code may list or render tools, but must not implement model, tool,
 policy, or state behavior.
 
 Durable `task.*`, `decision.*`, `plan.*`, and `memory.*` model tools use the same composition.
@@ -380,7 +386,7 @@ names or tab completion, but they do not inject `SKILL.md` content themselves.
 ## Deep Research
 
 `ResearchService` is an application service that coordinates research phases without
-putting orchestration logic in CLI or REPL code. It plans bounded queries, collects
+putting orchestration logic in CLI or TUI code. It plans bounded queries, collects
 evidence through repo/search/MCP source ports, asks for approval before networked lanes,
 persists `ResearchRun`, `ResearchSource`, and `ResearchClaim` records through the state
 port, and emits typed `ResearchStatusEvent` values for renderers. It also reads a bounded
@@ -402,7 +408,7 @@ Terminal activity rendering consumes strict `RunEventEnvelope` values through th
 wraps them with correlated run/session identity and adds durable run phase, tool-start,
 tool-completion, recoverability, and elapsed-time events. Provider and tool content is
 observed only after its corresponding authoritative journal event is durable and any
-post-effect release policy has allowed it. Authenticated worker protocol v3 transports
+post-effect release policy has allowed it. Authenticated worker protocol v4 transports
 the same envelopes used by embedded callers.
 
 `colossus-presentation` renders compact, verbose, or off activity modes and semantic
@@ -410,27 +416,30 @@ file, shell, Git, work, context, repository, skill, web, MCP, trace, integration
 and generic tool families. Renderers may show provider-supplied safe reasoning summaries,
 but they never receive raw provider frames or hidden chain-of-thought fields.
 
-The REPL composer state and theme selection also live in the interface layer. Embedded
-and authenticated-worker prompts render cached model, approval, session, context,
-work-state, and presentation status. Cache refreshes use bounded application/worker
-operations after status-affecting commands rather than querying repositories or creating
-per-keystroke audit traffic. The interface must continue to call application services
-for orchestration and context data rather than owning those behaviors.
+The TUI composer state and theme selection live in the interface layer. Embedded and
+authenticated-worker hosts supply cached model, approval, session, context, work-state,
+and presentation status. Cache refreshes use bounded application/worker operations only
+after relevant mutations or completed runs rather than querying repositories or creating
+per-keystroke audit traffic. Read-only commands return their document without forcing a
+full footer refresh.
 
-A `ComposerHighlighter` observes Reedline's current buffer and byte insertion point during
-the normal repaint pass, derives only Unicode-aware character/line counts and a 1-based
-cursor line/column, and shares that small snapshot with `ColossusPrompt`. Draft content
-stays inside Reedline, and per-keystroke edits do not cross worker IPC, repositories, the
-effect gateway, or the journal.
+`colossus-tui` is a reducer plus one terminal event loop. It owns Unicode editing,
+history navigation, completion, retained transcript layout, scrolling, overlays, queueing,
+and terminal restoration. Background runtime tasks can only publish typed `HostEvent`
+values through bounded channels. Draft content stays interface-local, and per-keystroke
+edits never cross worker IPC, repositories, the effect gateway, or the journal.
 
 `TerminalPalette` is a pure data-only presentation mapping for the five built-in theme
 identities and resolved custom-theme snapshots. `ThemeLibrary` performs bounded,
 strict JSON/TOML configuration loading; selection persists an immutable palette plus
 source hash through `PresentationRepository` rather than retaining a mutable file
-reference. Both supply Reedline prompt colors, semantic ANSI styles, assistant styling,
-and bounded activity frames. ANSI emission is selected only by the terminal interface
-after an `IsTerminal` check; the renderer defaults to unstyled text so workers, pipes,
-logs, and embedded callers cannot receive accidental control sequences.
+reference. Both supply Ratatui styles, semantic terminal strings, assistant styling,
+bounded activity frames, theme-aware type-ahead, and visual preview documents. The
+theme picker remains interface-only, while scaffold output is a validated template that
+never writes a file from the terminal surface. ANSI emission is selected only by the
+terminal interface after an `IsTerminal` check; the renderer defaults to unstyled text
+so workers, pipes, logs, and embedded callers cannot receive accidental control
+sequences.
 
 ## Telemetry And Observability
 
@@ -438,15 +447,16 @@ logs, and embedded callers cannot receive accidental control sequences.
 timestamped persisted run events. It reports run duration, event counts, tool
 calls/failures, approvals, risk assessments, research/subagent activity, compactions, and
 error totals without exposing raw prompts, hidden reasoning, or raw tool outputs by
-default. CLI and future TUI surfaces call the service for run lists, timelines, and
+default. CLI and TUI surfaces call the service for run lists, timelines, and
 aggregate metrics rather than querying redb or parsing transcript text directly.
 
-Saved REPL preferences and bounded submitted-input history are exposed through
+Saved terminal preferences and bounded submitted-input history are exposed through
 `PresentationRepository`. The Rust runtime uses an encrypted event-sourced adapter and
 sends every preference or history mutation through the effect gateway before appending
-its canonical event. Reedline receives only the newest 1,000 decrypted entries through
-the application API; it never owns a plaintext history file. The CLI and authenticated
-worker only coordinate the application operation; they do not write presentation files
-or canonical storage directly. Pure semantic rendering remains in
+its canonical event. The TUI receives only the newest 1,000 decrypted entries through the
+application API; it never owns a plaintext history file. The CLI and authenticated worker
+only coordinate the application operation; they do not write presentation files or
+canonical storage directly. The legacy stream and event identities remain unchanged for
+state compatibility. Pure semantic rendering remains in
 `colossus-presentation`, and preference values never enter provider routing, policy,
 tool, approval, or prompt-composition decisions. Legacy preference state is not imported.

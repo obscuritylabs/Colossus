@@ -8,6 +8,39 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Added
+
+- Restored a human-first terminal presentation layer with width-aware tables, semantic
+  status/result cards, Markdown, source previews with line numbers, styled diffs, and
+  separated process streams.
+- Added grouped REPL help, fish-style history/command/skill type-ahead with dim italic
+  ghost text, slash-command completion, discovered `@skill` completion and activation,
+  themed approval/input cards, and the same presentation behavior through the
+  authenticated worker.
+- Added `--output auto|human|json`; terminals default to human output while pipes retain
+  stable JSON for automation.
+- Added a guided theme picker, complete semantic theme previews, dynamic theme-name
+  completion, strict no-write scaffold output, library validation, and a tested custom
+  Ocean example.
+
+### Changed
+
+- Replaced raw structured dumps on interactive CLI and REPL surfaces with intentional
+  list/detail views and explicit empty states. Redirected commands remain compatible
+  with the existing JSON contract.
+- Buffered normal REPL model streams into a final Markdown response while preserving
+  `raw` streaming and `off` behavior as explicit presentation choices.
+- Routed `/session resume` through the numbered picker and prevented unknown slash
+  commands from ever being submitted as model prompts.
+- Rendered `user.ask` as a stable foreground input wait with explicit answer and
+  cancellation guidance instead of continuously repainting a tool-activity spinner.
+- Woke the bounded scheduler immediately for model-created subagents so a parent can
+  receive the completed child result in the same turn, and rendered queued/running
+  results as pending instead of failed.
+- Replaced the nested JSON shown by `/theme` with an active-state theme table and a
+  separate readable list of custom-theme search locations. Theme selection now saves
+  immediately and updates prompt, renderer, and type-ahead styling together.
+
 ## [0.6.0] - 2026-07-14
 
 ### Added

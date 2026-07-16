@@ -6,9 +6,9 @@ use colossus_contracts::{
     IntegrationConnection, IntegrationKind, IntegrationOperation, IntegrationStatus, KeyDecision,
     MemoryRecord, MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole, NewEvent,
     PackInstallation, PackManifest, PackStatus, PlanRecord, PlanStatus, PlanStep, ProjectionBatch,
-    ProjectionMutation, ProjectionWorkItem, PublisherTrust, ReplPreferences, ResearchClaim,
-    ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus,
-    SignedCheckpoint, StreamDisplayMode, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
+    ProjectionMutation, ProjectionWorkItem, PublisherTrust, ResearchClaim, ResearchDepth,
+    ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus, SignedCheckpoint,
+    StreamDisplayMode, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences,
     ThemeName, ToolSpec, TranscriptDensity, WorkflowDefinition, WorkflowMetadata, WorkflowStep,
 };
 use colossus_ports::{
@@ -938,16 +938,16 @@ pub async fn assert_audit_exporter_conformance(
 pub fn assert_presentation_repository_conformance(repository: &dyn PresentationRepository) {
     assert_eq!(
         repository.load().expect("default presentation profile"),
-        ReplPreferences::default()
+        TerminalPreferences::default()
     );
-    let expected = ReplPreferences {
+    let expected = TerminalPreferences {
         theme: ThemeName::HighContrast,
         multiline: true,
         stream_mode: StreamDisplayMode::Off,
         events_mode: EventDisplayMode::Verbose,
         show_reasoning: false,
         transcript_density: TranscriptDensity::Compact,
-        ..ReplPreferences::default()
+        ..TerminalPreferences::default()
     };
     let saved = repository
         .save(
@@ -1016,9 +1016,9 @@ pub fn assert_presentation_repository_conformance(repository: &dyn PresentationR
             )
             .is_err()
     );
-    let invalid = ReplPreferences {
+    let invalid = TerminalPreferences {
         schema_version: u16::MAX,
-        ..ReplPreferences::default()
+        ..TerminalPreferences::default()
     };
     assert!(
         repository

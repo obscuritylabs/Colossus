@@ -466,6 +466,18 @@ pub struct SessionMessage {
     pub created_at: String,
 }
 
+/// Bounded newest-first page boundary over canonical session messages.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionMessagePage {
+    /// Messages returned in chronological sequence order.
+    pub messages: Vec<SessionMessage>,
+    /// Sequence to pass as the exclusive upper bound for the next older page.
+    pub before_sequence: Option<u64>,
+    /// Whether more canonical messages exist before this page.
+    pub has_more: bool,
+}
+
 /// Immutable durable context snapshot derived from a bounded session prefix.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -937,7 +949,7 @@ pub struct CustomTheme {
     pub spinner: ThemeSpinner,
 }
 
-/// Provider/activity event detail rendered by the REPL.
+/// Provider/activity event detail rendered by terminal interfaces.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventDisplayMode {
@@ -1006,10 +1018,10 @@ impl TranscriptDensity {
     }
 }
 
-/// Strict versioned REPL presentation preferences.
+/// Strict versioned interactive-terminal presentation preferences.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ReplPreferences {
+pub struct TerminalPreferences {
     /// Preference schema version.
     pub schema_version: u16,
     /// Built-in theme identity, or the inheritance base for a custom snapshot.
@@ -1029,7 +1041,7 @@ pub struct ReplPreferences {
     pub transcript_density: TranscriptDensity,
 }
 
-impl Default for ReplPreferences {
+impl Default for TerminalPreferences {
     fn default() -> Self {
         Self {
             schema_version: 1,
@@ -1044,7 +1056,7 @@ impl Default for ReplPreferences {
     }
 }
 
-impl ReplPreferences {
+impl TerminalPreferences {
     /// Effective built-in or custom theme identity.
     pub fn theme_name(&self) -> &str {
         self.custom_theme
@@ -2190,6 +2202,10 @@ pub enum RunPhase {
     WaitingForModel,
     /// Releasing visible assistant output.
     Responding,
+    /// The operator requested a cooperative stop and the current effect is settling.
+    Cancelling,
+    /// The run reached a durable operator-cancelled terminal state.
+    Cancelled,
     /// The run reached a durable successful terminal state.
     Completed,
 }
@@ -2231,6 +2247,15 @@ pub enum RunEvent {
         result: ToolResult,
         /// Wall time spent executing this tool call.
         duration_seconds: f64,
+        /// Wall time since the run began.
+        elapsed_seconds: f64,
+    },
+    /// A validated model-requested tool was not executed because cancellation won first.
+    ToolCancelled {
+        /// One-based model turn.
+        turn: u16,
+        /// Strict released tool call that was skipped.
+        call: ToolCall,
         /// Wall time since the run began.
         elapsed_seconds: f64,
     },
@@ -2464,6 +2489,38 @@ pub struct AgentRunResult {
     pub event_count: u64,
     /// Elapsed wall time in fractional seconds.
     pub elapsed_seconds: f64,
+}
+
+/// Durable result of a cooperatively cancelled application run.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRunCancellation {
+    /// Stable UUIDv7 run identifier.
+    pub run_id: String,
+    /// Durable session containing any completed work before cancellation.
+    pub session_id: String,
+    /// One-based turn at which cancellation became terminal.
+    pub turn: u16,
+    /// Number of events durably recorded on the run stream.
+    pub event_count: u64,
+    /// Elapsed wall time in fractional seconds.
+    pub elapsed_seconds: f64,
+}
+
+/// Terminal outcome of a run that supports cooperative cancellation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentRunOutcome {
+    /// The run produced a normal released assistant result.
+    Completed {
+        /// Existing stable run result contract.
+        result: AgentRunResult,
+    },
+    /// The operator cancelled before another external effect began.
+    Cancelled {
+        /// Durable cancellation evidence.
+        result: AgentRunCancellation,
+    },
 }
 
 /// Complete, versioned request sent to a policy decision point.

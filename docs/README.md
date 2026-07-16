@@ -8,7 +8,7 @@ retained on `python-v0.5.0` and `python-legacy`.
 
 - [Getting Started](GETTING_STARTED.md): install, initialize, run the offline smoke, and
   connect a model provider.
-- [User Guide](USER_GUIDE.md): daily CLI, REPL, session, work, memory, research, and
+- [User Guide](USER_GUIDE.md): daily CLI, TUI, session, work, memory, research, and
   worker operations.
 - [Configuration](CONFIGURATION.md): strict YAML, providers, policy, storage, sandbox,
   memory, MCP, skills, and workflows.
@@ -23,6 +23,7 @@ retained on `python-v0.5.0` and `python-legacy`.
 - [Skills](SKILLS.md)
 - [Packs](PACKS.md)
 - [Context Compaction](CONTEXT.md)
+- [Terminal UX](TERMINAL_UX.md)
 - [Offline and Airgapped Operation](OFFLINE_AIRGAP.md)
 - [Offline Bundle Format](BUNDLE_FORMAT.md)
 

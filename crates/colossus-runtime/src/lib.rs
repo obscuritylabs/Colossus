@@ -8,7 +8,7 @@ use colossus_audit::{
 };
 use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
-    Actor, ActorType, AgentRunResult, BundleInstallation, BundleMaterialization,
+    Actor, ActorType, AgentRunOutcome, AgentRunResult, BundleInstallation, BundleMaterialization,
     BundleSigningKeyInfo, ContextSnapshot, ContextStatus, CredentialReference, DecisionOutcome,
     DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
     ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunResult, GoalStatus,
@@ -17,13 +17,13 @@ use colossus_contracts::{
     NewEvent, PackInstallation, PackVerification, PlanRecord, PlanStatus, PlanStep,
     PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness,
     ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
-    QuarantinedEffectResult, ReplPreferences, ResearchClaim, ResearchDepth, ResearchRun,
-    ResearchSource, ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary,
-    SessionMessage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
+    QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
+    ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
+    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
     SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
     SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
-    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, ToolCall, ToolResult, ToolSpec,
-    UserPromptRequest, WorkStateSnapshot,
+    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall,
+    ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -57,10 +57,13 @@ use colossus_ports::{
     EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider,
     MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
     PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
-    ResearchRepository, RiskEvaluationError, RiskEvaluator, RunEventObserver, SessionRepository,
-    SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry, UserPromptProvider,
-    WorkRepository, WorkflowRepository,
+    ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl, RunEventObserver,
+    SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
+    UserPromptProvider, WorkRepository, WorkflowRepository,
 };
+
+const SESSION_MESSAGE_PAGE_LIMIT: usize = 100;
+const SESSION_MESSAGE_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
     JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
@@ -96,11 +99,13 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    future::Future,
     path::{Path, PathBuf},
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 use thiserror::Error;
+use tokio::sync::{Mutex as TokioMutex, Notify};
 use tokio::task::JoinSet;
 use url::Url;
 use uuid::Uuid;
@@ -1258,7 +1263,7 @@ fn read_optional(path: Option<&PathBuf>) -> Result<Option<Vec<u8>>, RuntimeError
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum PresentationOperation {
-    Save { preferences: ReplPreferences },
+    Save { preferences: TerminalPreferences },
     AppendHistory { entry: String },
 }
 
@@ -1920,6 +1925,8 @@ pub struct Runtime {
     agent: Arc<AgentService>,
     agent_max_turns: u16,
     subagent_max_concurrent: usize,
+    subagent_notify: Arc<Notify>,
+    subagent_drain_lock: TokioMutex<()>,
     tools: Arc<dyn ToolRegistry>,
     filesystem_executor: Arc<FilesystemExecutor>,
     process_executor: Arc<SandboxProcessExecutor>,
@@ -2569,9 +2576,15 @@ impl Runtime {
         } else {
             context_tool_executor
         };
-        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(DiscoverableToolExecutor {
-            registry: Arc::clone(&tool_registry),
-            inner: interface_tool_executor,
+        let discoverable_tool_executor: Arc<dyn ToolExecutor> =
+            Arc::new(DiscoverableToolExecutor {
+                registry: Arc::clone(&tool_registry),
+                inner: interface_tool_executor,
+            });
+        let subagent_notify = Arc::new(Notify::new());
+        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(SubagentSchedulingToolExecutor {
+            notify: Arc::clone(&subagent_notify),
+            inner: discoverable_tool_executor,
         });
         let agent = Arc::new(
             AgentService::new(
@@ -2630,6 +2643,8 @@ impl Runtime {
             agent,
             agent_max_turns: config.agent.max_turns,
             subagent_max_concurrent: config.subagents.max_concurrent,
+            subagent_notify,
+            subagent_drain_lock: TokioMutex::new(()),
             tools: tool_registry,
             filesystem_executor,
             process_executor,
@@ -3371,16 +3386,16 @@ impl Runtime {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Reconstruct the current canonical REPL presentation profile.
-    pub fn presentation_preferences(&self) -> Result<ReplPreferences, RuntimeError> {
+    /// Reconstruct the current canonical terminal presentation profile.
+    pub fn presentation_preferences(&self) -> Result<TerminalPreferences, RuntimeError> {
         self.presentation.load().map_err(Into::into)
     }
 
     /// Persist a complete presentation profile through policy, permit, and audit boundaries.
     pub async fn save_presentation_preferences(
         &self,
-        preferences: ReplPreferences,
-    ) -> Result<ReplPreferences, RuntimeError> {
+        preferences: TerminalPreferences,
+    ) -> Result<TerminalPreferences, RuntimeError> {
         let operation = PresentationOperation::Save { preferences };
         let action = operation.action();
         let mut request = effect_request(
@@ -3399,13 +3414,13 @@ impl Runtime {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Reconstruct newest encrypted REPL history entries in chronological order.
-    pub fn repl_history(&self, limit: usize) -> Result<Vec<String>, RuntimeError> {
+    /// Reconstruct newest encrypted terminal-history entries in chronological order.
+    pub fn terminal_history(&self, limit: usize) -> Result<Vec<String>, RuntimeError> {
         self.presentation.list_history(limit).map_err(Into::into)
     }
 
-    /// Append one REPL history entry through policy, permit, and audit boundaries.
-    pub async fn append_repl_history(&self, entry: &str) -> Result<String, RuntimeError> {
+    /// Append one terminal-history entry through policy, permit, and audit boundaries.
+    pub async fn append_terminal_history(&self, entry: &str) -> Result<String, RuntimeError> {
         let operation = PresentationOperation::AppendHistory {
             entry: entry.into(),
         };
@@ -3425,6 +3440,18 @@ impl Runtime {
             .await?;
         serde_json::from_slice(&result.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Compatibility alias for callers using the original interactive surface name.
+    #[deprecated(note = "use Runtime::terminal_history")]
+    pub fn repl_history(&self, limit: usize) -> Result<Vec<String>, RuntimeError> {
+        self.terminal_history(limit)
+    }
+
+    /// Compatibility alias for callers using the original interactive surface name.
+    #[deprecated(note = "use Runtime::append_terminal_history")]
+    pub async fn append_repl_history(&self, entry: &str) -> Result<String, RuntimeError> {
+        self.append_terminal_history(entry).await
     }
 
     /// Create a durable empty session.
@@ -3464,6 +3491,23 @@ impl Runtime {
     /// Reconstruct append-only messages for an exact session.
     pub fn session_messages(&self, id: &str) -> Result<Vec<SessionMessage>, RuntimeError> {
         self.sessions.list_messages(id).map_err(Into::into)
+    }
+
+    /// Reconstruct a bounded page of canonical session messages newest-first by cursor.
+    pub fn session_messages_page(
+        &self,
+        id: &str,
+        before_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<SessionMessagePage, RuntimeError> {
+        self.sessions
+            .list_messages_page(
+                id,
+                before_sequence,
+                limit.clamp(1, SESSION_MESSAGE_PAGE_LIMIT),
+                SESSION_MESSAGE_PAGE_MAX_BYTES,
+            )
+            .map_err(Into::into)
     }
 
     /// Show active context budget and canonical-history size for one session.
@@ -4306,6 +4350,22 @@ impl Runtime {
         Ok(readiness)
     }
 
+    async fn run_with_subagent_scheduling<F>(&self, run: F) -> Result<AgentRunResult, RuntimeError>
+    where
+        F: Future<Output = Result<AgentRunResult, AgentError>>,
+    {
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.subagent_notify.notified() => {
+                    self.drain_subagents().await?;
+                }
+                result = &mut run => return result.map_err(Into::into),
+            }
+        }
+    }
+
     /// Execute the shared durable bounded provider/tool loop.
     pub async fn run_model(
         &self,
@@ -4375,17 +4435,15 @@ impl Runtime {
             .iter()
             .map(|skill| skill.name.clone())
             .collect::<Vec<_>>();
-        self.agent
-            .run_in_session_with_skills(
-                role,
-                &composition.instructions,
-                prompt,
-                max_turns.unwrap_or(self.agent_max_turns),
-                session_id,
-                &active,
-            )
-            .await
-            .map_err(Into::into)
+        self.run_with_subagent_scheduling(self.agent.run_in_session_with_skills(
+            role,
+            &composition.instructions,
+            prompt,
+            max_turns.unwrap_or(self.agent_max_turns),
+            session_id,
+            &active,
+        ))
+        .await
     }
 
     /// Execute a normal run and forward only policy-released provider events.
@@ -4414,18 +4472,66 @@ impl Runtime {
             .iter()
             .map(|skill| skill.name.clone())
             .collect::<Vec<_>>();
-        self.agent
-            .run_in_session_with_skills_stream(
-                role,
-                &composition.instructions,
-                prompt,
-                max_turns.unwrap_or(self.agent_max_turns),
-                session_id,
-                &active,
-                observer,
-            )
-            .await
-            .map_err(Into::into)
+        self.run_with_subagent_scheduling(self.agent.run_in_session_with_skills_stream(
+            role,
+            &composition.instructions,
+            prompt,
+            max_turns.unwrap_or(self.agent_max_turns),
+            session_id,
+            &active,
+            observer,
+        ))
+        .await
+    }
+
+    /// Execute a normal run with ordered events and cooperative cancellation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_model_with_skills_stream_controlled(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, RuntimeError> {
+        let composition = self.skill_composer.compose(
+            instructions,
+            prompt,
+            explicit_skills,
+            sticky_skills,
+            self.skills_enabled,
+            &self.tools.list_specs(),
+        )?;
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<Vec<_>>();
+
+        let run = self.agent.run_in_session_with_skills_stream_controlled(
+            role,
+            &composition.instructions,
+            prompt,
+            max_turns.unwrap_or(self.agent_max_turns),
+            session_id,
+            &active,
+            observer,
+            control,
+        );
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.subagent_notify.notified() => {
+                    self.drain_subagents().await?;
+                }
+                result = &mut run => return result.map_err(Into::into),
+            }
+        }
     }
 
     /// Execute structurally read-only Plan Mode with only inspection, task, and plan tools.
@@ -4538,8 +4644,7 @@ impl Runtime {
             .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        self.agent
-            .run_approved_plan(
+        self.run_with_subagent_scheduling(self.agent.run_approved_plan(
                 role,
                 "Execute the canonical approved plan using normal tools and policy. Preserve plan lineage and do not expand its scope.",
                 &prompt,
@@ -4547,9 +4652,8 @@ impl Runtime {
                 &consumed.session_id,
                 &consumed.id,
                 &run_id,
-            )
+            ))
             .await
-            .map_err(Into::into)
     }
 
     /// Run bounded autonomous iterations using the normal agent, session, policy, and tools.
@@ -4613,8 +4717,7 @@ impl Runtime {
                 )
             };
             let result = self
-                .agent
-                .run_goal_iteration(
+                .run_with_subagent_scheduling(self.agent.run_goal_iteration(
                     role,
                     &instructions,
                     &prompt,
@@ -4622,7 +4725,7 @@ impl Runtime {
                     session_id,
                     &current.id,
                     current.source_plan_id.as_deref(),
-                )
+                ))
                 .await?;
             iterations.push(GoalIterationResult {
                 iteration,
@@ -4732,6 +4835,7 @@ impl Runtime {
 
     /// Drain queued jobs with bounded local concurrency using normal child agent runs.
     pub async fn drain_subagents(&self) -> Result<SubagentQueueStatus, RuntimeError> {
+        let _drain_guard = self.subagent_drain_lock.lock().await;
         loop {
             let queued = self
                 .work
@@ -5982,6 +6086,30 @@ fn structural_symbol(line: &str) -> Option<Value> {
         "name": name,
         "text": bounded_tool_text(trimmed, 300),
     }))
+}
+
+struct SubagentSchedulingToolExecutor {
+    notify: Arc<Notify>,
+    inner: Arc<dyn ToolExecutor>,
+}
+
+#[async_trait]
+impl ToolExecutor for SubagentSchedulingToolExecutor {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        let delegated = call.name == "agent.delegate";
+        let result = self.inner.execute(call, context).await?;
+        if delegated && result.exit_code == 0 {
+            self.notify.notify_one();
+            // Give the owning runtime turn a scheduling point before the parent asks for
+            // the child result or emits a final answer based only on the queued snapshot.
+            tokio::task::yield_now().await;
+        }
+        Ok(result)
+    }
 }
 
 struct DiscoverableToolExecutor {
@@ -9746,8 +9874,8 @@ mod tests {
         EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope,
         MemoryStatus, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord,
         PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ProviderRoute, ProviderTurn,
-        QuarantinedEffectResult, ReplPreferences, RiskLevel, RiskRecommendation, SubagentStatus,
-        TaskStatus, ToolCall,
+        QuarantinedEffectResult, RiskLevel, RiskRecommendation, SubagentStatus, TaskStatus,
+        TerminalPreferences, ToolCall,
     };
     use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
     use colossus_policy::{
@@ -9879,9 +10007,9 @@ mod tests {
         let executor = PresentationEffectExecutor {
             repository: Arc::clone(&repository),
         };
-        let preferences = ReplPreferences {
+        let preferences = TerminalPreferences {
             theme: colossus_contracts::ThemeName::HighContrast,
-            ..ReplPreferences::default()
+            ..TerminalPreferences::default()
         };
         let operation = PresentationOperation::Save {
             preferences: preferences.clone(),
@@ -9907,7 +10035,7 @@ mod tests {
         assert!(denied_gateway.execute(request(), &executor).await.is_err());
         assert_eq!(
             repository.load().expect("unchanged"),
-            ReplPreferences::default()
+            TerminalPreferences::default()
         );
 
         let allowed_gateway = EffectGateway::new(

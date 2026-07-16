@@ -1,6 +1,6 @@
 # User Guide
 
-This guide covers the active Rust CLI and REPL. All examples assume an installed
+This guide covers the active Rust CLI and terminal UI. All examples assume an installed
 `colossus` binary and a strict `.colossus/config.yaml` initialized for the current
 repository.
 
@@ -16,9 +16,18 @@ colossus --config .colossus/config.yaml run --role research_worker \
   "Collect repository evidence"
 ```
 
-`run` prints a stable JSON result. `--stream` writes policy-released deltas and events to
-stderr while preserving JSON on stdout. Every run creates or attaches to a durable
-session and records the provider/effect lifecycle in the encrypted journal.
+On a terminal, `run` renders a human response card with Markdown. When stdout is piped or
+redirected, it emits the stable JSON result used by automation. `--stream` writes
+policy-released deltas and events to stderr while preserving the selected result format
+on stdout. Every run creates or attaches to a durable session and records the
+provider/effect lifecycle in the encrypted journal.
+
+Override output selection globally when needed:
+
+```bash
+colossus --output human tools list
+colossus --output json sessions list | jq .
+```
 
 Global approval mode precedes the subcommand:
 
@@ -32,13 +41,18 @@ approval obligations; none can override a policy deny or add sandbox capabilitie
 `risk-auto` reviews eligible `shell.run` requests and auto-proves only a strict
 low-risk/allow result; all other assessments require a prompt.
 
-## REPL
+## Terminal UI
 
 ```bash
-colossus --config .colossus/config.yaml repl
-colossus --config .colossus/config.yaml repl --resume
-colossus --config .colossus/config.yaml repl --session SESSION_ID
+colossus --config .colossus/config.yaml
+colossus --config .colossus/config.yaml tui --resume
+colossus --config .colossus/config.yaml tui --session SESSION_ID
+colossus --config .colossus/config.yaml --no-alt-screen tui
 ```
+
+The removed `colossus repl` alias is no longer accepted. The default alternate screen
+protects native scrollback; `--no-alt-screen` uses an inline viewport, and Zellij selects
+inline mode automatically.
 
 Useful commands include:
 
@@ -61,22 +75,69 @@ Useful commands include:
 /exit
 ```
 
+`/resume` opens a focused session overlay. Enter a listed number or exact ID, or press
+Esc/submit a blank answer to cancel. The durable transcript remains scrollable above a
+pinned composer and stable width-aware footer; narrower terminals hide optional footer
+fields instead of moving or overwriting input.
+
+The TUI displays fish-style inline type-ahead from prior prompts, slash commands, theme
+names, and installed `@skills`. Suggestions use each theme's low-emphasis color plus dim
+italic styling so typed text and the cursor position remain clear. Press Right Arrow to
+accept the full suggestion, or press Tab to advance matching commands, themes, and skills.
+The `/session resume` command opens the same picker as `/resume`; unknown slash commands
+stay inside the terminal command parser and are never sent to the model.
+
+When the agent uses `user.ask` or policy requires approval, a modal takes focus without
+discarding the current draft. Type an answer and press Enter, choose an exact option, or
+press Esc/submit a blank answer to fail closed. The run resumes after the one-use answer
+returns through the embedded or authenticated-worker bridge. Use workflow
+`wait_for_input` when a run must wait durably without an attached interactive client.
+
+`/help` is grouped by task, and Tab completes slash commands and installed `@skill`
+names. Put one or more known skill names at the beginning of a message to apply them to
+that turn, for example `@repo-review Review the current changes`.
+
+The composer remains usable during a run and accepts up to eight queued turns. Successful
+completion starts the next turn; failure or cancellation pauses the queue for operator
+confirmation. PageUp/PageDown scroll the transcript, End returns to live output, Ctrl-R
+searches encrypted history, Ctrl-C clears a draft/cancels a modal/requests cooperative run
+cancellation, and Ctrl-D exits only while idle with an empty draft. Interactive
+`--output json` is rejected; redirect stdin to use the compatible line runner and JSON.
+
 Presentation is local durable state, not model context:
 
 ```text
 /theme
-/theme preview ocean
-/theme save ocean
+/theme list
+/theme hacker
+/theme preview high_contrast
+/theme validate
+/theme scaffold night_sky
+/theme reset
 /events compact
 /stream on
 /reasoning off
 /transcript compact
 /multiline toggle
-/repl save
+/tui save
 ```
 
-Redirected output remains control-sequence-free. REPL history and preferences are
+Normal `stream=on` responses are buffered and rendered as Markdown; `stream=raw` emits
+provider text immediately, and `stream=off` suppresses intermediate stream output.
+Redirected output remains control-sequence-free. Terminal history and preferences are
 encrypted journal records.
+
+`/theme` opens a numbered picker. Enter a number or theme name to apply and save it,
+enter `p NUMBER` to inspect the complete prompt/Markdown/tool/approval/error/diff sample,
+or leave the line blank to cancel. `/theme NAME` is the direct form and also saves
+immediately; a separate save command is unnecessary.
+
+Custom themes are strict JSON or TOML files. `/theme scaffold NAME` prints a validated
+TOML starter and its suggested config-adjacent path without writing a file from the
+terminal interface. The bundled [Ocean example](../examples/themes/ocean.toml) can also
+be copied into `.colossus/themes/`. Restart Colossus after adding a file, then run
+`/theme validate` before selecting it. Theme loading rejects unknown fields, invalid
+colors, oversized libraries, symlinks, duplicate names, and built-in name collisions.
 
 ## Sessions And Context
 
@@ -134,6 +195,12 @@ colossus --config .colossus/config.yaml agents drain
 Goal iterations and subagent turns reuse the ordinary provider, tool, policy, context,
 and journal services. Interrupted effects become unknown; they are never silently
 replayed.
+
+When a model calls `agent.delegate`, Colossus wakes the bounded scheduler immediately.
+The child runs through the configured `subagent_default` role, and the parent can read
+its completed output with `agent.result` before answering. Manually queued jobs continue
+to wait for `agents drain` or a worker drain. A queued/running result is displayed as
+pending rather than failed.
 
 ## Memories
 
@@ -249,7 +316,7 @@ colossus --config .colossus/config.yaml worker --shutdown
 colossus --config .colossus/config.yaml worker --once
 ```
 
-CLI and REPL operations auto-discover a healthy worker. Authentication or protocol
+CLI and TUI operations auto-discover a healthy worker. Authentication or protocol
 failure is surfaced and never downgraded to embedded execution; only an unavailable
 endpoint permits embedded fallback.
 

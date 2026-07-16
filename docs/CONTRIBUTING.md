@@ -11,7 +11,7 @@ Colossus uses Conventional Commits for new commits:
 Examples:
 
 ```text
-feat(repl): add approval prompt cleanup
+feat(tui): add approval prompt cleanup
 fix: handle invalid tool arguments as recoverable errors
 docs: explain structured shell usage
 ```

@@ -1,16 +1,16 @@
-//! Durable bounded application loop shared by CLI, REPL, workflows, and embedded callers.
+//! Durable bounded application loop shared by CLI, TUI, workflows, and embedded callers.
 
 #![allow(clippy::missing_errors_doc)]
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ActorType, AgentRunResult, EventClassification, ExecutionContext, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelToolCall, NewEvent, ProviderEvent, RunEvent,
-    RunEventEnvelope, RunPhase, ToolCall, ToolResult,
+    Actor, ActorType, AgentRunCancellation, AgentRunOutcome, AgentRunResult, EventClassification,
+    ExecutionContext, ModelMessage, ModelMessageRole, ModelRequest, ModelToolCall, NewEvent,
+    ProviderEvent, RunEvent, RunEventEnvelope, RunPhase, ToolCall, ToolResult,
 };
 use colossus_ports::{
     ContextError, ContextPreparer, EventJournal, ModelProvider, ModelProviderError,
-    ProviderEventObserver, RunEventObserver, SessionRepository, StoreError, ToolError,
+    ProviderEventObserver, RunControl, RunEventObserver, SessionRepository, StoreError, ToolError,
     ToolExecutor, ToolRegistry,
 };
 use colossus_tools::model_definitions;
@@ -69,6 +69,12 @@ pub enum AgentError {
     /// Normalized turn contained neither visible output nor a tool call.
     #[error("provider returned no visible assistant output or tool calls")]
     EmptyTurn,
+    /// The operator requested a cooperative stop at a safe boundary.
+    #[error("agent run cancelled by the operator")]
+    Cancelled {
+        /// Durable cancellation evidence.
+        result: AgentRunCancellation,
+    },
 }
 
 /// Reusable application service implementing the durable model/tool loop.
@@ -135,6 +141,7 @@ impl AgentService {
             requested_session_id,
             RunScope::default(),
             None,
+            None,
         )
         .await
     }
@@ -160,6 +167,7 @@ impl AgentService {
                 active_skills,
                 ..RunScope::default()
             },
+            None,
             None,
         )
         .await
@@ -188,8 +196,44 @@ impl AgentService {
                 ..RunScope::default()
             },
             Some(observer),
+            None,
         )
         .await
+    }
+
+    /// Execute a skilled run with ordered events and cooperative cancellation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_in_session_with_skills_stream_controlled(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
+        match self
+            .run_with_lineage(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                requested_session_id,
+                RunScope {
+                    active_skills,
+                    ..RunScope::default()
+                },
+                Some(observer),
+                Some(control),
+            )
+            .await
+        {
+            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
+            Err(AgentError::Cancelled { result }) => Ok(AgentRunOutcome::Cancelled { result }),
+            Err(error) => Err(error),
+        }
     }
 
     /// Execute a structurally read-only planning run with only planning tools exposed.
@@ -214,6 +258,7 @@ impl AgentService {
                 plan_mode: true,
                 ..RunScope::default()
             },
+            None,
             None,
         )
         .await
@@ -243,6 +288,7 @@ impl AgentService {
                 ..RunScope::default()
             },
             Some(observer),
+            None,
         )
         .await
     }
@@ -270,6 +316,7 @@ impl AgentService {
                 plan_id: Some(plan_id),
                 ..RunScope::default()
             },
+            None,
             None,
         )
         .await
@@ -299,6 +346,7 @@ impl AgentService {
                 ..RunScope::default()
             },
             None,
+            None,
         )
         .await
     }
@@ -325,6 +373,7 @@ impl AgentService {
                 ..RunScope::default()
             },
             None,
+            None,
         )
         .await
     }
@@ -339,6 +388,7 @@ impl AgentService {
         requested_session_id: Option<&str>,
         scope: RunScope<'_>,
         mut released_observer: Option<&mut dyn RunEventObserver>,
+        control: Option<&RunControl>,
     ) -> Result<AgentRunResult, AgentError> {
         if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
@@ -446,6 +496,20 @@ impl AgentService {
         .await?;
 
         for turn in 1..=max_turns {
+            if control.is_some_and(RunControl::is_cancelled) {
+                return self
+                    .finish_cancelled_run(
+                        &stream_id,
+                        &mut stream_version,
+                        &context,
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        turn,
+                        &started,
+                    )
+                    .await;
+            }
             if turn > 1 {
                 emit_run_event(
                     &mut released_observer,
@@ -495,6 +559,20 @@ impl AgentService {
             } else {
                 messages.clone()
             };
+            if control.is_some_and(RunControl::is_cancelled) {
+                return self
+                    .finish_cancelled_run(
+                        &stream_id,
+                        &mut stream_version,
+                        &context,
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        turn,
+                        &started,
+                    )
+                    .await;
+            }
             let request = ModelRequest {
                 model: route.model.clone(),
                 instructions: instructions.into(),
@@ -628,6 +706,21 @@ impl AgentService {
                 }
             };
 
+            if control.is_some_and(RunControl::is_cancelled) {
+                return self
+                    .finish_cancelled_run(
+                        &stream_id,
+                        &mut stream_version,
+                        &context,
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        turn,
+                        &started,
+                    )
+                    .await;
+            }
+
             let mut visible_text = String::new();
             let mut final_output = None;
             let mut calls = Vec::new();
@@ -749,7 +842,67 @@ impl AgentService {
                 },
             )?;
             messages.push(assistant_message);
-            for call in calls {
+            for (call_index, call) in calls.iter().cloned().enumerate() {
+                if control.is_some_and(RunControl::is_cancelled) {
+                    for pending in calls.iter().skip(call_index) {
+                        let output = json!({
+                            "error": {
+                                "code": "operator_cancelled",
+                                "message": "tool execution was cancelled before the effect began",
+                                "recoverable": false,
+                            }
+                        })
+                        .to_string();
+                        self.append(
+                            &stream_id,
+                            &mut stream_version,
+                            "tool.call.cancelled.v1",
+                            system_actor(),
+                            &context,
+                            json!({
+                                "turn": turn,
+                                "call_id": pending.call_id,
+                                "name": pending.name,
+                            }),
+                        )?;
+                        emit_run_event(
+                            &mut released_observer,
+                            &run_id,
+                            &session_id,
+                            RunEvent::ToolCancelled {
+                                turn,
+                                call: pending.clone(),
+                                elapsed_seconds: started.elapsed().as_secs_f64(),
+                            },
+                        )
+                        .await?;
+                        let tool_message = ModelMessage {
+                            role: ModelMessageRole::Tool,
+                            content: output,
+                            tool_call_id: Some(pending.call_id.clone()),
+                            tool_calls: Vec::new(),
+                        };
+                        self.sessions.append_message(
+                            &session_id,
+                            &run_id,
+                            tool_message.clone(),
+                            system_actor(),
+                        )?;
+                        messages.push(tool_message);
+                    }
+                    return self
+                        .finish_cancelled_run(
+                            &stream_id,
+                            &mut stream_version,
+                            &context,
+                            &mut released_observer,
+                            &run_id,
+                            &session_id,
+                            turn,
+                            &started,
+                        )
+                        .await;
+                }
                 let tool_started = Instant::now();
                 let validation = if offered_tools.contains(call.name.as_str()) {
                     self.tools.validate(&call)
@@ -871,6 +1024,20 @@ impl AgentService {
                 )?;
                 messages.push(tool_message);
             }
+            if control.is_some_and(RunControl::is_cancelled) {
+                return self
+                    .finish_cancelled_run(
+                        &stream_id,
+                        &mut stream_version,
+                        &context,
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        turn,
+                        &started,
+                    )
+                    .await;
+            }
         }
 
         let event_count = stream_version;
@@ -896,6 +1063,62 @@ impl AgentService {
         )
         .await?;
         Err(AgentError::MaxTurns { max_turns })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_cancelled_run(
+        &self,
+        stream_id: &str,
+        stream_version: &mut u64,
+        context: &ExecutionContext,
+        observer: &mut Option<&mut dyn RunEventObserver>,
+        run_id: &str,
+        session_id: &str,
+        turn: u16,
+        started: &Instant,
+    ) -> Result<AgentRunResult, AgentError> {
+        let elapsed_seconds = started.elapsed().as_secs_f64();
+        emit_run_event(
+            observer,
+            run_id,
+            session_id,
+            RunEvent::Phase {
+                phase: RunPhase::Cancelling,
+                turn: Some(turn),
+                action: None,
+                elapsed_seconds,
+            },
+        )
+        .await?;
+        self.append(
+            stream_id,
+            stream_version,
+            "run.cancelled.v1",
+            system_actor(),
+            context,
+            json!({"turn": turn, "elapsed_seconds": elapsed_seconds}),
+        )?;
+        emit_run_event(
+            observer,
+            run_id,
+            session_id,
+            RunEvent::Phase {
+                phase: RunPhase::Cancelled,
+                turn: Some(turn),
+                action: None,
+                elapsed_seconds,
+            },
+        )
+        .await?;
+        Err(AgentError::Cancelled {
+            result: AgentRunCancellation {
+                run_id: run_id.into(),
+                session_id: session_id.into(),
+                turn,
+                event_count: *stream_version,
+                elapsed_seconds,
+            },
+        })
     }
 
     fn append(
@@ -1335,6 +1558,61 @@ mod tests {
         }
     }
 
+    struct CancellingTools {
+        calls: AtomicUsize,
+        control: RunControl,
+    }
+
+    struct CancellingProvider {
+        calls: AtomicUsize,
+        control: RunControl,
+    }
+
+    #[async_trait]
+    impl ModelProvider for CancellingProvider {
+        fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+            Ok(ProviderRoute {
+                role: role.into(),
+                profile: "cancelling".into(),
+                provider: "test".into(),
+                model: "test-model".into(),
+            })
+        }
+
+        async fn turn(
+            &self,
+            _role: &str,
+            _request: ModelRequest,
+            _context: ExecutionContext,
+        ) -> Result<ProviderTurn, ModelProviderError> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            self.control.cancel();
+            turn(vec![ProviderEvent::ToolCallRequested {
+                call_id: "must-not-start".into(),
+                name: "echo".into(),
+                arguments: json!({"text": "blocked"}),
+            }])
+        }
+    }
+
+    #[async_trait]
+    impl ToolExecutor for CancellingTools {
+        async fn execute(
+            &self,
+            call: ToolCall,
+            _context: ExecutionContext,
+        ) -> Result<ToolResult, ToolError> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            self.control.cancel();
+            Ok(ToolResult {
+                call_id: call.call_id,
+                name: call.name,
+                output: "first completed".into(),
+                exit_code: 0,
+            })
+        }
+    }
+
     fn turn(events: Vec<ProviderEvent>) -> Result<ProviderTurn, ModelProviderError> {
         Ok(ProviderTurn {
             profile: "scripted".into(),
@@ -1566,6 +1844,167 @@ mod tests {
             events.last().map(|event| event.event_type.as_str()),
             Some("run.completed.v1")
         );
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_provider_call_starts_no_external_effect() {
+        let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+            ProviderEvent::FinalOutput {
+                text: "must not run".into(),
+            },
+        ])]));
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let service = AgentService::new(
+            Arc::clone(&journal),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(StaticToolRegistry::builtins(&[]).expect("catalog")),
+            Arc::new(EchoTools),
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+        );
+        let control = RunControl::default();
+        control.cancel();
+        let mut observer = RecordingRunObserver::default();
+        let outcome = service
+            .run_in_session_with_skills_stream_controlled(
+                "primary",
+                "test",
+                "cancel now",
+                2,
+                None,
+                &[],
+                &mut observer,
+                &control,
+            )
+            .await
+            .expect("controlled outcome");
+        assert!(matches!(outcome, AgentRunOutcome::Cancelled { .. }));
+        assert!(provider.requests.lock().expect("requests").is_empty());
+        assert!(observer.events.iter().any(|event| matches!(
+            event.event,
+            RunEvent::Phase {
+                phase: RunPhase::Cancelled,
+                ..
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn cancellation_between_tools_finishes_active_effect_and_skips_remaining_calls() {
+        let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+            ProviderEvent::ToolCallRequested {
+                call_id: "call-1".into(),
+                name: "echo".into(),
+                arguments: json!({"text": "one"}),
+            },
+            ProviderEvent::ToolCallRequested {
+                call_id: "call-2".into(),
+                name: "echo".into(),
+                arguments: json!({"text": "two"}),
+            },
+        ])]));
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let control = RunControl::default();
+        let tools = Arc::new(CancellingTools {
+            calls: AtomicUsize::new(0),
+            control: control.clone(),
+        });
+        let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+        let service = AgentService::new(
+            Arc::clone(&journal),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+            Arc::clone(&tools) as Arc<dyn ToolExecutor>,
+            Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+        );
+        let mut observer = RecordingRunObserver::default();
+        let outcome = service
+            .run_in_session_with_skills_stream_controlled(
+                "primary",
+                "test",
+                "two calls",
+                2,
+                None,
+                &[],
+                &mut observer,
+                &control,
+            )
+            .await
+            .expect("controlled outcome");
+        let AgentRunOutcome::Cancelled { result } = outcome else {
+            panic!("expected cancellation");
+        };
+        assert_eq!(tools.calls.load(Ordering::Acquire), 1);
+        assert_eq!(provider.requests.lock().expect("requests").len(), 1);
+        assert!(observer.events.iter().any(
+            |event| matches!(&event.event, RunEvent::ToolCancelled { call, .. } if call.call_id == "call-2")
+        ));
+        let messages = sessions
+            .list_messages(&result.session_id)
+            .expect("session messages");
+        let tool_messages = messages
+            .iter()
+            .filter(|message| message.message.role == ModelMessageRole::Tool)
+            .collect::<Vec<_>>();
+        assert_eq!(tool_messages.len(), 2);
+        assert!(
+            tool_messages[1]
+                .message
+                .content
+                .contains("operator_cancelled")
+        );
+        let run_events = journal
+            .read_stream(&format!("run:{}", result.run_id))
+            .expect("run events");
+        assert!(
+            run_events
+                .iter()
+                .any(|event| event.event_type == "tool.call.cancelled.v1")
+        );
+        assert_eq!(
+            run_events.last().map(|event| event.event_type.as_str()),
+            Some("run.cancelled.v1")
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_provider_effect_settles_it_before_starting_no_tool_effect() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let control = RunControl::default();
+        let provider = Arc::new(CancellingProvider {
+            calls: AtomicUsize::new(0),
+            control: control.clone(),
+        });
+        let tools = Arc::new(CountingTools {
+            calls: AtomicUsize::new(0),
+        });
+        let service = AgentService::new(
+            Arc::clone(&journal),
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+            Arc::clone(&tools) as Arc<dyn ToolExecutor>,
+            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+        );
+        let mut observer = RecordingRunObserver::default();
+        let outcome = service
+            .run_in_session_with_skills_stream_controlled(
+                "primary",
+                "test",
+                "cancel provider",
+                2,
+                None,
+                &[],
+                &mut observer,
+                &control,
+            )
+            .await
+            .expect("controlled outcome");
+        assert!(matches!(outcome, AgentRunOutcome::Cancelled { .. }));
+        assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+        assert_eq!(tools.calls.load(Ordering::Acquire), 0);
+        assert!(observer.events.iter().all(|event| !matches!(
+            &event.event,
+            RunEvent::ToolStarted { call, .. } if call.call_id == "must-not-start"
+        )));
     }
 
     #[tokio::test]

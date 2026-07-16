@@ -233,6 +233,104 @@ fn sse_server(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<S
     (format!("http://{address}"), task)
 }
 
+fn request_body(request: &str) -> Value {
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .expect("provider request body");
+    serde_json::from_str(body).expect("provider request JSON")
+}
+
+fn subagent_server() -> (String, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    let address = listener.local_addr().expect("provider address");
+    let task = thread::spawn(move || {
+        let mut requests = Vec::new();
+
+        let (mut parent_delegate, _) = listener.accept().expect("parent delegate accept");
+        requests.push(read_request(&mut parent_delegate));
+        let delegate = json!({
+            "id": "chat-parent-delegate",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "id": "call-delegate",
+                    "type": "function",
+                    "function": {
+                        "name": "agent.delegate",
+                        "arguments": "{\"task\":\"Say hi to Alex and confirm the ping.\"}"
+                    }
+                }]},
+                "finish_reason": "tool_calls"
+            }]
+        });
+        respond_sse(
+            &mut parent_delegate,
+            &format!("data: {delegate}\n\ndata: [DONE]\n\n"),
+        );
+
+        let (mut child, _) = listener.accept().expect("child accept");
+        let child_request = read_request(&mut child);
+        assert!(child_request.contains("durable Colossus child agent"));
+        requests.push(child_request);
+        let child_answer = r#"data: {"id":"chat-child-final","choices":[{"index":0,"delta":{"content":"Hi, Alex! Ping received."},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+        respond_sse(&mut child, child_answer);
+
+        let (mut parent_result, _) = listener.accept().expect("parent result accept");
+        let parent_result_request = read_request(&mut parent_result);
+        let body = request_body(&parent_result_request);
+        let child_id = body["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .filter_map(|message| message["content"].as_str())
+            .filter_map(|content| serde_json::from_str::<Value>(content).ok())
+            .find_map(|result| result["id"].as_str().map(str::to_owned))
+            .expect("delegated child id");
+        requests.push(parent_result_request);
+        let result_arguments = json!({"id": child_id}).to_string();
+        let result_call = json!({
+            "id": "chat-parent-result",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "id": "call-result",
+                    "type": "function",
+                    "function": {
+                        "name": "agent.result",
+                        "arguments": result_arguments
+                    }
+                }]},
+                "finish_reason": "tool_calls"
+            }]
+        });
+        respond_sse(
+            &mut parent_result,
+            &format!("data: {result_call}\n\ndata: [DONE]\n\n"),
+        );
+
+        let (mut parent_final, _) = listener.accept().expect("parent final accept");
+        let parent_final_request = read_request(&mut parent_final);
+        assert!(parent_final_request.contains("Hi, Alex! Ping received."));
+        requests.push(parent_final_request);
+        let final_answer = r#"data: {"id":"chat-parent-final","choices":[{"index":0,"delta":{"content":"The subagent said hi."},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+        respond_sse(&mut parent_final, final_answer);
+
+        requests
+    });
+    (format!("http://{address}"), task)
+}
+
 fn live_server() -> (String, thread::JoinHandle<Vec<String>>) {
     let first_tool_call = r#"data: {"id":"chat-tool-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"echo","arguments":"{\"text\":\"terminal-tool-one\"}"}}]},"finish_reason":"tool_calls"}]}
 
@@ -253,9 +351,9 @@ data: {"id":"chat-final","choices":[],"usage":{"prompt_tokens":11,"completion_to
 data: [DONE]
 
 "#;
-    let repl_answer = r#"data: {"id":"chat-repl","choices":[{"index":0,"delta":{"content":"repl-"},"finish_reason":null}]}
+    let terminal_answer = r#"data: {"id":"chat-terminal","choices":[{"index":0,"delta":{"content":"terminal-"},"finish_reason":null}]}
 
-data: {"id":"chat-repl","choices":[{"index":0,"delta":{"content":"connected"},"finish_reason":"stop"}]}
+data: {"id":"chat-terminal","choices":[{"index":0,"delta":{"content":"connected"},"finish_reason":"stop"}]}
 
 data: [DONE]
 
@@ -271,7 +369,7 @@ data: [DONE]
         first_tool_call,
         second_tool_call,
         final_answer,
-        repl_answer,
+        terminal_answer,
         worker_answer,
     ])
 }
@@ -364,7 +462,7 @@ data: [DONE]
 }
 
 #[test]
-fn compatible_provider_streams_tool_use_and_repl_output_through_terminal_surfaces() {
+fn compatible_provider_streams_tool_use_and_tui_output_through_terminal_surfaces() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
     let state = directory.path().join("state.redb");
@@ -460,11 +558,9 @@ sandbox:
         2,
         "{terminal}"
     );
-    assert_eq!(
-        terminal.matches("[tool] complete echo status=ok").count(),
-        2,
-        "{terminal}"
-    );
+    assert_eq!(terminal.matches("Completed echo").count(), 2, "{terminal}");
+    assert!(terminal.contains("terminal-tool-one"), "{terminal}");
+    assert!(terminal.contains("terminal-tool-two"), "{terminal}");
     assert!(terminal.contains("connected"), "{terminal}");
     assert!(!terminal.contains("\x1b["));
     let result: Value = serde_json::from_slice(&run_output.stdout).expect("run JSON");
@@ -487,28 +583,32 @@ sandbox:
             .is_some_and(|seconds| seconds > 0.0)
     );
 
-    let mut repl = command(binary, &config);
-    repl.arg("repl")
+    let mut terminal = command(binary, &config);
+    terminal
+        .arg("tui")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut repl = repl.spawn().expect("spawn REPL");
-    repl.stdin
+    let mut terminal = terminal.spawn().expect("spawn terminal line runner");
+    terminal
+        .stdin
         .take()
-        .expect("REPL stdin")
-        .write_all(b"Reply from the live endpoint.\n/exit\n")
-        .expect("write REPL script");
-    let repl = repl.wait_with_output().expect("REPL output");
+        .expect("terminal stdin")
+        .write_all(b"/session bogus\n/session resume\n1\nReply from the live endpoint.\n/exit\n")
+        .expect("write terminal script");
+    let terminal = terminal.wait_with_output().expect("terminal output");
     assert!(
-        repl.status.success(),
+        terminal.status.success(),
         "stdout={}\nstderr={}",
-        String::from_utf8_lossy(&repl.stdout),
-        String::from_utf8_lossy(&repl.stderr)
+        String::from_utf8_lossy(&terminal.stdout),
+        String::from_utf8_lossy(&terminal.stderr)
     );
-    let repl_output = String::from_utf8_lossy(&repl.stdout);
-    assert!(repl_output.contains("Colossus Rust 0.6.0."));
-    assert!(repl_output.contains("repl-connected"));
-    assert!(!repl_output.contains("\x1b["));
+    let terminal_output = String::from_utf8_lossy(&terminal.stdout);
+    assert!(terminal_output.contains("Colossus Rust 0.6.0."));
+    assert!(terminal_output.contains("unknown terminal command: /session bogus"));
+    assert!(terminal_output.contains("Choose a session to resume:"));
+    assert!(terminal_output.contains("terminal-connected"));
+    assert!(!terminal_output.contains("\x1b["));
 
     let worker = command(binary, &config)
         .arg("worker")
@@ -555,6 +655,117 @@ sandbox:
     assert!(requests[2].contains("terminal-tool-two"));
     assert!(requests[3].contains("Reply from the live endpoint."));
     assert!(requests[4].contains("Reply through the worker endpoint."));
+}
+
+#[test]
+fn model_delegation_runs_the_child_before_agent_result_in_the_same_turn() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let state = directory.path().join("state.redb");
+    let anchor = directory.path().join("anchor.json");
+    let workflows = directory.path().join("workflows");
+    fs::create_dir(&workflows).expect("workflows");
+    let config = directory.path().join("config.yaml");
+    let (origin, server) = subagent_server();
+    fs::write(
+        &config,
+        format!(
+            r#"schemaVersion: 1
+storage:
+  path: {state}
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY
+    journal_key_id: provider-subagent-journal-v1
+    signing_variable: COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY
+    anchor_path: {anchor}
+policy:
+  kind: built_in
+  allow_actions: [provider.openai.chat, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue]
+  approval_actions: []
+  require_post_effect: true
+workflows:
+  repository: {workflows}
+  user: {workflows}
+providers:
+  profiles:
+    delegated:
+      kind: open_ai_compatible
+      model: delegated-model
+      baseUrl: {origin}/v1
+      credentialReference: null
+      timeoutMs: 10000
+  roles:
+    primary: delegated
+    subagent_default: delegated
+agent:
+  maxTurns: 4
+  tools: [agent.delegate, agent.result, agent.list]
+subagents:
+  maxConcurrent: 1
+sandbox:
+  backend: native
+  profile: provider-subagent-v1
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem: []
+  executables: []
+  environment: []
+  networkDestinations: [{origin}]
+  timeoutMs: 10000
+  maxOutputBytes: 1048576
+  maxProcesses: 2
+  maxMemoryBytes: 67108864
+  maxConcurrency: 1
+"#,
+            state = state.display(),
+            anchor = anchor.display(),
+            workflows = workflows.display(),
+        ),
+    )
+    .expect("config");
+
+    let output = command(binary, &config)
+        .current_dir(directory.path())
+        .args([
+            "run",
+            "Ask a subagent to say hi, then report its actual response.",
+            "--stream",
+            "--max-turns",
+            "4",
+        ])
+        .output()
+        .expect("delegated run");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
+    assert_eq!(result["output"], "The subagent said hi.");
+    let terminal = String::from_utf8_lossy(&output.stderr);
+    assert!(terminal.contains("Completed agent.delegate"), "{terminal}");
+    assert!(terminal.contains("Completed agent.result"), "{terminal}");
+    assert!(!terminal.contains("Failed agent.result"), "{terminal}");
+    assert!(terminal.contains("Hi, Alex! Ping received."), "{terminal}");
+
+    let requests = server.join().expect("subagent provider server");
+    assert_eq!(requests.len(), 4);
+    let session_id = result["session_id"].as_str().expect("session id");
+    let agents = run(
+        binary,
+        &config,
+        &["agents", "list", "--session", session_id],
+    );
+    assert!(agents.status.success());
+    let agents: Value = serde_json::from_slice(&agents.stdout).expect("agents JSON");
+    assert_eq!(agents.as_array().map(Vec::len), Some(1));
+    assert_eq!(agents[0]["status"], "completed");
+    assert_eq!(agents[0]["final_output"], "Hi, Alex! Ping received.");
 }
 
 #[test]
@@ -646,10 +857,7 @@ sandbox:
     );
     let terminal = String::from_utf8_lossy(&output.stderr);
     assert!(terminal.contains("[tool] start echo"), "{terminal}");
-    assert!(
-        terminal.contains("[tool] complete echo status=ok"),
-        "{terminal}"
-    );
+    assert!(terminal.contains("Completed echo"), "{terminal}");
     assert!(
         terminal.contains("responses-connected [REDACTED]"),
         "{terminal}"
@@ -872,7 +1080,15 @@ fn max_turn_empty_output_and_malformed_recovery_have_distinct_terminal_states() 
     assert!(!max_turn.status.success(), "turn exhaustion succeeded");
     let max_turn_terminal = String::from_utf8_lossy(&max_turn.stderr);
     assert!(
-        max_turn_terminal.contains("code=agent.max_turns recoverable=no"),
+        max_turn_terminal.contains("Run error"),
+        "{max_turn_terminal}"
+    );
+    assert!(
+        max_turn_terminal.contains("agent.max_turns"),
+        "{max_turn_terminal}"
+    );
+    assert!(
+        max_turn_terminal.contains("Recoverable"),
         "{max_turn_terminal}"
     );
     assert!(
@@ -905,10 +1121,12 @@ fn max_turn_empty_output_and_malformed_recovery_have_distinct_terminal_states() 
     let empty = failed_run(binary, &empty_directory, &empty_config, "4");
     assert!(!empty.status.success(), "empty provider output succeeded");
     let empty_terminal = String::from_utf8_lossy(&empty.stderr);
+    assert!(empty_terminal.contains("Run error"), "{empty_terminal}");
     assert!(
-        empty_terminal.contains("code=provider.failed recoverable=no"),
+        empty_terminal.contains("provider.failed"),
         "{empty_terminal}"
     );
+    assert!(empty_terminal.contains("Recoverable"), "{empty_terminal}");
     assert!(
         empty_terminal.contains("chat stream completed without visible text or tool calls"),
         "{empty_terminal}"
@@ -940,7 +1158,7 @@ fn max_turn_empty_output_and_malformed_recovery_have_distinct_terminal_states() 
     let malformed_terminal = String::from_utf8_lossy(&malformed.stderr);
     assert_eq!(
         malformed_terminal
-            .matches("code=provider.invalid_tool_arguments")
+            .matches("provider.invalid_tool_arguments")
             .count(),
         3,
         "{malformed_terminal}"

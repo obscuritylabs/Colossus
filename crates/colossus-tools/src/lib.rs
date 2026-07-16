@@ -622,7 +622,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "agent.delegate".into(),
-            description: "Queue a durable bounded child-agent job in the current session.".into(),
+            description: "Create a durable bounded child-agent job in the current session. Foreground runs schedule it immediately; use agent.result with the returned id before answering.".into(),
             input_schema: object_schema(
                 json!({"task": {"type": "string", "minLength": 1, "maxLength": 65536}}),
                 &["task"],
@@ -633,7 +633,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "agent.result".into(),
-            description: "Return one current-session durable child-agent job and result.".into(),
+            description: "Return one current-session durable child-agent job and its result. Queued or running is pending work, not failure.".into(),
             input_schema: object_schema(
                 json!({"id": {"type": "string", "minLength": 1, "maxLength": 128}}),
                 &["id"],

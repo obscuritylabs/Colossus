@@ -329,7 +329,7 @@ header only after a permit reaches the adapter.
 Streaming does not weaken that boundary. The adapter submits one normalized item at a
 time to the gateway, the gateway enforces cumulative output limits and any post-effect
 decision before observation, and the agent journals the released item before forwarding
-it to CLI or REPL rendering. The gateway latches the first sink failure, so an adapter
+it to CLI or TUI rendering. The gateway latches the first sink failure, so an adapter
 cannot ignore a denied callback and continue the effect. A denied item never reaches
 either observer.
 
@@ -461,7 +461,7 @@ ignores binary/non-UTF-8 or oversized files, and caps both match count and relea
 output.
 
 Rust one-shot commands deny approval obligations unless `--approval-mode ask`,
-`risk-auto`, or `full-access` is selected; the REPL defaults to `ask`. Ask mode shows a
+`risk-auto`, or `full-access` is selected; the TUI defaults to `ask`. Ask mode shows a
 bounded, hard-redacted proposed-content preview and accepts only an explicit `y`/`yes`.
 `full-access` can produce a proof for `require_approval`, but cannot convert a policy deny
 to allow, add a filesystem root, or mint an adapter permit itself. `risk-auto` invokes
@@ -582,6 +582,11 @@ Running subagent jobs that outlive a process are marked `interrupted` on startup
 than resumed from a half-open provider stream. Queued jobs remain runnable when a runtime
 with a configured subagent runner starts.
 
+A successful model delegation wakes the runtime scheduler, but does not bypass it. The
+same serialized drain, configured concurrency bound, lifecycle effects, provider gateway,
+and post-effect release rules execute the child. A scheduler notification is not retry
+authority: interrupted jobs remain interrupted until an explicit requeue.
+
 ## Model-Assisted Risk Review
 
 `shell.run` is reviewed by the `risk_evaluator` model role only in `risk-auto`. Review
@@ -653,24 +658,24 @@ they do not turn auth fields into model arguments.
 ## Reasoning Visibility
 
 Colossus may render provider-supplied reasoning summaries when an endpoint exposes a
-safe summary field. It does not render raw hidden reasoning text in CLI or REPL paths.
+safe summary field. It does not render raw hidden reasoning text in CLI or TUI paths.
 Stream chunks are normalized and individually post-authorized before becoming typed
 provider events; raw provider chunks are neither persisted nor placed in run-event
 envelopes.
 
-The REPL transcript labels these safe summaries as `thinking` only when they arrive as
+The TUI transcript labels these safe summaries as `thinking` only when they arrive as
 typed `ProviderEvent::ReasoningSummary` values. Tool results become `RunEvent::ToolCompleted`
 only after the released result and canonical completion event exist. Semantic rendering
 caps previews and identifies recoverable errors without reclassifying local harness
 activity as model reasoning.
 
-## REPL Themes And Preferences
+## TUI Themes And Preferences
 
-Rust REPL preferences and submitted-input history are strict records in the encrypted
+Rust terminal preferences and submitted-input history are strict records in the encrypted
 event journal. Updates cross the same policy, permit, and audit boundary as other durable
 mutations and route through authenticated worker IPC when the worker owns the writer
-lease. Reedline is hydrated into bounded memory and never receives a plaintext history
-file; audit envelopes and projections do not disclose entry contents. Preferences control
+lease. The TUI is hydrated with at most 1,000 entries and never receives a plaintext
+history file; audit envelopes and projections do not disclose entry contents. Preferences control
 display behavior only and do not change provider, policy, tool, approval, capability, or
 prompt decisions. Built-in themes are data-only identities; executable plugins are not
 loaded through the presentation path, and unknown schemas fail closed. Their fixed Rust
@@ -685,10 +690,17 @@ Selection stores the fully resolved palette and SHA-256 source hash in the encry
 preference event, so restart does not reread mutable theme content to reconstruct the
 active appearance.
 
-Composer metrics are interface-local derived values. Reedline supplies the draft and
-insertion point to a data-only highlighter during repaint; Colossus retains only cursor
-line/column and draft character/line counts in memory. Draft text is not copied into
-prompt status, worker IPC, telemetry, policy input, or audit events.
+Composer editing state is interface-local. The Ratatui reducer retains the draft and a
+UTF-8-boundary cursor only in memory. Draft text is not copied into footer status, worker
+IPC, telemetry, policy input, or audit events until the operator submits it. Hostile
+control input is filtered before it can become terminal control state.
+
+Worker protocol v4 prompt and cancellation frames are authenticated, sequenced, bounded,
+and bound to one connection and run. Prompt IDs are one-use. Replay, wrong connection,
+wrong request or prompt identity, timeout, disconnect, malformed data, and headless use
+fail closed. Cooperative cancellation prevents the next provider or tool effect from
+starting; an already-started effect settles to a known or auditable unknown terminal
+state before cancellation completes.
 
 ## Audit Logs
 

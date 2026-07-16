@@ -873,7 +873,7 @@ impl WorkRepository for EventSourcedWorkRepository {
     }
 }
 
-/// Validated application service shared by CLI, REPL, tools, and embedded callers.
+/// Validated application service shared by CLI, TUI, tools, and embedded callers.
 pub struct WorkService {
     repository: Arc<dyn WorkRepository>,
     sessions: Arc<dyn SessionRepository>,

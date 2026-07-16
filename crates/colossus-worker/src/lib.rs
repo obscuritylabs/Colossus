@@ -5,9 +5,15 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
-    AgentRunResult, DecisionPriority, DecisionStatus, GoalStatus, IntegrationAuth, MemoryScope,
-    MemoryStatus, PlanStatus, PlanStep, ReplPreferences, ResearchDepth, ResearchSourceKind,
-    RunEventEnvelope, SubagentStatus, TaskStatus,
+    AgentRunOutcome, AgentRunResult, ApprovalProof, DecisionPriority, DecisionStatus,
+    EffectRequest, GoalStatus, IntegrationAuth, MemoryScope, MemoryStatus, PlanStatus, PlanStep,
+    PolicyDecision, ResearchDepth, ResearchSourceKind, RunEventEnvelope, SubagentStatus,
+    TaskStatus, TerminalPreferences, UserPromptRequest, UserPromptResponse,
+};
+use colossus_policy::AllowApproval;
+use colossus_ports::{
+    ApprovalProvider, ModelProviderError, PolicyError, RunControl, RunEventObserver, ToolError,
+    UserPromptProvider,
 };
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeError};
 use hmac::{Hmac, Mac as _};
@@ -27,7 +33,7 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u16 = 3;
+const PROTOCOL_VERSION: u16 = 4;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -39,6 +45,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 // outer bound above that window so concurrent clients can use the retry path.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Serialize, Deserialize)]
@@ -166,7 +173,24 @@ pub enum WorkerOperation {
         session_id: Option<String>,
         /// Explicit declarative skills.
         explicit_skills: Vec<String>,
-        /// REPL-sticky declarative skills.
+        /// TUI-sticky declarative skills.
+        sticky_skills: Vec<String>,
+    },
+    /// Execute a model run with protocol-v4 prompts and cooperative cancellation.
+    RunModelControlled {
+        /// Logical role.
+        role: String,
+        /// Composed caller instructions.
+        instructions: String,
+        /// User prompt.
+        prompt: String,
+        /// Optional bounded turn override.
+        max_turns: Option<u16>,
+        /// Exact durable session.
+        session_id: String,
+        /// Explicit declarative skills.
+        explicit_skills: Vec<String>,
+        /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
     /// Execute structurally read-only Plan Mode.
@@ -183,7 +207,7 @@ pub enum WorkerOperation {
         session_id: Option<String>,
         /// Explicit declarative skills.
         explicit_skills: Vec<String>,
-        /// REPL-sticky declarative skills.
+        /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
     /// Execute the permit-bound offline echo effect.
@@ -211,6 +235,15 @@ pub enum WorkerOperation {
         /// Exact session identifier.
         session_id: String,
     },
+    /// Reconstruct one bounded canonical session-message page.
+    SessionMessagesPage {
+        /// Exact session identifier.
+        session_id: String,
+        /// Exclusive upper sequence bound for older paging.
+        before_sequence: Option<u64>,
+        /// Maximum records, clamped to 100.
+        limit: usize,
+    },
     /// Resolve the newest session.
     SessionLatest,
     /// Refresh bounded actionable work for one session.
@@ -220,7 +253,7 @@ pub enum WorkerOperation {
     },
     /// Reconstruct the canonical presentation profile.
     PresentationGet,
-    /// Reconstruct newest encrypted REPL history entries.
+    /// Reconstruct newest encrypted terminal history entries.
     PresentationHistory {
         /// Maximum entries in chronological order.
         limit: usize,
@@ -228,9 +261,9 @@ pub enum WorkerOperation {
     /// Persist a complete presentation profile through the runtime gateway.
     PresentationSave {
         /// Strict complete replacement profile.
-        preferences: ReplPreferences,
+        preferences: TerminalPreferences,
     },
-    /// Append one encrypted REPL history entry through the runtime gateway.
+    /// Append one encrypted terminal history entry through the runtime gateway.
     PresentationHistoryAppend {
         /// Exact submitted entry.
         entry: String,
@@ -915,12 +948,88 @@ struct WorkerRequest {
     authentication_tag: String,
 }
 
+/// Worker-side policy mode used by attached and headless clients.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerApprovalMode {
+    /// Deny approval obligations without prompting.
+    Deny,
+    /// Ask an attached protocol-v4 interactive client.
+    Ask,
+    /// Preserve model-assisted low-risk auto-approval and ask otherwise.
+    RiskAuto,
+    /// Mint approval obligations without a prompt.
+    FullAccess,
+}
+
+/// Kind of one authenticated worker-to-client prompt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerPromptKind {
+    /// Policy approval obligation.
+    Approval,
+    /// Tool-requested operator input.
+    UserInput,
+}
+
+/// Bounded authenticated prompt transported to an attached interactive client.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerPrompt {
+    /// One-use prompt identity bound to the request connection.
+    pub prompt_id: String,
+    /// Prompt purpose.
+    pub kind: WorkerPromptKind,
+    /// Short overlay title.
+    pub title: String,
+    /// Policy-released question or reason.
+    pub question: String,
+    /// Optional exact answer choices.
+    pub choices: Vec<String>,
+    /// Whether an answer outside the exact choices is valid.
+    pub allow_free_form: bool,
+    /// Bounded released details suitable for a semantic card.
+    pub details: Value,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WorkerFrameContent {
     Event { event: RunEventEnvelope },
+    Prompt { prompt: WorkerPrompt },
     Complete { result: Value },
     Error { message: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ClientFrameContent {
+    PromptResponse {
+        prompt_id: String,
+        answer: Option<String>,
+    },
+    Cancel,
+}
+
+#[derive(Serialize)]
+struct UnsignedClientFrame<'a> {
+    version: u16,
+    request_id: &'a str,
+    connection_nonce: &'a str,
+    sequence: u64,
+    timestamp_ms: i128,
+    content_base64: &'a str,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerClientFrame {
+    version: u16,
+    request_id: String,
+    connection_nonce: String,
+    sequence: u64,
+    timestamp_ms: i128,
+    content_base64: String,
+    authentication_tag: String,
 }
 
 #[derive(Serialize)]
@@ -966,7 +1075,15 @@ impl ReplayGuard {
     }
 }
 
+/// Client-side handler for authenticated worker approval and input prompts.
+#[async_trait]
+pub trait WorkerPromptHandler: Send + Sync {
+    /// Return one bounded answer, or `None` to fail closed.
+    async fn prompt(&self, prompt: WorkerPrompt) -> Result<Option<String>, WorkerError>;
+}
+
 /// Authenticated one-request-per-connection worker client.
+#[derive(Clone)]
 pub struct WorkerClient {
     endpoint: String,
     authentication_key: [u8; 32],
@@ -1030,6 +1147,9 @@ impl WorkerClient {
             WorkerFrameContent::Event { .. } => Err(WorkerError::Protocol(
                 "non-streaming call received a run event".into(),
             )),
+            WorkerFrameContent::Prompt { .. } => Err(WorkerError::Protocol(
+                "non-interactive call received a prompt and failed closed".into(),
+            )),
             WorkerFrameContent::Complete { result } => Ok(result),
             WorkerFrameContent::Error { message } => Err(WorkerError::Remote(message)),
         }
@@ -1077,7 +1197,111 @@ impl WorkerClient {
                         WorkerError::Protocol(format!("invalid run result: {error}"))
                     });
                 }
+                WorkerFrameContent::Prompt { .. } => {
+                    return Err(WorkerError::Protocol(
+                        "uncontrolled model call received a prompt and failed closed".into(),
+                    ));
+                }
                 WorkerFrameContent::Error { message } => return Err(WorkerError::Remote(message)),
+            }
+        }
+    }
+
+    /// Execute a protocol-v4 run with authenticated prompts and cooperative cancellation.
+    pub async fn run_model_controlled(
+        &self,
+        operation: WorkerOperation,
+        observer: &mut dyn RunEventObserver,
+        prompts: &dyn WorkerPromptHandler,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, WorkerError> {
+        if !matches!(operation, WorkerOperation::RunModelControlled { .. }) {
+            return Err(WorkerError::Protocol(
+                "run_model_controlled requires run_model_controlled".into(),
+            ));
+        }
+        let mut stream = self.connect().await?;
+        let connection_nonce = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            client_handshake(&mut stream, &self.authentication_key),
+        )
+        .await
+        .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))??;
+        let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
+        write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
+        let (mut reader, mut writer) = tokio::io::split(stream);
+        let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel(32);
+        let reader_task = tokio::spawn(async move {
+            loop {
+                let frame = read_message::<_, WorkerFrame>(&mut reader, MAX_FRAME_BYTES).await;
+                let finished = frame.is_err();
+                if frame_tx.send(frame).await.is_err() || finished {
+                    break;
+                }
+            }
+        });
+        let mut server_sequence = 0_u64;
+        let mut client_sequence = 0_u64;
+        let mut cancellation_sent = false;
+        let mut cancellation_poll = tokio::time::interval(Duration::from_millis(50));
+        cancellation_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            let frame = tokio::select! {
+                frame = frame_rx.recv() => frame.ok_or_else(|| {
+                    WorkerError::Protocol("worker response stream closed".into())
+                })??,
+                _ = cancellation_poll.tick(), if !cancellation_sent => {
+                    if control.is_cancelled() {
+                        client_sequence = client_sequence.saturating_add(1);
+                        write_signed_client_frame(
+                            &mut writer,
+                            &self.authentication_key,
+                            &request.request_id,
+                            &connection_nonce,
+                            client_sequence,
+                            ClientFrameContent::Cancel,
+                        )
+                        .await?;
+                        cancellation_sent = true;
+                    }
+                    continue;
+                }
+            };
+            let content = validate_frame(
+                &self.authentication_key,
+                &request.request_id,
+                &mut server_sequence,
+                &frame,
+            )?;
+            match content {
+                WorkerFrameContent::Event { event } => observer
+                    .observe(event)
+                    .await
+                    .map_err(|error| WorkerError::Remote(error.to_string()))?,
+                WorkerFrameContent::Prompt { prompt } => {
+                    let prompt_id = prompt.prompt_id.clone();
+                    let answer = prompts.prompt(prompt).await?;
+                    client_sequence = client_sequence.saturating_add(1);
+                    write_signed_client_frame(
+                        &mut writer,
+                        &self.authentication_key,
+                        &request.request_id,
+                        &connection_nonce,
+                        client_sequence,
+                        ClientFrameContent::PromptResponse { prompt_id, answer },
+                    )
+                    .await?;
+                }
+                WorkerFrameContent::Complete { result } => {
+                    reader_task.abort();
+                    return serde_json::from_value(result).map_err(|error| {
+                        WorkerError::Protocol(format!("invalid controlled run result: {error}"))
+                    });
+                }
+                WorkerFrameContent::Error { message } => {
+                    reader_task.abort();
+                    return Err(WorkerError::Remote(message));
+                }
             }
         }
     }
@@ -1087,6 +1311,173 @@ impl WorkerClient {
             .await
             .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))?
             .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))
+    }
+}
+
+#[derive(Clone)]
+struct InteractiveRunBridge {
+    prompts: tokio::sync::mpsc::Sender<WorkerPrompt>,
+    responses:
+        Arc<tokio::sync::Mutex<BTreeMap<String, tokio::sync::oneshot::Sender<Option<String>>>>>,
+}
+
+impl InteractiveRunBridge {
+    async fn request(&self, prompt: WorkerPrompt) -> Result<Option<String>, String> {
+        self.request_with_timeout(prompt, INTERACTIVE_PROMPT_TIMEOUT)
+            .await
+    }
+
+    async fn request_with_timeout(
+        &self,
+        prompt: WorkerPrompt,
+        timeout: Duration,
+    ) -> Result<Option<String>, String> {
+        let prompt_id = prompt.prompt_id.clone();
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        if self
+            .responses
+            .lock()
+            .await
+            .insert(prompt_id.clone(), response_tx)
+            .is_some()
+        {
+            return Err("duplicate interactive prompt id".into());
+        }
+        if self.prompts.send(prompt).await.is_err() {
+            self.responses.lock().await.remove(&prompt_id);
+            return Err("interactive worker client disconnected".into());
+        }
+        match tokio::time::timeout(timeout, response_rx).await {
+            Ok(Ok(answer)) => Ok(answer),
+            Ok(Err(_)) => Err("interactive worker response channel closed".into()),
+            Err(_) => {
+                self.responses.lock().await.remove(&prompt_id);
+                Err("interactive worker prompt timed out".into())
+            }
+        }
+    }
+
+    async fn respond(&self, prompt_id: &str, answer: Option<String>) -> Result<(), WorkerError> {
+        let response = self
+            .responses
+            .lock()
+            .await
+            .remove(prompt_id)
+            .ok_or_else(|| WorkerError::Protocol("unknown, replayed, or wrong prompt id".into()))?;
+        response
+            .send(answer)
+            .map_err(|_| WorkerError::Protocol("prompt response arrived after closure".into()))
+    }
+
+    async fn cancel_all(&self) {
+        let pending = std::mem::take(&mut *self.responses.lock().await);
+        for (_, response) in pending {
+            let _ = response.send(None);
+        }
+    }
+}
+
+tokio::task_local! {
+    static ACTIVE_INTERACTIVE_RUN: InteractiveRunBridge;
+}
+
+struct WorkerInteractiveApproval {
+    mode: WorkerApprovalMode,
+}
+
+#[async_trait]
+impl ApprovalProvider for WorkerInteractiveApproval {
+    fn risk_auto_enabled(&self) -> bool {
+        self.mode == WorkerApprovalMode::RiskAuto
+    }
+
+    async fn request_approval(
+        &self,
+        request: &EffectRequest,
+        request_hash: &str,
+        decision: &PolicyDecision,
+    ) -> Result<Option<ApprovalProof>, PolicyError> {
+        match self.mode {
+            WorkerApprovalMode::Deny => return Ok(None),
+            WorkerApprovalMode::FullAccess => {
+                return ApprovalProvider::request_approval(
+                    &AllowApproval {
+                        approved_by: "worker:full-access".into(),
+                    },
+                    request,
+                    request_hash,
+                    decision,
+                )
+                .await;
+            }
+            WorkerApprovalMode::Ask | WorkerApprovalMode::RiskAuto => {}
+        }
+        let bridge = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone).map_err(|_| {
+            PolicyError::Unavailable("no interactive worker client attached".into())
+        })?;
+        let answer = bridge
+            .request(WorkerPrompt {
+                prompt_id: Uuid::now_v7().to_string(),
+                kind: WorkerPromptKind::Approval,
+                title: "Approval required".into(),
+                question: decision.reason.clone(),
+                choices: vec!["Allow once".into(), "Deny".into()],
+                allow_free_form: false,
+                details: json!({
+                    "action": request.action,
+                    "resource": request.resource,
+                    "content": request.content,
+                    "decision_id": decision.decision_id,
+                }),
+            })
+            .await
+            .map_err(PolicyError::Unavailable)?;
+        if answer.as_deref() != Some("Allow once") {
+            return Ok(None);
+        }
+        ApprovalProvider::request_approval(
+            &AllowApproval {
+                approved_by: "worker:interactive".into(),
+            },
+            request,
+            request_hash,
+            decision,
+        )
+        .await
+    }
+}
+
+struct WorkerInteractiveUserPrompt;
+
+#[async_trait]
+impl UserPromptProvider for WorkerInteractiveUserPrompt {
+    async fn prompt(&self, request: UserPromptRequest) -> Result<UserPromptResponse, ToolError> {
+        let bridge = ACTIVE_INTERACTIVE_RUN
+            .try_with(Clone::clone)
+            .map_err(|_| ToolError::Failed("no interactive worker client attached".into()))?;
+        let answer = bridge
+            .request(WorkerPrompt {
+                prompt_id: Uuid::now_v7().to_string(),
+                kind: WorkerPromptKind::UserInput,
+                title: "Input needed".into(),
+                question: request.question.clone(),
+                choices: request.choices.clone(),
+                allow_free_form: request.allow_free_form,
+                details: Value::Null,
+            })
+            .await
+            .map_err(ToolError::Failed)?
+            .ok_or_else(|| ToolError::Failed("user cancelled the question".into()))?;
+        let selected_index = request.choices.iter().position(|choice| choice == &answer);
+        if selected_index.is_none() && !request.allow_free_form {
+            return Err(ToolError::Failed(
+                "user response did not match an allowed choice".into(),
+            ));
+        }
+        Ok(UserPromptResponse {
+            answer,
+            selected_index,
+        })
     }
 }
 
@@ -1114,6 +1505,28 @@ impl WorkerServer {
         })
     }
 
+    /// Open a worker whose protocol-v4 attached clients own prompts and cancellation.
+    pub fn open_with_mode(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+    ) -> Result<Self, WorkerError> {
+        let approvals: Arc<dyn ApprovalProvider> = Arc::new(WorkerInteractiveApproval {
+            mode: approval_mode,
+        });
+        let user_prompts: Arc<dyn UserPromptProvider> = Arc::new(WorkerInteractiveUserPrompt);
+        Ok(Self {
+            endpoint: config.worker_ipc_endpoint()?,
+            authentication_key: config.worker_ipc_auth_key()?,
+            runtime: Arc::new(Runtime::open_with_interfaces(
+                config,
+                approvals,
+                Some(user_prompts),
+            )?),
+            replay: Arc::new(Mutex::new(ReplayGuard::default())),
+            maintenance: Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
     /// Exact bound endpoint.
     pub fn endpoint(&self) -> &str {
         &self.endpoint
@@ -1136,14 +1549,14 @@ impl WorkerServer {
         while !stop {
             tokio::select! {
                 accepted = listener.accept() => {
-                    let mut stream = accepted?;
+                    let stream = accepted?;
                     let runtime = Arc::clone(&runtime);
                     let replay = Arc::clone(&replay);
                     let maintenance = Arc::clone(&maintenance);
                     let shutdown = shutdown_tx.clone();
                     tasks.spawn(async move {
                         if handle_connection(
-                            &mut stream,
+                            stream,
                             &key,
                             runtime.as_ref(),
                             replay.as_ref(),
@@ -1192,17 +1605,17 @@ impl WorkerServer {
 }
 
 async fn handle_connection<S>(
-    stream: &mut S,
+    mut stream: S,
     key: &[u8; 32],
     runtime: &Runtime,
     replay: &Mutex<ReplayGuard>,
     maintenance: &tokio::sync::Mutex<()>,
 ) -> Result<bool, WorkerError>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let connection_nonce =
-        match tokio::time::timeout(HANDSHAKE_TIMEOUT, server_handshake(stream, key))
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, server_handshake(&mut stream, key))
             .await
             .map_err(|_| WorkerError::Protocol("worker client handshake timed out".into()))
             .and_then(std::convert::identity)
@@ -1213,18 +1626,20 @@ where
                 return Err(error);
             }
         };
-    let request: WorkerRequest =
-        match tokio::time::timeout(HANDSHAKE_TIMEOUT, read_message(stream, MAX_REQUEST_BYTES))
-            .await
-            .map_err(|_| WorkerError::Protocol("worker request framing timed out".into()))
-            .and_then(std::convert::identity)
-        {
-            Ok(request) => request,
-            Err(error) => {
-                runtime.record_worker_ipc_audit(false, None, None, Some(&error.to_string()))?;
-                return Err(error);
-            }
-        };
+    let request: WorkerRequest = match tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        read_message(&mut stream, MAX_REQUEST_BYTES),
+    )
+    .await
+    .map_err(|_| WorkerError::Protocol("worker request framing timed out".into()))
+    .and_then(std::convert::identity)
+    {
+        Ok(request) => request,
+        Err(error) => {
+            runtime.record_worker_ipc_audit(false, None, None, Some(&error.to_string()))?;
+            return Err(error);
+        }
+    };
     if let Err(error) = validate_request(key, &request, replay, &connection_nonce) {
         runtime.record_worker_ipc_audit(
             false,
@@ -1242,6 +1657,130 @@ where
     )?;
     let request_id = request.request_id.clone();
     match request.operation {
+        WorkerOperation::RunModelControlled {
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            session_id,
+            explicit_skills,
+            sticky_skills,
+        } => {
+            let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
+            let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(16);
+            let responses = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+            let bridge = InteractiveRunBridge {
+                prompts: prompt_tx,
+                responses,
+            };
+            let control = RunControl::default();
+            let mut observer = ChannelWorkerObserver { sender: event_tx };
+            let run = ACTIVE_INTERACTIVE_RUN.scope(
+                bridge.clone(),
+                runtime.run_model_with_skills_stream_controlled(
+                    &role,
+                    &instructions,
+                    &prompt,
+                    max_turns,
+                    Some(&session_id),
+                    &explicit_skills,
+                    &sticky_skills,
+                    &mut observer,
+                    &control,
+                ),
+            );
+            tokio::pin!(run);
+            let (mut reader, mut writer) = tokio::io::split(stream);
+            let (client_tx, mut client_rx) = tokio::sync::mpsc::channel(16);
+            let reader_key = *key;
+            let reader_request_id = request_id.clone();
+            let reader_connection_nonce = connection_nonce.clone();
+            let reader_task = tokio::spawn(async move {
+                let mut sequence = 0_u64;
+                loop {
+                    let frame =
+                        read_message::<_, WorkerClientFrame>(&mut reader, MAX_REQUEST_BYTES)
+                            .await
+                            .and_then(|frame| {
+                                validate_client_frame(
+                                    &reader_key,
+                                    &reader_request_id,
+                                    &reader_connection_nonce,
+                                    &mut sequence,
+                                    &frame,
+                                )
+                            });
+                    let finished = frame.is_err();
+                    if client_tx.send(frame).await.is_err() || finished {
+                        break;
+                    }
+                }
+            });
+            let mut sequence = 0_u64;
+            loop {
+                tokio::select! {
+                    result = &mut run => {
+                        sequence = sequence.saturating_add(1);
+                        let content = match result {
+                            Ok(outcome) => WorkerFrameContent::Complete {
+                                result: serde_json::to_value(outcome)?,
+                            },
+                            Err(error) => WorkerFrameContent::Error {
+                                message: bounded_error(&error.to_string()),
+                            },
+                        };
+                        write_signed_frame(&mut writer, key, &request_id, sequence, content).await?;
+                        reader_task.abort();
+                        bridge.cancel_all().await;
+                        return Ok(false);
+                    }
+                    event = event_rx.recv() => {
+                        let Some(event) = event else { continue; };
+                        sequence = sequence.saturating_add(1);
+                        write_signed_frame(
+                            &mut writer,
+                            key,
+                            &request_id,
+                            sequence,
+                            WorkerFrameContent::Event { event },
+                        ).await?;
+                    }
+                    prompt = prompt_rx.recv() => {
+                        let Some(prompt) = prompt else { continue; };
+                        sequence = sequence.saturating_add(1);
+                        write_signed_frame(
+                            &mut writer,
+                            key,
+                            &request_id,
+                            sequence,
+                            WorkerFrameContent::Prompt { prompt },
+                        ).await?;
+                    }
+                    client = client_rx.recv() => {
+                        match client {
+                            Some(Ok(ClientFrameContent::PromptResponse { prompt_id, answer })) => {
+                                bridge.respond(&prompt_id, answer).await?;
+                            }
+                            Some(Ok(ClientFrameContent::Cancel)) => control.cancel(),
+                            Some(Err(error)) => {
+                                control.cancel();
+                                bridge.cancel_all().await;
+                                reader_task.abort();
+                                return Err(error);
+                            }
+                            None => {
+                                control.cancel();
+                                bridge.cancel_all().await;
+                                reader_task.abort();
+                                return Err(WorkerError::Protocol(
+                                    "interactive worker client disconnected".into(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         WorkerOperation::RunModel {
             role,
             instructions,
@@ -1252,7 +1791,7 @@ where
             sticky_skills,
         } => {
             let mut observer = IpcRunObserver {
-                stream,
+                stream: &mut stream,
                 key,
                 request_id: &request_id,
                 sequence: 0,
@@ -1285,7 +1824,7 @@ where
             sticky_skills,
         } => {
             let mut observer = IpcRunObserver {
-                stream,
+                stream: &mut stream,
                 key,
                 request_id: &request_id,
                 sequence: 0,
@@ -1318,7 +1857,7 @@ where
                     message: bounded_error(&error.to_string()),
                 },
             };
-            write_signed_frame(stream, key, &request_id, 1, content).await?;
+            write_signed_frame(&mut stream, key, &request_id, 1, content).await?;
             Ok(shutdown && succeeded)
         }
     }
@@ -1345,12 +1884,14 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ProviderRoute { .. } => "provider_route",
         WorkerOperation::ToolsList => "tools_list",
         WorkerOperation::RunModel { .. } => "run_model",
+        WorkerOperation::RunModelControlled { .. } => "run_model_controlled",
         WorkerOperation::RunPlan { .. } => "run_plan",
         WorkerOperation::Echo { .. } => "echo",
         WorkerOperation::SessionCreate { .. } => "session_create",
         WorkerOperation::SessionGet { .. } => "session_get",
         WorkerOperation::SessionList { .. } => "session_list",
         WorkerOperation::SessionMessages { .. } => "session_messages",
+        WorkerOperation::SessionMessagesPage { .. } => "session_messages_page",
         WorkerOperation::SessionLatest => "session_latest",
         WorkerOperation::WorkState { .. } => "work_state",
         WorkerOperation::PresentationGet => "presentation_get",
@@ -1478,7 +2019,7 @@ where
         || (now_ms() - hello.timestamp_ms).abs() > MAX_CLOCK_SKEW_MS
     {
         return Err(WorkerError::Protocol(
-            "worker server handshake version, challenge, or timestamp is invalid".into(),
+            "worker server protocol is incompatible or its handshake is invalid; restart the worker with this Colossus version".into(),
         ));
     }
     verify_tag(
@@ -1505,7 +2046,7 @@ where
         || hex::decode(&hello.challenge).map_or(true, |bytes| bytes.len() != 32)
     {
         return Err(WorkerError::Protocol(
-            "worker client handshake version or challenge is invalid".into(),
+            "worker client protocol is incompatible or its handshake is invalid; restart the worker and client with the same Colossus version".into(),
         ));
     }
     let mut server_nonce = [0_u8; 32];
@@ -1611,6 +2152,15 @@ async fn dispatch(
         WorkerOperation::SessionMessages { session_id } => Ok(serde_json::to_value(
             runtime.session_messages(&session_id)?,
         )?),
+        WorkerOperation::SessionMessagesPage {
+            session_id,
+            before_sequence,
+            limit,
+        } => Ok(serde_json::to_value(runtime.session_messages_page(
+            &session_id,
+            before_sequence,
+            limit.clamp(1, 100),
+        )?)?),
         WorkerOperation::SessionLatest => Ok(serde_json::to_value(runtime.latest_session()?)?),
         WorkerOperation::WorkState { session_id } => {
             Ok(serde_json::to_value(runtime.work_state(&session_id)?)?)
@@ -1619,13 +2169,13 @@ async fn dispatch(
             Ok(serde_json::to_value(runtime.presentation_preferences()?)?)
         }
         WorkerOperation::PresentationHistory { limit } => Ok(serde_json::to_value(
-            runtime.repl_history(limit.clamp(1, 1_000))?,
+            runtime.terminal_history(limit.clamp(1, 1_000))?,
         )?),
         WorkerOperation::PresentationSave { preferences } => Ok(serde_json::to_value(
             runtime.save_presentation_preferences(preferences).await?,
         )?),
         WorkerOperation::PresentationHistoryAppend { entry } => Ok(serde_json::to_value(
-            runtime.append_repl_history(&entry).await?,
+            runtime.append_terminal_history(&entry).await?,
         )?),
         WorkerOperation::ContextStatus { session_id } => Ok(serde_json::to_value(
             runtime.context_status(&session_id).await?,
@@ -2270,9 +2820,11 @@ async fn dispatch(
         )?),
         WorkerOperation::Drain => drain_once(runtime, maintenance).await,
         WorkerOperation::Shutdown => Ok(json!({"stopping": true})),
-        WorkerOperation::RunModel { .. } | WorkerOperation::RunPlan { .. } => Err(
-            WorkerError::Protocol("model runs must use the streaming dispatch path".into()),
-        ),
+        WorkerOperation::RunModel { .. }
+        | WorkerOperation::RunModelControlled { .. }
+        | WorkerOperation::RunPlan { .. } => Err(WorkerError::Protocol(
+            "model runs must use the streaming dispatch path".into(),
+        )),
     }
 }
 
@@ -2303,6 +2855,20 @@ async fn parse_json_source(runtime: &Runtime, source: &str) -> Result<Value, Wor
     };
     serde_json::from_str(&document)
         .map_err(|error| WorkerError::Protocol(format!("invalid JSON input: {error}")))
+}
+
+struct ChannelWorkerObserver {
+    sender: tokio::sync::mpsc::Sender<RunEventEnvelope>,
+}
+
+#[async_trait]
+impl RunEventObserver for ChannelWorkerObserver {
+    async fn observe(&mut self, event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        self.sender
+            .send(event)
+            .await
+            .map_err(|_| ModelProviderError::Failed("worker event client disconnected".into()))
+    }
 }
 
 struct IpcRunObserver<'a, S> {
@@ -2459,6 +3025,46 @@ fn validate_frame(
     Ok(content)
 }
 
+fn validate_client_frame(
+    key: &[u8; 32],
+    request_id: &str,
+    connection_nonce: &str,
+    sequence: &mut u64,
+    frame: &WorkerClientFrame,
+) -> Result<ClientFrameContent, WorkerError> {
+    let expected_sequence = sequence.saturating_add(1);
+    if frame.version != PROTOCOL_VERSION
+        || frame.request_id != request_id
+        || frame.connection_nonce != connection_nonce
+        || frame.sequence != expected_sequence
+        || (now_ms() - frame.timestamp_ms).abs() > MAX_CLOCK_SKEW_MS
+    {
+        return Err(WorkerError::Protocol(
+            "client frame version, request, connection, sequence, or timestamp is invalid".into(),
+        ));
+    }
+    verify_tag(
+        key,
+        &UnsignedClientFrame {
+            version: frame.version,
+            request_id: &frame.request_id,
+            connection_nonce: &frame.connection_nonce,
+            sequence: frame.sequence,
+            timestamp_ms: frame.timestamp_ms,
+            content_base64: &frame.content_base64,
+        },
+        &frame.authentication_tag,
+        "worker client frame",
+    )?;
+    let content = BASE64
+        .decode(&frame.content_base64)
+        .map_err(|_| WorkerError::Protocol("worker client payload is not base64".into()))?;
+    let content = serde_json::from_slice(&content)
+        .map_err(|error| WorkerError::Protocol(format!("invalid worker client frame: {error}")))?;
+    *sequence = expected_sequence;
+    Ok(content)
+}
+
 async fn write_signed_frame<S>(
     stream: &mut S,
     key: &[u8; 32],
@@ -2494,6 +3100,53 @@ where
             authentication_tag,
         },
         MAX_FRAME_BYTES,
+    )
+    .await
+}
+
+async fn write_signed_client_frame<S>(
+    stream: &mut S,
+    key: &[u8; 32],
+    request_id: &str,
+    connection_nonce: &str,
+    sequence: u64,
+    content: ClientFrameContent,
+) -> Result<(), WorkerError>
+where
+    S: AsyncWrite + Unpin,
+{
+    let timestamp_ms = now_ms();
+    let content =
+        serde_json::to_vec(&content).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    if content.len() > MAX_REQUEST_BYTES {
+        return Err(WorkerError::Protocol(
+            "worker client frame exceeds the 1 MiB limit".into(),
+        ));
+    }
+    let content_base64 = BASE64.encode(content);
+    let authentication_tag = request_tag(
+        key,
+        &UnsignedClientFrame {
+            version: PROTOCOL_VERSION,
+            request_id,
+            connection_nonce,
+            sequence,
+            timestamp_ms,
+            content_base64: &content_base64,
+        },
+    )?;
+    write_message(
+        stream,
+        &WorkerClientFrame {
+            version: PROTOCOL_VERSION,
+            request_id: request_id.into(),
+            connection_nonce: connection_nonce.into(),
+            sequence,
+            timestamp_ms,
+            content_base64,
+            authentication_tag,
+        },
+        MAX_REQUEST_BYTES,
     )
     .await
 }
@@ -2838,6 +3491,284 @@ mod tests {
             validate_request(&key, &request, &replay, "connection-two"),
             Err(WorkerError::Protocol(message)) if message.contains("replayed")
         ));
+    }
+
+    fn signed_client_frame(
+        key: &[u8; 32],
+        request_id: &str,
+        connection_nonce: &str,
+        sequence: u64,
+        content: ClientFrameContent,
+    ) -> WorkerClientFrame {
+        let timestamp_ms = now_ms();
+        let content_base64 = BASE64.encode(serde_json::to_vec(&content).expect("content"));
+        let authentication_tag = request_tag(
+            key,
+            &UnsignedClientFrame {
+                version: PROTOCOL_VERSION,
+                request_id,
+                connection_nonce,
+                sequence,
+                timestamp_ms,
+                content_base64: &content_base64,
+            },
+        )
+        .expect("tag");
+        WorkerClientFrame {
+            version: PROTOCOL_VERSION,
+            request_id: request_id.into(),
+            connection_nonce: connection_nonce.into(),
+            sequence,
+            timestamp_ms,
+            content_base64,
+            authentication_tag,
+        }
+    }
+
+    #[test]
+    fn client_frames_reject_wrong_connection_request_and_replay() {
+        let key = [11_u8; 32];
+        let frame = signed_client_frame(
+            &key,
+            "request-one",
+            "connection-one",
+            1,
+            ClientFrameContent::Cancel,
+        );
+        let mut sequence = 0;
+        assert!(matches!(
+            validate_client_frame(
+                &key,
+                "request-one",
+                "wrong-connection",
+                &mut sequence,
+                &frame,
+            ),
+            Err(WorkerError::Protocol(_))
+        ));
+        assert!(matches!(
+            validate_client_frame(
+                &key,
+                "wrong-request",
+                "connection-one",
+                &mut sequence,
+                &frame,
+            ),
+            Err(WorkerError::Protocol(_))
+        ));
+        validate_client_frame(&key, "request-one", "connection-one", &mut sequence, &frame)
+            .expect("first frame");
+        assert!(matches!(
+            validate_client_frame(&key, "request-one", "connection-one", &mut sequence, &frame,),
+            Err(WorkerError::Protocol(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn prompt_ids_are_one_use_and_unknown_ids_fail_closed() {
+        let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
+        let bridge = InteractiveRunBridge {
+            prompts: prompt_tx,
+            responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+        };
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        bridge
+            .responses
+            .lock()
+            .await
+            .insert("prompt-one".into(), response_tx);
+        bridge
+            .respond("prompt-one", Some("answer".into()))
+            .await
+            .expect("first response");
+        assert_eq!(
+            response_rx.await.expect("answer").as_deref(),
+            Some("answer")
+        );
+        assert!(matches!(
+            bridge.respond("prompt-one", None).await,
+            Err(WorkerError::Protocol(message)) if message.contains("replayed")
+        ));
+        assert!(matches!(
+            bridge.respond("wrong-prompt", None).await,
+            Err(WorkerError::Protocol(_))
+        ));
+    }
+
+    fn test_prompt(id: &str, kind: WorkerPromptKind) -> WorkerPrompt {
+        WorkerPrompt {
+            prompt_id: id.into(),
+            kind,
+            title: "Test prompt".into(),
+            question: "Continue?".into(),
+            choices: vec!["Allow once".into(), "Deny".into()],
+            allow_free_form: false,
+            details: Value::Null,
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() {
+        let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(4);
+        let bridge = InteractiveRunBridge {
+            prompts: prompt_tx,
+            responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+        };
+
+        let answered_bridge = bridge.clone();
+        let answered = tokio::spawn(async move {
+            answered_bridge
+                .request(test_prompt("answered", WorkerPromptKind::UserInput))
+                .await
+        });
+        let prompt = prompt_rx.recv().await.expect("answered prompt");
+        bridge
+            .respond(&prompt.prompt_id, Some("Allow once".into()))
+            .await
+            .expect("answer prompt");
+        assert_eq!(
+            answered.await.expect("answered task").expect("answer"),
+            Some("Allow once".into())
+        );
+
+        let cancelled_bridge = bridge.clone();
+        let cancelled = tokio::spawn(async move {
+            cancelled_bridge
+                .request(test_prompt("cancelled", WorkerPromptKind::UserInput))
+                .await
+        });
+        prompt_rx.recv().await.expect("cancelled prompt");
+        bridge.cancel_all().await;
+        assert_eq!(cancelled.await.expect("cancel task").expect("cancel"), None);
+
+        let timeout_bridge = bridge.clone();
+        let timed_out = tokio::spawn(async move {
+            timeout_bridge
+                .request_with_timeout(
+                    test_prompt("timeout", WorkerPromptKind::UserInput),
+                    Duration::from_millis(1),
+                )
+                .await
+        });
+        prompt_rx.recv().await.expect("timeout prompt");
+        assert!(matches!(
+            timed_out.await.expect("timeout task"),
+            Err(message) if message.contains("timed out")
+        ));
+
+        let control = RunControl::default();
+        control.cancel();
+        assert!(control.is_cancelled());
+
+        let (disconnected_tx, disconnected_rx) = tokio::sync::mpsc::channel(1);
+        drop(disconnected_rx);
+        let disconnected = InteractiveRunBridge {
+            prompts: disconnected_tx,
+            responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+        };
+        assert!(matches!(
+            disconnected
+                .request(test_prompt("disconnect", WorkerPromptKind::Approval))
+                .await,
+            Err(message) if message.contains("disconnected")
+        ));
+    }
+
+    #[tokio::test]
+    async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
+        let request = colossus_policy::effect_request(
+            colossus_policy::system_actor("worker-test"),
+            "filesystem.write",
+            "note.txt",
+            json!({"content": "bounded"}),
+        );
+        let decision = PolicyDecision {
+            decision_id: "decision-test".into(),
+            policy_revision: "test-v1".into(),
+            outcome: colossus_contracts::DecisionOutcome::RequireApproval,
+            reason: "operator must approve".into(),
+            obligations: colossus_contracts::PolicyObligations::default(),
+        };
+
+        for (answer, expected_approval) in [("Allow once", true), ("Deny", false)] {
+            let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(1);
+            let bridge = InteractiveRunBridge {
+                prompts: prompt_tx,
+                responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            };
+            let responder_bridge = bridge.clone();
+            let answer = answer.to_owned();
+            let responder = tokio::spawn(async move {
+                let prompt = prompt_rx.recv().await.expect("approval prompt");
+                assert_eq!(prompt.kind, WorkerPromptKind::Approval);
+                responder_bridge
+                    .respond(&prompt.prompt_id, Some(answer))
+                    .await
+                    .expect("approval response");
+            });
+            let provider = WorkerInteractiveApproval {
+                mode: WorkerApprovalMode::Ask,
+            };
+            let proof = ACTIVE_INTERACTIVE_RUN
+                .scope(
+                    bridge,
+                    provider.request_approval(&request, "request-hash", &decision),
+                )
+                .await
+                .expect("approval result");
+            responder.await.expect("responder");
+            assert_eq!(proof.is_some(), expected_approval);
+        }
+    }
+
+    #[tokio::test]
+    async fn protocol_version_mismatch_has_restart_guidance() {
+        let key = [13_u8; 32];
+        let mut frame =
+            signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);
+        frame.version = PROTOCOL_VERSION - 1;
+        let mut sequence = 0;
+        assert!(matches!(
+            validate_client_frame(&key, "request", "connection", &mut sequence, &frame),
+            Err(WorkerError::Protocol(message)) if message.contains("version")
+        ));
+
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let writer = tokio::spawn(async move {
+            write_message(
+                &mut client,
+                &ClientHello {
+                    version: PROTOCOL_VERSION - 1,
+                    challenge: "a".repeat(64),
+                },
+                1024,
+            )
+            .await
+        });
+        assert!(matches!(
+            server_handshake(&mut server, &key).await,
+            Err(WorkerError::Protocol(message)) if message.contains("restart the worker")
+        ));
+        writer.await.expect("hello writer").expect("hello");
+    }
+
+    #[tokio::test]
+    async fn oversized_client_prompt_response_is_rejected_before_write() {
+        let key = [12_u8; 32];
+        let (mut writer, _reader) = tokio::io::duplex(64);
+        let result = write_signed_client_frame(
+            &mut writer,
+            &key,
+            "request",
+            "connection",
+            1,
+            ClientFrameContent::PromptResponse {
+                prompt_id: "prompt".into(),
+                answer: Some("x".repeat(MAX_REQUEST_BYTES + 1)),
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(WorkerError::Protocol(message)) if message.contains("1 MiB")));
     }
 
     #[tokio::test]
