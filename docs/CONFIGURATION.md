@@ -100,6 +100,11 @@ storage:
     anchor_path: .colossus/secure-anchor.json
 ```
 
+Changing `storage.adapter` does not migrate, import, or delete existing redb state.
+Provision and verify the PostgreSQL target independently, retain the original redb files
+and key material, and treat any intentional data transition as an explicit reviewed
+operation. Colossus never merges the two canonical journals silently.
+
 `COLOSSUS_DATABASE_URL` may contain a libpq URL or key/value string; its value is resolved
 only by the adapter and is never rendered by `config show` or `state doctor`. The pinned
 Mozilla WebPKI root set is the default TLS policy. A private deployment can instead use

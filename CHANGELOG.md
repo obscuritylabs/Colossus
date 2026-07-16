@@ -8,6 +8,77 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-16
+
+### Added
+
+- Added durable fixed-cadence workflow schedules with deterministic skip or fire-once
+  misfire handling, hash-pinned definitions, atomic queued-run creation, and
+  process-kill-safe recovery.
+- Added HMAC-SHA256 authenticated workflow webhooks with bounded replay protection,
+  exact raw-body verification, policy and audit routing, atomic delivery receipts, and
+  loopback HTTP, CLI, TUI, and worker surfaces.
+- Added exact repository-domain-event workflow subscriptions with optional stream
+  scoping, durable checkpoints, deterministic run identities, duplicate-delivery
+  suppression, and deferred policy-refusal handling.
+- Added a transactional PostgreSQL journal and projection adapter with encrypted
+  envelopes, global-chain serialization, shared repository conformance, TLS policy,
+  credential-reference-only configuration, and concurrent-process recovery tests.
+- Added permit-bound HTTPS WORM audit export with deterministic create-only objects,
+  exact-origin networking, credential redaction, idempotent replay, and durable unknown
+  outcome handling.
+- Added a searchable Rust-native mdBook documentation site deployed from `main`, with
+  executable navigation, link, and Pages-permission contracts.
+
+### Changed
+
+- Parallelized the pull-request and release validation matrices behind a fast formatting
+  and locked-metadata preflight, added shared compiler caching, removed redundant native
+  workspace compilation, and replaced source-built supply-chain tools with pinned,
+  checksum-verified release binaries.
+- Expanded the storage configuration to select redb or PostgreSQL explicitly while
+  preserving redb as the local default and canonical configuration behavior.
+- Updated workflow, storage, security, operator, and reconstruction documentation for
+  the new durable trigger and external-storage boundaries.
+
+### Fixed
+
+- Hardened Windows worker named-pipe backlog, replacement-listener, routing, shutdown,
+  and contention behavior so a busy authenticated worker is never mistaken for an
+  absent worker that permits a second embedded writer.
+- Granted the documentation workflow the Pages permission required by its pinned setup
+  action and added regression coverage for that deployment boundary.
+- Scoped `sccache` environment variables to jobs that install the wrapper, preventing
+  dependency-policy jobs from attempting to invoke a missing compiler wrapper.
+- Increased the bounded OCI control-command startup allowance so cold rootless Podman
+  initialization does not spuriously fail the same security acceptance suite that
+  Docker completes.
+- Reused the production RustSec database for the fuzz lockfile audit, removing a
+  redundant network fetch from the fail-closed supply-chain job.
+- Injected both standard Unix proxy-variable spellings for native and OCI sandboxes so
+  clients such as curl use the authenticated allowlist proxy on every release platform.
+
+### Security
+
+- Workflow triggers revalidate definition hashes, call graphs, input schemas, replay
+  state, and policy immediately before atomic dispatch; trigger creation grants no
+  downstream effect authority.
+- PostgreSQL and WORM credentials remain late-resolved environment references, verified
+  TLS is required outside explicit loopback acceptance, and diagnostics never release
+  connection strings, bearer values, ciphertext, or plaintext audit payloads.
+
+### Upgrade Notes
+
+- Existing redb installations remain redb installations. Selecting PostgreSQL is an
+  explicit configuration change and does not silently import, copy, or replace local
+  state; operators must provision and validate the target independently.
+- Schedule, webhook, and subscription records are additive. Existing workflow
+  definitions and runs retain their current hashes and behavior until an operator
+  explicitly creates and enables a trigger.
+- Signed multi-pack collections and authenticated remote pack-registry pull/push
+  operations are intentionally deferred to the 0.9.0 roadmap. Local verified packs,
+  OCI layouts, and signed offline release bundles remain supported in 0.8.0.
+
 ## [0.7.0] - 2026-07-15
 
 ### Added

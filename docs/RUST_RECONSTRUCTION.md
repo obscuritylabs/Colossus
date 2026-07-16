@@ -1,6 +1,6 @@
 # Rust Runtime Status
 
-Rust 0.7.0 is the active repository-root implementation. It uses Rust 1.96, edition
+Rust 0.8.0 is the active repository-root implementation. It uses Rust 1.96, edition
 2024, strict YAML configuration, and encrypted redb state. It never imports Python
 configuration or SQLite state. Python 0.5 remains frozen at `python-v0.5.0` and on the
 `python-legacy` branch.
@@ -82,8 +82,11 @@ was built from revision `5cdf9ee14ef33a3e63d72f80494b39b85a1813a4`; its full
 passed all native runtime, sandbox, policy, dependency, fuzz, and packaging jobs.
 
 PostgreSQL event storage, HTTPS WORM audit export, persisted schedules, authenticated
-webhooks, and durable repository-event subscriptions are complete in the post-0.7 source
-tree and will ship with the next release. Signed collections and remote registry
-operations remain the principal 0.8 implementation track.
-The [Roadmap To 0.8.0](ROADMAP.md) is the current completion index and defines the
-evidence required to close each track.
+webhooks, and durable repository-event subscriptions are included in the 0.8 source
+tree. Existing redb state remains authoritative unless an operator explicitly selects
+and provisions PostgreSQL; no automatic storage migration occurs.
+
+Signed multi-pack collections and authenticated remote registry operations are deferred
+to 0.9.0. Local verified pack directories, OCI layouts, and signed offline release
+bundles remain the supported 0.8 distribution boundary. The [Post-0.8 Roadmap](ROADMAP.md)
+tracks those deferred capabilities and their required security evidence.

@@ -350,6 +350,18 @@ fn full_matrix_fans_out_after_a_cached_fast_preflight() {
         Some("cargo-deny@0.20.2,cargo-audit@0.22.2")
     );
     assert_eq!(field(inputs, "fallback").as_str(), Some("none"));
+
+    let fuzz_policy = named_step(
+        job(jobs, "rust-supply-chain"),
+        "Enforce fuzz dependency policy",
+    );
+    let fuzz_policy_commands = field(fuzz_policy, "run")
+        .as_str()
+        .expect("fuzz dependency policy must be a script");
+    assert!(
+        fuzz_policy_commands.contains("cargo audit --no-fetch -D warnings --file fuzz/Cargo.lock"),
+        "the fuzz audit must reuse the database fetched by the production audit"
+    );
 }
 
 #[test]
