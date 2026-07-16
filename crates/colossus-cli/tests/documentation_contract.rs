@@ -96,6 +96,7 @@ fn static_documentation_site_is_complete_searchable_and_python_free() {
         "actions/configure-pages@v5",
         "actions/upload-pages-artifact@v4",
         "actions/deploy-pages@v4",
+        "pages: write",
     ] {
         assert!(
             workflow.contains(required),
