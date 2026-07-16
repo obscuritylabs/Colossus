@@ -89,7 +89,9 @@ colossus --config .colossus/config.yaml worker --shutdown
 
 Only one redb writer lease is allowed. A healthy worker owns it; CLI/TUI use authenticated
 IPC. Wrong-key, stale, replayed, malformed, or incorrectly permissioned endpoints fail
-without embedded fallback. If no worker endpoint exists, the same runtime embeds safely.
+without embedded fallback. A busy Windows pipe receives bounded connection and
+authenticated-handshake retries and also never falls through to embedded mode. If no
+worker endpoint exists, the same runtime embeds safely.
 
 ## Recovery Mode Or Audit Failure
 

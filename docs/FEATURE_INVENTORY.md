@@ -129,7 +129,7 @@ inspect hashes, audit records, and package contents without network access.
 | CTX-01 | Context composition and compaction | P1 | Raw history is retained while provider input stays within budget. |
 | WORK-01 | Tasks, decisions, memories, and plans | P1 | Long-running work state is persisted and inspectable. |
 | MEM-01 | Canonical memory and disposable indexes | P1 | Memory lifecycle state remains authoritative and usable while lexical or semantic indexes lag or rebuild. |
-| FLOW-01 | Durable versioned workflows | P1 | YAML workflows are validated, hash-pinned, restartable, bounded, and use normal authorization for every effectful step. |
+| FLOW-01 | Durable versioned workflows | P1 | YAML workflows and fixed-cadence schedules are validated, hash-pinned, restartable, bounded, and use normal authorization for every effectful step. |
 | GOAL-01 | Bounded Goal Mode | P1 | Autonomous iterations stop on terminal status or budget exhaustion. |
 | AGENT-01 | Durable subagents | P1 | Queued child jobs support bounded concurrency and lifecycle controls. |
 | RES-01 | Deep Research | P1 | Evidence collection, claims, citations, progress, and fallback are durable. |
@@ -587,6 +587,19 @@ definition validation/registration plus start, get, list, input, resume, cancel,
 drain. CLI, TUI, an embedded API, and an optional single-writer worker all invoke that
 same application layer.
 
+Persisted schedules bind an operator-selected identifier, validated input snapshot, and
+fixed cadence of 60 seconds through 31 days to an exact workflow hash. UTC RFC3339 `Z`
+timestamps are authoritative. Enable/disable is explicit and journaled. When multiple
+occurrences are overdue, the selected policy MUST either skip the entire backlog or
+queue one run for the latest occurrence; a single due occurrence queues once. Next-fire
+reconstruction MUST be deterministic and bounded without iterating once per missed
+occurrence. A fired schedule transition and its deterministic queued run MUST commit in
+one journal batch. Restart and process loss MUST NOT lose or duplicate the occurrence.
+Definition, call-graph, and input trust is rechecked before enable and dispatch; actual
+invalidation disables the schedule, while storage failure remains a retriable failure.
+Trigger-created runs use the ordinary hash-pinned queue, worker lock, policy, approval,
+effect, and recovery paths.
+
 When the worker is active it owns the canonical writer lease. Local clients MUST
 authenticate the server before disclosing operation content, authenticate every request
 and ordered response frame, bind requests to a single connection, reject replay and
@@ -595,10 +608,11 @@ Windows named pipes implement the same logical contract. Supported CLI/TUI opera
 auto-discover the worker and fall back to the embedded runtime only when no authenticated
 worker is active.
 
-Worker routing covers model runs, core TUI turns, sessions, workflows, audit and runtime
-diagnostics, context and telemetry, plus canonical tasks, decisions, plans, goals,
-subagents, memories, and memory-index maintenance. Approval mode belongs to the worker
-process; a client-side approval override MUST fail rather than silently change authority.
+Worker routing covers model runs, core TUI turns, sessions, workflows and workflow
+schedules, audit and runtime diagnostics, context and telemetry, plus canonical tasks,
+decisions, plans, goals, subagents, memories, and memory-index maintenance. Approval mode
+belongs to the worker process; a client-side approval override MUST fail rather than
+silently change authority.
 Research, skills, packs, bundles, integrations, MCP, process, and network commands use
 typed operations too; `@path` JSON and other file-backed inputs are read by the worker
 through the normal filesystem permission boundary rather than by the client.
@@ -1148,6 +1162,10 @@ the resulting signed evidence and six native archives.
   after synced non-idempotent/idempotent primary effects, after a synced compensation, and
   immediately after durable step completion, plus parallel sibling replay, linked-child
   intent repair, and child-first nested recovery without duplicate execution.
+- [x] Persisted fixed-cadence workflow schedules pass shared in-memory/redb repository
+  conformance, clock-controlled misfire and trust-invalidation tests, CLI/TUI/worker
+  contract tests, and a separate-process redb abort immediately after the atomic
+  schedule-fire/queued-run batch with no lost or duplicate occurrence after reopen.
 - [x] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
   network escapes on each supported platform.
   The final cutover run passed native macOS/Linux arm64/x64 isolation, Windows arm64/x64

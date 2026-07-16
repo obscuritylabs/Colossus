@@ -13,7 +13,7 @@ use colossus_contracts::{
     RunEventEnvelope, SessionMessage, SessionMessagePage, SessionSummary, SignedCheckpoint,
     SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
     TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
-    WorkflowDefinition, WorkflowRun,
+    WorkflowDefinition, WorkflowRun, WorkflowSchedule,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -781,6 +781,28 @@ pub trait WorkflowRepository: Send + Sync {
 
     /// List bounded run projections.
     fn runs(&self, limit: usize) -> Result<Vec<WorkflowRun>, StoreError>;
+
+    /// Persist one new hash-pinned workflow schedule.
+    fn create_schedule(
+        &self,
+        schedule: &WorkflowSchedule,
+        actor: Actor,
+    ) -> Result<WorkflowSchedule, StoreError>;
+
+    /// Persist an explicit enabled/disabled schedule transition.
+    fn set_schedule_enabled(
+        &self,
+        schedule_id: &str,
+        enabled: bool,
+        updated_at: &str,
+        actor: Actor,
+    ) -> Result<WorkflowSchedule, StoreError>;
+
+    /// Reconstruct one canonical schedule.
+    fn schedule(&self, schedule_id: &str) -> Result<Option<WorkflowSchedule>, StoreError>;
+
+    /// List bounded schedules in deterministic identifier order.
+    fn schedules(&self, limit: usize) -> Result<Vec<WorkflowSchedule>, StoreError>;
 }
 
 /// Disposable search projection for canonical memory identifiers.

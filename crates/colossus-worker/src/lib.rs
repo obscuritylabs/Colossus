@@ -9,6 +9,7 @@ use colossus_contracts::{
     EffectRequest, GoalStatus, IntegrationAuth, MemoryScope, MemoryStatus, PlanStatus, PlanStep,
     PolicyDecision, ResearchDepth, ResearchSourceKind, RunEventEnvelope, SubagentStatus,
     TaskStatus, TerminalPreferences, UserPromptRequest, UserPromptResponse,
+    WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -41,10 +42,17 @@ const REPLAY_WINDOW: usize = 4_096;
 #[cfg(not(windows))]
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(windows)]
-// The platform connector retries a busy named pipe for two seconds. Keep the
-// outer bound above that window so concurrent clients can use the retry path.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+// A missing pipe is retried briefly by the platform connector, while a pipe
+// that is known to be busy receives a longer load-shedding window. Keep the
+// outer bound above both so the connector can preserve that distinction.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(65);
+#[cfg(not(windows))]
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(windows)]
+// Hosted Windows debug builds can leave a connected pipe queued behind
+// synchronous durable-store work. A connected endpoint is known to be live,
+// so wait within the same bound used for Windows pipe saturation.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 type HmacSha256 = Hmac<Sha256>;
 
@@ -100,6 +108,9 @@ pub enum WorkerError {
     /// No worker answered at the configured endpoint.
     #[error("worker is unavailable at {0}")]
     Unavailable(String),
+    /// A live worker could not accept another connection before the bounded deadline.
+    #[error("worker is busy at {0}")]
+    Busy(String),
 }
 
 /// Versioned operations exposed by the local worker application API.
@@ -898,6 +909,47 @@ pub enum WorkerOperation {
         /// Leave the run queued for worker drain instead of executing immediately.
         queued: bool,
     },
+    /// Create one persisted hash-pinned cadence schedule.
+    WorkflowScheduleCreate {
+        /// Stable schedule identifier.
+        schedule_id: String,
+        /// Workflow name.
+        name: String,
+        /// Workflow version.
+        version: String,
+        /// Inline JSON or a server-local `@path` reference.
+        inputs_source: String,
+        /// Fixed bounded cadence in seconds.
+        cadence_seconds: u64,
+        /// Explicit multiple-occurrence behavior.
+        misfire_policy: WorkflowScheduleMisfirePolicy,
+        /// Initial enabled state.
+        enabled: bool,
+        /// Optional UTC RFC3339 first occurrence boundary.
+        starts_at: Option<String>,
+    },
+    /// List persisted workflow schedules.
+    WorkflowScheduleList {
+        /// Maximum schedules.
+        limit: usize,
+    },
+    /// Show one persisted workflow schedule.
+    WorkflowScheduleShow {
+        /// Exact schedule identifier.
+        schedule_id: String,
+    },
+    /// Explicitly enable or disable one persisted schedule.
+    WorkflowScheduleSetEnabled {
+        /// Exact schedule identifier.
+        schedule_id: String,
+        /// Requested enabled state.
+        enabled: bool,
+    },
+    /// Evaluate due workflow schedules against a real or explicit clock.
+    WorkflowScheduleTick {
+        /// Optional UTC RFC3339 clock used for deterministic operation.
+        at: Option<String>,
+    },
     /// Reconstruct one workflow run.
     WorkflowStatus {
         /// Exact run identifier.
@@ -1132,7 +1184,7 @@ impl WorkerClient {
             client_handshake(&mut stream, &self.authentication_key),
         )
         .await
-        .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))??;
+        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
         let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let mut sequence = 0_u64;
@@ -1175,7 +1227,7 @@ impl WorkerClient {
             client_handshake(&mut stream, &self.authentication_key),
         )
         .await
-        .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))??;
+        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
         let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let mut sequence = 0_u64;
@@ -1226,7 +1278,7 @@ impl WorkerClient {
             client_handshake(&mut stream, &self.authentication_key),
         )
         .await
-        .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))??;
+        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
         let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let (mut reader, mut writer) = tokio::io::split(stream);
@@ -1307,11 +1359,25 @@ impl WorkerClient {
     }
 
     async fn connect(&self) -> Result<platform::ClientStream, WorkerError> {
-        tokio::time::timeout(CONNECT_TIMEOUT, platform::connect(&self.endpoint))
-            .await
-            .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))?
-            .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))
+        match tokio::time::timeout(CONNECT_TIMEOUT, platform::connect(&self.endpoint)).await {
+            Err(_) => Err(WorkerError::Busy(self.endpoint.clone())),
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(error)) if platform::connection_is_busy(&error) => {
+                Err(WorkerError::Busy(self.endpoint.clone()))
+            }
+            Ok(Err(error)) if platform::connection_is_absent(&error) => {
+                Err(WorkerError::Unavailable(self.endpoint.clone()))
+            }
+            Ok(Err(error)) => Err(WorkerError::Io(error)),
+        }
     }
+}
+
+fn handshake_timeout_error(endpoint: &str) -> WorkerError {
+    // Establishing the transport proves that an endpoint accepted this
+    // connection. A delayed authenticated hello is therefore a live/busy or
+    // unhealthy endpoint, never evidence that embedded execution is safe.
+    WorkerError::Busy(endpoint.into())
 }
 
 #[derive(Clone)]
@@ -1986,6 +2052,11 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::WorkflowList => "workflow_list",
         WorkerOperation::WorkflowShow { .. } => "workflow_show",
         WorkerOperation::WorkflowStart { .. } => "workflow_start",
+        WorkerOperation::WorkflowScheduleCreate { .. } => "workflow_schedule_create",
+        WorkerOperation::WorkflowScheduleList { .. } => "workflow_schedule_list",
+        WorkerOperation::WorkflowScheduleShow { .. } => "workflow_schedule_show",
+        WorkerOperation::WorkflowScheduleSetEnabled { .. } => "workflow_schedule_set_enabled",
+        WorkerOperation::WorkflowScheduleTick { .. } => "workflow_schedule_tick",
         WorkerOperation::WorkflowStatus { .. } => "workflow_status",
         WorkerOperation::WorkflowResume { .. } => "workflow_resume",
         WorkerOperation::WorkflowInput { .. } => "workflow_input",
@@ -2800,6 +2871,54 @@ async fn dispatch(
             };
             Ok(serde_json::to_value(run)?)
         }
+        WorkerOperation::WorkflowScheduleCreate {
+            schedule_id,
+            name,
+            version,
+            inputs_source,
+            cadence_seconds,
+            misfire_policy,
+            enabled,
+            starts_at,
+        } => {
+            let inputs = parse_json_source(runtime, &inputs_source).await?;
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(runtime.workflows().create_schedule(
+                &schedule_id,
+                &name,
+                &version,
+                inputs,
+                cadence_seconds,
+                misfire_policy,
+                enabled,
+                starts_at.as_deref(),
+            )?)?)
+        }
+        WorkerOperation::WorkflowScheduleList { limit } => Ok(serde_json::to_value(
+            runtime.workflows().list_schedules(limit.clamp(1, 10_000))?,
+        )?),
+        WorkerOperation::WorkflowScheduleShow { schedule_id } => Ok(serde_json::to_value(
+            runtime.workflows().get_schedule(&schedule_id)?,
+        )?),
+        WorkerOperation::WorkflowScheduleSetEnabled {
+            schedule_id,
+            enabled,
+        } => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(
+                runtime
+                    .workflows()
+                    .set_schedule_enabled(&schedule_id, enabled)?,
+            )?)
+        }
+        WorkerOperation::WorkflowScheduleTick { at } => {
+            let _guard = maintenance.lock().await;
+            let dispatches = match at {
+                Some(at) => runtime.workflows().tick_schedules_at(&at)?,
+                None => runtime.workflows().tick_schedules_now()?,
+            };
+            Ok(serde_json::to_value(dispatches)?)
+        }
         WorkerOperation::WorkflowStatus { run_id } => {
             Ok(serde_json::to_value(runtime.workflows().get_run(&run_id)?)?)
         }
@@ -2833,6 +2952,7 @@ async fn drain_once(
     maintenance: &tokio::sync::Mutex<()>,
 ) -> Result<Value, WorkerError> {
     let _guard = maintenance.lock().await;
+    let schedules = runtime.workflows().tick_schedules_now()?;
     let workflows = runtime.workflows().drain().await?;
     // Durable execution queues take precedence over disposable projections so
     // a large projection backlog cannot starve queued child work.
@@ -2840,6 +2960,7 @@ async fn drain_once(
     let projections = runtime.drain_projections()?;
     let audit_exports = runtime.drain_audit_exports().await?;
     Ok(json!({
+        "schedules": schedules,
         "workflows": workflows,
         "projections": projections,
         "subagents": subagents,
@@ -3324,6 +3445,17 @@ mod platform {
         UnixStream::connect(endpoint).await
     }
 
+    pub fn connection_is_busy(_error: &std::io::Error) -> bool {
+        false
+    }
+
+    pub fn connection_is_absent(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+        )
+    }
+
     pub fn endpoint_is_trusted(endpoint: &str) -> Result<bool, WorkerError> {
         let path = Path::new(endpoint);
         let metadata = match fs::symlink_metadata(path) {
@@ -3364,7 +3496,6 @@ mod platform {
     pub type ServerStream = NamedPipeServer;
 
     const ERROR_PIPE_BUSY: i32 = 231;
-
     pub struct Listener {
         endpoint: String,
         next: Option<NamedPipeServer>,
@@ -3395,6 +3526,9 @@ mod platform {
                 .next
                 .take()
                 .ok_or_else(|| WorkerError::Protocol("named pipe listener lost instance".into()))?;
+            // Publish the replacement before the connected instance is handed to
+            // its request task. Saturated clients use the bounded busy retry below
+            // until this slot is available instead of falling back to a writer.
             self.next = Some(ServerOptions::new().create(&self.endpoint)?);
             Ok(server)
         }
@@ -3403,20 +3537,30 @@ mod platform {
     }
 
     pub async fn connect(endpoint: &str) -> Result<ClientStream, std::io::Error> {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let missing_deadline = Instant::now() + Duration::from_secs(2);
+        let busy_deadline = Instant::now() + Duration::from_secs(60);
         loop {
             match ClientOptions::new().open(endpoint) {
                 Ok(client) => return Ok(client),
+                Err(error) if connection_is_busy(&error) && Instant::now() < busy_deadline => {
+                    sleep(Duration::from_millis(10)).await;
+                }
                 Err(error)
-                    if (matches!(error.kind(), ErrorKind::NotFound | ErrorKind::WouldBlock)
-                        || error.raw_os_error() == Some(ERROR_PIPE_BUSY))
-                        && Instant::now() < deadline =>
+                    if error.kind() == ErrorKind::NotFound && Instant::now() < missing_deadline =>
                 {
                     sleep(Duration::from_millis(10)).await;
                 }
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    pub fn connection_is_busy(error: &std::io::Error) -> bool {
+        error.kind() == ErrorKind::WouldBlock || error.raw_os_error() == Some(ERROR_PIPE_BUSY)
+    }
+
+    pub fn connection_is_absent(error: &std::io::Error) -> bool {
+        error.kind() == ErrorKind::NotFound
     }
 
     pub fn endpoint_is_trusted(_endpoint: &str) -> Result<bool, WorkerError> {
@@ -3430,6 +3574,66 @@ compile_error!("colossus-worker supports only Unix sockets or Windows named pipe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pipe_saturation_is_classified_as_busy() {
+        let error = std::io::Error::from_raw_os_error(231);
+        assert!(platform::connection_is_busy(&error));
+    }
+
+    #[test]
+    fn delayed_authenticated_handshake_is_never_worker_absence() {
+        assert!(matches!(
+            handshake_timeout_error("worker-endpoint"),
+            WorkerError::Busy(endpoint) if endpoint == "worker-endpoint"
+        ));
+    }
+
+    #[test]
+    fn only_explicit_transport_absence_allows_worker_fallback() {
+        assert!(platform::connection_is_absent(&std::io::Error::from(
+            std::io::ErrorKind::NotFound
+        )));
+        assert!(!platform::connection_is_absent(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
+    }
+
+    #[test]
+    fn workflow_schedule_operation_round_trips_the_worker_contract() {
+        let encoded = serde_json::to_value(WorkerOperation::WorkflowScheduleCreate {
+            schedule_id: "nightly".into(),
+            name: "smoke".into(),
+            version: "1.0.0".into(),
+            inputs_source: r#"{"message":"scheduled"}"#.into(),
+            cadence_seconds: 3_600,
+            misfire_policy: WorkflowScheduleMisfirePolicy::Skip,
+            enabled: false,
+            starts_at: Some("2026-01-01T12:00:00Z".into()),
+        })
+        .expect("serialize schedule operation");
+        assert_eq!(encoded["operation"], "workflow_schedule_create");
+        assert_eq!(encoded["misfire_policy"], "skip");
+        let decoded: WorkerOperation =
+            serde_json::from_value(encoded).expect("deserialize schedule operation");
+        let WorkerOperation::WorkflowScheduleCreate {
+            schedule_id,
+            cadence_seconds,
+            misfire_policy,
+            enabled,
+            starts_at,
+            ..
+        } = decoded
+        else {
+            panic!("expected schedule creation operation");
+        };
+        assert_eq!(schedule_id, "nightly");
+        assert_eq!(cadence_seconds, 3_600);
+        assert_eq!(misfire_policy, WorkflowScheduleMisfirePolicy::Skip);
+        assert!(!enabled);
+        assert_eq!(starts_at.as_deref(), Some("2026-01-01T12:00:00Z"));
+    }
 
     #[test]
     fn authenticated_frames_cover_exact_serialized_payload_bytes() {

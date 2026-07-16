@@ -265,7 +265,10 @@ authenticated shutdown and removes its Unix endpoint. IPC never bypasses the run
 model, workflow, session, policy, permit, journal, and projection work executes through
 the same application services used by embedded mode. Clients fall back to embedded mode
 only when the endpoint is unavailable; an authentication or protocol failure is surfaced
-and never converted into a fallback request.
+and never converted into a fallback request. Windows pipe saturation is likewise a live,
+busy worker state: clients retry it for a bounded interval and never reinterpret it as an
+absent endpoint that permits embedded writer acquisition. This remains true after the
+transport connects while the authenticated server hello is queued under load.
 
 Workflow queueing is journal-native: a worker may claim only `queued` runs and recovery
 never drains `waiting` or `interrupted` runs. A started step without a durable terminal
@@ -273,6 +276,18 @@ record is labeled `outcome_unknown`; operator resume is refused when that step l
 explicit idempotency strategy. Compensation is definition-declared, uses separate step
 identity and audit events, and crosses the effect gateway independently for every action.
 Policy approval of a primary effect never authorizes its compensation.
+
+Persisted workflow schedules are fixed-cadence UTC aggregates with bounded identifiers,
+cadence, count, and input validation. They pin the exact workflow definition hash and
+revalidate the complete call graph and saved input before explicit enable and each due
+dispatch. A missing, changed, or invalid definition disables the schedule with an
+auditable bounded reason; a journal/repository outage fails the tick for retry and MUST
+NOT be converted into a permanent trust decision. Overdue reconstruction is constant-
+time arithmetic. The schedule-fire transition and deterministic queued-run identity are
+one atomic journal batch, preventing crash windows that could advance a schedule without
+its run or queue the same occurrence twice. Schedule creation or firing grants no effect
+authority: the resulting run still crosses the ordinary queue claim, policy, approval,
+permit, quarantine, and unknown-outcome boundaries.
 
 Recovery compares scoped execution ids, so completion of a repeated or parallel sibling
 cannot clear another attempt's uncertainty. An abandoned compensation is explicitly

@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::os::unix::fs::PermissionsExt as _;
 use std::{
     fs,
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::Path,
     process::{Child, Command, Output, Stdio},
     thread,
@@ -19,6 +19,10 @@ const SIGNING_KEY: &str = "66666666666666666666666666666666666666666666666666666
 const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(windows)]
 const WORKER_AGENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(windows))]
+const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(windows)]
+const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct ChildGuard(Child);
 
@@ -69,10 +73,23 @@ fn run_with_input(binary: &Path, config: &Path, arguments: &[&str], input: &str)
     child.wait_with_output().expect("wait for Colossus")
 }
 
-fn wait_for_worker(binary: &Path, config: &Path, timeout: Duration) {
+fn wait_for_worker(binary: &Path, config: &Path, worker: &mut ChildGuard, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     let mut last_error = String::new();
     while Instant::now() < deadline {
+        if let Some(status) = worker.0.try_wait().expect("worker status") {
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+            if let Some(mut pipe) = worker.0.stdout.take() {
+                pipe.read_to_string(&mut stdout).expect("worker stdout");
+            }
+            if let Some(mut pipe) = worker.0.stderr.take() {
+                pipe.read_to_string(&mut stderr).expect("worker stderr");
+            }
+            panic!(
+                "worker exited before becoming ready ({status}); stdout: {stdout}; stderr: {stderr}"
+            );
+        }
         let status = run(binary, config, &["worker", "--status"]);
         if status.status.success() {
             return;
@@ -83,12 +100,18 @@ fn wait_for_worker(binary: &Path, config: &Path, timeout: Duration) {
     panic!("worker endpoint did not become ready: {last_error}");
 }
 
-fn wait_for_exit(child: &mut Child, timeout: Duration) {
+fn wait_for_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
     let deadline = Instant::now() + timeout;
-    while child.try_wait().expect("worker status").is_none() && Instant::now() < deadline {
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("worker status") {
+            return status;
+        }
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(child.try_wait().expect("worker status").is_some());
+    panic!(
+        "worker process {} did not exit within {timeout:?}",
+        child.id()
+    );
 }
 
 #[test]
@@ -204,7 +227,7 @@ sandbox:
         .spawn()
         .expect("start worker");
     let mut worker = ChildGuard(child);
-    wait_for_worker(binary, &config, Duration::from_secs(10));
+    wait_for_worker(binary, &config, &mut worker, Duration::from_secs(10));
     #[cfg(unix)]
     assert_eq!(
         fs::metadata(&socket)
@@ -724,7 +747,11 @@ steps:
     );
     let shutdown: Value = serde_json::from_slice(&shutdown.stdout).expect("shutdown JSON");
     assert_eq!(shutdown["stopping"], true);
-    wait_for_exit(&mut worker.0, Duration::from_secs(5));
+    let worker_status = wait_for_exit(&mut worker.0, WORKER_SHUTDOWN_TIMEOUT);
+    assert!(
+        worker_status.success(),
+        "worker exited unsuccessfully after shutdown: {worker_status}"
+    );
     #[cfg(unix)]
     assert!(!socket.exists());
 

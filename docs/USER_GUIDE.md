@@ -71,6 +71,7 @@ Useful commands include:
 /memories
 /research QUESTION
 /workflow list
+/workflow schedule list
 /audit verify
 /exit
 ```
@@ -279,11 +280,17 @@ colossus --config .colossus/config.yaml workflow register \
 colossus --config .colossus/config.yaml workflow run release 1.0.0 \
   --inputs '{"branch":"main"}'
 colossus --config .colossus/config.yaml workflow status WORKFLOW_RUN_ID
+colossus --config .colossus/config.yaml workflow schedule create nightly \
+  release 1.0.0 --cadence-seconds 86400 --inputs '{"branch":"main"}'
+colossus --config .colossus/config.yaml workflow schedule list
 ```
 
 Definitions are exact-content hash pinned. A changed file is a new trust identity.
 Effectful retries require an explicit idempotency strategy; recovery records abandoned
-attempts as interrupted or unknown instead of rerunning them.
+attempts as interrupted or unknown instead of rerunning them. Persisted schedules use a
+bounded fixed UTC cadence and explicit skip/fire-once backlog behavior; their schedule
+transition and deterministic queued run commit atomically. See
+[Durable Workflows](WORKFLOWS.md) for the complete schedule lifecycle.
 
 ## Integrations And MCP
 
@@ -318,7 +325,11 @@ colossus --config .colossus/config.yaml worker --once
 
 CLI and TUI operations auto-discover a healthy worker. Authentication or protocol
 failure is surfaced and never downgraded to embedded execution; only an unavailable
-endpoint permits embedded fallback.
+endpoint permits embedded fallback. A saturated Windows named pipe—or a connected pipe
+waiting for its authenticated hello—is reported as a busy live worker after bounded
+retries and does not permit embedded fallback. The worker publishes a replacement Windows
+pipe instance before dispatching each connection, and concurrent clients wait for that
+live endpoint rather than opening an embedded writer.
 
 ## Audit And Diagnostics
 

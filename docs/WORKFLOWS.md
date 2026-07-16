@@ -85,6 +85,42 @@ Compensation is explicit and separately authorized. A crash after an external ef
 starts but before its terminal event becomes `outcome_unknown`; resume refuses unsafe
 implicit replay.
 
+## Persisted Schedules
+
+Schedules bind a fixed UTC cadence to an exact registered workflow hash and validated
+input snapshot. They are canonical journal state, not terminal or worker configuration.
+
+```bash
+colossus --config .colossus/config.yaml workflow schedule create nightly \
+  release 1.0.0 --cadence-seconds 86400 --inputs '{"branch":"main"}' \
+  --misfire fire-once --starts-at 2026-08-01T02:00:00Z
+colossus --config .colossus/config.yaml workflow schedule list
+colossus --config .colossus/config.yaml workflow schedule show nightly
+colossus --config .colossus/config.yaml workflow schedule disable nightly
+colossus --config .colossus/config.yaml workflow schedule enable nightly
+colossus --config .colossus/config.yaml workflow schedule tick \
+  --at 2026-08-02T02:00:00Z
+```
+
+Cadence is bounded from 60 seconds through 31 days. `--starts-at` accepts only UTC
+RFC3339 with the `Z` offset; when omitted, the first occurrence is one cadence after
+creation. Fixed cadence is intentional—cron expressions and local-time/DST semantics are
+not part of this contract.
+
+When multiple occurrences are overdue, `fire-once` queues exactly one deterministic run
+for the latest occurrence and records how many earlier occurrences were missed. `skip`
+records and advances beyond the complete backlog without queuing a catch-up run. A
+single due occurrence always queues once. The schedule transition and queued run are one
+atomic journal batch, so restart or process loss cannot advance the schedule without its
+run or create the same occurrence twice.
+
+Changing, removing, or invalidating the pinned workflow definition disables a due
+schedule with a bounded reason. Explicit enable rechecks the definition hash, complete
+call graph, and saved inputs. The long-running worker evaluates schedules during its
+one-second coordinated drain; `worker --once` does the same once. The explicit
+`workflow schedule tick` command only evaluates and queues due runs, leaving execution
+to the ordinary worker or workflow drain path.
+
 ## Worker Execution
 
 ```bash
@@ -93,6 +129,6 @@ colossus --config .colossus/config.yaml worker --status
 colossus --config .colossus/config.yaml worker --once
 ```
 
-The worker claims only queued runs, owns the canonical writer lease, and exposes the same
-authenticated application API used by CLI/TUI. Waiting or interrupted runs are never
-silently drained as new work.
+The worker evaluates due schedules, claims only queued runs, owns the canonical writer
+lease, and exposes the same authenticated application API used by CLI/TUI. Waiting or
+interrupted runs are never silently drained as new work.
