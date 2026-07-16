@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fs, path::Path};
 
 const REQUIRED_CUTOVER_JOBS: &[&str] = &[
+    "rust-preflight",
     "rust",
     "rust-native-sandbox",
     "rust-windows-runtime",
@@ -18,6 +19,7 @@ const REQUIRED_CUTOVER_JOBS: &[&str] = &[
 ];
 
 const REQUIRED_PULL_REQUEST_JOBS: &[&str] = &[
+    "rust-preflight",
     "rust",
     "rust-native-sandbox",
     "rust-windows-runtime",
@@ -185,6 +187,15 @@ fn named_step<'a>(job: &'a Map<String, Value>, name: &str) -> &'a Map<String, Va
         .unwrap_or_else(|| panic!("missing job step {name}"))
 }
 
+fn has_named_step(job: &Map<String, Value>, name: &str) -> bool {
+    field(job, "steps")
+        .as_array()
+        .expect("job steps must be a sequence")
+        .iter()
+        .map(|step| mapping(step, "job step"))
+        .any(|step| field(step, "name").as_str() == Some(name))
+}
+
 #[test]
 fn actions_cost_policy_runs_full_validation_only_before_merge_or_on_manual_dispatch() {
     let workflow = workflow();
@@ -208,6 +219,10 @@ fn actions_cost_policy_runs_full_validation_only_before_merge_or_on_manual_dispa
         Some("${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}")
     );
     assert_eq!(
+        field(job(jobs, "rust-preflight"), "if").as_str(),
+        Some(FULL_VALIDATION_CONDITION)
+    );
+    assert_eq!(
         field(job(jobs, "rust"), "if").as_str(),
         Some(FULL_VALIDATION_CONDITION)
     );
@@ -215,27 +230,101 @@ fn actions_cost_policy_runs_full_validation_only_before_merge_or_on_manual_dispa
         !jobs.contains_key("rust-portability"),
         "standalone macOS/Windows portability duplicates native matrix runners"
     );
-    let native_compile = named_step(
-        job(jobs, "rust-native-sandbox"),
-        "Compile every target on the native platform",
+    assert!(
+        !has_named_step(
+            job(jobs, "rust-native-sandbox"),
+            "Compile every target on the native platform"
+        ),
+        "native acceptance must not compile the whole workspace before its focused test"
     );
-    assert_eq!(
-        field(native_compile, "run").as_str(),
-        Some("cargo check --locked --workspace --all-targets")
-    );
-    let windows_compile = named_step(
-        job(jobs, "rust-windows-runtime"),
-        "Compile every target on the native platform",
-    );
-    assert_eq!(
-        field(windows_compile, "run").as_str(),
-        Some("cargo test --locked --workspace --all-targets --no-run")
+    assert!(
+        !has_named_step(
+            job(jobs, "rust-windows-runtime"),
+            "Compile every target on the native platform"
+        ),
+        "Windows acceptance must not compile the whole workspace before its focused tests"
     );
     assert_eq!(
         field(job(jobs, "rust-release-smoke"), "if").as_str(),
         Some("${{ github.event_name == 'workflow_dispatch' }}"),
         "six-target packaging must run only for explicit release validation"
     );
+}
+
+#[test]
+fn full_matrix_fans_out_after_a_cached_fast_preflight() {
+    let workflow = workflow();
+    let root = mapping(&workflow, "workflow");
+    let jobs = jobs(&workflow);
+    let preflight = job(jobs, "rust-preflight");
+
+    assert_eq!(field(preflight, "timeout-minutes").as_u64(), Some(5));
+    for step in [
+        "Check formatting",
+        "Check independent fuzz harness formatting",
+        "Validate locked workspace metadata",
+        "Validate locked fuzz metadata",
+    ] {
+        assert!(
+            has_named_step(preflight, step),
+            "preflight is missing {step}"
+        );
+    }
+
+    for heavy_job in REQUIRED_CUTOVER_JOBS
+        .iter()
+        .copied()
+        .filter(|name| *name != "rust-preflight")
+    {
+        assert_eq!(
+            field(job(jobs, heavy_job), "needs").as_str(),
+            Some("rust-preflight"),
+            "{heavy_job} must start immediately after the fast preflight"
+        );
+    }
+
+    let environment = mapping(field(root, "env"), "workflow environment");
+    assert_eq!(
+        field(environment, "SCCACHE_GHA_ENABLED").as_str(),
+        Some("true")
+    );
+    assert_eq!(
+        field(environment, "RUSTC_WRAPPER").as_str(),
+        Some("sccache")
+    );
+    for compile_job in [
+        "rust-quick",
+        "rust",
+        "rust-native-sandbox",
+        "rust-windows-runtime",
+        "rust-fuzz",
+        "rust-release-smoke",
+        "rust-live-chroma",
+        "rust-live-storage",
+        "rust-live-security",
+    ] {
+        let cache = named_step(job(jobs, compile_job), "Enable shared compiler cache");
+        assert_eq!(
+            field(cache, "uses").as_str(),
+            Some("mozilla-actions/sccache-action@v0.0.10"),
+            "{compile_job} must use the pinned shared compiler cache action"
+        );
+    }
+
+    let install = named_step(
+        job(jobs, "rust-supply-chain"),
+        "Install checksum-verified pinned supply-chain tools",
+    );
+    assert_eq!(
+        field(install, "uses").as_str(),
+        Some("taiki-e/install-action@v2.83.2")
+    );
+    let inputs = mapping(field(install, "with"), "supply-chain installer inputs");
+    assert_eq!(
+        field(inputs, "tool").as_str(),
+        Some("cargo-deny@0.20.2,cargo-audit@0.22.2")
+    );
+    assert_eq!(field(inputs, "fallback").as_str(), Some("none"));
 }
 
 #[test]
