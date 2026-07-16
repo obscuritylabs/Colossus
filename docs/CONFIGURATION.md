@@ -12,6 +12,37 @@ colossus --config .colossus/config.yaml config show
 `config init` refuses to overwrite. Use source control or an explicit backup before
 replacing configuration; there is intentionally no force flag.
 
+## Isolated Source Development
+
+Source builds can avoid platform credential-store prompts by using the development
+launcher:
+
+```bash
+./scripts/colossus-dev --approval-mode full-access tui
+```
+
+On first use, the launcher creates `.colossus/config.dev.yaml` and a mode-0600
+`.colossus/dev-keys.env`. If `.colossus/config.yaml` exists, its non-storage settings
+are strictly parsed and cloned. The development config always replaces the complete
+storage section with a fresh environment-key identity, `.colossus/state.dev.redb`, and
+`.colossus/secure-anchor.dev.json`; it never opens or imports the source state.
+
+The equivalent initializer is:
+
+```bash
+cargo run --offline -q -p colossus-cli --bin colossus -- \
+  --config .colossus/config.dev.yaml \
+  config init --development --from .colossus/config.yaml
+```
+
+`--from` is accepted only with `--development`. The initializer writes key references,
+not key values; the launcher generates and loads two independent 32-byte hexadecimal
+keys without evaluating the key file as shell code. It compiles before loading those
+keys, then executes `target/debug/colossus` directly so Cargo and dependency build
+scripts never receive them. The development config, keys, state, and anchor are ignored
+by Git. Do not point the development config at an existing platform-keyed or production
+journal.
+
 ## Minimal Offline Configuration
 
 The generated file uses platform-managed keys. A headless equivalent can use explicit

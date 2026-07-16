@@ -33,3 +33,16 @@ The hook validates commit messages with:
 
 The checker is POSIX shell and does not require Python. CI validates pull request titles
 and pushed commit messages with the same script.
+
+## Run A Development TUI
+
+Use the repository launcher when iterating on the debug binary:
+
+```bash
+./scripts/colossus-dev --approval-mode full-access tui
+```
+
+The launcher keeps development keys, redb state, and the secure anchor isolated under
+`.colossus` and does not access the platform credential store. See
+[Configuration](CONFIGURATION.md#isolated-source-development) for the generated files
+and direct initialization command.

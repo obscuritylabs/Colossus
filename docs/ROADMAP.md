@@ -113,7 +113,7 @@ release assets, and clean-prefix install/use verification.
   runtime, sandbox, and packaging jobs from the exact release revision.
 - The published release contains six native archives, checksums, SPDX inventory,
   publisher identity, a signed offline bundle, and fresh install/audit evidence.
-- The deployed documentation site identifies 0.8.0 as current and links to the exact
+- The deployed documentation site identifies 0.8.1 as current and links to the exact
   release and validation evidence.
 
 ## Explicit Non-Goals

@@ -1,0 +1,101 @@
+#!/bin/sh
+set -eu
+
+fail() {
+    printf 'colossus-dev: %s\n' "$*" >&2
+    exit 1
+}
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+config=${COLOSSUS_DEV_CONFIG:-"$repository/.colossus/config.dev.yaml"}
+source_config=${COLOSSUS_DEV_SOURCE_CONFIG:-"$repository/.colossus/config.yaml"}
+keys_file=${COLOSSUS_DEV_KEYS_FILE:-"$repository/.colossus/dev-keys.env"}
+config_dir=$(dirname -- "$config")
+keys_dir=$(dirname -- "$keys_file")
+
+umask 077
+[ ! -L "$config_dir" ] || fail "refusing symlinked config directory: $config_dir"
+[ ! -L "$keys_dir" ] || fail "refusing symlinked key directory: $keys_dir"
+mkdir -p -- "$config_dir" "$keys_dir"
+
+[ ! -L "$config" ] || fail "refusing symlinked config: $config"
+[ ! -L "$keys_file" ] || fail "refusing symlinked key file: $keys_file"
+
+cd -- "$repository"
+unset COLOSSUS_DEV_JOURNAL_KEY COLOSSUS_DEV_SIGNING_KEY
+cargo build --offline -q --target-dir "$repository/target" -p colossus-cli --bin colossus
+colossus="$repository/target/debug/colossus"
+[ -x "$colossus" ] || fail "development binary was not created: $colossus"
+
+if [ ! -e "$config" ]; then
+    if [ -e "$source_config" ]; then
+        "$colossus" --config "$config" config init --development --from "$source_config"
+    else
+        "$colossus" --config "$config" config init --development
+    fi
+fi
+
+if [ ! -e "$keys_file" ]; then
+    [ ! -e "$config_dir/state.dev.redb" ] || \
+        fail "refusing to replace keys for existing development state; restore $keys_file"
+    [ ! -e "$config_dir/secure-anchor.dev.json" ] || \
+        fail "refusing to replace keys for an existing development anchor; restore $keys_file"
+    command -v openssl >/dev/null 2>&1 || fail "openssl is required to generate development keys"
+    temporary=$(mktemp "${keys_file}.tmp.XXXXXX") || fail "could not create a temporary key file"
+    trap 'rm -f -- "$temporary"' 0 HUP INT TERM
+    journal_key=$(openssl rand -hex 32) || fail "could not generate the journal key"
+    signing_key=$(openssl rand -hex 32) || fail "could not generate the signing key"
+    {
+        printf 'COLOSSUS_DEV_JOURNAL_KEY=%s\n' "$journal_key"
+        printf 'COLOSSUS_DEV_SIGNING_KEY=%s\n' "$signing_key"
+    } >"$temporary"
+    chmod 600 "$temporary"
+    [ ! -e "$keys_file" ] || fail "key file appeared during initialization: $keys_file"
+    mv -- "$temporary" "$keys_file"
+    trap - 0 HUP INT TERM
+    printf 'created %s\n' "$keys_file"
+fi
+
+[ -f "$keys_file" ] || fail "key path is not a regular file: $keys_file"
+owner=$(stat -f '%u' "$keys_file" 2>/dev/null || stat -c '%u' "$keys_file" 2>/dev/null) \
+    || fail "could not inspect key-file owner"
+[ "$owner" = "$(id -u)" ] || fail "key file must be owned by the current user: $keys_file"
+links=$(stat -f '%l' "$keys_file" 2>/dev/null || stat -c '%h' "$keys_file" 2>/dev/null) \
+    || fail "could not inspect key-file link count"
+[ "$links" = "1" ] || fail "key file must not have additional hard links: $keys_file"
+mode=$(stat -f '%Lp' "$keys_file" 2>/dev/null || stat -c '%a' "$keys_file" 2>/dev/null) \
+    || fail "could not inspect key-file permissions"
+[ "$mode" = "600" ] || fail "key file must have mode 600 (found $mode): $keys_file"
+
+journal_key=
+signing_key=
+while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+        COLOSSUS_DEV_JOURNAL_KEY=*)
+            [ -z "$journal_key" ] || fail "duplicate journal key in $keys_file"
+            journal_key=${line#COLOSSUS_DEV_JOURNAL_KEY=}
+            ;;
+        COLOSSUS_DEV_SIGNING_KEY=*)
+            [ -z "$signing_key" ] || fail "duplicate signing key in $keys_file"
+            signing_key=${line#COLOSSUS_DEV_SIGNING_KEY=}
+            ;;
+        *)
+            fail "unexpected entry in $keys_file"
+            ;;
+    esac
+done <"$keys_file"
+
+case "$journal_key" in
+    ''|*[!0123456789abcdefABCDEF]*) fail "journal key must be exactly 32 bytes of hexadecimal" ;;
+esac
+case "$signing_key" in
+    ''|*[!0123456789abcdefABCDEF]*) fail "signing key must be exactly 32 bytes of hexadecimal" ;;
+esac
+[ "${#journal_key}" -eq 64 ] || fail "journal key must be exactly 32 bytes of hexadecimal"
+[ "${#signing_key}" -eq 64 ] || fail "signing key must be exactly 32 bytes of hexadecimal"
+
+export COLOSSUS_DEV_JOURNAL_KEY="$journal_key"
+export COLOSSUS_DEV_SIGNING_KEY="$signing_key"
+
+exec "$colossus" --config "$config" "$@"

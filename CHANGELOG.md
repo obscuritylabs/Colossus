@@ -8,6 +8,29 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-16
+
+### Added
+
+- Added `scripts/colossus-dev`, an isolated source-development launcher that reuses the
+  debug build, loads owner-only environment keys only after compilation, and keeps its
+  configuration, redb state, and secure anchor separate from operator state.
+
+### Changed
+
+- Rotated the official Ed25519 offline-bundle publisher identity and added `.env` to
+  ignored local files so an operator-held signing seed cannot be accidentally staged.
+
+### Security
+
+- The `v0.8.0` source tag remains immutable, but no signed GitHub release was published
+  from it after the previous private seed became unavailable. Version 0.8.1 establishes
+  a new exact publisher/key binding and is the first signed distribution of the 0.8
+  release line.
+- Operators who trusted the earlier publisher identity must verify the new
+  `release/bundle-publisher.json` through an independent channel and explicitly replace
+  the old trust binding before installing the 0.8.1 signed bundle.
+
 ## [0.8.0] - 2026-07-16
 
 ### Added

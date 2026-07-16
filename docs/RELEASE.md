@@ -1,8 +1,9 @@
 # Release Process
 
-Rust 0.8.0 is the operational workflow and storage release built on the completed Rust
-cutover and terminal experience. It adds durable workflow triggers, PostgreSQL storage,
-HTTPS WORM audit export, and the searchable Rust-native documentation site.
+Rust 0.8.1 is the publisher-key rotation patch for the operational workflow and storage
+release built on the completed Rust cutover and terminal experience. The 0.8 line adds
+durable workflow triggers, PostgreSQL storage, HTTPS WORM audit export, and the searchable
+Rust-native documentation site.
 Release only from a clean tree after the feature inventory and acceptance matrix
 accurately describe any remaining gap.
 
@@ -117,7 +118,7 @@ staging tree and install its current-target executable without an archive tool:
 
 ```bash
 colossus --config .colossus/config.yaml --approval-mode ask bundle build \
-  ./bundle-stage ./bundle --name colossus-offline --version 0.8.0 \
+  ./bundle-stage ./bundle --name colossus-offline --version 0.8.1 \
   --publisher colossus --created-at CREATED_AT --source-revision GIT_COMMIT \
   --signing-key-reference env:COLOSSUS_BUNDLE_SIGNING_SEED
 colossus --config .colossus/config.yaml --approval-mode ask bundle install \
@@ -132,8 +133,8 @@ status, and artifact hashes as release evidence.
 After all required CI and acceptance evidence is green:
 
 ```bash
-git tag -a v0.8.0 -m "Colossus v0.8.0"
-git push origin v0.8.0
+git tag -a v0.8.1 -m "Colossus v0.8.1"
+git push origin v0.8.1
 ```
 
 Attach all six archives, sidecars, SBOM/signature material, changelog excerpt, and known

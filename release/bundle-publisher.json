@@ -2,6 +2,6 @@
   "publisher": "colossus",
   "purpose": "offline-bundle-manifest-signing",
   "algorithm": "ed25519",
-  "key_id": "56dff0e111867269353b1f534f63989e4924f4f67f64aaa9224193cb60735f21",
-  "public_key": "kyheq1omtl17SZNoa9UOGo69pdef8jYjAwQH+QeJ/ww="
+  "key_id": "21c0377e815e7e2d70e987665f838c6d096d9307e6495dd48c87c6504c6fc384",
+  "public_key": "jHc0Kb4Xx2mRv5MbThqoH0Acco6Tpxb6VqFmWPzppwc="
 }
