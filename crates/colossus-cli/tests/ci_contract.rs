@@ -283,16 +283,17 @@ fn full_matrix_fans_out_after_a_cached_fast_preflight() {
         );
     }
 
-    let environment = mapping(field(root, "env"), "workflow environment");
-    assert_eq!(
-        field(environment, "SCCACHE_GHA_ENABLED").as_str(),
-        Some("true")
+    let workflow_wrapper = root
+        .get("env")
+        .and_then(Value::as_object)
+        .and_then(|environment| environment.get("RUSTC_WRAPPER"))
+        .and_then(Value::as_str);
+    assert_ne!(
+        workflow_wrapper,
+        Some("sccache"),
+        "the compiler wrapper must not leak into jobs that do not install it"
     );
-    assert_eq!(
-        field(environment, "RUSTC_WRAPPER").as_str(),
-        Some("sccache")
-    );
-    for compile_job in [
+    for compile_job_name in [
         "rust-quick",
         "rust",
         "rust-native-sandbox",
@@ -303,12 +304,36 @@ fn full_matrix_fans_out_after_a_cached_fast_preflight() {
         "rust-live-storage",
         "rust-live-security",
     ] {
-        let cache = named_step(job(jobs, compile_job), "Enable shared compiler cache");
+        let compile_job = job(jobs, compile_job_name);
+        let environment = mapping(field(compile_job, "env"), "compile job environment");
+        assert_eq!(
+            field(environment, "SCCACHE_GHA_ENABLED").as_str(),
+            Some("true")
+        );
+        assert_eq!(
+            field(environment, "RUSTC_WRAPPER").as_str(),
+            Some("sccache")
+        );
+        let cache = named_step(compile_job, "Enable shared compiler cache");
         assert_eq!(
             field(cache, "uses").as_str(),
             Some("mozilla-actions/sccache-action@v0.0.10"),
-            "{compile_job} must use the pinned shared compiler cache action"
+            "{compile_job_name} must use the pinned shared compiler cache action"
         );
+    }
+    for (job_name, job_definition) in jobs {
+        let job = mapping(job_definition, job_name);
+        let wrapper = job
+            .get("env")
+            .and_then(Value::as_object)
+            .and_then(|environment| environment.get("RUSTC_WRAPPER"))
+            .and_then(Value::as_str);
+        if wrapper == Some("sccache") {
+            assert!(
+                has_named_step(job, "Enable shared compiler cache"),
+                "{job_name} configures sccache without installing it"
+            );
+        }
     }
 
     let install = named_step(

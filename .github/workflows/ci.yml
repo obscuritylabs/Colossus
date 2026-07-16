@@ -14,16 +14,15 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
-
 jobs:
   rust-quick:
     name: Rust quick validation
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -104,6 +103,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: rust-preflight
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -137,6 +139,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     needs: rust-preflight
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -172,6 +177,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     needs: rust-preflight
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -207,6 +215,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: rust-preflight
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -286,6 +297,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     needs: rust-preflight
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -790,6 +804,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: rust-preflight
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -846,6 +863,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: rust-preflight
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     services:
       postgres:
         image: postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f
@@ -899,6 +919,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     needs: rust-preflight
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
