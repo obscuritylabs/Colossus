@@ -404,6 +404,15 @@ impl SafetyKernel {
         }
         if decision.outcome == DecisionOutcome::Allow
             && request.phase == EffectPhase::PreEffect
+            && request.action == "web.search"
+            && !obligations.require_post_effect
+        {
+            return Err(GatewayError::Safety(
+                "web.search requires mandatory post-effect authorization".into(),
+            ));
+        }
+        if decision.outcome == DecisionOutcome::Allow
+            && request.phase == EffectPhase::PreEffect
             && is_process_action(&request.action)
         {
             validate_process_obligations(request, obligations)?;
@@ -412,6 +421,7 @@ impl SafetyKernel {
             && (matches!(
                 request.action.as_str(),
                 "network.http"
+                    | "web.search"
                     | "audit.export.worm.write"
                     | "provider.openai.responses"
                     | "provider.openai.chat"
@@ -1572,6 +1582,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
                     || request.action.starts_with("github.")
                     || request.action.starts_with("searxng.")
                     || request.action.starts_with("opensearch.")
+                    || request.action == "web.search"
                     || request.action == "mcp.call"
                 {
                     DecisionOutcome::RequireApproval
@@ -1613,7 +1624,7 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("bundle.")
             || matches!(
                 request.action.as_str(),
-                "network.http" | "audit.export.worm.write"
+                "network.http" | "web.search" | "audit.export.worm.write"
             )
         {
             obligations.require_post_effect = true;
@@ -2247,6 +2258,7 @@ mod tests {
         let actions = [
             "filesystem.read",
             "network.http",
+            "web.search",
             "provider.openai.responses",
             "process.spawn",
             "memory.search",

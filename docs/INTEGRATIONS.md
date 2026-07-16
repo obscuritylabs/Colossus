@@ -68,8 +68,11 @@ colossus --config .colossus/config.yaml --approval-mode ask \
   --auth-header X-Searxng-Key
 ```
 
-The native connector is model-callable. The separate `research.search` configuration
-controls automatic web-source collection for research runs.
+The native connector remains model-callable as `searxng.search` for compatibility and
+integration workflows. New agent and research search should use the provider-neutral
+top-level `search` profiles and `web.search`; those routes can select SearXNG, SerpAPI,
+or a future gateway without changing model arguments. See
+[Provider-Neutral Web Search](SEARCH.md).
 
 ## OpenSearch
 

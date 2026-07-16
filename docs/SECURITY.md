@@ -631,7 +631,7 @@ Security-sensitive defaults:
 | `repo.*` | Read | Denied | No | Enabled |
 | `agent.*` | None | Denied | No | Enabled, durable queued child-agent jobs |
 | `web.fetch` and `docs.fetch` | None | Allowed by spec | Yes | Bounded HTTP(S) fetch after approval |
-| `web.search` | None | Allowed by spec | Yes | Exposed only when a search adapter such as SearXNG is configured |
+| `web.search` | None | Exact configured origin | Yes, by default | Exposed only with an explicit tool and valid `agent` route; post-effect release is mandatory |
 | `mcp.servers/tools` | None | Denied | No | Returns unconfigured state |
 | `mcp.call` | None | Allowed by spec | Yes | Adapter extension point, not exposed by default |
 | `github.*`, `searxng.*`, `opensearch.*`, and `openapi.NAME.*` | None | Allowed by spec | Yes | Exposed only after integration connection |
@@ -717,6 +717,16 @@ read-only. Configured web search and MCP source collection require approval, and
 or denied source lanes are recorded as limitations rather than bypassed. Search provider
 secrets are read from environment variables and must not be sent as tool arguments,
 source metadata, or audit payload fields.
+
+First-party SearXNG and SerpAPI search executors accept only HTTPS endpoints except for
+loopback HTTP. They require an exact configured and permitted origin, pin a bounded DNS
+answer set, disable redirects and ambient proxies, and bound both provider bodies and
+normalized fields. Credentials resolve only after permit issuance and are redacted from
+echoed output before parsing. Titles and snippets remain quarantined untrusted content
+until a mandatory post-effect decision. Transport failure after dispatch is
+`outcome_unknown` and is never retried implicitly. Search profile inspection performs no
+credential resolution or network access. The complete contract is documented in
+[Provider-Neutral Web Search](SEARCH.md).
 
 Global HTTP PKI and proxy settings configure Colossus-owned HTTP clients only. They do
 not grant network approval, expand tool schemas, or affect HTTP

@@ -42,6 +42,8 @@ not expand configured policy or sandbox grants.
   routing, streaming, strict tool schemas, and durable multi-turn sessions.
 - Filesystem, Git, process, network, memory, research, integration, MCP, skill, pack,
   workflow, goal, and subagent operations routed through one effect gateway.
+- Provider-neutral web search with explicit SearXNG or SerpAPI role routing shared by
+  agents, Deep Research, and operator diagnostics.
 - Built-in deny-by-default policy or strict OPA decisions, explicit approval proofs,
   one-use permits, bounded quarantine, and post-effect content release.
 - XChaCha20-Poly1305 journal payloads, hash chaining, signed checkpoints, secure anchors,

@@ -256,6 +256,18 @@ colossus --config .colossus/config.yaml --approval-mode ask bundle install \
   ./bundle --prefix "$HOME/.local"
 ```
 
+## Web Search
+
+```bash
+colossus --config .colossus/config.yaml search profiles
+colossus --config .colossus/config.yaml search query \
+  "provider-neutral search" --role agent --limit 5
+```
+
+Profiles and role routes are operator configuration, never model arguments. Agent and
+Deep Research searches share this normalized path; fetching a result page remains a
+separate `web.fetch` operation. See [Provider-Neutral Web Search](SEARCH.md).
+
 ## Research
 
 ```bash

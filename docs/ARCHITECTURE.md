@@ -421,6 +421,14 @@ freshly discovered schema. Each page and call is a separate normal effect. Envir
 credential references are resolved only after permit issuance, server output is bounded
 and quarantined, and configured MCP calls can also supply the research collector.
 
+Provider-neutral web search is a separate first-party boundary from the namespaced
+SearXNG integration. Agent `web.search`, the Deep Research web lane, and operator search
+diagnostics all call the `SearchProvider` port. `colossus-search` owns named profiles,
+exact role routing, normalization, late credential resolution, and permit-bound SearXNG
+and SerpAPI executors. This keeps future HTTP or gRPC search gateways outside the agent
+harness while preserving one request/response contract. See
+[Provider-Neutral Web Search](SEARCH.md) and its editable routing diagram.
+
 Colossus should not depend on ADK in core. Compatibility comes through importers and
 adapters. A future AI proxy should be a separate phase behind the same credential
 boundary for model-provider routing, usage, and rate limits; app credentials and model
@@ -452,10 +460,11 @@ prior-session context block for planning and synthesis, then appends the complet
 report as a normal assistant session message so later chat turns can continue from it.
 
 Search and MCP are adapter concerns. The default config keeps web search disabled and
-MCP unconfigured; when enabled, their tool specs become visible through the normal tool
-catalog and still pass policy, approval, and audit paths for model-callable use. Search
+MCP unconfigured. Deep Research requires an explicit `search.roles.research` route and
+uses the same normalized path as model and CLI searches. `web.search` becomes visible to
+the model only when listed in `agent.tools` and `search.roles.agent` is valid. Search
 credentials stay in provider configuration and environment variables rather than in the
-provider-neutral `web.search` tool input.
+provider-neutral tool input.
 Research planner, worker, and synthesizer model roles default to `primary` unless
 configured separately.
 

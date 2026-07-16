@@ -21,6 +21,7 @@ colossus-packs.workspace = true
 colossus-research.workspace = true
 colossus-policy.workspace = true
 colossus-provider.workspace = true
+colossus-search.workspace = true
 colossus-presentation.workspace = true
 colossus-ports.workspace = true
 colossus-projection.workspace = true

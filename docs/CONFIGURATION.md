@@ -321,17 +321,33 @@ memory:
 Chroma and remote embedding origins also need exact network and policy grants. Canonical
 records remain available when an index is unavailable; use `memories index status|sync|rebuild`.
 
-SearXNG research uses an exact `/search` endpoint and `network.http` authorization:
+Provider-neutral search uses named profiles plus explicit `agent` and `research` routes:
 
 ```yaml
-research:
-  maxSources: 20
-  maxWorkers: 4
-  search:
-    kind: searxng
-    endpoint: https://search.internal.example/search
-    userAgent: colossus-rust/0.7
+search:
+  profiles:
+    local:
+      kind: searxng
+      endpoint: http://127.0.0.1:8888/search
+      timeoutMs: 30000
+    paid:
+      kind: serp_api
+      endpoint: https://serpapi.com/search.json
+      credentialReference: env:SERPAPI_API_KEY
+      timeoutMs: 30000
+  roles:
+    agent: local
+    research: local
+
+agent:
+  tools: [echo, web.search]
 ```
+
+Every profile origin must be present in `sandbox.networkDestinations`. Provider choice
+never appears in model arguments, and routes do not fall back or retry. The v0.8
+`research.search.kind: searxng` form remains a deprecated research-only fallback when
+top-level `search` is absent; configuring both forms is rejected. See
+[Provider-Neutral Web Search](SEARCH.md) for SearXNG, SerpAPI, policy, and diagnostics.
 
 ## Workflows, Skills, Packs, And MCP
 

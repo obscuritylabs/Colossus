@@ -752,6 +752,8 @@ enum Command {
     Workflow(WorkflowCommand),
     /// Inspect and diagnose configured model providers.
     Provider(ProviderCommand),
+    /// Inspect and query provider-neutral web-search routes.
+    Search(SearchCommand),
     /// Inspect model role routing.
     Models(ModelsCommand),
     /// Inspect the active strict tool catalog.
@@ -1236,6 +1238,29 @@ enum ProviderAction {
     Doctor { profile: Option<String> },
     /// List normalized models through policy.
     Models { profile: Option<String> },
+}
+
+#[derive(Args)]
+struct SearchCommand {
+    #[command(subcommand)]
+    command: SearchAction,
+}
+
+#[derive(Subcommand)]
+enum SearchAction {
+    /// Show safe configured search profile metadata.
+    Profiles,
+    /// Execute one explicit search through an exact logical role.
+    Query {
+        /// Search query.
+        query: String,
+        /// Exact configured route; no fallback is applied.
+        #[arg(long, default_value = "agent", value_parser = ["agent", "research"])]
+        role: String,
+        /// Number of normalized results to return.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
 }
 
 #[derive(Args)]
@@ -3821,6 +3846,18 @@ async fn dispatch_to_worker_if_active(
             print_json(&client.call(operation).await?)?;
             Ok(true)
         }
+        Command::Search(command) => {
+            let operation = match &command.command {
+                SearchAction::Profiles => WorkerOperation::SearchProfiles,
+                SearchAction::Query { query, role, limit } => WorkerOperation::SearchQuery {
+                    role: role.clone(),
+                    query: query.clone(),
+                    limit: *limit,
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
         Command::Models(command) => {
             match &command.command {
                 ModelsAction::Routes => {
@@ -5821,6 +5858,12 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
             }
             ProviderAction::Models { profile } => {
                 print_json(&runtime.provider_models(profile.as_deref()).await?)?;
+            }
+        },
+        Command::Search(command) => match command.command {
+            SearchAction::Profiles => print_json(&runtime.search_profiles())?,
+            SearchAction::Query { query, role, limit } => {
+                print_json(&runtime.search(&role, &query, limit).await?)?;
             }
         },
         Command::Models(command) => match command.command {
