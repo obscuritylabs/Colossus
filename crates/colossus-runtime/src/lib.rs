@@ -5,6 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
 use colossus_audit::{
     AuditExportReport, AuditExportService, AuditExportStatus, GatewayDirectoryAuditExporter,
+    GatewayWormAuditExporter,
 };
 use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
@@ -28,6 +29,7 @@ use colossus_contracts::{
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
 };
+use colossus_journal_postgres::{PostgresEventJournal, PostgresJournalConfig};
 use colossus_journal_redb::{
     Ed25519CheckpointSigner, EnvironmentKeyProvider, PlatformKeyProvider, RedbEventJournal,
     RedbWriterLease, platform_secret,
@@ -182,6 +184,13 @@ pub enum AuditExporterConfig {
     Directory {
         /// Existing directory receiving deterministic sequence/event-id files.
         path: PathBuf,
+    },
+    /// Create deterministic objects through an HTTPS endpoint backed by retention lock/WORM.
+    WormHttp {
+        /// Credential-free trailing-slash collection endpoint.
+        endpoint: String,
+        /// Optional environment-backed bearer credential reference.
+        credential_reference: Option<String>,
     },
 }
 
@@ -523,10 +532,28 @@ impl Default for SandboxConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StorageConfig {
-    /// Fresh redb state file.
+    /// Local state identity and redb state file when the redb adapter is active.
     pub path: PathBuf,
+    /// Canonical journal and projection adapter.
+    #[serde(default)]
+    pub adapter: StorageAdapter,
+    /// PostgreSQL settings, required exactly when `adapter` is `postgres`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres: Option<PostgresJournalConfig>,
     /// Mandatory key provider.
     pub keys: KeyConfig,
+}
+
+/// Canonical storage adapter selection.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageAdapter {
+    /// Embedded single-writer redb journal and projections.
+    #[default]
+    Redb,
+    /// Multi-process PostgreSQL journal and projections.
+    #[serde(alias = "postgresql")]
+    Postgres,
 }
 
 /// Mandatory encryption/signing key provider configuration.
@@ -610,6 +637,23 @@ impl RuntimeConfig {
                 "schemaVersion must be exactly 1".into(),
             ));
         }
+        match (config.storage.adapter, config.storage.postgres.as_ref()) {
+            (StorageAdapter::Redb, None) => {}
+            (StorageAdapter::Redb, Some(_)) => {
+                return Err(RuntimeError::Config(
+                    "storage.postgres must be omitted when storage.adapter is redb".into(),
+                ));
+            }
+            (StorageAdapter::Postgres, Some(postgres)) => postgres
+                .validate()
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+            (StorageAdapter::Postgres, None) => {
+                return Err(RuntimeError::Config(
+                    "storage.postgres is required when storage.adapter is postgres".into(),
+                ));
+            }
+        }
+        validate_audit_config(&config.audit, &config.sandbox)?;
         if !matches!(
             config.sandbox.backend.as_str(),
             "native" | "oci" | "windows_job" | "broker"
@@ -828,6 +872,8 @@ impl RuntimeConfig {
             schema_version: 1,
             storage: StorageConfig {
                 path: state_path.into(),
+                adapter: StorageAdapter::Redb,
+                postgres: None,
                 keys: KeyConfig::Platform {
                     service: "dev.colossus.runtime".into(),
                     journal_key_id: format!("journal-{instance_id}"),
@@ -901,6 +947,50 @@ impl RuntimeConfig {
         digest.update(endpoint.as_bytes());
         Ok(digest.finalize().into())
     }
+}
+
+fn validate_audit_config(audit: &AuditConfig, sandbox: &SandboxConfig) -> Result<(), RuntimeError> {
+    let AuditExporterConfig::WormHttp {
+        endpoint,
+        credential_reference,
+    } = &audit.exporter
+    else {
+        return Ok(());
+    };
+    let url = Url::parse(endpoint)
+        .map_err(|_| RuntimeError::Config("WORM audit endpoint is invalid".into()))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.path().ends_with('/')
+        || url.cannot_be_a_base()
+    {
+        return Err(RuntimeError::Config(
+            "WORM audit endpoint must be a credential-free trailing-slash HTTPS URL".into(),
+        ));
+    }
+    let origin = url.origin().ascii_serialization();
+    if !sandbox.network_destinations.contains(&origin) {
+        return Err(RuntimeError::Config(format!(
+            "WORM audit endpoint origin {origin} requires an exact sandbox network destination"
+        )));
+    }
+    if let Some(reference) = credential_reference {
+        let variable = reference.strip_prefix("env:").ok_or_else(|| {
+            RuntimeError::Config("WORM audit credential must be an env:VARIABLE reference".into())
+        })?;
+        if !valid_environment_name(variable)
+            || !sandbox.environment.iter().any(|name| name == variable)
+        {
+            return Err(RuntimeError::Config(format!(
+                "WORM audit credential variable {variable} requires an exact sandbox environment grant"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_research_search_config(
@@ -1891,9 +1981,18 @@ fn compile_active_pack_extensions(
     })
 }
 
+struct StorageComposition {
+    writer_lease: Option<RedbWriterLease>,
+    journal: Arc<dyn EventJournal>,
+    projections: Arc<dyn ProjectionStore>,
+    recovery_reason: Option<String>,
+    diagnostic: Value,
+}
+
 /// Fully composed auditable runtime.
 pub struct Runtime {
-    writer_lease: RedbWriterLease,
+    writer_lease: Option<RedbWriterLease>,
+    storage_diagnostic: Value,
     journal: Arc<dyn EventJournal>,
     recovery_reason: Option<String>,
     projections: Arc<ProjectionWorker>,
@@ -1962,7 +2061,6 @@ impl Runtime {
         if let Some(parent) = config.storage.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let writer_lease = RedbWriterLease::acquire(&config.storage.path)?;
         let (keys, signing_key_id, signing_key): (Arc<dyn KeyProvider>, String, [u8; 32]) =
             match &config.storage.keys {
                 KeyConfig::Platform {
@@ -1990,10 +2088,51 @@ impl Runtime {
                 ),
             };
         let signer = Arc::new(Ed25519CheckpointSigner::new(signing_key_id, signing_key));
-        let redb = Arc::new(RedbEventJournal::open(&config.storage.path, keys, signer)?);
-        let recovery_reason = redb.recovery_reason()?;
-        let journal: Arc<dyn EventJournal> = redb.clone();
-        let projection_store: Arc<dyn ProjectionStore> = redb;
+        let StorageComposition {
+            writer_lease,
+            journal,
+            projections: projection_store,
+            recovery_reason,
+            diagnostic: storage_diagnostic,
+        } = match config.storage.adapter {
+            StorageAdapter::Redb => {
+                let lease = RedbWriterLease::acquire(&config.storage.path)?;
+                let redb = Arc::new(RedbEventJournal::open(
+                    &config.storage.path,
+                    Arc::clone(&keys),
+                    signer.clone(),
+                )?);
+                let recovery_reason = redb.recovery_reason()?;
+                StorageComposition {
+                    writer_lease: Some(lease),
+                    journal: redb.clone(),
+                    projections: redb,
+                    recovery_reason,
+                    diagnostic: json!({"adapter": "redb", "path": config.storage.path}),
+                }
+            }
+            StorageAdapter::Postgres => {
+                let postgres_config = config.storage.postgres.clone().ok_or_else(|| {
+                    RuntimeError::Config(
+                        "storage.postgres is required when storage.adapter is postgres".into(),
+                    )
+                })?;
+                let postgres = Arc::new(PostgresEventJournal::open(
+                    postgres_config,
+                    Arc::clone(&keys),
+                    signer,
+                )?);
+                let recovery_reason = postgres.recovery_reason()?;
+                let diagnostic = postgres.diagnostic();
+                StorageComposition {
+                    writer_lease: None,
+                    journal: postgres.clone(),
+                    projections: postgres,
+                    recovery_reason,
+                    diagnostic,
+                }
+            }
+        };
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
@@ -2308,6 +2447,7 @@ impl Runtime {
             "filesystem.search".to_owned(),
             "filesystem.write".to_owned(),
             "audit.export.write".to_owned(),
+            "audit.export.worm.write".to_owned(),
             "process.spawn".to_owned(),
             "shell.run".to_owned(),
             "git.status".to_owned(),
@@ -2416,6 +2556,15 @@ impl Runtime {
                     Arc::clone(&filesystem_executor) as Arc<dyn EffectExecutor>,
                 )?))
             }
+            AuditExporterConfig::WormHttp {
+                endpoint,
+                credential_reference,
+            } => Some(Arc::new(GatewayWormAuditExporter::new(
+                endpoint,
+                credential_reference.clone(),
+                Arc::clone(&gateway),
+                Arc::clone(&http_executor) as Arc<dyn EffectExecutor>,
+            )?)),
         };
         let audit_exports = Arc::new(AuditExportService::new(
             Arc::clone(&journal),
@@ -2614,6 +2763,7 @@ impl Runtime {
         }
         Ok(Self {
             writer_lease,
+            storage_diagnostic,
             journal,
             recovery_reason,
             projections,
@@ -4203,17 +4353,24 @@ impl Runtime {
     /// Bounded local storage health report without decrypted event payloads.
     pub fn state_doctor(&self) -> Result<Value, RuntimeError> {
         let (journal_head, record_hash) = self.journal.head()?;
+        let writer_lease = self.writer_lease.as_ref().map_or_else(
+            || json!({"held": false, "reason": "database-coordinated"}),
+            |lease| json!({"held": true, "path": lease.path()}),
+        );
+        let projection_adapter = self
+            .storage_diagnostic
+            .get("adapter")
+            .cloned()
+            .unwrap_or_else(|| Value::String("unknown".into()));
         Ok(json!({
             "recovery_mode": self.journal.is_recovery_mode(),
             "recovery_reason": self.recovery_reason,
             "journal_head": journal_head,
             "record_hash": record_hash,
-            "writer_lease": {
-                "held": true,
-                "path": self.writer_lease.path(),
-            },
+            "storage": self.storage_diagnostic,
+            "writer_lease": writer_lease,
             "projection_store": {
-                "adapter": "redb",
+                "adapter": projection_adapter,
                 "positions": self.projection_status()?,
             },
             "repository_adapters": {
@@ -9905,15 +10062,15 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
+        AuditExporterConfig, ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
         GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
         InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor,
         MemoryEmbeddingConfig, MemoryOperation, PackProcessDeclaration, PackProcessExecutor,
         PackToolEffectInput, PresentationEffectExecutor, PresentationOperation,
         ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig,
-        SkillEffectExecutor, SkillOperation, SkillScaffoldResult, TraceToolExecutor,
-        WorkEffectExecutor, goal_objective_from_plan, recover_interrupted_subagents,
-        recover_unknown_effects, terminal_actor,
+        SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
+        TraceToolExecutor, WorkEffectExecutor, goal_objective_from_plan,
+        recover_interrupted_subagents, recover_unknown_effects, terminal_actor,
     };
     use colossus_contracts::{
         Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -10352,6 +10509,46 @@ workflows:
 surprise: true
 "#;
         assert!(RuntimeConfig::from_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn storage_adapter_requires_exact_postgres_configuration_pairing() {
+        use colossus_journal_postgres::{PostgresJournalConfig, PostgresTlsConfig};
+
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        config.storage.adapter = StorageAdapter::Postgres;
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config.storage.postgres = Some(
+            PostgresJournalConfig::new(
+                "COLOSSUS_DATABASE_URL",
+                "colossus_runtime",
+                PostgresTlsConfig::WebpkiRoots,
+            )
+            .expect("PostgreSQL config"),
+        );
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+        config.storage.adapter = StorageAdapter::Redb;
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    }
+
+    #[test]
+    fn worm_audit_config_requires_https_origin_and_credential_grants() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        config.audit.exporter = AuditExporterConfig::WormHttp {
+            endpoint: "https://worm.example/retained/".into(),
+            credential_reference: Some("env:WORM_TOKEN".into()),
+        };
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config.sandbox.network_destinations = vec!["https://worm.example".into()];
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config.sandbox.environment = vec!["WORM_TOKEN".into()];
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+        config.audit.exporter = AuditExporterConfig::WormHttp {
+            endpoint: "http://worm.example/retained/".into(),
+            credential_reference: None,
+        };
+        config.sandbox.network_destinations = vec!["http://worm.example".into()];
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
     }
 
     #[tokio::test]

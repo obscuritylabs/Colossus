@@ -13,6 +13,7 @@ const REQUIRED_CUTOVER_JOBS: &[&str] = &[
     "rust-supply-chain",
     "rust-release-smoke",
     "rust-live-chroma",
+    "rust-live-storage",
     "rust-live-security",
 ];
 
@@ -23,6 +24,7 @@ const REQUIRED_PULL_REQUEST_JOBS: &[&str] = &[
     "rust-fuzz",
     "rust-supply-chain",
     "rust-live-chroma",
+    "rust-live-storage",
     "rust-live-security",
 ];
 

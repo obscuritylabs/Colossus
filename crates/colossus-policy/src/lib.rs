@@ -409,11 +409,14 @@ impl SafetyKernel {
             validate_process_obligations(request, obligations)?;
         }
         if decision.outcome == DecisionOutcome::Allow
-            && (request.action == "network.http"
-                || matches!(
-                    request.action.as_str(),
-                    "provider.openai.responses" | "provider.openai.chat" | "provider.models"
-                ))
+            && (matches!(
+                request.action.as_str(),
+                "network.http"
+                    | "audit.export.worm.write"
+                    | "provider.openai.responses"
+                    | "provider.openai.chat"
+                    | "provider.models"
+            ))
         {
             let origin = canonical_network_origin(&request.resource)?;
             if !obligations
@@ -1608,7 +1611,10 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("mcp.")
             || request.action.starts_with("pack.")
             || request.action.starts_with("bundle.")
-            || request.action == "network.http"
+            || matches!(
+                request.action.as_str(),
+                "network.http" | "audit.export.worm.write"
+            )
         {
             obligations.require_post_effect = true;
         }
@@ -2457,34 +2463,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn network_origin_not_in_obligations_never_reaches_adapter() {
-        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
-        let policy =
-            BuiltInPolicy::offline_default().with_action("network.http", DecisionOutcome::Allow);
-        let gateway = EffectGateway::new(
-            journal,
-            Arc::new(policy),
-            Arc::new(AllowApproval {
-                approved_by: "user".into(),
-            }),
-            SafetyKernel::new(["network.http".into()]),
-            [9_u8; 32],
-        );
-        let executor = CountingExecutor {
-            calls: AtomicUsize::new(0),
-        };
-        let mut request = effect_request(
-            system_actor("test"),
-            "network.http",
-            "https://example.com/path",
-            serde_json::json!({"method": "GET", "headers": {}}),
-        );
-        request.capabilities = vec!["network.http".into()];
-        assert!(matches!(
-            gateway.execute(request, &executor).await,
-            Err(GatewayError::Safety(_))
-        ));
-        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+    async fn network_origins_not_in_obligations_never_reach_adapters() {
+        for action in ["network.http", "audit.export.worm.write"] {
+            let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+            let policy =
+                BuiltInPolicy::offline_default().with_action(action, DecisionOutcome::Allow);
+            let gateway = EffectGateway::new(
+                journal,
+                Arc::new(policy),
+                Arc::new(AllowApproval {
+                    approved_by: "user".into(),
+                }),
+                SafetyKernel::new([action.into()]),
+                [9_u8; 32],
+            );
+            let executor = CountingExecutor {
+                calls: AtomicUsize::new(0),
+            };
+            let mut request = effect_request(
+                system_actor("test"),
+                action,
+                "https://example.com/path",
+                serde_json::json!({"method": "GET", "headers": {}}),
+            );
+            request.capabilities = vec![action.into()];
+            assert!(matches!(
+                gateway.execute(request, &executor).await,
+                Err(GatewayError::Safety(_))
+            ));
+            assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+        }
     }
 
     #[tokio::test]

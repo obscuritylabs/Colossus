@@ -76,6 +76,36 @@ not put key values in YAML. Platform mode instead uses `kind: platform` with `se
 `journal_key_id`, and `signing_key_id`; Keychain, DPAPI, or Secret Service stores the
 material and secure anchor.
 
+### PostgreSQL Journal And Projections
+
+Redb remains the default when `storage.adapter` is omitted. A multi-process deployment
+can select PostgreSQL while retaining `storage.path` as its local instance and worker-IPC
+identity:
+
+```yaml
+storage:
+  path: .colossus/instance.redb
+  adapter: postgres
+  postgres:
+    connectionVariable: COLOSSUS_DATABASE_URL
+    schema: colossus_production
+    tls:
+      kind: webpki_roots
+    statementTimeoutMs: 30000
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_JOURNAL_KEY
+    journal_key_id: journal-production-v1
+    signing_variable: COLOSSUS_SIGNING_KEY
+    anchor_path: .colossus/secure-anchor.json
+```
+
+`COLOSSUS_DATABASE_URL` may contain a libpq URL or key/value string; its value is resolved
+only by the adapter and is never rendered by `config show` or `state doctor`. The pinned
+Mozilla WebPKI root set is the default TLS policy. A private deployment can instead use
+`kind: custom_ca` plus `caPemPath`; that PEM bundle becomes the complete database trust set.
+`kind: disabled` is rejected unless every target is loopback or a Unix socket.
+
 ## Provider Profiles And Roles
 
 Supported kinds are `echo`, `open_ai_responses`, and `open_ai_compatible`. Network
@@ -356,6 +386,24 @@ audit:
 Grant `audit.export.write`, approval if required, and a matching filesystem write root.
 Use `audit exporter-status`, `audit exporter-drain`, and operator-authorized
 `audit exporter-reset` for durable queue management.
+
+A retention-locked service exposing create-only object PUTs can receive the same evidence:
+
+```yaml
+audit:
+  exporter:
+    kind: worm_http
+    endpoint: https://worm.example/v1/retained-audit/
+    credentialReference: env:COLOSSUS_WORM_TOKEN
+sandbox:
+  environment: [COLOSSUS_WORM_TOKEN]
+  networkDestinations: [https://worm.example]
+```
+
+Grant `audit.export.worm.write` in policy. The endpoint must end in `/`, contain no
+credentials/query/fragment, and enforce retention or object lock independently. Colossus
+uses deterministic content-hashed names and create-only HTTP semantics; it does not infer
+WORM durability from a successful HTTP response.
 
 ## Workspace And Path Resolution
 

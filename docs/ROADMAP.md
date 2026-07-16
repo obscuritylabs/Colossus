@@ -63,18 +63,20 @@ duplicate run.
 
 ### 3. Replaceable Durable Storage And Audit Export
 
-- Implement a PostgreSQL event-journal adapter behind the existing journal port without
+- **Complete in this source tree:** a PostgreSQL event-journal adapter behind the existing journal port without
   weakening optimistic streams, the global hash chain, encrypted payloads, atomic
   outboxes, writer ownership, checkpoints, anchors, or recovery mode.
-- Run the shared journal, repository, projection, and crash/reopen conformance suites
+- **Complete:** shared journal, repository, projection, external-work, and crash/reopen conformance suites run
   against PostgreSQL.
-- Add a remote append-only/WORM audit exporter behind the existing exporter port with
+- **Complete:** a remote append-only/WORM audit exporter behind the existing exporter port preserves
   the same ciphertext-free evidence, permit, retry, unknown-outcome, and acknowledgment
   contract as the directory exporter.
 
-Exit evidence: opt-in live PostgreSQL and WORM-adapter CI, concurrent-writer and outage
-tests, kill-point recovery, idempotent replay, credential non-disclosure, and operator
-diagnostics that distinguish unavailable, lagging, blocked, and recovery-only states.
+Exit evidence is present in pinned live PostgreSQL CI, concurrent-writer/outage recovery,
+kill-point recovery, shared conformance, idempotent WORM replay, credential
+non-disclosure, and adapter-aware operator diagnostics. A repository-configured HTTPS
+WORM endpoint can additionally run its destructive live acceptance during an explicit
+workflow dispatch.
 
 ### 4. Distribution And Extension Operations
 

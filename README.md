@@ -45,8 +45,8 @@ not expand configured policy or sandbox grants.
 - Built-in deny-by-default policy or strict OPA decisions, explicit approval proofs,
   one-use permits, bounded quarantine, and post-effect content release.
 - XChaCha20-Poly1305 journal payloads, hash chaining, signed checkpoints, secure anchors,
-  recovery mode, redacted audit views, and durable external evidence export.
-- Canonical redb repositories, disposable projections, Tantivy lexical memory, optional
+  recovery mode, redacted audit views, PostgreSQL storage, and directory/HTTPS-WORM evidence export.
+- Canonical redb or PostgreSQL repositories, disposable projections, Tantivy lexical memory, optional
   Chroma semantic memory, and an authenticated worker over local IPC.
 - A responsive Ratatui terminal UI with a durable scrollable transcript, pinned composer,
   semantic Markdown/cards, overlays, completions, themes, and automatic JSON preservation
