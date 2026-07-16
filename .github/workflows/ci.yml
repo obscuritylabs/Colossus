@@ -22,7 +22,6 @@ jobs:
     timeout-minutes: 15
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -38,7 +37,14 @@ jobs:
           components: rustfmt
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -105,7 +111,6 @@ jobs:
     needs: rust-preflight
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -117,7 +122,14 @@ jobs:
           components: clippy
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
@@ -141,7 +153,6 @@ jobs:
     needs: rust-preflight
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -160,7 +171,14 @@ jobs:
           toolchain: 1.96.0
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Cache native sandbox target
         uses: Swatinem/rust-cache@v2
@@ -179,7 +197,6 @@ jobs:
     needs: rust-preflight
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -196,7 +213,14 @@ jobs:
           toolchain: 1.96.0
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Cache Windows runtime target
         uses: Swatinem/rust-cache@v2
@@ -217,7 +241,6 @@ jobs:
     needs: rust-preflight
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -228,7 +251,14 @@ jobs:
           toolchain: nightly-2026-07-10
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Cache fuzz dependencies and targets
         uses: Swatinem/rust-cache@v2
@@ -299,7 +329,6 @@ jobs:
     needs: rust-preflight
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -333,7 +362,14 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Install musl linker
         if: runner.os == 'Linux'
@@ -806,7 +842,6 @@ jobs:
     needs: rust-preflight
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -825,7 +860,14 @@ jobs:
           toolchain: 1.96.0
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -865,7 +907,6 @@ jobs:
     needs: rust-preflight
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     services:
       postgres:
         image: postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f
@@ -890,7 +931,14 @@ jobs:
           toolchain: 1.96.0
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -921,7 +969,6 @@ jobs:
     needs: rust-preflight
     env:
       SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -932,7 +979,14 @@ jobs:
           toolchain: 1.96.0
 
       - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2

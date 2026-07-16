@@ -6879,9 +6879,8 @@ mod tests {
         fs::write(directory.path().join("state.dev.redb"), b"orphaned state")
             .expect("orphaned development state");
 
-        let error = init_config(&destination, true, None)
-            .err()
-            .expect("orphaned state must fail closed");
+        let error =
+            init_config(&destination, true, None).expect_err("orphaned state must fail closed");
         assert!(error.to_string().contains("restore the matching config"));
         assert!(!destination.exists());
     }
