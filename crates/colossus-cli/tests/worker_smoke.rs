@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::os::unix::fs::PermissionsExt as _;
 use std::{
     fs,
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::Path,
     process::{Child, Command, Output, Stdio},
     thread,
@@ -73,10 +73,23 @@ fn run_with_input(binary: &Path, config: &Path, arguments: &[&str], input: &str)
     child.wait_with_output().expect("wait for Colossus")
 }
 
-fn wait_for_worker(binary: &Path, config: &Path, timeout: Duration) {
+fn wait_for_worker(binary: &Path, config: &Path, worker: &mut ChildGuard, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     let mut last_error = String::new();
     while Instant::now() < deadline {
+        if let Some(status) = worker.0.try_wait().expect("worker status") {
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+            if let Some(mut pipe) = worker.0.stdout.take() {
+                pipe.read_to_string(&mut stdout).expect("worker stdout");
+            }
+            if let Some(mut pipe) = worker.0.stderr.take() {
+                pipe.read_to_string(&mut stderr).expect("worker stderr");
+            }
+            panic!(
+                "worker exited before becoming ready ({status}); stdout: {stdout}; stderr: {stderr}"
+            );
+        }
         let status = run(binary, config, &["worker", "--status"]);
         if status.status.success() {
             return;
@@ -214,7 +227,7 @@ sandbox:
         .spawn()
         .expect("start worker");
     let mut worker = ChildGuard(child);
-    wait_for_worker(binary, &config, Duration::from_secs(10));
+    wait_for_worker(binary, &config, &mut worker, Duration::from_secs(10));
     #[cfg(unix)]
     assert_eq!(
         fs::metadata(&socket)

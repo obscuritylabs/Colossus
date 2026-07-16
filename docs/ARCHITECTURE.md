@@ -211,8 +211,9 @@ runs, the worker-backed TUI, session operations, and workflow lifecycle operatio
 auto-discover the worker and otherwise use the same runtime in-process. A busy Windows
 named pipe, including a connected pipe waiting for its authenticated hello, is treated
 as a live worker with bounded connection backoff, never as permission to fall through to
-a second embedded writer. The Windows listener maintains a bounded pending-instance
-backlog so concurrent terminal clients do not serialize behind one pipe slot. Durable task,
+a second embedded writer. The Windows listener publishes its replacement pending instance
+before dispatching each connection; concurrent terminal clients wait with bounded backoff
+instead of opening another writer. Durable task,
 decision, plan, goal, child-agent, and memory lifecycle commands use that application
 protocol as well. Research, declarative skill, signed pack/bundle, integration, MCP,
 process, and network terminal operations are also dispatched to the worker when active.

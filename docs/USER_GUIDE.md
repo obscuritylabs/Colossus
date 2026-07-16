@@ -327,8 +327,9 @@ CLI and TUI operations auto-discover a healthy worker. Authentication or protoco
 failure is surfaced and never downgraded to embedded execution; only an unavailable
 endpoint permits embedded fallback. A saturated Windows named pipe—or a connected pipe
 waiting for its authenticated hello—is reported as a busy live worker after bounded
-retries and does not permit embedded fallback. The worker keeps a bounded Windows pipe
-backlog for concurrent CLI and TUI clients.
+retries and does not permit embedded fallback. The worker publishes a replacement Windows
+pipe instance before dispatching each connection, and concurrent clients wait for that
+live endpoint rather than opening an embedded writer.
 
 ## Audit And Diagnostics
 

@@ -3489,7 +3489,6 @@ mod platform {
         net::windows::named_pipe::{
             ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
         },
-        task::JoinSet,
         time::{Instant, sleep},
     };
 
@@ -3497,54 +3496,44 @@ mod platform {
     pub type ServerStream = NamedPipeServer;
 
     const ERROR_PIPE_BUSY: i32 = 231;
-    const PIPE_BACKLOG: usize = 16;
-
     pub struct Listener {
         endpoint: String,
-        pending: JoinSet<Result<NamedPipeServer, std::io::Error>>,
+        next: Option<NamedPipeServer>,
     }
 
     impl Listener {
         pub async fn bind(endpoint: &str) -> Result<Self, WorkerError> {
-            let mut listener = Self {
+            let next = ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(endpoint)?;
+            Ok(Self {
                 endpoint: endpoint.into(),
-                pending: JoinSet::new(),
-            };
-            listener.spawn_pending(true)?;
-            for _ in 1..PIPE_BACKLOG {
-                listener.spawn_pending(false)?;
-            }
-            Ok(listener)
+                next: Some(next),
+            })
         }
 
         pub async fn accept(&mut self) -> Result<ServerStream, WorkerError> {
-            // JoinSet::join_next is cancellation safe, so polling this inside the
-            // worker select loop cannot lose a completed connection. Replenish
-            // before handing the connected instance to its request task.
+            // Keep the pending instance in `self` while awaiting connection. This
+            // future is polled inside `select!`; taking the instance first would
+            // drop it whenever another branch wins and permanently lose the
+            // listener after serving one client.
+            self.next
+                .as_ref()
+                .ok_or_else(|| WorkerError::Protocol("named pipe listener lost instance".into()))?
+                .connect()
+                .await?;
             let server = self
-                .pending
-                .join_next()
-                .await
-                .ok_or_else(|| WorkerError::Protocol("named pipe listener lost backlog".into()))?
-                .map_err(|error| WorkerError::Protocol(error.to_string()))??;
-            self.spawn_pending(false)?;
+                .next
+                .take()
+                .ok_or_else(|| WorkerError::Protocol("named pipe listener lost instance".into()))?;
+            // Publish the replacement before the connected instance is handed to
+            // its request task. Saturated clients use the bounded busy retry below
+            // until this slot is available instead of falling back to a writer.
+            self.next = Some(ServerOptions::new().create(&self.endpoint)?);
             Ok(server)
         }
 
         pub fn cleanup(&mut self) {}
-
-        fn spawn_pending(&mut self, first: bool) -> Result<(), WorkerError> {
-            let mut options = ServerOptions::new();
-            options
-                .first_pipe_instance(first)
-                .max_instances(PIPE_BACKLOG);
-            let server = options.create(&self.endpoint)?;
-            self.pending.spawn(async move {
-                server.connect().await?;
-                Ok(server)
-            });
-            Ok(())
-        }
     }
 
     pub async fn connect(endpoint: &str) -> Result<ClientStream, std::io::Error> {

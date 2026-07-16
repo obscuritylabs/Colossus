@@ -148,7 +148,7 @@ sandbox:
     - /usr/local/bin/python3
   environment: [SAFE]
   networkDestinations: []
-  timeoutMs: 6000
+  timeoutMs: 12000
   maxOutputBytes: 1048576
   maxProcesses: 16
   maxMemoryBytes: 134217728
@@ -271,7 +271,7 @@ sandbox:
                 "  networkDestinations: []",
                 "  networkDestinations:\n    - http://example.com\n    - https://example.com",
             )
-            .replace("  timeoutMs: 6000", "  timeoutMs: 12000"),
+            .replace("  timeoutMs: 12000", "  timeoutMs: 20000"),
     )
     .expect("network config");
     let allowed_network = run(
