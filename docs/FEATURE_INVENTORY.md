@@ -1028,11 +1028,11 @@ disabled, and audited without exposing its credentials.
 
 A reconstruction is complete only when all applicable checks pass:
 
-Cutover note (2026-07-14): Rust 0.6.0 is promoted to the repository root, the Python
+Cutover note (2026-07-15): Rust 0.7.0 is the active repository-root implementation, the Python
 runtime/package is removed from `main`, and the pull-request security gate is green.
-The [final cutover run](https://github.com/obscuritylabs/Colossus/actions/runs/29379377810)
-passed on source revision `8b4950141e053b79df1e02ed32f3f967e15a1c18`, and the
-[v0.6.0 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.6.0) contains
+The [0.7 release run](https://github.com/obscuritylabs/Colossus/actions/runs/29465535984)
+passed on source revision `5cdf9ee14ef33a3e63d72f80494b39b85a1813a4`, and the
+[v0.7.0 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.7.0) contains
 the resulting signed evidence and six native archives.
 
 - [x] Offline install and echo smoke test require no provider credentials or network.

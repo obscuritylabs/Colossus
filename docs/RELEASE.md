@@ -138,7 +138,7 @@ Attach all six archives, sidecars, SBOM/signature material, changelog excerpt, a
 limitations. Confirm installation on a clean matching host before announcing the release.
 
 The release bundle MUST be signed by the private key matching
-[`release/bundle-publisher.json`](../release/bundle-publisher.json). Never publish the
+[`release/bundle-publisher.json`](https://github.com/obscuritylabs/Colossus/blob/main/release/bundle-publisher.json). Never publish the
 disposable signing seed used by CI bundle smoke tests. Attach the publisher identity to
 the release and include it inside the signed bundle so operators can establish trust from
 an independently obtained copy before verification.

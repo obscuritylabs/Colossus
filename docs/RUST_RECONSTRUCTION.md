@@ -67,13 +67,20 @@ See [Getting Started](GETTING_STARTED.md), [User Guide](USER_GUIDE.md), and
 
 ## Release And Remaining Scope
 
-The repository-root cutover is complete. The exact `v0.6.0` source revision passed the
+The repository-root cutover is complete. The exact `v0.7.0` source revision passed the
 explicit cutover workflow, including build, clean installation, and smoke tests for macOS,
 static Linux, and Windows arm64/x64. The published release includes all six archives,
 checksums, an SPDX inventory, the publisher identity, verification evidence, and a signed
 multi-platform offline bundle. Ordinary `main` pushes continue to run the inexpensive
 validation path; the full matrix belongs to pull requests and explicit release validation.
 
+The [v0.7.0 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.7.0)
+was built from revision `5cdf9ee14ef33a3e63d72f80494b39b85a1813a4`; its full
+[release validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29465535984)
+passed all native runtime, sandbox, policy, dependency, fuzz, and packaging jobs.
+
 P2 remains intentionally open: schedules, webhooks, repository/event subscriptions,
 PostgreSQL event storage, external WORM audit anchors, and additional adapters. These are
-new product work, not hidden blockers in the Rust 0.6 baseline.
+new product work, not hidden blockers in the Rust 0.7 baseline.
+The [Roadmap To 0.8.0](ROADMAP.md) is the current completion index and defines the
+evidence required to close each track.

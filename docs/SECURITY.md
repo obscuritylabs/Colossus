@@ -735,5 +735,5 @@ See [Offline Bundle Format](BUNDLE_FORMAT.md) for the directory and manifest for
 
 ## Vulnerability Reporting
 
-See the root [Security Policy](../SECURITY.md) for supported versions and vulnerability
+See the root [Security Policy](https://github.com/obscuritylabs/Colossus/blob/main/SECURITY.md) for supported versions and vulnerability
 reporting expectations.

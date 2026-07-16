@@ -295,7 +295,7 @@ research:
   search:
     kind: searxng
     endpoint: https://search.internal.example/search
-    userAgent: colossus-rust/0.6
+    userAgent: colossus-rust/0.7
 ```
 
 ## Workflows, Skills, Packs, And MCP

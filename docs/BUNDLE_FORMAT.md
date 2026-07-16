@@ -40,7 +40,7 @@ hash mismatch fail verification.
 {
   "format_version": 1,
   "name": "colossus-offline",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "colossus",
   "created_at": "2026-07-11T00:00:00Z",
   "source_revision": "GIT_COMMIT",
@@ -84,7 +84,7 @@ colossus --config .colossus/config.yaml bundle verify ./bundle
 ```
 
 Official Colossus release bundles use the Ed25519 publisher identity recorded in
-[`release/bundle-publisher.json`](../release/bundle-publisher.json). Before verifying an
+[`release/bundle-publisher.json`](https://github.com/obscuritylabs/Colossus/blob/main/release/bundle-publisher.json). Before verifying an
 official bundle, compare that file with the copy attached to the GitHub release and add
 its `public_key` for publisher `colossus`. The expected `key_id` is the SHA-256 digest of
 the decoded public key; Colossus derives and checks that binding when trust is added.
@@ -106,7 +106,7 @@ export COLOSSUS_BUNDLE_SIGNING_SEED=...
 colossus --config .colossus/config.yaml --approval-mode ask bundle build \
   ./bundle-stage ./bundle \
   --name colossus-offline \
-  --version 0.6.0 \
+  --version 0.7.0 \
   --publisher colossus \
   --created-at 2026-07-11T00:00:00Z \
   --source-revision GIT_COMMIT \

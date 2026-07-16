@@ -4,6 +4,11 @@ These pages document the active Rust runtime. Fresh installations use strict YAM
 encrypted redb state, and the native `colossus` executable. Python 0.5 documentation is
 retained on `python-v0.5.0` and `python-legacy`.
 
+The same Markdown is published as a searchable mdBook site. Build it locally with
+`mdbook build` from the repository root, or use `mdbook serve --open` for live preview.
+The documentation build uses the Rust-native mdBook tool and does not reintroduce a
+Python package or runtime dependency.
+
 ## Start Here
 
 - [Getting Started](GETTING_STARTED.md): install, initialize, run the offline smoke, and
@@ -34,6 +39,7 @@ retained on `python-v0.5.0` and `python-legacy`.
 - [Rust Reconstruction Status](RUST_RECONSTRUCTION.md)
 - [Rust Acceptance Matrix](RUST_ACCEPTANCE_MATRIX.md)
 - [Feature Inventory](FEATURE_INVENTORY.md)
+- [Roadmap To 0.8.0](ROADMAP.md)
 - [Installation](INSTALLATION.md)
 - [Release Process](RELEASE.md)
 - [Contributing](CONTRIBUTING.md)
