@@ -13,7 +13,7 @@ use colossus_contracts::{
     RunEventEnvelope, SessionMessage, SessionMessagePage, SessionSummary, SignedCheckpoint,
     SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
     TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
-    WorkflowDefinition, WorkflowRun, WorkflowSchedule,
+    WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowWebhook, WorkflowWebhookDelivery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -803,6 +803,35 @@ pub trait WorkflowRepository: Send + Sync {
 
     /// List bounded schedules in deterministic identifier order.
     fn schedules(&self, limit: usize) -> Result<Vec<WorkflowSchedule>, StoreError>;
+
+    /// Persist one new hash-pinned authenticated workflow webhook.
+    fn create_webhook(
+        &self,
+        webhook: &WorkflowWebhook,
+        actor: Actor,
+    ) -> Result<WorkflowWebhook, StoreError>;
+
+    /// Persist an explicit enabled/disabled webhook transition.
+    fn set_webhook_enabled(
+        &self,
+        webhook_id: &str,
+        enabled: bool,
+        updated_at: &str,
+        actor: Actor,
+    ) -> Result<WorkflowWebhook, StoreError>;
+
+    /// Reconstruct one canonical webhook.
+    fn webhook(&self, webhook_id: &str) -> Result<Option<WorkflowWebhook>, StoreError>;
+
+    /// List bounded webhooks in deterministic identifier order.
+    fn webhooks(&self, limit: usize) -> Result<Vec<WorkflowWebhook>, StoreError>;
+
+    /// Reconstruct one accepted delivery by webhook and replay identifier.
+    fn webhook_delivery(
+        &self,
+        webhook_id: &str,
+        delivery_id: &str,
+    ) -> Result<Option<WorkflowWebhookDelivery>, StoreError>;
 }
 
 /// Disposable search projection for canonical memory identifiers.

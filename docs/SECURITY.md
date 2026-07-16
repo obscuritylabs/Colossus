@@ -289,6 +289,33 @@ its run or queue the same occurrence twice. Schedule creation or firing grants n
 authority: the resulting run still crosses the ordinary queue claim, policy, approval,
 permit, quarantine, and unknown-outcome boundaries.
 
+Persisted workflow webhooks are authenticated trigger bindings, not ambient network
+authority. Each binding pins an exact validated workflow hash and stores only an `env:`
+credential reference, bounded replay window, bounded raw-body limit, and enable state.
+At delivery time the runtime late-resolves a secret of at least 32 bytes and verifies
+HMAC-SHA256 over `timestamp + "\\n" + delivery_id + "\\n" + exact_raw_body`. Timestamps
+must be UTC RFC3339 `Z`; delivery identifiers and headers are bounded; the body must be
+nonempty strict JSON; signatures must be lowercase hexadecimal with an optional
+`sha256=` prefix. Authentication, timestamp, definition trust, schema, size, and known
+replay failures occur before policy. Replay state is checked again while holding the
+writer coordination lock after policy so concurrent deliveries cannot both commit.
+
+The effect gateway receives the full body, application headers, sizes, hashes, replay
+window, and pinned workflow identity under `workflow.webhook.ingest`. It receives a
+credential reference and one-way value hash, never the raw secret or submitted signature.
+OPA may deny the request; the built-in runtime policy allows this already-authenticated
+noninteractive ingress action because it cannot pause an HTTP sender for an approval.
+The accepted-delivery receipt and deterministic queued run commit atomically and the run
+later crosses every ordinary workflow policy, permit, recovery, and unknown-outcome gate.
+A changed or missing pinned definition disables the binding with an auditable reason.
+
+The supplied HTTP ingress adapter binds loopback addresses only, accepts POST over
+HTTP/1.1 with a required `Content-Length`, rejects chunked or trailing bodies, caps
+headers at 64 KiB and bodies at 1 MiB, applies a ten-second read timeout, and closes each
+connection. It is intended for a trusted local reverse proxy that supplies the three
+`X-Colossus-*` authentication headers; it is not a public TLS endpoint or a replacement
+for perimeter rate limiting.
+
 Recovery compares scoped execution ids, so completion of a repeated or parallel sibling
 cannot clear another attempt's uncertainty. An abandoned compensation is explicitly
 phase-labeled and never resumed through the primary workflow path, even if its definition

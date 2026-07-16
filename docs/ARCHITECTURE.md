@@ -258,6 +258,20 @@ explicit enable. Actual invalidation disables the schedule, while repository fai
 surface for retry rather than being persisted as a trust decision. Trigger-created runs
 then use the ordinary claim, policy, approval, effect, and recovery paths.
 
+Workflow webhooks are canonical hash-pinned bindings behind the same repository. A
+binding stores an operator-selected identifier, bounded replay/body limits, enable state,
+and a credential reference, never the HMAC secret. The runtime resolves an `env:` secret
+only at ingress, verifies HMAC-SHA256 over the exact timestamp, delivery identifier, and
+raw JSON body, rejects stale or repeated deliveries, and then submits
+`workflow.webhook.ingest` through the ordinary effect gateway. The request discloses the
+complete body and application headers plus a credential reference and secret hash to
+policy, but not the secret or submitted signature. After authorization, a shared writer
+lock rechecks binding trust and replay state; the accepted-delivery receipt and
+deterministically identified `queued` run are one journal batch. The optional HTTP adapter
+is a bounded loopback-only HTTP/1.1 listener intended to sit behind a trusted reverse
+proxy. CLI, TUI, embedded runtime, and authenticated worker transports remain interfaces
+to this application behavior rather than owning authentication or persistence rules.
+
 Runtime execution identity is separate from the static YAML step ID. Root steps retain
 their declared ID, while nested repeated work receives bounded paths such as
 `each[1]/approval` and `parallel.branch[0]/tool`. Journal completion, waiting input,

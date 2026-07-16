@@ -30,9 +30,11 @@ tokio.workspace = true
 [dev-dependencies]
 ed25519-dalek.workspace = true
 hex.workspace = true
+hmac.workspace = true
 serde-saphyr.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
+time.workspace = true
 colossus-packs.workspace = true
 
 [lints]

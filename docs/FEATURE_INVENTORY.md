@@ -129,7 +129,7 @@ inspect hashes, audit records, and package contents without network access.
 | CTX-01 | Context composition and compaction | P1 | Raw history is retained while provider input stays within budget. |
 | WORK-01 | Tasks, decisions, memories, and plans | P1 | Long-running work state is persisted and inspectable. |
 | MEM-01 | Canonical memory and disposable indexes | P1 | Memory lifecycle state remains authoritative and usable while lexical or semantic indexes lag or rebuild. |
-| FLOW-01 | Durable versioned workflows | P1 | YAML workflows and fixed-cadence schedules are validated, hash-pinned, restartable, bounded, and use normal authorization for every effectful step. |
+| FLOW-01 | Durable versioned workflows | P1 | YAML workflows, fixed-cadence schedules, and authenticated webhook triggers are validated, hash-pinned, restartable, bounded, and use normal authorization for every effectful step. |
 | GOAL-01 | Bounded Goal Mode | P1 | Autonomous iterations stop on terminal status or budget exhaustion. |
 | AGENT-01 | Durable subagents | P1 | Queued child jobs support bounded concurrency and lifecycle controls. |
 | RES-01 | Deep Research | P1 | Evidence collection, claims, citations, progress, and fallback are durable. |
@@ -599,6 +599,27 @@ Definition, call-graph, and input trust is rechecked before enable and dispatch;
 invalidation disables the schedule, while storage failure remains a retriable failure.
 Trigger-created runs use the ordinary hash-pinned queue, worker lock, policy, approval,
 effect, and recovery paths.
+
+Persisted webhooks bind an operator-selected identifier and an `env:` HMAC credential
+reference to an exact workflow hash. The raw secret MUST NOT enter configuration,
+schemas, model context, telemetry, or journal payloads. Ingress MUST verify HMAC-SHA256
+over the exact timestamp, delivery identifier, and raw body; require a UTC RFC3339 `Z`
+timestamp within a configured 60-to-3600-second replay window; bound identifiers,
+headers, and a nonempty strict-JSON body; reject a known delivery identifier; revalidate
+the workflow call graph and input envelope; and submit the complete safe request through
+the ordinary policy/effect/audit gateway. The gateway receives a credential reference
+and value hash but never the raw secret or submitted signature.
+
+After authorization, ingress MUST hold the writer coordination lock and recheck binding
+state, workflow trust, replay state, and deterministic run identity. The accepted
+delivery receipt and queued run MUST commit in one journal batch, so concurrent delivery,
+restart, or process loss cannot accept the same delivery twice or record acceptance
+without its run. The run input envelope contains `body`, `delivery_id`, application
+`headers`, and `timestamp` and MUST satisfy the workflow's declared input schema.
+Changing or removing the pinned definition disables the webhook with an auditable
+bounded reason; storage failure remains retriable. Any bundled HTTP adapter MUST bind
+loopback only, bound parsing before allocation, reject chunked/trailing bodies, and leave
+public TLS, origin authentication, and rate limiting to a trusted reverse proxy.
 
 When the worker is active it owns the canonical writer lease. Local clients MUST
 authenticate the server before disclosing operation content, authenticate every request
@@ -1166,6 +1187,10 @@ the resulting signed evidence and six native archives.
   conformance, clock-controlled misfire and trust-invalidation tests, CLI/TUI/worker
   contract tests, and a separate-process redb abort immediately after the atomic
   schedule-fire/queued-run batch with no lost or duplicate occurrence after reopen.
+- [x] Authenticated workflow webhooks pass shared in-memory/redb repository conformance,
+  HMAC/timestamp/replay/body/trust rejection tests, credential-reference-only gateway
+  disclosure, atomic accepted-delivery/run queueing, bounded loopback HTTP parsing, and
+  CLI/TUI/worker/embedded contract and parity tests.
 - [x] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
   network escapes on each supported platform.
   The final cutover run passed native macOS/Linux arm64/x64 isolation, Windows arm64/x64

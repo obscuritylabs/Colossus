@@ -3,16 +3,18 @@
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ActorType, EventClassification, ExecutionContext, NewEvent, WorkflowDefinition,
-    WorkflowRun, WorkflowSchedule, WorkflowScheduleDispatch, WorkflowScheduleDispatchStatus,
-    WorkflowScheduleMisfirePolicy, WorkflowStatus, WorkflowStep, WorkflowTriggerKind,
+    Actor, ActorType, CredentialReference, EventClassification, ExecutionContext, NewEvent,
+    WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowScheduleDispatch,
+    WorkflowScheduleDispatchStatus, WorkflowScheduleMisfirePolicy, WorkflowStatus, WorkflowStep,
+    WorkflowTriggerKind, WorkflowWebhook, WorkflowWebhookDelivery, WorkflowWebhookDispatch,
 };
 use colossus_ports::{EventJournal, StoreError, WorkflowRepository};
 use futures::{StreamExt as _, TryStreamExt as _, stream};
+use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -37,6 +39,14 @@ const MIN_SCHEDULE_CADENCE_SECONDS: u64 = 60;
 const MAX_SCHEDULE_CADENCE_SECONDS: u64 = 31 * 24 * 60 * 60;
 const MAX_WORKFLOW_SCHEDULES: usize = 10_000;
 const MAX_SCHEDULE_ID_BYTES: usize = 128;
+const MAX_WORKFLOW_WEBHOOKS: usize = 10_000;
+const MAX_WEBHOOK_ID_BYTES: usize = 128;
+const MAX_WEBHOOK_DELIVERY_ID_BYTES: usize = 128;
+const MIN_WEBHOOK_REPLAY_WINDOW_SECONDS: u64 = 60;
+const MAX_WEBHOOK_REPLAY_WINDOW_SECONDS: u64 = 60 * 60;
+const MAX_WEBHOOK_BODY_BYTES: u64 = 1024 * 1024;
+const MAX_WEBHOOK_HEADERS: usize = 64;
+const MAX_WEBHOOK_HEADER_BYTES: usize = 32 * 1024;
 
 /// Workflow validation or durable execution failure.
 #[derive(Debug, Error)]
@@ -1037,6 +1047,114 @@ impl WorkflowRepository for EventSourcedWorkflowRepository {
             })
             .collect()
     }
+
+    fn create_webhook(
+        &self,
+        webhook: &WorkflowWebhook,
+        actor: Actor,
+    ) -> Result<WorkflowWebhook, StoreError> {
+        let stream_id = webhook_stream(&webhook.webhook_id);
+        if !self.journal.read_stream(&stream_id)?.is_empty() {
+            return Err(StoreError::Adapter(format!(
+                "workflow webhook {} already exists",
+                webhook.webhook_id
+            )));
+        }
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version: 0,
+            classification: EventClassification::Workflow,
+            event_type: "workflow.webhook.registered.v1".into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: webhook.webhook_id.clone(),
+                workflow_id: Some(webhook.webhook_id.clone()),
+                workflow_hash: Some(webhook.workflow_hash.clone()),
+                ..ExecutionContext::default()
+            },
+            payload: json!({"record": webhook}),
+        })?;
+        Ok(webhook.clone())
+    }
+
+    fn set_webhook_enabled(
+        &self,
+        webhook_id: &str,
+        enabled: bool,
+        updated_at: &str,
+        actor: Actor,
+    ) -> Result<WorkflowWebhook, StoreError> {
+        let mut webhook = self
+            .webhook(webhook_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("workflow webhook {webhook_id}")))?;
+        if webhook.enabled == enabled {
+            return Ok(webhook);
+        }
+        webhook.enabled = enabled;
+        webhook.updated_at = updated_at.into();
+        if enabled {
+            webhook.blocked_reason = None;
+        }
+        let stream_id = webhook_stream(webhook_id);
+        let expected_stream_version = u64::try_from(self.journal.read_stream(&stream_id)?.len())
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version,
+            classification: EventClassification::Workflow,
+            event_type: if enabled {
+                "workflow.webhook.enabled.v1"
+            } else {
+                "workflow.webhook.disabled.v1"
+            }
+            .into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: webhook_id.into(),
+                workflow_id: Some(webhook_id.into()),
+                workflow_hash: Some(webhook.workflow_hash.clone()),
+                ..ExecutionContext::default()
+            },
+            payload: json!({"record": &webhook}),
+        })?;
+        Ok(webhook)
+    }
+
+    fn webhook(&self, webhook_id: &str) -> Result<Option<WorkflowWebhook>, StoreError> {
+        fold_webhook(self.journal.as_ref(), webhook_id)
+    }
+
+    fn webhooks(&self, limit: usize) -> Result<Vec<WorkflowWebhook>, StoreError> {
+        let mut webhook_ids = BTreeSet::new();
+        for event in self.journal.read_global(1, usize::MAX)? {
+            if event.event_type == "workflow.webhook.registered.v1"
+                && let Some(webhook_id) = event.stream_id.strip_prefix("workflow-webhook:")
+            {
+                webhook_ids.insert(webhook_id.to_owned());
+            }
+        }
+        webhook_ids
+            .into_iter()
+            .take(limit)
+            .map(|webhook_id| {
+                fold_webhook(self.journal.as_ref(), &webhook_id)?.ok_or_else(|| {
+                    StoreError::Verification(format!(
+                        "workflow webhook {webhook_id} cannot be reconstructed"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    fn webhook_delivery(
+        &self,
+        webhook_id: &str,
+        delivery_id: &str,
+    ) -> Result<Option<WorkflowWebhookDelivery>, StoreError> {
+        fold_webhook_delivery(self.journal.as_ref(), webhook_id, delivery_id)
+    }
 }
 
 fn schedule_stream(schedule_id: &str) -> String {
@@ -1066,6 +1184,65 @@ fn fold_schedule(
         )));
     }
     Ok(Some(schedule))
+}
+
+fn webhook_stream(webhook_id: &str) -> String {
+    format!("workflow-webhook:{webhook_id}")
+}
+
+fn webhook_delivery_stream(webhook_id: &str, delivery_id: &str) -> String {
+    let digest = hex::encode(Sha256::digest(delivery_id.as_bytes()));
+    format!("workflow-webhook-delivery:{webhook_id}:{digest}")
+}
+
+fn fold_webhook(
+    journal: &dyn EventJournal,
+    webhook_id: &str,
+) -> Result<Option<WorkflowWebhook>, StoreError> {
+    let events = journal.read_stream(&webhook_stream(webhook_id))?;
+    let Some(last) = events.last() else {
+        return Ok(None);
+    };
+    let payload = journal.decrypt_payload(last)?;
+    let webhook: WorkflowWebhook = serde_json::from_value(
+        payload
+            .get("record")
+            .cloned()
+            .ok_or_else(|| StoreError::Verification("webhook record is absent".into()))?,
+    )
+    .map_err(|error| StoreError::Verification(error.to_string()))?;
+    if webhook.webhook_id != webhook_id {
+        return Err(StoreError::Verification(format!(
+            "webhook stream {webhook_id} contains record {}",
+            webhook.webhook_id
+        )));
+    }
+    Ok(Some(webhook))
+}
+
+fn fold_webhook_delivery(
+    journal: &dyn EventJournal,
+    webhook_id: &str,
+    delivery_id: &str,
+) -> Result<Option<WorkflowWebhookDelivery>, StoreError> {
+    let events = journal.read_stream(&webhook_delivery_stream(webhook_id, delivery_id))?;
+    let Some(first) = events.first() else {
+        return Ok(None);
+    };
+    let payload = journal.decrypt_payload(first)?;
+    let delivery: WorkflowWebhookDelivery = serde_json::from_value(
+        payload
+            .get("record")
+            .cloned()
+            .ok_or_else(|| StoreError::Verification("webhook delivery record is absent".into()))?,
+    )
+    .map_err(|error| StoreError::Verification(error.to_string()))?;
+    if delivery.webhook_id != webhook_id || delivery.delivery_id != delivery_id {
+        return Err(StoreError::Verification(
+            "webhook delivery stream identity does not match its record".into(),
+        ));
+    }
+    Ok(Some(delivery))
 }
 
 fn fold_run(journal: &dyn EventJournal, run_id: &str) -> Result<Option<WorkflowRun>, StoreError> {
@@ -1310,6 +1487,175 @@ fn scheduled_run_event(schedule: &WorkflowSchedule, run_id: &str, occurrence: &s
     }
 }
 
+fn valid_environment_reference(reference: &str) -> bool {
+    reference.strip_prefix("env:").is_some_and(|variable| {
+        !variable.is_empty()
+            && variable.len() <= 128
+            && variable
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+            && variable
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_uppercase)
+    })
+}
+
+fn validate_webhook_headers(headers: &BTreeMap<String, String>) -> Result<(), WorkflowError> {
+    if headers.len() > MAX_WEBHOOK_HEADERS {
+        return Err(WorkflowError::InvalidDefinition(format!(
+            "webhook headers exceed the {MAX_WEBHOOK_HEADERS} field limit"
+        )));
+    }
+    let mut total = 0_usize;
+    for (name, value) in headers {
+        if name.is_empty()
+            || name.len() > 256
+            || !name.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            })
+        {
+            return Err(WorkflowError::InvalidDefinition(
+                "webhook header names must be lowercase HTTP field names".into(),
+            ));
+        }
+        if value.len() > 8 * 1024 || value.chars().any(|character| character.is_control()) {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "webhook header {name} contains an invalid or oversized value"
+            )));
+        }
+        total = total.checked_add(name.len() + value.len()).ok_or_else(|| {
+            WorkflowError::InvalidDefinition("webhook header size overflow".into())
+        })?;
+    }
+    if total > MAX_WEBHOOK_HEADER_BYTES {
+        return Err(WorkflowError::InvalidDefinition(format!(
+            "webhook headers exceed {MAX_WEBHOOK_HEADER_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn verify_webhook_signature(
+    timestamp: &str,
+    delivery_id: &str,
+    body: &[u8],
+    signature: &str,
+    secret: &[u8],
+) -> Result<(), WorkflowError> {
+    let signature = signature.strip_prefix("sha256=").unwrap_or(signature);
+    if signature.len() != 64
+        || !signature
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(WorkflowError::InvalidDefinition(
+            "webhook signature must be sha256=<64 lowercase hex characters>".into(),
+        ));
+    }
+    let decoded = hex::decode(signature).map_err(|_| {
+        WorkflowError::InvalidDefinition("webhook signature is not valid hexadecimal".into())
+    })?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret)
+        .map_err(|error| WorkflowError::InvalidDefinition(error.to_string()))?;
+    mac.update(timestamp.as_bytes());
+    mac.update(b"\n");
+    mac.update(delivery_id.as_bytes());
+    mac.update(b"\n");
+    mac.update(body);
+    mac.verify_slice(&decoded)
+        .map_err(|_| WorkflowError::InvalidTransition("webhook signature is invalid".into()))
+}
+
+fn webhook_run_id(webhook_id: &str, delivery_id: &str) -> String {
+    let digest = hex::encode(Sha256::digest(
+        format!("{webhook_id}\0{delivery_id}").as_bytes(),
+    ));
+    format!("webhook-{}", digest.chars().take(32).collect::<String>())
+}
+
+fn webhook_delivery_event(
+    webhook: &WorkflowWebhook,
+    delivery: &WorkflowWebhookDelivery,
+) -> NewEvent {
+    NewEvent {
+        event_version: 1,
+        stream_id: webhook_delivery_stream(&webhook.webhook_id, &delivery.delivery_id),
+        expected_stream_version: 0,
+        classification: EventClassification::Workflow,
+        event_type: "workflow.webhook.delivery.accepted.v1".into(),
+        actor: Actor {
+            actor_type: ActorType::Workflow,
+            id: webhook.webhook_id.clone(),
+        },
+        context: ExecutionContext {
+            correlation_id: delivery.run_id.clone(),
+            run_id: Some(delivery.run_id.clone()),
+            workflow_id: Some(webhook.webhook_id.clone()),
+            workflow_hash: Some(webhook.workflow_hash.clone()),
+            ..ExecutionContext::default()
+        },
+        payload: json!({"record": delivery}),
+    }
+}
+
+fn webhook_run_event(
+    webhook: &WorkflowWebhook,
+    run_id: &str,
+    delivery_id: &str,
+    inputs: Value,
+) -> NewEvent {
+    NewEvent {
+        event_version: 1,
+        stream_id: format!("workflow-run:{run_id}"),
+        expected_stream_version: 0,
+        classification: EventClassification::Workflow,
+        event_type: "workflow.run.queued.v1".into(),
+        actor: Actor {
+            actor_type: ActorType::Workflow,
+            id: webhook.webhook_id.clone(),
+        },
+        context: ExecutionContext {
+            correlation_id: run_id.into(),
+            run_id: Some(run_id.into()),
+            workflow_id: Some(run_id.into()),
+            workflow_hash: Some(webhook.workflow_hash.clone()),
+            ..ExecutionContext::default()
+        },
+        payload: json!({
+            "workflow_name": webhook.workflow_name,
+            "workflow_version": webhook.workflow_version,
+            "workflow_hash": webhook.workflow_hash,
+            "inputs": inputs,
+            "parent_run_id": Value::Null,
+            "parent_step_id": Value::Null,
+            "parent_execution_id": Value::Null,
+            "trigger_kind": WorkflowTriggerKind::Webhook,
+            "trigger_id": webhook.webhook_id,
+            "trigger_occurrence": delivery_id,
+            "call_depth": 1,
+        }),
+    }
+}
+
 /// Policy-controlled workflow effect request handed to the runtime gateway.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkflowEffect {
@@ -1321,6 +1667,8 @@ pub struct WorkflowEffect {
     pub content: Value,
     /// Optional explicit idempotency strategy.
     pub idempotency: Option<String>,
+    /// Late-bound credential references whose values are deliberately absent.
+    pub credential_references: Vec<CredentialReference>,
     /// Workflow run identifier.
     pub run_id: String,
     /// Workflow step identifier.
@@ -1654,6 +2002,382 @@ impl WorkflowService {
                 },
             )
             .map_err(Into::into)
+    }
+
+    /// Create one bounded, hash-pinned authenticated workflow webhook.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_webhook(
+        &self,
+        webhook_id: &str,
+        workflow_name: &str,
+        workflow_version: &str,
+        secret_reference: &str,
+        replay_window_seconds: u64,
+        max_body_bytes: u64,
+        enabled: bool,
+    ) -> Result<WorkflowWebhook, WorkflowError> {
+        if webhook_id.is_empty()
+            || webhook_id.len() > MAX_WEBHOOK_ID_BYTES
+            || !valid_name(webhook_id)
+        {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "webhook id must contain 1..={MAX_WEBHOOK_ID_BYTES} lowercase letters, digits, dots, or hyphens"
+            )));
+        }
+        if !valid_environment_reference(secret_reference) {
+            return Err(WorkflowError::InvalidDefinition(
+                "webhook secret must use an env:VARIABLE credential reference".into(),
+            ));
+        }
+        if !(MIN_WEBHOOK_REPLAY_WINDOW_SECONDS..=MAX_WEBHOOK_REPLAY_WINDOW_SECONDS)
+            .contains(&replay_window_seconds)
+        {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "webhook replay window must be between {MIN_WEBHOOK_REPLAY_WINDOW_SECONDS} and {MAX_WEBHOOK_REPLAY_WINDOW_SECONDS} seconds"
+            )));
+        }
+        if !(1..=MAX_WEBHOOK_BODY_BYTES).contains(&max_body_bytes) {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "webhook body limit must be between 1 and {MAX_WEBHOOK_BODY_BYTES} bytes"
+            )));
+        }
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        if self.repository.webhook(webhook_id)?.is_some() {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "workflow webhook {webhook_id} already exists"
+            )));
+        }
+        if self.repository.webhooks(MAX_WORKFLOW_WEBHOOKS)?.len() >= MAX_WORKFLOW_WEBHOOKS {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "workflow webhook limit {MAX_WORKFLOW_WEBHOOKS} is exhausted"
+            )));
+        }
+        let (definition, workflow_hash) = self
+            .repository
+            .definition(workflow_name, workflow_version)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("{workflow_name}:{workflow_version}"))
+            })?;
+        validate_call_graph(self.repository.as_ref(), &definition, true)?;
+        let now = format_schedule_time(OffsetDateTime::now_utc())?;
+        let webhook = WorkflowWebhook {
+            webhook_id: webhook_id.into(),
+            workflow_name: workflow_name.into(),
+            workflow_version: workflow_version.into(),
+            workflow_hash,
+            secret_reference: secret_reference.into(),
+            enabled,
+            replay_window_seconds,
+            max_body_bytes,
+            blocked_reason: None,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.repository.create_webhook(
+            &webhook,
+            Actor {
+                actor_type: ActorType::User,
+                id: "workflow-webhook-registrar".into(),
+            },
+        )?;
+        Ok(webhook)
+    }
+
+    /// Reconstruct one canonical workflow webhook.
+    pub fn get_webhook(&self, webhook_id: &str) -> Result<WorkflowWebhook, WorkflowError> {
+        self.repository
+            .webhook(webhook_id)?
+            .ok_or_else(|| WorkflowError::NotFound(format!("workflow webhook {webhook_id}")))
+    }
+
+    /// List bounded workflow webhooks in deterministic identifier order.
+    pub fn list_webhooks(&self, limit: usize) -> Result<Vec<WorkflowWebhook>, WorkflowError> {
+        self.repository
+            .webhooks(limit.min(MAX_WORKFLOW_WEBHOOKS))
+            .map_err(Into::into)
+    }
+
+    /// Explicitly enable or disable one webhook after rechecking pinned trust.
+    pub fn set_webhook_enabled(
+        &self,
+        webhook_id: &str,
+        enabled: bool,
+    ) -> Result<WorkflowWebhook, WorkflowError> {
+        let now = format_schedule_time(OffsetDateTime::now_utc())?;
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let webhook = self
+            .repository
+            .webhook(webhook_id)?
+            .ok_or_else(|| WorkflowError::NotFound(format!("workflow webhook {webhook_id}")))?;
+        if enabled {
+            self.validate_webhook_trust(&webhook)?;
+        }
+        self.repository
+            .set_webhook_enabled(
+                webhook_id,
+                enabled,
+                &now,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "workflow-webhook-operator".into(),
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    /// Authenticate, authorize, and durably queue one webhook delivery.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ingest_webhook(
+        &self,
+        webhook_id: &str,
+        delivery_id: &str,
+        timestamp: &str,
+        signature: &str,
+        headers: BTreeMap<String, String>,
+        body: &[u8],
+        secret: &[u8],
+    ) -> Result<WorkflowWebhookDispatch, WorkflowError> {
+        let received = OffsetDateTime::now_utc();
+        self.ingest_webhook_at(
+            webhook_id,
+            delivery_id,
+            timestamp,
+            signature,
+            headers,
+            body,
+            secret,
+            received,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn ingest_webhook_at(
+        &self,
+        webhook_id: &str,
+        delivery_id: &str,
+        timestamp: &str,
+        signature: &str,
+        headers: BTreeMap<String, String>,
+        body: &[u8],
+        secret: &[u8],
+        received: OffsetDateTime,
+    ) -> Result<WorkflowWebhookDispatch, WorkflowError> {
+        if delivery_id.is_empty() || delivery_id.len() > MAX_WEBHOOK_DELIVERY_ID_BYTES {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "webhook delivery id must contain 1..={MAX_WEBHOOK_DELIVERY_ID_BYTES} bytes"
+            )));
+        }
+        if delivery_id.chars().any(char::is_control) {
+            return Err(WorkflowError::InvalidDefinition(
+                "webhook delivery id cannot contain control characters".into(),
+            ));
+        }
+        validate_webhook_headers(&headers)?;
+        let webhook = self
+            .repository
+            .webhook(webhook_id)?
+            .ok_or_else(|| WorkflowError::NotFound(format!("workflow webhook {webhook_id}")))?;
+        if !webhook.enabled {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "workflow webhook {webhook_id} is disabled"
+            )));
+        }
+        let body_limit = usize::try_from(webhook.max_body_bytes)
+            .map_err(|error| WorkflowError::InvalidDefinition(error.to_string()))?;
+        if body.is_empty() || body.len() > body_limit {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "webhook body must contain 1..={} bytes",
+                webhook.max_body_bytes
+            )));
+        }
+        if secret.len() < 32 {
+            return Err(WorkflowError::InvalidDefinition(
+                "webhook HMAC secret must contain at least 32 bytes".into(),
+            ));
+        }
+        let signed_at = parse_schedule_time(timestamp, "webhook timestamp")?;
+        let age_seconds = (received - signed_at).whole_seconds().unsigned_abs();
+        if age_seconds > webhook.replay_window_seconds {
+            return Err(WorkflowError::InvalidTransition(
+                "webhook timestamp is outside the configured replay window".into(),
+            ));
+        }
+        verify_webhook_signature(timestamp, delivery_id, body, signature, secret)?;
+        if self
+            .repository
+            .webhook_delivery(webhook_id, delivery_id)?
+            .is_some()
+        {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "webhook delivery {delivery_id} was already accepted"
+            )));
+        }
+        if let Err(error) = self.validate_webhook_trust(&webhook) {
+            if !matches!(&error, WorkflowError::Store(_)) {
+                self.block_webhook(
+                    webhook_id,
+                    "pinned workflow definition or call graph is no longer trusted",
+                    received,
+                )?;
+            }
+            return Err(error);
+        }
+        let body_value: Value = serde_json::from_slice(body).map_err(|error| {
+            WorkflowError::InvalidDefinition(format!("webhook body must be strict JSON: {error}"))
+        })?;
+        let inputs = json!({
+            "body": body_value,
+            "delivery_id": delivery_id,
+            "headers": headers,
+            "timestamp": timestamp,
+        });
+        let (definition, _) = self
+            .repository
+            .definition(&webhook.workflow_name, &webhook.workflow_version)?
+            .ok_or_else(|| WorkflowError::NotFound(webhook.workflow_name.clone()))?;
+        validate_instance(&definition.inputs, &inputs, "webhook input")?;
+        let run_id = webhook_run_id(webhook_id, delivery_id);
+        let body_sha256 = hex::encode(Sha256::digest(body));
+        let secret_hash = hex::encode(Sha256::digest(secret));
+        self.effects
+            .run(WorkflowEffect {
+                kind: "workflow".into(),
+                action: "workflow.webhook.ingest".into(),
+                content: json!({
+                    "webhook_id": webhook_id,
+                    "delivery_id": delivery_id,
+                    "timestamp": timestamp,
+                    "headers": inputs["headers"].clone(),
+                    "body": inputs["body"].clone(),
+                    "body_bytes": body.len(),
+                    "body_sha256": body_sha256,
+                    "replay_window_seconds": webhook.replay_window_seconds,
+                    "workflow_name": webhook.workflow_name,
+                    "workflow_version": webhook.workflow_version,
+                }),
+                idempotency: Some(format!("webhook:{webhook_id}:{delivery_id}")),
+                credential_references: vec![CredentialReference {
+                    reference: webhook.secret_reference.clone(),
+                    value_hash: Some(secret_hash),
+                }],
+                run_id: run_id.clone(),
+                step_id: "$webhook".into(),
+                definition_step_id: "$webhook".into(),
+                workflow_hash: webhook.workflow_hash.clone(),
+                attempt: 1,
+                compensation: false,
+            })
+            .await?;
+
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        if self
+            .repository
+            .webhook_delivery(webhook_id, delivery_id)?
+            .is_some()
+        {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "webhook delivery {delivery_id} was already accepted"
+            )));
+        }
+        let current = self
+            .repository
+            .webhook(webhook_id)?
+            .ok_or_else(|| WorkflowError::NotFound(format!("workflow webhook {webhook_id}")))?;
+        if !current.enabled || current != webhook {
+            return Err(WorkflowError::InvalidTransition(
+                "webhook configuration changed during authorization; retry with current state"
+                    .into(),
+            ));
+        }
+        self.validate_webhook_trust(&current)?;
+        if self.repository.run(&run_id)?.is_some() {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "deterministic webhook run {run_id} already exists"
+            )));
+        }
+        let received_at = format_schedule_time(received)?;
+        let delivery = WorkflowWebhookDelivery {
+            webhook_id: webhook_id.into(),
+            delivery_id: delivery_id.into(),
+            timestamp: timestamp.into(),
+            received_at,
+            body_sha256,
+            run_id: run_id.clone(),
+        };
+        self.journal.append_batch(vec![
+            webhook_delivery_event(&current, &delivery),
+            webhook_run_event(&current, &run_id, delivery_id, inputs),
+        ])?;
+        Ok(WorkflowWebhookDispatch {
+            delivery,
+            run: self.get_run(&run_id)?,
+        })
+    }
+
+    fn validate_webhook_trust(&self, webhook: &WorkflowWebhook) -> Result<(), WorkflowError> {
+        let (definition, current_hash) = self
+            .repository
+            .definition(&webhook.workflow_name, &webhook.workflow_version)?
+            .ok_or_else(|| WorkflowError::NotFound(webhook.workflow_name.clone()))?;
+        if current_hash != webhook.workflow_hash {
+            return Err(WorkflowError::InvalidTransition(
+                "webhook pinned workflow definition changed".into(),
+            ));
+        }
+        validate_call_graph(self.repository.as_ref(), &definition, true)
+    }
+
+    fn block_webhook(
+        &self,
+        webhook_id: &str,
+        reason: &str,
+        now: OffsetDateTime,
+    ) -> Result<(), WorkflowError> {
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let Some(mut webhook) = self.repository.webhook(webhook_id)? else {
+            return Ok(());
+        };
+        if !webhook.enabled {
+            return Ok(());
+        }
+        webhook.enabled = false;
+        webhook.blocked_reason = Some(reason.into());
+        webhook.updated_at = format_schedule_time(now)?;
+        let stream_id = webhook_stream(webhook_id);
+        let expected_stream_version = u64::try_from(self.journal.read_stream(&stream_id)?.len())
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version,
+            classification: EventClassification::Workflow,
+            event_type: "workflow.webhook.blocked.v1".into(),
+            actor: Actor {
+                actor_type: ActorType::Workflow,
+                id: webhook_id.into(),
+            },
+            context: ExecutionContext {
+                correlation_id: webhook_id.into(),
+                workflow_id: Some(webhook_id.into()),
+                workflow_hash: Some(webhook.workflow_hash.clone()),
+                ..ExecutionContext::default()
+            },
+            payload: json!({"record": webhook, "reason": reason}),
+        })?;
+        Ok(())
     }
 
     /// Evaluate every due schedule against an explicit UTC clock value.
@@ -2426,6 +3150,7 @@ impl WorkflowService {
                         idempotency: idempotency
                             .as_ref()
                             .map(|strategy| format!("{strategy}:{run_id}:{execution_id}")),
+                        credential_references: Vec::new(),
                         run_id: run_id.into(),
                         step_id: execution_id.clone(),
                         definition_step_id: id.clone(),
@@ -2457,6 +3182,7 @@ impl WorkflowService {
                         idempotency: idempotency
                             .as_ref()
                             .map(|strategy| format!("{strategy}:{run_id}:{execution_id}")),
+                        credential_references: Vec::new(),
                         run_id: run_id.into(),
                         step_id: execution_id.clone(),
                         definition_step_id: id.clone(),
@@ -2486,6 +3212,7 @@ impl WorkflowService {
                             "inputs": inputs,
                         }),
                         idempotency: Some(format!("subworkflow:{run_id}:{execution_id}")),
+                        credential_references: Vec::new(),
                         run_id: run_id.into(),
                         step_id: execution_id.clone(),
                         definition_step_id: id.clone(),
@@ -2808,6 +3535,7 @@ impl WorkflowService {
                     action: "agent.run".into(),
                     content: json!({"prompt": prompt}),
                     idempotency: idempotency.clone(),
+                    credential_references: Vec::new(),
                     run_id: run_id.into(),
                     step_id: id.clone(),
                     definition_step_id: id.clone(),
@@ -2825,6 +3553,7 @@ impl WorkflowService {
                     action: tool.clone(),
                     content: arguments.clone(),
                     idempotency: idempotency.clone(),
+                    credential_references: Vec::new(),
                     run_id: run_id.into(),
                     step_id: id.clone(),
                     definition_step_id: id.clone(),
@@ -3071,7 +3800,9 @@ mod tests {
         EventJournal, KeyProvider, StoreError, VerificationReport, WorkflowRepository,
     };
     use colossus_testkit::{InMemoryEventJournal, assert_workflow_repository_conformance};
+    use hmac::{Hmac, Mac};
     use serde_json::json;
+    use sha2::Sha256;
     use std::{
         collections::BTreeMap,
         fs::{self, OpenOptions},
@@ -3104,6 +3835,43 @@ steps:
     id: result
     value: { ok: true }
 "#;
+
+    const WEBHOOK_WORKFLOW: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: webhook-smoke
+  version: 1.0.0
+  description: Authenticated webhook smoke workflow
+inputs:
+  type: object
+  additionalProperties: false
+  required: [body, delivery_id, headers, timestamp]
+  properties:
+    body: { type: object }
+    delivery_id: { type: string }
+    headers: { type: object }
+    timestamp: { type: string }
+outputs:
+  type: object
+capabilities: []
+maxConcurrency: 2
+stepBudget: 4
+steps:
+  - type: emit
+    id: result
+    value: { ok: true }
+"#;
+
+    fn webhook_signature(timestamp: &str, delivery_id: &str, body: &[u8], secret: &[u8]) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC secret");
+        mac.update(timestamp.as_bytes());
+        mac.update(b"\n");
+        mac.update(delivery_id.as_bytes());
+        mac.update(b"\n");
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
 
     #[test]
     fn event_sourced_workflow_repository_passes_shared_conformance() {
@@ -3195,6 +3963,240 @@ steps:
             Some("workflow.run.queued.v1"),
             "the schedule transition and queued run must be adjacent in one journal batch"
         );
+    }
+
+    #[tokio::test]
+    async fn authenticated_webhook_is_policy_gated_and_atomically_queues_once() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            effects.clone(),
+        );
+        service
+            .register_definition(WEBHOOK_WORKFLOW, "webhook-test")
+            .expect("register workflow");
+        let webhook = service
+            .create_webhook(
+                "github-main",
+                "webhook-smoke",
+                "1.0.0",
+                "env:COLOSSUS_WEBHOOK_SECRET",
+                300,
+                4096,
+                true,
+            )
+            .expect("create webhook");
+        assert_eq!(
+            service.get_webhook("github-main").expect("stored webhook"),
+            webhook
+        );
+
+        let secret = b"this-secret-is-at-least-thirty-two-bytes";
+        let timestamp = "2026-07-16T12:00:00Z";
+        let delivery_id = "delivery-0001";
+        let body = br#"{"event":"push"}"#;
+        let signature = webhook_signature(timestamp, delivery_id, body, secret);
+        let received =
+            parse_schedule_time("2026-07-16T12:02:00Z", "test clock").expect("test clock");
+        let dispatch = service
+            .ingest_webhook_at(
+                "github-main",
+                delivery_id,
+                timestamp,
+                &signature,
+                BTreeMap::from([("content-type".into(), "application/json".into())]),
+                body,
+                secret,
+                received,
+            )
+            .await
+            .expect("ingest webhook");
+        assert_eq!(dispatch.run.status, WorkflowStatus::Queued);
+        assert_eq!(
+            dispatch.run.trigger_kind,
+            Some(WorkflowTriggerKind::Webhook)
+        );
+        assert_eq!(dispatch.run.trigger_id.as_deref(), Some("github-main"));
+        assert_eq!(
+            dispatch.run.trigger_occurrence.as_deref(),
+            Some(delivery_id)
+        );
+        assert_eq!(dispatch.delivery.run_id, dispatch.run.run_id);
+        assert_eq!(
+            repository
+                .webhook_delivery("github-main", delivery_id)
+                .expect("delivery lookup")
+                .expect("delivery"),
+            dispatch.delivery
+        );
+
+        let calls = effects.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].action, "workflow.webhook.ingest");
+        assert_eq!(calls[0].credential_references.len(), 1);
+        assert_eq!(
+            calls[0].credential_references[0].reference,
+            "env:COLOSSUS_WEBHOOK_SECRET"
+        );
+        assert!(
+            !calls[0]
+                .content
+                .to_string()
+                .contains(&String::from_utf8_lossy(secret).to_string())
+        );
+        assert!(!calls[0].content.to_string().contains(&signature));
+
+        let replay = service
+            .ingest_webhook_at(
+                "github-main",
+                delivery_id,
+                timestamp,
+                &signature,
+                BTreeMap::new(),
+                body,
+                secret,
+                received,
+            )
+            .await;
+        assert!(matches!(replay, Err(WorkflowError::InvalidTransition(_))));
+        assert_eq!(service.list_runs(10).expect("runs").len(), 1);
+        assert_eq!(effects.calls().len(), 1);
+
+        let events = journal.read_global(1, usize::MAX).expect("events");
+        let accepted = events
+            .iter()
+            .position(|event| event.event_type == "workflow.webhook.delivery.accepted.v1")
+            .expect("accepted event");
+        assert_eq!(
+            events
+                .get(accepted + 1)
+                .map(|event| event.event_type.as_str()),
+            Some("workflow.run.queued.v1")
+        );
+    }
+
+    #[tokio::test]
+    async fn webhook_rejects_bad_auth_and_stale_delivery_before_policy() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(journal, repository, effects.clone());
+        service
+            .register_definition(WEBHOOK_WORKFLOW, "webhook-test")
+            .expect("register workflow");
+        service
+            .create_webhook(
+                "incoming",
+                "webhook-smoke",
+                "1.0.0",
+                "env:COLOSSUS_WEBHOOK_SECRET",
+                60,
+                32,
+                true,
+            )
+            .expect("create webhook");
+        let secret = b"this-secret-is-at-least-thirty-two-bytes";
+        let received =
+            parse_schedule_time("2026-07-16T12:02:00Z", "test clock").expect("test clock");
+        let bad = service
+            .ingest_webhook_at(
+                "incoming",
+                "bad-auth",
+                "2026-07-16T12:02:00Z",
+                &format!("sha256={}", "0".repeat(64)),
+                BTreeMap::new(),
+                br#"{}"#,
+                secret,
+                received,
+            )
+            .await;
+        assert!(matches!(bad, Err(WorkflowError::InvalidTransition(_))));
+
+        let stale_timestamp = "2026-07-16T11:59:00Z";
+        let stale = service
+            .ingest_webhook_at(
+                "incoming",
+                "stale",
+                stale_timestamp,
+                &webhook_signature(stale_timestamp, "stale", br#"{}"#, secret),
+                BTreeMap::new(),
+                br#"{}"#,
+                secret,
+                received,
+            )
+            .await;
+        assert!(matches!(stale, Err(WorkflowError::InvalidTransition(_))));
+
+        let oversized = service
+            .ingest_webhook_at(
+                "incoming",
+                "oversized",
+                "2026-07-16T12:02:00Z",
+                &format!("sha256={}", "0".repeat(64)),
+                BTreeMap::new(),
+                &[b'x'; 33],
+                secret,
+                received,
+            )
+            .await;
+        assert!(matches!(
+            oversized,
+            Err(WorkflowError::InvalidDefinition(_))
+        ));
+        assert!(effects.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn authenticated_delivery_blocks_webhook_after_definition_trust_changes() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(journal, repository, effects.clone());
+        service
+            .register_definition(WEBHOOK_WORKFLOW, "webhook-test")
+            .expect("register workflow");
+        service
+            .create_webhook(
+                "trust-change",
+                "webhook-smoke",
+                "1.0.0",
+                "env:COLOSSUS_WEBHOOK_SECRET",
+                300,
+                4096,
+                true,
+            )
+            .expect("create webhook");
+        service
+            .register_definition(
+                &WEBHOOK_WORKFLOW.replace("value: { ok: true }", "value: { ok: false }"),
+                "webhook-test-changed",
+            )
+            .expect("change workflow definition");
+        let secret = b"this-secret-is-at-least-thirty-two-bytes";
+        let timestamp = "2026-07-16T12:00:00Z";
+        let result = service
+            .ingest_webhook_at(
+                "trust-change",
+                "delivery-after-change",
+                timestamp,
+                &webhook_signature(timestamp, "delivery-after-change", br#"{}"#, secret),
+                BTreeMap::new(),
+                br#"{}"#,
+                secret,
+                parse_schedule_time(timestamp, "test clock").expect("test clock"),
+            )
+            .await;
+        assert!(matches!(result, Err(WorkflowError::InvalidTransition(_))));
+        let webhook = service.get_webhook("trust-change").expect("webhook");
+        assert!(!webhook.enabled);
+        assert!(webhook.blocked_reason.is_some());
+        assert!(effects.calls().is_empty());
     }
 
     #[test]
@@ -4731,6 +5733,147 @@ compensation:
                 .as_deref(),
             Some(run_id.as_str())
         );
+        let runs = repository.runs(10).expect("reopened runs");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, WorkflowStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn process_kill_after_webhook_batch_recovers_without_duplicate_delivery() {
+        const CHILD_ENV: &str = "COLOSSUS_WORKFLOW_WEBHOOK_PROCESS_KILL_CHILD";
+        const ROOT_ENV: &str = "COLOSSUS_WORKFLOW_WEBHOOK_PROCESS_KILL_ROOT";
+        const WEBHOOK_ID: &str = "process-kill-webhook";
+        const DELIVERY_ID: &str = "process-kill-delivery";
+        const TIMESTAMP: &str = "2026-07-16T12:00:00Z";
+        const BODY: &[u8] = br#"{"event":"process-kill"}"#;
+        const SECRET: &[u8] = b"process-kill-webhook-secret-at-least-32-bytes";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let root =
+                PathBuf::from(std::env::var_os(ROOT_ENV).expect("webhook process-kill child root"));
+            let durable_journal = process_kill_journal(&root);
+            let repository: Arc<dyn WorkflowRepository> = Arc::new(
+                EventSourcedWorkflowRepository::new(Arc::clone(&durable_journal)),
+            );
+            let service = WorkflowService::new(
+                Arc::clone(&durable_journal),
+                repository,
+                Arc::new(RecordingEffects::default()),
+            );
+            service
+                .register_definition(WEBHOOK_WORKFLOW, "webhook-process-kill-test")
+                .expect("register webhook workflow");
+            service
+                .create_webhook(
+                    WEBHOOK_ID,
+                    "webhook-smoke",
+                    "1.0.0",
+                    "env:COLOSSUS_WEBHOOK_PROCESS_KILL_SECRET",
+                    300,
+                    4096,
+                    true,
+                )
+                .expect("create webhook");
+            drop(service);
+
+            let journal: Arc<dyn EventJournal> = Arc::new(CrashAfterEventJournal {
+                inner: durable_journal,
+                event_type: "workflow.webhook.delivery.accepted.v1",
+            });
+            let repository: Arc<dyn WorkflowRepository> =
+                Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+            let service =
+                WorkflowService::new(journal, repository, Arc::new(RecordingEffects::default()));
+            service
+                .ingest_webhook_at(
+                    WEBHOOK_ID,
+                    DELIVERY_ID,
+                    TIMESTAMP,
+                    &webhook_signature(TIMESTAMP, DELIVERY_ID, BODY, SECRET),
+                    BTreeMap::new(),
+                    BODY,
+                    SECRET,
+                    parse_schedule_time(TIMESTAMP, "test clock").expect("test clock"),
+                )
+                .await
+                .expect("webhook batch must terminate this process after commit");
+            panic!("webhook process-kill child returned without terminating");
+        }
+
+        let directory = tempdir().expect("webhook process-kill directory");
+        let output = Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                "tests::process_kill_after_webhook_batch_recovers_without_duplicate_delivery",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env(ROOT_ENV, directory.path())
+            .output()
+            .expect("spawn webhook process-kill child");
+        assert!(
+            !output.status.success(),
+            "webhook process-kill child unexpectedly succeeded: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let journal = process_kill_journal(directory.path());
+        journal
+            .verify()
+            .expect("verify journal after webhook process kill");
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            effects.clone(),
+        );
+        let delivery = repository
+            .webhook_delivery(WEBHOOK_ID, DELIVERY_ID)
+            .expect("reopen webhook delivery")
+            .expect("accepted webhook delivery");
+        let queued = service
+            .get_run(&delivery.run_id)
+            .expect("reopen webhook run");
+        assert_eq!(queued.status, WorkflowStatus::Queued);
+        assert_eq!(queued.trigger_kind, Some(WorkflowTriggerKind::Webhook));
+        assert_eq!(queued.trigger_id.as_deref(), Some(WEBHOOK_ID));
+        assert_eq!(queued.trigger_occurrence.as_deref(), Some(DELIVERY_ID));
+
+        let replay = service
+            .ingest_webhook_at(
+                WEBHOOK_ID,
+                DELIVERY_ID,
+                TIMESTAMP,
+                &webhook_signature(TIMESTAMP, DELIVERY_ID, BODY, SECRET),
+                BTreeMap::new(),
+                BODY,
+                SECRET,
+                parse_schedule_time(TIMESTAMP, "test clock").expect("test clock"),
+            )
+            .await;
+        assert!(matches!(replay, Err(WorkflowError::InvalidTransition(_))));
+        assert!(effects.calls().is_empty());
+        let completed = service.drain().await.expect("drain recovered webhook run");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].run_id, delivery.run_id);
+        assert_eq!(completed[0].status, WorkflowStatus::Completed);
+        assert_eq!(service.list_runs(10).expect("list runs").len(), 1);
+        journal.verify().expect("verify recovered webhook journal");
+        drop(service);
+        drop(repository);
+        drop(journal);
+
+        let reopened = process_kill_journal(directory.path());
+        reopened.verify().expect("verify reopened webhook journal");
+        let repository = EventSourcedWorkflowRepository::new(reopened);
+        let replayed_delivery = repository
+            .webhook_delivery(WEBHOOK_ID, DELIVERY_ID)
+            .expect("reopened delivery")
+            .expect("delivery");
+        assert_eq!(replayed_delivery, delivery);
         let runs = repository.runs(10).expect("reopened runs");
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].status, WorkflowStatus::Completed);

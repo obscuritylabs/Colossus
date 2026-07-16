@@ -10,7 +10,7 @@ use colossus_contracts::{
     ResearchRun, ResearchSource, ResearchSourceKind, ResearchStatus, SignedCheckpoint,
     StreamDisplayMode, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences,
     ThemeName, ToolSpec, TranscriptDensity, WorkflowDefinition, WorkflowMetadata, WorkflowSchedule,
-    WorkflowScheduleMisfirePolicy, WorkflowStep,
+    WorkflowScheduleMisfirePolicy, WorkflowStep, WorkflowWebhook,
 };
 use colossus_ports::{
     AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, MemoryIndex,
@@ -904,6 +904,52 @@ where
         )
         .expect("disable schedule");
     assert!(!disabled.enabled);
+    let webhook = WorkflowWebhook {
+        webhook_id: "conformance-hook".into(),
+        workflow_name: "conformance".into(),
+        workflow_version: "1.0.0".into(),
+        workflow_hash: "hash-two".into(),
+        secret_reference: "env:CONFORMANCE_WEBHOOK_SECRET".into(),
+        enabled: true,
+        replay_window_seconds: 300,
+        max_body_bytes: 4096,
+        blocked_reason: None,
+        created_at: "2025-12-31T00:00:00Z".into(),
+        updated_at: "2025-12-31T00:00:00Z".into(),
+    };
+    repository
+        .create_webhook(
+            &webhook,
+            Actor {
+                actor_type: ActorType::User,
+                id: "conformance".into(),
+            },
+        )
+        .expect("create webhook");
+    assert!(
+        repository
+            .create_webhook(
+                &webhook,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "duplicate".into(),
+                },
+            )
+            .is_err(),
+        "webhook identifiers must be unique"
+    );
+    let disabled_webhook = repository
+        .set_webhook_enabled(
+            &webhook.webhook_id,
+            false,
+            "2026-01-01T01:00:00Z",
+            Actor {
+                actor_type: ActorType::User,
+                id: "conformance".into(),
+            },
+        )
+        .expect("disable webhook");
+    assert!(!disabled_webhook.enabled);
     let reopened = factory();
     assert_eq!(
         reopened
@@ -922,6 +968,22 @@ where
     assert_eq!(
         reopened.schedules(10).expect("schedule list"),
         vec![disabled]
+    );
+    assert_eq!(
+        reopened
+            .webhook(&webhook.webhook_id)
+            .expect("reconstructed webhook"),
+        Some(disabled_webhook.clone())
+    );
+    assert_eq!(
+        reopened.webhooks(10).expect("webhook list"),
+        vec![disabled_webhook]
+    );
+    assert!(
+        reopened
+            .webhook_delivery(&webhook.webhook_id, "missing-delivery")
+            .expect("missing webhook delivery")
+            .is_none()
     );
 }
 

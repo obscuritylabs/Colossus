@@ -950,6 +950,55 @@ pub enum WorkerOperation {
         /// Optional UTC RFC3339 clock used for deterministic operation.
         at: Option<String>,
     },
+    /// Create one persisted hash-pinned authenticated workflow webhook.
+    WorkflowWebhookCreate {
+        /// Stable webhook identifier.
+        webhook_id: String,
+        /// Workflow name.
+        name: String,
+        /// Workflow version.
+        version: String,
+        /// Late-bound `env:VARIABLE` HMAC secret reference.
+        secret_reference: String,
+        /// Maximum accepted delivery age.
+        replay_window_seconds: u64,
+        /// Maximum accepted raw JSON body size.
+        max_body_bytes: u64,
+        /// Initial enabled state.
+        enabled: bool,
+    },
+    /// List persisted authenticated workflow webhooks.
+    WorkflowWebhookList {
+        /// Maximum webhooks.
+        limit: usize,
+    },
+    /// Show one persisted authenticated workflow webhook.
+    WorkflowWebhookShow {
+        /// Exact webhook identifier.
+        webhook_id: String,
+    },
+    /// Explicitly enable or disable one persisted webhook.
+    WorkflowWebhookSetEnabled {
+        /// Exact webhook identifier.
+        webhook_id: String,
+        /// Requested enabled state.
+        enabled: bool,
+    },
+    /// Authenticate and durably ingest one workflow webhook delivery.
+    WorkflowWebhookIngest {
+        /// Exact webhook identifier.
+        webhook_id: String,
+        /// Sender-supplied replay identifier.
+        delivery_id: String,
+        /// Sender-supplied signed UTC RFC3339 timestamp.
+        timestamp: String,
+        /// Sender-supplied HMAC-SHA256 signature.
+        signature: String,
+        /// Lowercase application header fields, excluding authentication headers.
+        headers: BTreeMap<String, String>,
+        /// Inline JSON or a server-local `@path` reference.
+        body_source: String,
+    },
     /// Reconstruct one workflow run.
     WorkflowStatus {
         /// Exact run identifier.
@@ -2057,6 +2106,11 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::WorkflowScheduleShow { .. } => "workflow_schedule_show",
         WorkerOperation::WorkflowScheduleSetEnabled { .. } => "workflow_schedule_set_enabled",
         WorkerOperation::WorkflowScheduleTick { .. } => "workflow_schedule_tick",
+        WorkerOperation::WorkflowWebhookCreate { .. } => "workflow_webhook_create",
+        WorkerOperation::WorkflowWebhookList { .. } => "workflow_webhook_list",
+        WorkerOperation::WorkflowWebhookShow { .. } => "workflow_webhook_show",
+        WorkerOperation::WorkflowWebhookSetEnabled { .. } => "workflow_webhook_set_enabled",
+        WorkerOperation::WorkflowWebhookIngest { .. } => "workflow_webhook_ingest",
         WorkerOperation::WorkflowStatus { .. } => "workflow_status",
         WorkerOperation::WorkflowResume { .. } => "workflow_resume",
         WorkerOperation::WorkflowInput { .. } => "workflow_input",
@@ -2919,6 +2973,70 @@ async fn dispatch(
             };
             Ok(serde_json::to_value(dispatches)?)
         }
+        WorkerOperation::WorkflowWebhookCreate {
+            webhook_id,
+            name,
+            version,
+            secret_reference,
+            replay_window_seconds,
+            max_body_bytes,
+            enabled,
+        } => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(runtime.workflows().create_webhook(
+                &webhook_id,
+                &name,
+                &version,
+                &secret_reference,
+                replay_window_seconds,
+                max_body_bytes,
+                enabled,
+            )?)?)
+        }
+        WorkerOperation::WorkflowWebhookList { limit } => Ok(serde_json::to_value(
+            runtime.workflows().list_webhooks(limit.clamp(1, 10_000))?,
+        )?),
+        WorkerOperation::WorkflowWebhookShow { webhook_id } => Ok(serde_json::to_value(
+            runtime.workflows().get_webhook(&webhook_id)?,
+        )?),
+        WorkerOperation::WorkflowWebhookSetEnabled {
+            webhook_id,
+            enabled,
+        } => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(
+                runtime
+                    .workflows()
+                    .set_webhook_enabled(&webhook_id, enabled)?,
+            )?)
+        }
+        WorkerOperation::WorkflowWebhookIngest {
+            webhook_id,
+            delivery_id,
+            timestamp,
+            signature,
+            headers,
+            body_source,
+        } => {
+            let body = if let Some(path) = body_source.strip_prefix('@') {
+                runtime.read_text_file(path).await?
+            } else {
+                body_source
+            };
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(
+                runtime
+                    .ingest_workflow_webhook(
+                        &webhook_id,
+                        &delivery_id,
+                        &timestamp,
+                        &signature,
+                        headers,
+                        body.as_bytes(),
+                    )
+                    .await?,
+            )?)
+        }
         WorkerOperation::WorkflowStatus { run_id } => {
             Ok(serde_json::to_value(runtime.workflows().get_run(&run_id)?)?)
         }
@@ -3633,6 +3751,39 @@ mod tests {
         assert_eq!(misfire_policy, WorkflowScheduleMisfirePolicy::Skip);
         assert!(!enabled);
         assert_eq!(starts_at.as_deref(), Some("2026-01-01T12:00:00Z"));
+    }
+
+    #[test]
+    fn workflow_webhook_operation_round_trips_without_secret_material() {
+        let encoded = serde_json::to_value(WorkerOperation::WorkflowWebhookCreate {
+            webhook_id: "github-main".into(),
+            name: "smoke".into(),
+            version: "1.0.0".into(),
+            secret_reference: "env:COLOSSUS_WEBHOOK_SECRET".into(),
+            replay_window_seconds: 300,
+            max_body_bytes: 4096,
+            enabled: true,
+        })
+        .expect("serialize webhook operation");
+        assert_eq!(encoded["operation"], "workflow_webhook_create");
+        assert_eq!(encoded["secret_reference"], "env:COLOSSUS_WEBHOOK_SECRET");
+        assert!(encoded.to_string().find("actual-secret-value").is_none());
+        let decoded: WorkerOperation =
+            serde_json::from_value(encoded).expect("deserialize webhook operation");
+        let WorkerOperation::WorkflowWebhookCreate {
+            webhook_id,
+            replay_window_seconds,
+            max_body_bytes,
+            enabled,
+            ..
+        } = decoded
+        else {
+            panic!("expected webhook creation operation");
+        };
+        assert_eq!(webhook_id, "github-main");
+        assert_eq!(replay_window_seconds, 300);
+        assert_eq!(max_body_bytes, 4096);
+        assert!(enabled);
     }
 
     #[test]

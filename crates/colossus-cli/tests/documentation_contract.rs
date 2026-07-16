@@ -202,6 +202,8 @@ fn documented_command_families_are_real_clap_routes() {
         &["bundle", "build"],
         &["bundle", "install"],
         &["workflow", "input"],
+        &["workflow", "webhook", "create"],
+        &["workflow", "webhook", "serve"],
         &["integrations", "import-openapi"],
         &["mcp", "call"],
         &["worker"],
