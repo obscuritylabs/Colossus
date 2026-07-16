@@ -45,8 +45,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 // A missing pipe is retried briefly by the platform connector, while a pipe
 // that is known to be busy receives a longer load-shedding window. Keep the
 // outer bound above both so the connector can preserve that distinction.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(65);
+#[cfg(not(windows))]
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(windows)]
+// Hosted Windows debug builds can leave a connected pipe queued behind
+// synchronous durable-store work. A connected endpoint is known to be live,
+// so wait within the same bound used for Windows pipe saturation.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 type HmacSha256 = Hmac<Sha256>;
 
@@ -1178,7 +1184,7 @@ impl WorkerClient {
             client_handshake(&mut stream, &self.authentication_key),
         )
         .await
-        .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))??;
+        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
         let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let mut sequence = 0_u64;
@@ -1221,7 +1227,7 @@ impl WorkerClient {
             client_handshake(&mut stream, &self.authentication_key),
         )
         .await
-        .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))??;
+        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
         let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let mut sequence = 0_u64;
@@ -1272,7 +1278,7 @@ impl WorkerClient {
             client_handshake(&mut stream, &self.authentication_key),
         )
         .await
-        .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))??;
+        .map_err(|_| handshake_timeout_error(&self.endpoint))??;
         let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let (mut reader, mut writer) = tokio::io::split(stream);
@@ -1354,14 +1360,24 @@ impl WorkerClient {
 
     async fn connect(&self) -> Result<platform::ClientStream, WorkerError> {
         match tokio::time::timeout(CONNECT_TIMEOUT, platform::connect(&self.endpoint)).await {
-            Err(_) => Err(WorkerError::Unavailable(self.endpoint.clone())),
+            Err(_) => Err(WorkerError::Busy(self.endpoint.clone())),
             Ok(Ok(stream)) => Ok(stream),
             Ok(Err(error)) if platform::connection_is_busy(&error) => {
                 Err(WorkerError::Busy(self.endpoint.clone()))
             }
-            Ok(Err(_)) => Err(WorkerError::Unavailable(self.endpoint.clone())),
+            Ok(Err(error)) if platform::connection_is_absent(&error) => {
+                Err(WorkerError::Unavailable(self.endpoint.clone()))
+            }
+            Ok(Err(error)) => Err(WorkerError::Io(error)),
         }
     }
+}
+
+fn handshake_timeout_error(endpoint: &str) -> WorkerError {
+    // Establishing the transport proves that an endpoint accepted this
+    // connection. A delayed authenticated hello is therefore a live/busy or
+    // unhealthy endpoint, never evidence that embedded execution is safe.
+    WorkerError::Busy(endpoint.into())
 }
 
 #[derive(Clone)]
@@ -3433,6 +3449,13 @@ mod platform {
         false
     }
 
+    pub fn connection_is_absent(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+        )
+    }
+
     pub fn endpoint_is_trusted(endpoint: &str) -> Result<bool, WorkerError> {
         let path = Path::new(endpoint);
         let metadata = match fs::symlink_metadata(path) {
@@ -3466,6 +3489,7 @@ mod platform {
         net::windows::named_pipe::{
             ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
         },
+        task::JoinSet,
         time::{Instant, sleep},
     };
 
@@ -3473,47 +3497,59 @@ mod platform {
     pub type ServerStream = NamedPipeServer;
 
     const ERROR_PIPE_BUSY: i32 = 231;
+    const PIPE_BACKLOG: usize = 16;
 
     pub struct Listener {
         endpoint: String,
-        next: Option<NamedPipeServer>,
+        pending: JoinSet<Result<NamedPipeServer, std::io::Error>>,
     }
 
     impl Listener {
         pub async fn bind(endpoint: &str) -> Result<Self, WorkerError> {
-            let next = ServerOptions::new()
-                .first_pipe_instance(true)
-                .create(endpoint)?;
-            Ok(Self {
+            let mut listener = Self {
                 endpoint: endpoint.into(),
-                next: Some(next),
-            })
+                pending: JoinSet::new(),
+            };
+            listener.spawn_pending(true)?;
+            for _ in 1..PIPE_BACKLOG {
+                listener.spawn_pending(false)?;
+            }
+            Ok(listener)
         }
 
         pub async fn accept(&mut self) -> Result<ServerStream, WorkerError> {
-            // Keep the pending instance in `self` while awaiting connection. This
-            // future is polled inside `select!`; taking the instance first would
-            // drop it whenever another branch wins and permanently lose the
-            // listener after serving one client.
-            self.next
-                .as_ref()
-                .ok_or_else(|| WorkerError::Protocol("named pipe listener lost instance".into()))?
-                .connect()
-                .await?;
+            // JoinSet::join_next is cancellation safe, so polling this inside the
+            // worker select loop cannot lose a completed connection. Replenish
+            // before handing the connected instance to its request task.
             let server = self
-                .next
-                .take()
-                .ok_or_else(|| WorkerError::Protocol("named pipe listener lost instance".into()))?;
-            self.next = Some(ServerOptions::new().create(&self.endpoint)?);
+                .pending
+                .join_next()
+                .await
+                .ok_or_else(|| WorkerError::Protocol("named pipe listener lost backlog".into()))?
+                .map_err(|error| WorkerError::Protocol(error.to_string()))??;
+            self.spawn_pending(false)?;
             Ok(server)
         }
 
         pub fn cleanup(&mut self) {}
+
+        fn spawn_pending(&mut self, first: bool) -> Result<(), WorkerError> {
+            let mut options = ServerOptions::new();
+            options
+                .first_pipe_instance(first)
+                .max_instances(PIPE_BACKLOG);
+            let server = options.create(&self.endpoint)?;
+            self.pending.spawn(async move {
+                server.connect().await?;
+                Ok(server)
+            });
+            Ok(())
+        }
     }
 
     pub async fn connect(endpoint: &str) -> Result<ClientStream, std::io::Error> {
         let missing_deadline = Instant::now() + Duration::from_secs(2);
-        let busy_deadline = Instant::now() + Duration::from_secs(10);
+        let busy_deadline = Instant::now() + Duration::from_secs(60);
         loop {
             match ClientOptions::new().open(endpoint) {
                 Ok(client) => return Ok(client),
@@ -3534,6 +3570,10 @@ mod platform {
         error.kind() == ErrorKind::WouldBlock || error.raw_os_error() == Some(ERROR_PIPE_BUSY)
     }
 
+    pub fn connection_is_absent(error: &std::io::Error) -> bool {
+        error.kind() == ErrorKind::NotFound
+    }
+
     pub fn endpoint_is_trusted(_endpoint: &str) -> Result<bool, WorkerError> {
         Ok(true)
     }
@@ -3551,6 +3591,24 @@ mod tests {
     fn windows_pipe_saturation_is_classified_as_busy() {
         let error = std::io::Error::from_raw_os_error(231);
         assert!(platform::connection_is_busy(&error));
+    }
+
+    #[test]
+    fn delayed_authenticated_handshake_is_never_worker_absence() {
+        assert!(matches!(
+            handshake_timeout_error("worker-endpoint"),
+            WorkerError::Busy(endpoint) if endpoint == "worker-endpoint"
+        ));
+    }
+
+    #[test]
+    fn only_explicit_transport_absence_allows_worker_fallback() {
+        assert!(platform::connection_is_absent(&std::io::Error::from(
+            std::io::ErrorKind::NotFound
+        )));
+        assert!(!platform::connection_is_absent(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
     }
 
     #[test]

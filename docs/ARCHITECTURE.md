@@ -209,8 +209,10 @@ redb writers. The long-running worker owns that lease and serves a versioned loc
 application protocol over a mode-0600 Unix socket or a Windows named pipe. CLI one-shot
 runs, the worker-backed TUI, session operations, and workflow lifecycle operations
 auto-discover the worker and otherwise use the same runtime in-process. A busy Windows
-named pipe is treated as a live worker with bounded connection backoff, never as
-permission to fall through to a second embedded writer. Durable task,
+named pipe, including a connected pipe waiting for its authenticated hello, is treated
+as a live worker with bounded connection backoff, never as permission to fall through to
+a second embedded writer. The Windows listener maintains a bounded pending-instance
+backlog so concurrent terminal clients do not serialize behind one pipe slot. Durable task,
 decision, plan, goal, child-agent, and memory lifecycle commands use that application
 protocol as well. Research, declarative skill, signed pack/bundle, integration, MCP,
 process, and network terminal operations are also dispatched to the worker when active.

@@ -325,8 +325,10 @@ colossus --config .colossus/config.yaml worker --once
 
 CLI and TUI operations auto-discover a healthy worker. Authentication or protocol
 failure is surfaced and never downgraded to embedded execution; only an unavailable
-endpoint permits embedded fallback. A saturated Windows named pipe is reported as a
-busy live worker after bounded retries and does not permit embedded fallback.
+endpoint permits embedded fallback. A saturated Windows named pipe—or a connected pipe
+waiting for its authenticated hello—is reported as a busy live worker after bounded
+retries and does not permit embedded fallback. The worker keeps a bounded Windows pipe
+backlog for concurrent CLI and TUI clients.
 
 ## Audit And Diagnostics
 

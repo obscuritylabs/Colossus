@@ -267,7 +267,8 @@ the same application services used by embedded mode. Clients fall back to embedd
 only when the endpoint is unavailable; an authentication or protocol failure is surfaced
 and never converted into a fallback request. Windows pipe saturation is likewise a live,
 busy worker state: clients retry it for a bounded interval and never reinterpret it as an
-absent endpoint that permits embedded writer acquisition.
+absent endpoint that permits embedded writer acquisition. This remains true after the
+transport connects while the authenticated server hello is queued under load.
 
 Workflow queueing is journal-native: a worker may claim only `queued` runs and recovery
 never drains `waiting` or `interrupted` runs. A started step without a durable terminal
