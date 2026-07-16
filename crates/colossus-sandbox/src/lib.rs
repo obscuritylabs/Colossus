@@ -76,7 +76,10 @@ const OCI_CLEANUP_RESERVE_MS: u64 = 2_000;
 const OCI_NETWORK_CLEANUP_RESERVE_MS: u64 = 5_000;
 const WINDOWS_JOB_CLEANUP_RESERVE_MS: u64 = 7_000;
 const NATIVE_CLEANUP_RESERVE_MS: u64 = 250;
-const OCI_CONTROL_COMMAND_TIMEOUT_MS: u64 = 1_500;
+// Rootless Podman may need more than a second to initialize its user namespace and
+// network helpers on a cold host. Keep control operations bounded, but allow the
+// runtime enough time to complete that trusted setup without a spurious failure.
+const OCI_CONTROL_COMMAND_TIMEOUT_MS: u64 = 5_000;
 const OCI_DNS_RESOLUTION_TIMEOUT_MS: u64 = 3_000;
 const MAX_OCI_CONTROL_DIAGNOSTIC_BYTES: usize = 4 * 1024;
 
@@ -4082,6 +4085,19 @@ mod tests {
     }
 
     struct AdapterPostDenyPolicy(BuiltInPolicy);
+
+    #[cfg(unix)]
+    #[test]
+    fn oci_control_timeout_allows_bounded_cold_runtime_startup() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 2; printf ready"]);
+
+        let (status, stdout, stderr) =
+            super::bounded_control_command(command).expect("bounded command completes");
+        assert!(status.success());
+        assert_eq!(stdout, b"ready");
+        assert!(stderr.is_empty());
+    }
 
     #[test]
     fn helper_budgets_reserve_backend_cleanup_before_the_outer_deadline() {

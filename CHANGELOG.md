@@ -50,6 +50,9 @@ include breaking changes while the public API is still settling.
   action and added regression coverage for that deployment boundary.
 - Scoped `sccache` environment variables to jobs that install the wrapper, preventing
   dependency-policy jobs from attempting to invoke a missing compiler wrapper.
+- Increased the bounded OCI control-command startup allowance so cold rootless Podman
+  initialization does not spuriously fail the same security acceptance suite that
+  Docker completes.
 
 ### Security
 
