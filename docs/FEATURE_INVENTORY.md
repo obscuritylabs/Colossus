@@ -483,8 +483,11 @@ ciphertext, nonce, plaintext, credentials, or hidden reasoning. External deliver
 the effect gateway with `audit.export.write` (or an adapter-specific capability), and an
 unknown delivery outcome blocks automatic retry. Policy lifecycle events created by an
 export MUST remain in the canonical journal but MUST NOT create an unbounded recursive
-export loop. The initial directory adapter is deterministic and replay-safe; it does not
-claim WORM durability.
+export loop. The directory adapter is deterministic and replay-safe; it does not claim
+WORM durability. The HTTPS WORM adapter MUST use deterministic content-hashed object
+names, create-only conditional PUT, an exact-origin permit, late environment credential
+resolution, no response-body release, and unknown-outcome blocking. The remote service,
+not Colossus, MUST independently enforce retention lock.
 
 ## 12. Sessions, Context, Decisions, And Memories
 

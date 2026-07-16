@@ -6,9 +6,9 @@ contract remains [Feature Inventory](FEATURE_INVENTORY.md); security invariants 
 
 | Requirement | Status | Executable evidence | Remaining scope |
 | --- | --- | --- | --- |
-| AUDIT-01 | Passing foundation | encrypted redb conformance; concurrency and crash injection; hash/checkpoint/anchor tamper detection; key rotation; unknown-effect recovery; projection and audit-export replay | remote/WORM exporter and broader OS key-provider matrix |
+| AUDIT-01 | Passing | encrypted redb/PostgreSQL conformance; concurrency, outage, and crash injection; hash/checkpoint/anchor tamper detection; key rotation; unknown-effect recovery; projection and directory/WORM audit-export replay | broader OS key-provider matrix |
 | AUTHZ-01 | Passing foundation | deny-before-adapter and unforgeable one-use permit tests across every effect family; two-phase release denial; OPA allow/deny/approval/outage/mTLS; native and OCI escape suites; `risk-auto` low/allow auto-proof, explicit-prompt fallback, redacted strict model input, deterministic-deny isolation, and green 0.7 release-platform rerun | future policy adapters |
-| STORE-01 | Passing foundation | shared in-memory/redb journal and repository suites; projection/outbox positions; writer lease; authenticated worker IPC; Tantivy and permit-bound Chroma conformance; audit-export retry/recovery | PostgreSQL and additional adapters |
+| STORE-01 | Passing | shared in-memory/redb/PostgreSQL journal, repository, projection, and outbox suites; local writer lease or database transaction ownership; authenticated worker IPC; Tantivy and permit-bound Chroma conformance; audit-export retry/recovery | additional adapters |
 | MEM-01 | Passing P1 | canonical lifecycle and scope filtering; Tantivy rebuild/fallback; Chroma candidate projection; local and OpenAI-compatible embeddings; lag, backoff, and unknown-outcome recovery | broader hosted Chroma/version coverage |
 | FLOW-01 | Passing P1 + triggers | strict YAML/hash trust; bounded control flow; waits; idempotent retry; compensation; subworkflows; cancellation; fixed-cadence schedule misfire/trust/restart reconstruction; HMAC webhook authentication/replay/size/trust rejection; exact domain-event subscriptions with durable checkpoints and duplicate acknowledgement; atomic deterministic trigger dispatch under process kill; policy and worker/embedded routing | future trigger adapters |
 | PROV-01 | Passing P0 | echo, Responses, and compatible adapters; normalized streaming/tool/usage contracts; post-release gating; late credential resolution; malformed-call recovery; CLI/TUI/worker continuation tests | broader hosted provider/version coverage |
@@ -22,7 +22,8 @@ contract remains [Feature Inventory](FEATURE_INVENTORY.md); security invariants 
 Primary evidence locations:
 
 - `crates/colossus-policy/src/lib.rs` and `crates/colossus-policy/tests/opa_live.rs`
-- `crates/colossus-journal-redb/src/lib.rs` and `crates/colossus-audit/src/lib.rs`
+- `crates/colossus-journal-redb/src/lib.rs`,
+  `crates/colossus-journal-postgres/src/lib.rs`, and `crates/colossus-audit/src/lib.rs`
 - `crates/colossus-runtime/src/lib.rs`, `crates/colossus-agent/src/lib.rs`, and
   `crates/colossus-workflow/src/lib.rs`
 - `crates/colossus-sandbox/src/lib.rs` and `crates/colossus-windows-process/src/lib.rs`

@@ -3208,10 +3208,24 @@ impl EffectExecutor for HttpExecutor {
         request: &EffectRequest,
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        if request.action != "network.http" {
+        let worm_write = request.action == "audit.export.worm.write";
+        if request.action != "network.http" && !worm_write {
             return Err(adapter_failure("HTTP executor received another action"));
         }
         let url = Url::parse(&request.resource).map_err(adapter_failure)?;
+        if worm_write && url.scheme() != "https" {
+            return Err(adapter_failure("WORM audit export requires HTTPS"));
+        }
+        if worm_write
+            && (!url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some())
+        {
+            return Err(adapter_failure(
+                "WORM audit export URL must not contain credentials, a query, or a fragment",
+            ));
+        }
         let origin = url.origin().ascii_serialization();
         if !permit.obligations().network_destinations.contains(&origin) {
             return Err(adapter_failure("HTTP origin is not permitted"));
@@ -3230,15 +3244,91 @@ impl EffectExecutor for HttpExecutor {
             .timeout(Duration::from_millis(permit.obligations().timeout_ms))
             .build()
             .map_err(adapter_failure)?;
-        let method = request
-            .content
-            .get("method")
-            .and_then(Value::as_str)
-            .unwrap_or("GET")
-            .parse()
-            .map_err(adapter_failure)?;
-        let mut builder = client.request(method, url);
-        if let Some(headers) = request.content.get("headers").and_then(Value::as_object) {
+        let method = if worm_write {
+            if request.content.get("method").and_then(Value::as_str) != Some("PUT")
+                || request.content.get("create_only").and_then(Value::as_bool) != Some(true)
+            {
+                return Err(adapter_failure(
+                    "WORM audit export requires an explicit create-only PUT",
+                ));
+            }
+            reqwest::Method::PUT
+        } else {
+            request
+                .content
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("GET")
+                .parse()
+                .map_err(adapter_failure)?
+        };
+        let mut builder = client.request(method, url.clone());
+        if worm_write {
+            if request.credential_references.len() > 1 {
+                return Err(adapter_failure(
+                    "WORM audit export accepts at most one credential reference",
+                ));
+            }
+            if let Some(reference) = request.credential_references.first() {
+                let variable = reference.reference.strip_prefix("env:").ok_or_else(|| {
+                    adapter_failure("WORM audit credential must be environment-backed")
+                })?;
+                if !permit
+                    .obligations()
+                    .allowed_environment
+                    .iter()
+                    .any(|allowed| allowed == variable)
+                {
+                    return Err(adapter_failure(
+                        "WORM audit credential is absent from permit obligations",
+                    ));
+                }
+                let secret = std::env::var(variable).map_err(|_| {
+                    adapter_failure(format!("environment variable {variable} is unset"))
+                })?;
+                if secret.is_empty() {
+                    return Err(adapter_failure("resolved WORM audit credential is empty"));
+                }
+                builder = builder.bearer_auth(secret);
+            }
+            let encoded = request
+                .content
+                .get("body_base64")
+                .and_then(Value::as_str)
+                .ok_or_else(|| adapter_failure("WORM audit export requires a body"))?;
+            let body = BASE64.decode(encoded).map_err(adapter_failure)?;
+            if u64::try_from(body.len()).map_err(adapter_failure)?
+                > permit.obligations().max_output_bytes
+            {
+                return Err(adapter_failure(
+                    "HTTP request body exceeds the permitted bound",
+                ));
+            }
+            let content_hash = request
+                .content
+                .get("content_sha256")
+                .and_then(Value::as_str)
+                .ok_or_else(|| adapter_failure("WORM audit export requires a content hash"))?;
+            if content_hash.len() != 64
+                || !content_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || content_hash != sha256_hex(&body)
+            {
+                return Err(adapter_failure(
+                    "WORM audit export content hash does not match the body",
+                ));
+            }
+            let expected_suffix = format!("-{content_hash}.json");
+            if !url.path().ends_with(&expected_suffix) {
+                return Err(adapter_failure(
+                    "WORM audit export object key is not bound to the content hash",
+                ));
+            }
+            builder = builder
+                .header("content-type", "application/json")
+                .header("if-none-match", "*")
+                .header("x-content-sha256", content_hash)
+                .body(body);
+        } else if let Some(headers) = request.content.get("headers").and_then(Value::as_object) {
             for (name, value) in headers {
                 let normalized = name.to_ascii_lowercase();
                 if !matches!(
@@ -3255,7 +3345,9 @@ impl EffectExecutor for HttpExecutor {
                 builder = builder.header(name, value);
             }
         }
-        if let Some(encoded) = request.content.get("body_base64").and_then(Value::as_str) {
+        if !worm_write
+            && let Some(encoded) = request.content.get("body_base64").and_then(Value::as_str)
+        {
             let body = BASE64.decode(encoded).map_err(adapter_failure)?;
             if u64::try_from(body.len()).map_err(adapter_failure)?
                 > permit.obligations().max_output_bytes
@@ -3266,7 +3358,25 @@ impl EffectExecutor for HttpExecutor {
             }
             builder = builder.body(body);
         }
-        let response = builder.send().await.map_err(adapter_failure)?;
+        let response = builder.send().await.map_err(|error| {
+            if worm_write {
+                ExecutionError::OutcomeUnknown(format!(
+                    "WORM audit delivery transport failed: {error}"
+                ))
+            } else {
+                adapter_failure(error)
+            }
+        })?;
+        if worm_write
+            && (response.status().is_success()
+                || response.status() == reqwest::StatusCode::PRECONDITION_FAILED)
+        {
+            return Ok(QuarantinedEffectResult {
+                media_type: "application/json".into(),
+                bytes: Vec::new(),
+                effect_succeeded: true,
+            });
+        }
         if !response.status().is_success() {
             return Err(adapter_failure(format!(
                 "HTTP destination returned {}",
@@ -3932,7 +4042,7 @@ mod tests {
         atomic_create, atomic_write, authority, host_process_limits_apply, non_public_ip,
         oci_command, oci_proxy_run_arguments, oci_remove_arguments, oci_resource_names,
         proposed_write_bytes, redact_proxy_credential, resolve_oci_origins, sandbox_helper_budget,
-        tls_server_name, validate_process_spec,
+        sha256_hex, tls_server_name, validate_process_spec,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::{native_helper_diagnostics, native_target_pid};
@@ -4732,6 +4842,63 @@ mod tests {
         assert_eq!(value["matches"][0]["column"], 1);
         assert_eq!(value["truncated"], true);
         assert_eq!(value["matches"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[tokio::test]
+    async fn worm_http_requires_body_and_object_key_hash_binding() {
+        let origin = "https://127.0.0.1:1";
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("audit.export.worm.write", DecisionOutcome::Allow)
+            .with_network_destination(origin);
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["audit.export.worm.write".into()]),
+            [90_u8; 32],
+        );
+        let body = br#"{"event":"redacted"}"#;
+        let content_hash = sha256_hex(body);
+        let request = |resource: &str, hash: &str| {
+            let mut request = effect_request(
+                system_actor("test"),
+                "audit.export.worm.write",
+                resource,
+                json!({
+                    "method": "PUT",
+                    "create_only": true,
+                    "body_base64": BASE64.encode(body),
+                    "content_sha256": hash,
+                }),
+            );
+            request.capabilities = vec!["audit.export.worm.write".into()];
+            request
+        };
+
+        let mismatch = gateway
+            .execute(
+                request(
+                    &format!(
+                        "{origin}/00000000000000000001-event-{}.json",
+                        "0".repeat(64)
+                    ),
+                    &"0".repeat(64),
+                ),
+                &HttpExecutor::new(),
+            )
+            .await
+            .expect_err("mismatched body hash must fail");
+        assert!(mismatch.to_string().contains("content hash"));
+
+        let unbound = gateway
+            .execute(
+                request(&format!("{origin}/event.json"), &content_hash),
+                &HttpExecutor::new(),
+            )
+            .await
+            .expect_err("unbound object key must fail");
+        assert!(unbound.to_string().contains("object key"));
     }
 
     #[tokio::test]

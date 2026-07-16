@@ -126,9 +126,15 @@ workspace path and the session identity from the execution context. Targeted acc
 checked against the canonical record after authorization, and list limits are applied
 after scope filtering.
 
-Adapter compatibility is executable rather than documentary. One shared testkit contract
-runs against in-memory and encrypted-redb journal/projection stores, factory-reopened
-session/work/memory/workflow repositories on both journals, and Tantivy/Chroma indexes.
+Adapter compatibility is executable rather than documentary. Shared testkit contracts
+run against in-memory, encrypted-redb, and PostgreSQL journal/projection stores,
+factory-reopened repositories, external-work queues, and Tantivy/Chroma indexes.
+PostgreSQL locks one singleton chain-head row inside each append transaction, so global
+sequence/hash advancement, optimistic stream versions, encrypted envelopes, and outbox
+records commit atomically across processes. It reconnects for each operation, requires
+verified TLS except for explicit loopback/Unix-socket acceptance, and resolves its
+connection string only from a named environment variable. `storage.path` remains the
+local instance/IPC identity; only redb holds the local writer lease.
 Canonical memory fallback remains available when every index is offline or a destructive
 rebuild fails, and the recovered index later replays the complete journal.
 
@@ -150,9 +156,12 @@ adapter writes deterministic sequence/event-id JSON files only through
 position and bounded retry state; unknown outcomes require an explicit operator reset.
 Because authorizing an export appends ordinary effect lifecycle events, those events use
 the reserved `system/audit-exporter` actor and are acknowledged without re-export to
-prevent recursion. The canonical journal still retains them. Additional exporters reuse
-the same evidence, queue, policy, and conformance boundary. Process-level fault tests
-terminate the journal immediately before and after redb commit and terminate export after
+prevent recursion. The canonical journal still retains them. The HTTPS WORM adapter
+creates deterministic content-hashed objects with `If-None-Match: *`, resolves an
+optional bearer credential only after a permit, releases no response body, and treats a
+precondition failure as idempotent replay. Its remote service remains responsible for
+enabling and enforcing retention lock. Process-level fault tests terminate redb and
+PostgreSQL immediately before and after commit and terminate export after
 delivery but before queue acknowledgment; recovery proves atomic rollback or durable
 visibility and idempotent evidence replay, respectively. Verified startup repairs a
 periodic checkpoint interrupted after its event commit, and checkpoint scheduling uses

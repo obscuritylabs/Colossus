@@ -3,15 +3,19 @@
 #![allow(clippy::missing_errors_doc)]
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
-    Actor, ActorType, AuditEvidence, EventEnvelope, ExecutionContext, ExternalWorkRetryState,
+    Actor, ActorType, AuditEvidence, CredentialReference, EventEnvelope, ExecutionContext,
+    ExternalWorkRetryState,
 };
 use colossus_policy::{EffectExecutor, EffectGateway, GatewayError, effect_request};
 use colossus_ports::{AuditExporter, EventJournal, ExternalWorkQueue, StoreError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Arc};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use url::Url;
 
 /// Stable consumer identity for external audit evidence.
 pub const AUDIT_EXPORT_CONSUMER: &str = "audit.export-v1";
@@ -137,6 +141,131 @@ impl AuditExporter for GatewayDirectoryAuditExporter {
                 error => StoreError::Adapter(error.to_string()),
             })
     }
+}
+
+/// HTTPS create-only exporter for a remote retention-locked or WORM object endpoint.
+pub struct GatewayWormAuditExporter {
+    endpoint: Url,
+    credential_reference: Option<String>,
+    gateway: Arc<EffectGateway>,
+    executor: Arc<dyn EffectExecutor>,
+}
+
+impl GatewayWormAuditExporter {
+    /// Bind a trailing-slash HTTPS collection endpoint to the permit-bearing HTTP executor.
+    pub fn new(
+        endpoint: &str,
+        credential_reference: Option<String>,
+        gateway: Arc<EffectGateway>,
+        executor: Arc<dyn EffectExecutor>,
+    ) -> Result<Self, StoreError> {
+        let endpoint = Url::parse(endpoint)
+            .map_err(|_| StoreError::Adapter("WORM audit endpoint is invalid".into()))?;
+        if endpoint.scheme() != "https"
+            || endpoint.host_str().is_none()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+            || !endpoint.path().ends_with('/')
+            || endpoint.cannot_be_a_base()
+        {
+            return Err(StoreError::Adapter(
+                "WORM audit endpoint must be a credential-free trailing-slash HTTPS URL".into(),
+            ));
+        }
+        if credential_reference
+            .as_deref()
+            .is_some_and(|reference| !valid_environment_reference(reference))
+        {
+            return Err(StoreError::Adapter(
+                "WORM audit credential must be an env:VARIABLE reference".into(),
+            ));
+        }
+        Ok(Self {
+            endpoint,
+            credential_reference,
+            gateway,
+            executor,
+        })
+    }
+
+    fn target(&self, evidence: &AuditEvidence, content_hash: &str) -> Result<Url, StoreError> {
+        let mut target = self.endpoint.clone();
+        target
+            .path_segments_mut()
+            .map_err(|_| StoreError::Adapter("WORM audit object URL is invalid".into()))?
+            .push(&format!(
+                "{:020}-{}-{content_hash}.json",
+                evidence.global_sequence, evidence.event_id
+            ));
+        Ok(target)
+    }
+}
+
+#[async_trait]
+impl AuditExporter for GatewayWormAuditExporter {
+    fn kind(&self) -> &'static str {
+        "https-create-only-worm-json"
+    }
+
+    async fn export(&self, evidence: &AuditEvidence) -> Result<(), StoreError> {
+        let mut encoded = serde_json::to_vec(evidence).map_err(adapter)?;
+        encoded.push(b'\n');
+        if encoded.len() > MAX_EVIDENCE_BYTES {
+            return Err(StoreError::Adapter(
+                "redacted audit evidence exceeds 256 KiB".into(),
+            ));
+        }
+        let content_hash = hex::encode(Sha256::digest(&encoded));
+        let target = self.target(evidence, &content_hash)?;
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::System,
+                id: AUDIT_EXPORT_ACTOR.into(),
+            },
+            "audit.export.worm.write",
+            target.as_str(),
+            json!({
+                "method": "PUT",
+                "create_only": true,
+                "body_base64": BASE64.encode(encoded),
+                "content_sha256": content_hash,
+            }),
+        );
+        request.capabilities = vec!["audit.export.worm.write".into()];
+        request.credential_references = self
+            .credential_reference
+            .iter()
+            .map(|reference| CredentialReference {
+                reference: reference.clone(),
+                value_hash: None,
+            })
+            .collect();
+        request.context = ExecutionContext {
+            correlation_id: format!("audit-export:{}", evidence.event_id),
+            causation_id: Some(evidence.event_id.clone()),
+            ..ExecutionContext::default()
+        };
+        self.gateway
+            .execute(request, self.executor.as_ref())
+            .await
+            .map(|_| ())
+            .map_err(|error| match error {
+                GatewayError::OutcomeUnknown(message) => StoreError::OutcomeUnknown(message),
+                error => StoreError::Adapter(error.to_string()),
+            })
+    }
+}
+
+fn valid_environment_reference(reference: &str) -> bool {
+    reference.strip_prefix("env:").is_some_and(|name| {
+        let mut bytes = name.bytes();
+        bytes
+            .next()
+            .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+            && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+    })
 }
 
 /// Bounded readiness for one configured audit-export consumer.
@@ -377,14 +506,20 @@ fn bounded_error(error: &StoreError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AUDIT_EXPORT_ACTOR, AuditExportService, GatewayDirectoryAuditExporter, evidence};
+    use super::{
+        AUDIT_EXPORT_ACTOR, AuditExportService, GatewayDirectoryAuditExporter,
+        GatewayWormAuditExporter, evidence,
+    };
     use async_trait::async_trait;
     use colossus_contracts::{
-        Actor, ActorType, AuditEvidence, DecisionOutcome, EventClassification, ExecutionContext,
-        NewEvent,
+        Actor, ActorType, AuditEvidence, DecisionOutcome, EffectRequest, EventClassification,
+        ExecutionContext, NewEvent, QuarantinedEffectResult,
     };
     use colossus_journal_redb::{Ed25519CheckpointSigner, RedbEventJournal, StaticKeyProvider};
-    use colossus_policy::{BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel};
+    use colossus_policy::{
+        BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError,
+        ExecutionPermit, SafetyKernel,
+    };
     use colossus_ports::{
         AuditExporter, EventJournal, ExternalWorkQueue, ProjectionStore, StoreError,
     };
@@ -555,6 +690,142 @@ mod tests {
     #[derive(Default)]
     struct RecordingExporter {
         evidence: Mutex<Vec<AuditEvidence>>,
+    }
+
+    #[derive(Default)]
+    struct RecordingEffectExecutor {
+        requests: Mutex<Vec<EffectRequest>>,
+    }
+
+    #[async_trait]
+    impl EffectExecutor for RecordingEffectExecutor {
+        async fn execute(
+            &self,
+            request: &EffectRequest,
+            _permit: ExecutionPermit,
+        ) -> Result<QuarantinedEffectResult, ExecutionError> {
+            self.requests
+                .lock()
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?
+                .push(request.clone());
+            Ok(QuarantinedEffectResult {
+                media_type: "application/json".into(),
+                bytes: Vec::new(),
+                effect_succeeded: true,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn worm_export_is_create_only_redacted_and_credential_reference_only() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let stored = journal
+            .append(event(
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "operator".into(),
+                },
+                "fixture:worm",
+            ))
+            .expect("source event");
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("audit.export.worm.write", DecisionOutcome::Allow)
+            .with_network_destination("https://worm.example")
+            .with_environment("WORM_TOKEN");
+        let gateway = Arc::new(EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["audit.export.worm.write".into()]),
+            [89_u8; 32],
+        ));
+        let executor = Arc::new(RecordingEffectExecutor::default());
+        let exporter = GatewayWormAuditExporter::new(
+            "https://worm.example/retained/",
+            Some("env:WORM_TOKEN".into()),
+            gateway,
+            executor.clone(),
+        )
+        .expect("WORM exporter");
+        let mut record = evidence(&stored);
+        record.event_id = "../escape?query#fragment/slash".into();
+        assert_audit_exporter_conformance(&exporter, &record).await;
+        let requests = executor.requests.lock().expect("requests");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].action, "audit.export.worm.write");
+        assert_eq!(requests[0].resource, requests[1].resource);
+        assert!(requests[0].resource.ends_with(".json"));
+        let target = url::Url::parse(&requests[0].resource).expect("object URL");
+        assert_eq!(
+            target.origin().ascii_serialization(),
+            "https://worm.example"
+        );
+        assert!(target.path().starts_with("/retained/"));
+        assert!(target.query().is_none());
+        assert!(target.fragment().is_none());
+        assert!(target.path().contains("%2F"));
+        assert_eq!(requests[0].content["method"], "PUT");
+        assert_eq!(requests[0].content["create_only"], true);
+        assert_eq!(requests[0].credential_references.len(), 1);
+        assert_eq!(
+            requests[0].credential_references[0].reference,
+            "env:WORM_TOKEN"
+        );
+        let encoded = requests[0].content["body_base64"]
+            .as_str()
+            .expect("encoded evidence");
+        let body = BASE64.decode(encoded).expect("evidence body");
+        let body = String::from_utf8(body).expect("UTF-8 evidence");
+        assert!(!body.contains("never export plaintext"));
+        assert!(!body.contains("ciphertext"));
+        assert!(!body.contains("WORM_TOKEN"));
+        assert!(!body.contains("token-value"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires COLOSSUS_TEST_WORM_ENDPOINT and COLOSSUS_TEST_WORM_TOKEN"]
+    async fn live_https_worm_endpoint_accepts_idempotent_create_only_delivery() {
+        let (Ok(endpoint), Ok(_token)) = (
+            std::env::var("COLOSSUS_TEST_WORM_ENDPOINT"),
+            std::env::var("COLOSSUS_TEST_WORM_TOKEN"),
+        ) else {
+            return;
+        };
+        let origin = url::Url::parse(&endpoint)
+            .expect("WORM endpoint URL")
+            .origin()
+            .ascii_serialization();
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let stored = journal
+            .append(event(
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "live-worm-acceptance".into(),
+                },
+                &format!("fixture:worm-live:{}", uuid::Uuid::now_v7()),
+            ))
+            .expect("source event");
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("audit.export.worm.write", DecisionOutcome::Allow)
+            .with_network_destination(origin)
+            .with_environment("COLOSSUS_TEST_WORM_TOKEN");
+        let gateway = Arc::new(EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["audit.export.worm.write".into()]),
+            [87_u8; 32],
+        ));
+        let exporter = GatewayWormAuditExporter::new(
+            &endpoint,
+            Some("env:COLOSSUS_TEST_WORM_TOKEN".into()),
+            gateway,
+            Arc::new(colossus_sandbox::HttpExecutor::new()),
+        )
+        .expect("live WORM exporter");
+        assert_audit_exporter_conformance(&exporter, &evidence(&stored)).await;
     }
 
     #[async_trait]

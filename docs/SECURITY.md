@@ -86,8 +86,23 @@ root, and a one-use permit. The configured root must already exist. Export autho
 events use the reserved `system/audit-exporter` actor and are retained canonically but
 not recursively exported. Retryable failures use durable bounded backoff; an unknown
 write outcome blocks implicit retry until an operator explicitly resets the consumer.
-The local directory sink is replay-safe operational evidence, not WORM storage; a future
-remote/WORM adapter must preserve the same policy and evidence contract.
+The local directory sink is replay-safe operational evidence, not WORM storage.
+
+The remote adapter requires a credential-free HTTPS collection URL, an exact network
+origin grant, `audit.export.worm.write`, and (when configured) an exact environment grant
+for its bearer credential reference. It uses deterministic sequence/event/content-hash
+object keys, `PUT`, and `If-None-Match: *`; an existing identical key is replay success.
+DNS is pinned and redirects, proxies, private destinations, response-body release, and
+credential values in configuration or audit records are prohibited. A transport failure
+after dispatch is `outcome_unknown`. The target service must independently enforce
+retention lock/object lock; create-only HTTP semantics alone do not establish WORM.
+
+PostgreSQL journal credentials are likewise environment references, never YAML values.
+Every append transaction locks the chain head before rechecking stream versions and
+commits the encrypted envelope, global chain head, stream version, and projection outbox
+together. Database diagnostics expose adapter/schema/TLS mode and the variable name, not
+the connection value. TLS is required except for an explicitly disabled loopback or Unix
+socket used by acceptance tests.
 
 OPA receives full logical request content after raw credentials, authentication headers,
 private keys, key material, and hidden reasoning are replaced by bounded hashes and
