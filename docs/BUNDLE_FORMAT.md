@@ -40,7 +40,7 @@ hash mismatch fail verification.
 {
   "format_version": 1,
   "name": "colossus-offline",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "colossus",
   "created_at": "2026-07-11T00:00:00Z",
   "source_revision": "GIT_COMMIT",
@@ -106,7 +106,7 @@ export COLOSSUS_BUNDLE_SIGNING_SEED=...
 colossus --config .colossus/config.yaml --approval-mode ask bundle build \
   ./bundle-stage ./bundle \
   --name colossus-offline \
-  --version 0.7.0 \
+  --version 0.8.0 \
   --publisher colossus \
   --created-at 2026-07-11T00:00:00Z \
   --source-revision GIT_COMMIT \

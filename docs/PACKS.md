@@ -136,8 +136,9 @@ skill script; executable behavior must be a declared tool or MCP server instead.
 V1 supports installing from local OCI-layout artifacts. The first supported layer must
 contain a pack directory with `colossus.pack.json`.
 
-Remote registry pull, push, auth, and hosted registry workflows are deferred. The local
-OCI shape exists so future registry support can use the same artifact format.
+Remote registry pull, push, auth, hosted registry workflows, and signed multi-pack
+collections are deferred to 0.9.0. The local OCI shape exists so future registry
+support can use the same artifact format without weakening 0.8.0 local verification.
 
 The Rust reconstruction accepts verified local directories plus OCI layout 1.0 sources
 with one OCI image manifest and a supported tar or tar+gzip pack layer. Descriptor sizes

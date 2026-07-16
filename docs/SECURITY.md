@@ -1,5 +1,20 @@
 # Security Model
 
+## 0.8 Release Boundary
+
+Version 0.8 adds durable schedule, webhook, and repository-event trigger ingress plus
+PostgreSQL journal/projection storage and HTTPS WORM audit export. These are new adapters
+and canonical records, not alternate authority paths: every trigger dispatch, database
+operation, and remote audit delivery retains the ordinary validation, policy, permit,
+quarantine, audit, replay, and unknown-outcome boundaries described below.
+
+Selecting PostgreSQL never imports or replaces redb state automatically. Operators must
+provision and verify PostgreSQL explicitly, keep credential values outside YAML, and
+perform any deliberate data transition as a separately reviewed operation. Signed
+multi-pack collections and authenticated remote registry operations are not present in
+0.8 and are deferred to 0.9; local verified packs, OCI layouts, and signed offline
+release bundles remain the supported distribution boundary.
+
 ## Rust Safety Kernel And Effect Gateway
 
 The Rust reconstruction treats every external or sensitive operation as an effect. The

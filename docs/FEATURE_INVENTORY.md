@@ -1086,8 +1086,10 @@ disabled, and audited without exposing its credentials.
 
 A reconstruction is complete only when all applicable checks pass:
 
-Cutover note (2026-07-15): Rust 0.7.0 is the active repository-root implementation, the Python
-runtime/package is removed from `main`, and the pull-request security gate is green.
+Cutover note (2026-07-15): Rust 0.7.0 established the active repository-root
+implementation, removed the Python runtime/package from `main`, and passed the
+pull-request security gate. Rust 0.8.0 retains that state/configuration boundary while
+adding durable workflow triggers and explicit PostgreSQL/WORM adapters.
 The [0.7 release run](https://github.com/obscuritylabs/Colossus/actions/runs/29465535984)
 passed on source revision `5cdf9ee14ef33a3e63d72f80494b39b85a1813a4`, and the
 [v0.7.0 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.7.0) contains
