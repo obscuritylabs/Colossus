@@ -185,6 +185,69 @@ The listener deliberately has no public bind, TLS, chunked transfer, or rate lim
 deploy those at the reverse proxy. It automatically routes through the authenticated
 worker when one is active and otherwise uses the embedded runtime.
 
+## Repository-Event Subscriptions
+
+Subscriptions bind one exact versioned domain event type, an optional aggregate stream
+prefix, and an exact registered workflow hash. By default delivery begins after the
+current journal head. Use `--after-sequence 0` only when intentional replay of the full
+canonical history is desired.
+
+```bash
+colossus --config .colossus/config.yaml workflow subscription create new-tasks \
+  task-handler 1.0.0 --event-type task.created.v1 --stream-prefix task:
+colossus --config .colossus/config.yaml workflow subscription list
+colossus --config .colossus/config.yaml workflow subscription show new-tasks
+colossus --config .colossus/config.yaml workflow subscription disable new-tasks
+colossus --config .colossus/config.yaml workflow subscription enable new-tasks
+colossus --config .colossus/config.yaml workflow subscription tick
+```
+
+Only events classified as canonical domain events are eligible, and workflow lifecycle
+events cannot be selected. A matching run receives this top-level input shape:
+
+```json
+{
+  "subscription_id": "new-tasks",
+  "idempotency_key": "subscription:new-tasks:SOURCE_EVENT_ID",
+  "event": {
+    "event_id": "SOURCE_EVENT_ID",
+    "global_sequence": 42,
+    "stream_id": "task:TASK_ID",
+    "stream_version": 1,
+    "classification": "domain",
+    "event_type": "task.created.v1",
+    "actor": {"actor_type": "user", "id": "operator"},
+    "context": {
+      "correlation_id": "CORRELATION_ID",
+      "causation_id": null,
+      "session_id": null,
+      "run_id": null,
+      "goal_id": null,
+      "plan_id": null,
+      "subagent_id": null,
+      "skill_ids": [],
+      "workflow_id": null,
+      "workflow_hash": null,
+      "step_id": null,
+      "attempt": null
+    },
+    "occurred_at": "2026-08-01T02:00:00Z",
+    "payload": {}
+  }
+}
+```
+
+The workflow input schema must allow that envelope. Before queueing, definition trust and
+the complete input are validated and the payload crosses the ordinary
+`workflow.subscription.dispatch` policy boundary. Source consumption is at least once:
+the immutable event ID and exposed `idempotency_key` are authoritative for workflow
+idempotency. The subscription checkpoint, delivery receipt, and deterministic queued run
+commit in one journal batch. A replayed source event reuses the existing receipt and run
+rather than queuing again. Unmatched domain work advances a durable checkpoint; trust or
+schema failure disables the subscription without advancing past the rejected event. A
+refused or incomplete policy dispatch is reported as `deferred`, keeps the source
+pending, and does not stop other subscriptions or queued workflows.
+
 ## Worker Execution
 
 ```bash
@@ -193,6 +256,7 @@ colossus --config .colossus/config.yaml worker --status
 colossus --config .colossus/config.yaml worker --once
 ```
 
-The worker evaluates due schedules, claims only queued runs, owns the canonical writer
-lease, and exposes the same authenticated application API used by CLI/TUI. Waiting or
-interrupted runs are never silently drained as new work.
+The worker evaluates due schedules and repository-event subscriptions, claims only
+queued runs, owns the canonical writer lease, and exposes the same authenticated
+application API used by CLI/TUI. Waiting or interrupted runs are never silently drained
+as new work.

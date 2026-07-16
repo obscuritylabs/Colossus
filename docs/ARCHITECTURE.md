@@ -272,6 +272,24 @@ is a bounded loopback-only HTTP/1.1 listener intended to sit behind a trusted re
 proxy. CLI, TUI, embedded runtime, and authenticated worker transports remain interfaces
 to this application behavior rather than owning authentication or persistence rules.
 
+Workflow subscriptions are canonical hash-pinned consumers of the authoritative event
+journal behind `WorkflowRepository`. A binding selects one exact versioned domain event
+type and, optionally, a stream prefix. It stores a global checkpoint rather than a
+separate projection cursor; creation defaults that checkpoint to the current journal
+head so history is replayed only when the operator supplies an explicit earlier
+sequence. The worker scans a bounded page before its ordinary workflow drain, ignores
+non-domain and `workflow.*` lifecycle events, and advances past unmatched domain events.
+For a match, it validates the pinned definition, full call graph, and event input
+envelope before submitting `workflow.subscription.dispatch` through the ordinary effect
+gateway. After authorization, the source checkpoint, immutable-event delivery receipt,
+and deterministic `queued` run are appended in one journal batch. Once that receipt
+exists, reopening or replaying the same event acknowledges the existing delivery without
+another policy call or run. A refused or incomplete control dispatch leaves the source
+pending while the worker continues evaluating other subscriptions and queued runs. Trust
+or schema invalidation disables the subscription without advancing past the rejected
+source event. CLI, TUI, worker, and embedded routes are interfaces to this shared
+behavior.
+
 Runtime execution identity is separate from the static YAML step ID. Root steps retain
 their declared ID, while nested repeated work receives bounded paths such as
 `each[1]/approval` and `parallel.branch[0]/tool`. Journal completion, waiting input,

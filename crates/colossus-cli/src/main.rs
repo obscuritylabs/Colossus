@@ -176,6 +176,11 @@ const TERMINAL_COMPLETIONS: &[&str] = &[
     "/workflow webhook show",
     "/workflow webhook enable",
     "/workflow webhook disable",
+    "/workflow subscription list",
+    "/workflow subscription show",
+    "/workflow subscription enable",
+    "/workflow subscription disable",
+    "/workflow subscription tick",
     "/audit verify",
     "/projection status",
     "/tools",
@@ -1053,6 +1058,11 @@ enum WorkflowAction {
         #[command(subcommand)]
         command: WorkflowWebhookAction,
     },
+    /// Create, inspect, control, or evaluate repository-event subscriptions.
+    Subscription {
+        #[command(subcommand)]
+        command: WorkflowSubscriptionAction,
+    },
     /// Show a reconstructed run.
     Status { run_id: String },
     /// Resume a waiting or interrupted run.
@@ -1160,6 +1170,41 @@ enum WorkflowWebhookAction {
         #[arg(long, default_value = "127.0.0.1:8787")]
         bind: SocketAddr,
     },
+}
+
+#[derive(Subcommand)]
+enum WorkflowSubscriptionAction {
+    /// Create a hash-pinned exact domain-event subscription.
+    Create {
+        subscription_id: String,
+        name: String,
+        version: String,
+        /// Exact versioned domain event type.
+        #[arg(long)]
+        event_type: String,
+        /// Optional aggregate stream prefix used to narrow matching events.
+        #[arg(long)]
+        stream_prefix: Option<String>,
+        /// Create the subscription disabled.
+        #[arg(long)]
+        disabled: bool,
+        /// Begin after this global sequence; defaults to the current journal head.
+        #[arg(long)]
+        after_sequence: Option<u64>,
+    },
+    /// List persisted subscriptions in deterministic identifier order.
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Show one exact persisted subscription.
+    Show { subscription_id: String },
+    /// Enable one subscription after rechecking pinned workflow trust.
+    Enable { subscription_id: String },
+    /// Disable one subscription without deleting its audit history.
+    Disable { subscription_id: String },
+    /// Evaluate bounded canonical journal work for subscriptions.
+    Tick,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -3048,6 +3093,46 @@ async fn workflow_command(
                 serve_workflow_webhooks(bind, WebhookIngressBackend::Runtime(runtime)).await?;
             }
         },
+        WorkflowAction::Subscription { command } => match command {
+            WorkflowSubscriptionAction::Create {
+                subscription_id,
+                name,
+                version,
+                event_type,
+                stream_prefix,
+                disabled,
+                after_sequence,
+            } => print_json(&runtime.workflows().create_subscription(
+                &subscription_id,
+                &name,
+                &version,
+                &event_type,
+                stream_prefix.as_deref(),
+                !disabled,
+                after_sequence,
+            )?)?,
+            WorkflowSubscriptionAction::List { limit } => print_json(
+                &runtime
+                    .workflows()
+                    .list_subscriptions(limit.clamp(1, 10_000))?,
+            )?,
+            WorkflowSubscriptionAction::Show { subscription_id } => {
+                print_json(&runtime.workflows().get_subscription(&subscription_id)?)?;
+            }
+            WorkflowSubscriptionAction::Enable { subscription_id } => print_json(
+                &runtime
+                    .workflows()
+                    .set_subscription_enabled(&subscription_id, true)?,
+            )?,
+            WorkflowSubscriptionAction::Disable { subscription_id } => print_json(
+                &runtime
+                    .workflows()
+                    .set_subscription_enabled(&subscription_id, false)?,
+            )?,
+            WorkflowSubscriptionAction::Tick => {
+                print_json(&runtime.workflows().tick_subscriptions_now().await?)?;
+            }
+        },
         WorkflowAction::Status { run_id } => {
             print_json(&runtime.workflows().get_run(&run_id)?)?;
         }
@@ -3315,6 +3400,14 @@ async fn line_runner(
                 runtime,
                 WorkflowAction::Schedule {
                     command: WorkflowScheduleAction::List { limit: 100 },
+                },
+            )
+            .await?;
+        } else if line == "/workflow subscription list" {
+            workflow_command(
+                runtime,
+                WorkflowAction::Subscription {
+                    command: WorkflowSubscriptionAction::List { limit: 100 },
                 },
             )
             .await?;
@@ -4025,6 +4118,46 @@ async fn dispatch_to_worker_if_active(
                     WorkflowWebhookAction::Serve { .. } => {
                         unreachable!("webhook serve is handled before operation routing")
                     }
+                },
+                WorkflowAction::Subscription { command } => match command {
+                    WorkflowSubscriptionAction::Create {
+                        subscription_id,
+                        name,
+                        version,
+                        event_type,
+                        stream_prefix,
+                        disabled,
+                        after_sequence,
+                    } => WorkerOperation::WorkflowSubscriptionCreate {
+                        subscription_id: subscription_id.clone(),
+                        name: name.clone(),
+                        version: version.clone(),
+                        event_type: event_type.clone(),
+                        stream_prefix: stream_prefix.clone(),
+                        enabled: !*disabled,
+                        after_sequence: *after_sequence,
+                    },
+                    WorkflowSubscriptionAction::List { limit } => {
+                        WorkerOperation::WorkflowSubscriptionList { limit: *limit }
+                    }
+                    WorkflowSubscriptionAction::Show { subscription_id } => {
+                        WorkerOperation::WorkflowSubscriptionShow {
+                            subscription_id: subscription_id.clone(),
+                        }
+                    }
+                    WorkflowSubscriptionAction::Enable { subscription_id } => {
+                        WorkerOperation::WorkflowSubscriptionSetEnabled {
+                            subscription_id: subscription_id.clone(),
+                            enabled: true,
+                        }
+                    }
+                    WorkflowSubscriptionAction::Disable { subscription_id } => {
+                        WorkerOperation::WorkflowSubscriptionSetEnabled {
+                            subscription_id: subscription_id.clone(),
+                            enabled: false,
+                        }
+                    }
+                    WorkflowSubscriptionAction::Tick => WorkerOperation::WorkflowSubscriptionTick,
                 },
                 WorkflowAction::Status { run_id } => WorkerOperation::WorkflowStatus {
                     run_id: run_id.clone(),
@@ -4891,6 +5024,12 @@ async fn worker_line_runner(
             print_json(
                 &client
                     .call(WorkerOperation::WorkflowScheduleList { limit: 100 })
+                    .await?,
+            )?;
+        } else if line == "/workflow subscription list" {
+            print_json(
+                &client
+                    .call(WorkerOperation::WorkflowSubscriptionList { limit: 100 })
                     .await?,
             )?;
         } else if let Some(run_id) = line.strip_prefix("/workflow status ") {
@@ -6615,6 +6754,7 @@ mod tests {
         assert!(values.contains(&"/workflow schedule list".into()));
         assert!(values.contains(&"/workflow schedule tick".into()));
         assert!(values.contains(&"/workflow webhook list".into()));
+        assert!(values.contains(&"/workflow subscription list".into()));
         assert!(values.contains(&"/theme hacker".into()));
         assert!(values.contains(&"/theme preview high_contrast".into()));
         assert!(values.contains(&"@skill-creator".into()));
@@ -6743,6 +6883,52 @@ mod tests {
                 }
             }) if delivery_id == "delivery-1" && headers == vec!["content-type=application/json"]
         ));
+    }
+
+    #[test]
+    fn workflow_subscription_cli_parses_the_complete_creation_contract() {
+        let cli = Cli::try_parse_from([
+            "colossus",
+            "workflow",
+            "subscription",
+            "create",
+            "new-tasks",
+            "smoke",
+            "1.0.0",
+            "--event-type",
+            "task.created.v1",
+            "--stream-prefix",
+            "task:",
+            "--after-sequence",
+            "41",
+            "--disabled",
+        ])
+        .expect("workflow subscription command");
+        let Command::Workflow(WorkflowCommand {
+            command:
+                WorkflowAction::Subscription {
+                    command:
+                        WorkflowSubscriptionAction::Create {
+                            subscription_id,
+                            name,
+                            version,
+                            event_type,
+                            stream_prefix,
+                            disabled,
+                            after_sequence,
+                        },
+                },
+        }) = cli.command
+        else {
+            panic!("expected workflow subscription creation command");
+        };
+        assert_eq!(subscription_id, "new-tasks");
+        assert_eq!(name, "smoke");
+        assert_eq!(version, "1.0.0");
+        assert_eq!(event_type, "task.created.v1");
+        assert_eq!(stream_prefix.as_deref(), Some("task:"));
+        assert!(disabled);
+        assert_eq!(after_sequence, Some(41));
     }
 
     #[test]

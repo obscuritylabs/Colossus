@@ -999,6 +999,42 @@ pub enum WorkerOperation {
         /// Inline JSON or a server-local `@path` reference.
         body_source: String,
     },
+    /// Create one persisted hash-pinned repository-event subscription.
+    WorkflowSubscriptionCreate {
+        /// Stable subscription identifier.
+        subscription_id: String,
+        /// Workflow name.
+        name: String,
+        /// Workflow version.
+        version: String,
+        /// Exact versioned domain event type.
+        event_type: String,
+        /// Optional aggregate stream prefix.
+        stream_prefix: Option<String>,
+        /// Initial enabled state.
+        enabled: bool,
+        /// Optional global sequence after which delivery begins.
+        after_sequence: Option<u64>,
+    },
+    /// List persisted repository-event subscriptions.
+    WorkflowSubscriptionList {
+        /// Maximum subscriptions.
+        limit: usize,
+    },
+    /// Show one persisted repository-event subscription.
+    WorkflowSubscriptionShow {
+        /// Exact subscription identifier.
+        subscription_id: String,
+    },
+    /// Explicitly enable or disable one persisted subscription.
+    WorkflowSubscriptionSetEnabled {
+        /// Exact subscription identifier.
+        subscription_id: String,
+        /// Requested enabled state.
+        enabled: bool,
+    },
+    /// Evaluate bounded canonical journal work for subscriptions.
+    WorkflowSubscriptionTick,
     /// Reconstruct one workflow run.
     WorkflowStatus {
         /// Exact run identifier.
@@ -2111,6 +2147,13 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::WorkflowWebhookShow { .. } => "workflow_webhook_show",
         WorkerOperation::WorkflowWebhookSetEnabled { .. } => "workflow_webhook_set_enabled",
         WorkerOperation::WorkflowWebhookIngest { .. } => "workflow_webhook_ingest",
+        WorkerOperation::WorkflowSubscriptionCreate { .. } => "workflow_subscription_create",
+        WorkerOperation::WorkflowSubscriptionList { .. } => "workflow_subscription_list",
+        WorkerOperation::WorkflowSubscriptionShow { .. } => "workflow_subscription_show",
+        WorkerOperation::WorkflowSubscriptionSetEnabled { .. } => {
+            "workflow_subscription_set_enabled"
+        }
+        WorkerOperation::WorkflowSubscriptionTick => "workflow_subscription_tick",
         WorkerOperation::WorkflowStatus { .. } => "workflow_status",
         WorkerOperation::WorkflowResume { .. } => "workflow_resume",
         WorkerOperation::WorkflowInput { .. } => "workflow_input",
@@ -3037,6 +3080,53 @@ async fn dispatch(
                     .await?,
             )?)
         }
+        WorkerOperation::WorkflowSubscriptionCreate {
+            subscription_id,
+            name,
+            version,
+            event_type,
+            stream_prefix,
+            enabled,
+            after_sequence,
+        } => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(
+                runtime.workflows().create_subscription(
+                    &subscription_id,
+                    &name,
+                    &version,
+                    &event_type,
+                    stream_prefix.as_deref(),
+                    enabled,
+                    after_sequence,
+                )?,
+            )?)
+        }
+        WorkerOperation::WorkflowSubscriptionList { limit } => Ok(serde_json::to_value(
+            runtime
+                .workflows()
+                .list_subscriptions(limit.clamp(1, 10_000))?,
+        )?),
+        WorkerOperation::WorkflowSubscriptionShow { subscription_id } => Ok(serde_json::to_value(
+            runtime.workflows().get_subscription(&subscription_id)?,
+        )?),
+        WorkerOperation::WorkflowSubscriptionSetEnabled {
+            subscription_id,
+            enabled,
+        } => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(
+                runtime
+                    .workflows()
+                    .set_subscription_enabled(&subscription_id, enabled)?,
+            )?)
+        }
+        WorkerOperation::WorkflowSubscriptionTick => {
+            let _guard = maintenance.lock().await;
+            Ok(serde_json::to_value(
+                runtime.workflows().tick_subscriptions_now().await?,
+            )?)
+        }
         WorkerOperation::WorkflowStatus { run_id } => {
             Ok(serde_json::to_value(runtime.workflows().get_run(&run_id)?)?)
         }
@@ -3071,6 +3161,7 @@ async fn drain_once(
 ) -> Result<Value, WorkerError> {
     let _guard = maintenance.lock().await;
     let schedules = runtime.workflows().tick_schedules_now()?;
+    let subscriptions = runtime.workflows().tick_subscriptions_now().await?;
     let workflows = runtime.workflows().drain().await?;
     // Durable execution queues take precedence over disposable projections so
     // a large projection backlog cannot starve queued child work.
@@ -3079,6 +3170,7 @@ async fn drain_once(
     let audit_exports = runtime.drain_audit_exports().await?;
     Ok(json!({
         "schedules": schedules,
+        "subscriptions": subscriptions,
         "workflows": workflows,
         "projections": projections,
         "subagents": subagents,
@@ -3784,6 +3876,39 @@ mod tests {
         assert_eq!(replay_window_seconds, 300);
         assert_eq!(max_body_bytes, 4096);
         assert!(enabled);
+    }
+
+    #[test]
+    fn workflow_subscription_operation_round_trips_the_worker_contract() {
+        let encoded = serde_json::to_value(WorkerOperation::WorkflowSubscriptionCreate {
+            subscription_id: "new-tasks".into(),
+            name: "subscription-smoke".into(),
+            version: "1.0.0".into(),
+            event_type: "task.created.v1".into(),
+            stream_prefix: Some("task:".into()),
+            enabled: true,
+            after_sequence: Some(41),
+        })
+        .expect("serialize subscription operation");
+        assert_eq!(encoded["operation"], "workflow_subscription_create");
+        let decoded: WorkerOperation =
+            serde_json::from_value(encoded).expect("deserialize subscription operation");
+        let WorkerOperation::WorkflowSubscriptionCreate {
+            subscription_id,
+            event_type,
+            stream_prefix,
+            enabled,
+            after_sequence,
+            ..
+        } = decoded
+        else {
+            panic!("expected subscription creation operation");
+        };
+        assert_eq!(subscription_id, "new-tasks");
+        assert_eq!(event_type, "task.created.v1");
+        assert_eq!(stream_prefix.as_deref(), Some("task:"));
+        assert!(enabled);
+        assert_eq!(after_sequence, Some(41));
     }
 
     #[test]

@@ -2126,6 +2126,7 @@ impl Runtime {
                     "presentation.preferences.update",
                     "presentation.history.append",
                     "workflow.webhook.ingest",
+                    "workflow.subscription.dispatch",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
@@ -9828,7 +9829,7 @@ impl EffectExecutor for WorkflowControlExecutor {
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         if !matches!(
             request.action.as_str(),
-            "workflow.start" | "workflow.webhook.ingest"
+            "workflow.start" | "workflow.webhook.ingest" | "workflow.subscription.dispatch"
         ) {
             return Err(ExecutionError::Failed(
                 "workflow control executor received an unsupported action".into(),
@@ -9882,7 +9883,9 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
         };
         let executor: &dyn EffectExecutor = match request.action.as_str() {
             "provider.echo" => &EchoExecutor,
-            "workflow.start" | "workflow.webhook.ingest" => &WorkflowControlExecutor,
+            "workflow.start" | "workflow.webhook.ingest" | "workflow.subscription.dispatch" => {
+                &WorkflowControlExecutor
+            }
             _ => &UnavailableExecutor,
         };
         match self.gateway.execute(request, executor).await {
@@ -9893,6 +9896,7 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
             Err(GatewayError::OutcomeUnknown(message)) => {
                 Err(WorkflowError::OutcomeUnknown(message))
             }
+            Err(GatewayError::Journal(error)) => Err(WorkflowError::Store(error)),
             Err(error) => Err(WorkflowError::Effect(error.to_string())),
         }
     }
@@ -10089,6 +10093,57 @@ mod tests {
             "env:COLOSSUS_WEBHOOK_SECRET"
         );
         assert!(!payload.to_string().contains("actual-secret-value"));
+    }
+
+    #[tokio::test]
+    async fn subscription_dispatch_uses_the_ordinary_gateway() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let gateway = colossus_policy::EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(
+                colossus_policy::BuiltInPolicy::offline_default()
+                    .with_action("workflow.subscription.dispatch", DecisionOutcome::Allow),
+            ),
+            Arc::new(colossus_policy::DenyApproval),
+            colossus_policy::SafetyKernel::new(["workflow.execute".into()]),
+            [46_u8; 32],
+        );
+        GatewayWorkflowEffects {
+            gateway: Arc::new(gateway),
+        }
+        .run(WorkflowEffect {
+            kind: "workflow".into(),
+            action: "workflow.subscription.dispatch".into(),
+            content: json!({
+                "subscription_id": "new-tasks",
+                "event": {"event_id": "event-1", "payload": {"title": "review"}},
+            }),
+            idempotency: Some("subscription:new-tasks:event-1".into()),
+            credential_references: Vec::new(),
+            run_id: "subscription-run".into(),
+            step_id: "$subscription".into(),
+            definition_step_id: "$subscription".into(),
+            workflow_hash: "workflow-digest".into(),
+            attempt: 1,
+            compensation: false,
+        })
+        .await
+        .expect("authorized subscription dispatch");
+
+        let requested = journal
+            .read_global(1, 100)
+            .expect("events")
+            .into_iter()
+            .find(|event| event.event_type == "effect.requested.v1")
+            .expect("requested event");
+        let payload = journal.decrypt_payload(&requested).expect("payload");
+        assert_eq!(payload["action"], "workflow.subscription.dispatch");
+        let content_fields = payload["content_fields"]
+            .as_array()
+            .expect("content fields");
+        assert_eq!(content_fields.len(), 2);
+        assert!(content_fields.contains(&json!("event")));
+        assert!(content_fields.contains(&json!("subscription_id")));
     }
 
     #[tokio::test]

@@ -129,7 +129,7 @@ inspect hashes, audit records, and package contents without network access.
 | CTX-01 | Context composition and compaction | P1 | Raw history is retained while provider input stays within budget. |
 | WORK-01 | Tasks, decisions, memories, and plans | P1 | Long-running work state is persisted and inspectable. |
 | MEM-01 | Canonical memory and disposable indexes | P1 | Memory lifecycle state remains authoritative and usable while lexical or semantic indexes lag or rebuild. |
-| FLOW-01 | Durable versioned workflows | P1 | YAML workflows, fixed-cadence schedules, and authenticated webhook triggers are validated, hash-pinned, restartable, bounded, and use normal authorization for every effectful step. |
+| FLOW-01 | Durable versioned workflows | P1 | YAML workflows, fixed-cadence schedules, authenticated webhooks, and repository-event subscriptions are validated, hash-pinned, restartable, bounded, and use normal authorization for every dispatch and effectful step. |
 | GOAL-01 | Bounded Goal Mode | P1 | Autonomous iterations stop on terminal status or budget exhaustion. |
 | AGENT-01 | Durable subagents | P1 | Queued child jobs support bounded concurrency and lifecycle controls. |
 | RES-01 | Deep Research | P1 | Evidence collection, claims, citations, progress, and fallback are durable. |
@@ -620,6 +620,26 @@ Changing or removing the pinned definition disables the webhook with an auditabl
 bounded reason; storage failure remains retriable. Any bundled HTTP adapter MUST bind
 loopback only, bound parsing before allocation, reject chunked/trailing bodies, and leave
 public TLS, origin authentication, and rate limiting to a trusted reverse proxy.
+
+Persisted repository-event subscriptions bind an operator-selected identifier, one exact
+versioned domain event type, an optional aggregate stream prefix, and a validated input
+envelope to an exact workflow hash. `workflow.*` source types and non-domain journal
+events MUST be rejected. Creation defaults its global checkpoint to the current journal
+head; replay before that point requires an explicit `after_sequence`. Definition,
+call-graph, and complete input trust MUST be checked before enable and dispatch, and the
+complete event envelope MUST cross `workflow.subscription.dispatch` through the ordinary
+policy/effect/audit gateway.
+
+After authorization, dispatch MUST hold the writer coordination lock and recheck binding
+state, trust, checkpoint, and immutable source-event identity. The source checkpoint,
+delivery receipt, and deterministic queued run MUST commit in one journal batch. Replay
+of a delivered source event MUST acknowledge the existing receipt without another policy
+request or run. Unmatched domain events advance the checkpoint; definition or schema
+invalidation disables the subscription without advancing past the rejected event, while
+storage failure remains retriable. A refused or incomplete control dispatch leaves the
+source pending and MUST NOT starve unrelated subscriptions or queued workflow runs.
+Trigger-created runs retain ordinary workflow policy, approval, permit, recovery, and
+unknown-outcome semantics.
 
 When the worker is active it owns the canonical writer lease. Local clients MUST
 authenticate the server before disclosing operation content, authenticate every request
@@ -1191,6 +1211,11 @@ the resulting signed evidence and six native archives.
   HMAC/timestamp/replay/body/trust rejection tests, credential-reference-only gateway
   disclosure, atomic accepted-delivery/run queueing, bounded loopback HTTP parsing, and
   CLI/TUI/worker/embedded contract and parity tests.
+- [x] Repository-event workflow subscriptions pass shared in-memory/redb repository
+  conformance, exact domain-type and stream filtering, trust/schema blocking,
+  policy-gated dispatch, atomic checkpoint/delivery/run queueing, stale-checkpoint
+  duplicate suppression, CLI/TUI/worker contract tests, and a separate-process redb abort
+  immediately after the atomic delivery batch with no lost or duplicate run after reopen.
 - [x] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
   network escapes on each supported platform.
   The final cutover run passed native macOS/Linux arm64/x64 isolation, Windows arm64/x64

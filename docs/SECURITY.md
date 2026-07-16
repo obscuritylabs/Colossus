@@ -316,6 +316,28 @@ connection. It is intended for a trusted local reverse proxy that supplies the t
 `X-Colossus-*` authentication headers; it is not a public TLS endpoint or a replacement
 for perimeter rate limiting.
 
+Persisted workflow subscriptions consume only events classified as canonical domain
+events. An operator must select one exact versioned event type; `workflow.*` lifecycle
+events are rejected as subscription sources, preventing a triggered run from recursively
+triggering itself through its own queue and execution records. The optional stream prefix
+is a filter, not authority. A subscription created without an explicit checkpoint begins
+after the current journal head, so old sensitive payloads are not silently replayed into
+new workflow inputs.
+
+Each matching event is converted to a bounded input envelope containing its immutable
+event identity, provenance, context, and decrypted domain payload. That complete envelope
+crosses `workflow.subscription.dispatch`; policy can deny it before any workflow run is
+queued. Definition hash, complete call graph, and input schema are revalidated at enable
+and dispatch. Under the shared writer lock, the source checkpoint, delivery receipt, and
+deterministic queued run commit atomically. Once a receipt exists, stale-checkpoint replay
+re-acknowledges it without another policy request or run. Definition or schema
+invalidation disables the binding without skipping the rejected event; repository outage
+remains retriable. Subscription creation grants no capability to the triggered workflow,
+whose steps still cross every ordinary policy, approval, permit, quarantine, and
+unknown-outcome boundary. A denied or incomplete dispatch leaves the event pending and is
+reported as deferred; it does not prevent unrelated subscriptions or already-queued
+workflow runs from being evaluated.
+
 Recovery compares scoped execution ids, so completion of a repeated or parallel sibling
 cannot clear another attempt's uncertainty. An abandoned compensation is explicitly
 phase-labeled and never resumed through the primary workflow path, even if its definition

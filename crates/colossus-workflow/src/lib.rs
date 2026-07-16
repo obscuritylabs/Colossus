@@ -3,10 +3,12 @@
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ActorType, CredentialReference, EventClassification, ExecutionContext, NewEvent,
-    WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowScheduleDispatch,
+    Actor, ActorType, CredentialReference, EventClassification, EventEnvelope, ExecutionContext,
+    NewEvent, WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowScheduleDispatch,
     WorkflowScheduleDispatchStatus, WorkflowScheduleMisfirePolicy, WorkflowStatus, WorkflowStep,
-    WorkflowTriggerKind, WorkflowWebhook, WorkflowWebhookDelivery, WorkflowWebhookDispatch,
+    WorkflowSubscription, WorkflowSubscriptionDelivery, WorkflowSubscriptionDispatch,
+    WorkflowSubscriptionDispatchStatus, WorkflowTriggerKind, WorkflowWebhook,
+    WorkflowWebhookDelivery, WorkflowWebhookDispatch,
 };
 use colossus_ports::{EventJournal, StoreError, WorkflowRepository};
 use futures::{StreamExt as _, TryStreamExt as _, stream};
@@ -47,6 +49,12 @@ const MAX_WEBHOOK_REPLAY_WINDOW_SECONDS: u64 = 60 * 60;
 const MAX_WEBHOOK_BODY_BYTES: u64 = 1024 * 1024;
 const MAX_WEBHOOK_HEADERS: usize = 64;
 const MAX_WEBHOOK_HEADER_BYTES: usize = 32 * 1024;
+const MAX_WORKFLOW_SUBSCRIPTIONS: usize = 10_000;
+const MAX_SUBSCRIPTION_ID_BYTES: usize = 128;
+const MAX_SUBSCRIPTION_EVENT_TYPE_BYTES: usize = 256;
+const MAX_SUBSCRIPTION_STREAM_PREFIX_BYTES: usize = 256;
+const MAX_SUBSCRIPTION_SCAN_EVENTS: usize = 256;
+const MAX_SUBSCRIPTION_DISPATCHES_PER_TICK: usize = 64;
 
 /// Workflow validation or durable execution failure.
 #[derive(Debug, Error)]
@@ -1155,6 +1163,118 @@ impl WorkflowRepository for EventSourcedWorkflowRepository {
     ) -> Result<Option<WorkflowWebhookDelivery>, StoreError> {
         fold_webhook_delivery(self.journal.as_ref(), webhook_id, delivery_id)
     }
+
+    fn create_subscription(
+        &self,
+        subscription: &WorkflowSubscription,
+        actor: Actor,
+    ) -> Result<WorkflowSubscription, StoreError> {
+        let stream_id = subscription_stream(&subscription.subscription_id);
+        if !self.journal.read_stream(&stream_id)?.is_empty() {
+            return Err(StoreError::Adapter(format!(
+                "workflow subscription {} already exists",
+                subscription.subscription_id
+            )));
+        }
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version: 0,
+            classification: EventClassification::Workflow,
+            event_type: "workflow.subscription.registered.v1".into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: subscription.subscription_id.clone(),
+                workflow_id: Some(subscription.subscription_id.clone()),
+                workflow_hash: Some(subscription.workflow_hash.clone()),
+                ..ExecutionContext::default()
+            },
+            payload: json!({"record": subscription}),
+        })?;
+        Ok(subscription.clone())
+    }
+
+    fn set_subscription_enabled(
+        &self,
+        subscription_id: &str,
+        enabled: bool,
+        updated_at: &str,
+        actor: Actor,
+    ) -> Result<WorkflowSubscription, StoreError> {
+        let mut subscription = self.subscription(subscription_id)?.ok_or_else(|| {
+            StoreError::NotFound(format!("workflow subscription {subscription_id}"))
+        })?;
+        if subscription.enabled == enabled {
+            return Ok(subscription);
+        }
+        subscription.enabled = enabled;
+        subscription.updated_at = updated_at.into();
+        if enabled {
+            subscription.blocked_reason = None;
+        }
+        let stream_id = subscription_stream(subscription_id);
+        let expected_stream_version = u64::try_from(self.journal.read_stream(&stream_id)?.len())
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        self.journal.append(NewEvent {
+            event_version: 1,
+            stream_id,
+            expected_stream_version,
+            classification: EventClassification::Workflow,
+            event_type: if enabled {
+                "workflow.subscription.enabled.v1"
+            } else {
+                "workflow.subscription.disabled.v1"
+            }
+            .into(),
+            actor,
+            context: ExecutionContext {
+                correlation_id: subscription_id.into(),
+                workflow_id: Some(subscription_id.into()),
+                workflow_hash: Some(subscription.workflow_hash.clone()),
+                ..ExecutionContext::default()
+            },
+            payload: json!({"record": &subscription}),
+        })?;
+        Ok(subscription)
+    }
+
+    fn subscription(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Option<WorkflowSubscription>, StoreError> {
+        fold_subscription(self.journal.as_ref(), subscription_id)
+    }
+
+    fn subscriptions(&self, limit: usize) -> Result<Vec<WorkflowSubscription>, StoreError> {
+        let mut subscription_ids = BTreeSet::new();
+        for event in self.journal.read_global(1, usize::MAX)? {
+            if event.event_type == "workflow.subscription.registered.v1"
+                && let Some(subscription_id) =
+                    event.stream_id.strip_prefix("workflow-subscription:")
+            {
+                subscription_ids.insert(subscription_id.to_owned());
+            }
+        }
+        subscription_ids
+            .into_iter()
+            .take(limit)
+            .map(|subscription_id| {
+                fold_subscription(self.journal.as_ref(), &subscription_id)?.ok_or_else(|| {
+                    StoreError::Verification(format!(
+                        "workflow subscription {subscription_id} cannot be reconstructed"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    fn subscription_delivery(
+        &self,
+        subscription_id: &str,
+        source_event_id: &str,
+    ) -> Result<Option<WorkflowSubscriptionDelivery>, StoreError> {
+        fold_subscription_delivery(self.journal.as_ref(), subscription_id, source_event_id)
+    }
 }
 
 fn schedule_stream(schedule_id: &str) -> String {
@@ -1240,6 +1360,66 @@ fn fold_webhook_delivery(
     if delivery.webhook_id != webhook_id || delivery.delivery_id != delivery_id {
         return Err(StoreError::Verification(
             "webhook delivery stream identity does not match its record".into(),
+        ));
+    }
+    Ok(Some(delivery))
+}
+
+fn subscription_stream(subscription_id: &str) -> String {
+    format!("workflow-subscription:{subscription_id}")
+}
+
+fn subscription_delivery_stream(subscription_id: &str, source_event_id: &str) -> String {
+    let digest = hex::encode(Sha256::digest(source_event_id.as_bytes()));
+    format!("workflow-subscription-delivery:{subscription_id}:{digest}")
+}
+
+fn fold_subscription(
+    journal: &dyn EventJournal,
+    subscription_id: &str,
+) -> Result<Option<WorkflowSubscription>, StoreError> {
+    let events = journal.read_stream(&subscription_stream(subscription_id))?;
+    let Some(last) = events.last() else {
+        return Ok(None);
+    };
+    let payload = journal.decrypt_payload(last)?;
+    let subscription: WorkflowSubscription = serde_json::from_value(
+        payload
+            .get("record")
+            .cloned()
+            .ok_or_else(|| StoreError::Verification("subscription record is absent".into()))?,
+    )
+    .map_err(|error| StoreError::Verification(error.to_string()))?;
+    if subscription.subscription_id != subscription_id {
+        return Err(StoreError::Verification(format!(
+            "subscription stream {subscription_id} contains record {}",
+            subscription.subscription_id
+        )));
+    }
+    Ok(Some(subscription))
+}
+
+fn fold_subscription_delivery(
+    journal: &dyn EventJournal,
+    subscription_id: &str,
+    source_event_id: &str,
+) -> Result<Option<WorkflowSubscriptionDelivery>, StoreError> {
+    let events = journal.read_stream(&subscription_delivery_stream(
+        subscription_id,
+        source_event_id,
+    ))?;
+    let Some(first) = events.first() else {
+        return Ok(None);
+    };
+    let payload = journal.decrypt_payload(first)?;
+    let delivery: WorkflowSubscriptionDelivery =
+        serde_json::from_value(payload.get("record").cloned().ok_or_else(|| {
+            StoreError::Verification("subscription delivery record is absent".into())
+        })?)
+        .map_err(|error| StoreError::Verification(error.to_string()))?;
+    if delivery.subscription_id != subscription_id || delivery.source_event_id != source_event_id {
+        return Err(StoreError::Verification(
+            "subscription delivery stream identity does not match its record".into(),
         ));
     }
     Ok(Some(delivery))
@@ -1651,6 +1831,132 @@ fn webhook_run_event(
             "trigger_kind": WorkflowTriggerKind::Webhook,
             "trigger_id": webhook.webhook_id,
             "trigger_occurrence": delivery_id,
+            "call_depth": 1,
+        }),
+    }
+}
+
+fn valid_subscription_event_type(event_type: &str) -> bool {
+    let Some((name, version)) = event_type.rsplit_once(".v") else {
+        return false;
+    };
+    !name.is_empty()
+        && !version.is_empty()
+        && version.bytes().all(|byte| byte.is_ascii_digit())
+        && event_type.len() <= MAX_SUBSCRIPTION_EVENT_TYPE_BYTES
+        && !event_type.starts_with("workflow.")
+        && event_type.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn subscription_matches(subscription: &WorkflowSubscription, event: &EventEnvelope) -> bool {
+    event.classification == EventClassification::Domain
+        && event.event_type == subscription.event_type
+        && subscription
+            .stream_prefix
+            .as_deref()
+            .is_none_or(|prefix| event.stream_id.starts_with(prefix))
+}
+
+fn subscription_run_id(subscription_id: &str, source_event_id: &str) -> String {
+    let digest = hex::encode(Sha256::digest(
+        format!("{subscription_id}\0{source_event_id}").as_bytes(),
+    ));
+    format!(
+        "subscription-{}",
+        digest.chars().take(32).collect::<String>()
+    )
+}
+
+fn subscription_event(
+    subscription: &WorkflowSubscription,
+    expected_stream_version: u64,
+    event_type: &str,
+    payload: Value,
+) -> NewEvent {
+    NewEvent {
+        event_version: 1,
+        stream_id: subscription_stream(&subscription.subscription_id),
+        expected_stream_version,
+        classification: EventClassification::Workflow,
+        event_type: event_type.into(),
+        actor: Actor {
+            actor_type: ActorType::Workflow,
+            id: subscription.subscription_id.clone(),
+        },
+        context: ExecutionContext {
+            correlation_id: subscription.subscription_id.clone(),
+            workflow_id: Some(subscription.subscription_id.clone()),
+            workflow_hash: Some(subscription.workflow_hash.clone()),
+            ..ExecutionContext::default()
+        },
+        payload,
+    }
+}
+
+fn subscription_delivery_event(
+    subscription: &WorkflowSubscription,
+    delivery: &WorkflowSubscriptionDelivery,
+) -> NewEvent {
+    NewEvent {
+        event_version: 1,
+        stream_id: subscription_delivery_stream(
+            &subscription.subscription_id,
+            &delivery.source_event_id,
+        ),
+        expected_stream_version: 0,
+        classification: EventClassification::Workflow,
+        event_type: "workflow.subscription.delivery.accepted.v1".into(),
+        actor: Actor {
+            actor_type: ActorType::Workflow,
+            id: subscription.subscription_id.clone(),
+        },
+        context: ExecutionContext {
+            correlation_id: delivery.run_id.clone(),
+            run_id: Some(delivery.run_id.clone()),
+            workflow_id: Some(subscription.subscription_id.clone()),
+            workflow_hash: Some(subscription.workflow_hash.clone()),
+            ..ExecutionContext::default()
+        },
+        payload: json!({"record": delivery}),
+    }
+}
+
+fn subscription_run_event(
+    subscription: &WorkflowSubscription,
+    source_event_id: &str,
+    run_id: &str,
+    inputs: Value,
+) -> NewEvent {
+    NewEvent {
+        event_version: 1,
+        stream_id: format!("workflow-run:{run_id}"),
+        expected_stream_version: 0,
+        classification: EventClassification::Workflow,
+        event_type: "workflow.run.queued.v1".into(),
+        actor: Actor {
+            actor_type: ActorType::Workflow,
+            id: subscription.subscription_id.clone(),
+        },
+        context: ExecutionContext {
+            correlation_id: run_id.into(),
+            run_id: Some(run_id.into()),
+            workflow_id: Some(run_id.into()),
+            workflow_hash: Some(subscription.workflow_hash.clone()),
+            ..ExecutionContext::default()
+        },
+        payload: json!({
+            "workflow_name": subscription.workflow_name,
+            "workflow_version": subscription.workflow_version,
+            "workflow_hash": subscription.workflow_hash,
+            "inputs": inputs,
+            "parent_run_id": Value::Null,
+            "parent_step_id": Value::Null,
+            "parent_execution_id": Value::Null,
+            "trigger_kind": WorkflowTriggerKind::Subscription,
+            "trigger_id": subscription.subscription_id,
+            "trigger_occurrence": source_event_id,
             "call_depth": 1,
         }),
     }
@@ -2378,6 +2684,599 @@ impl WorkflowService {
             payload: json!({"record": webhook, "reason": reason}),
         })?;
         Ok(())
+    }
+
+    /// Create one bounded, hash-pinned repository-event subscription.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_subscription(
+        &self,
+        subscription_id: &str,
+        workflow_name: &str,
+        workflow_version: &str,
+        event_type: &str,
+        stream_prefix: Option<&str>,
+        enabled: bool,
+        after_sequence: Option<u64>,
+    ) -> Result<WorkflowSubscription, WorkflowError> {
+        if subscription_id.is_empty()
+            || subscription_id.len() > MAX_SUBSCRIPTION_ID_BYTES
+            || !valid_name(subscription_id)
+        {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "subscription id must contain 1..={MAX_SUBSCRIPTION_ID_BYTES} lowercase letters, digits, dots, or hyphens"
+            )));
+        }
+        if !valid_subscription_event_type(event_type) {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "subscription event type must be a versioned name ending in .vN, contain at most {MAX_SUBSCRIPTION_EVENT_TYPE_BYTES} lowercase letters, digits, dots, underscores, or hyphens, and cannot target workflow lifecycle events"
+            )));
+        }
+        if let Some(prefix) = stream_prefix
+            && (prefix.is_empty()
+                || prefix.len() > MAX_SUBSCRIPTION_STREAM_PREFIX_BYTES
+                || prefix.chars().any(char::is_control))
+        {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "subscription stream prefix must contain 1..={MAX_SUBSCRIPTION_STREAM_PREFIX_BYTES} non-control bytes"
+            )));
+        }
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        if self.repository.subscription(subscription_id)?.is_some() {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "workflow subscription {subscription_id} already exists"
+            )));
+        }
+        if self
+            .repository
+            .subscriptions(MAX_WORKFLOW_SUBSCRIPTIONS)?
+            .len()
+            >= MAX_WORKFLOW_SUBSCRIPTIONS
+        {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "workflow subscription limit {MAX_WORKFLOW_SUBSCRIPTIONS} is exhausted"
+            )));
+        }
+        let (definition, workflow_hash) = self
+            .repository
+            .definition(workflow_name, workflow_version)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("{workflow_name}:{workflow_version}"))
+            })?;
+        validate_call_graph(self.repository.as_ref(), &definition, true)?;
+        let (head, _) = self.journal.head()?;
+        let checkpoint = after_sequence.unwrap_or(head);
+        if checkpoint > head {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "subscription checkpoint {checkpoint} is beyond journal head {head}"
+            )));
+        }
+        let now = format_schedule_time(OffsetDateTime::now_utc())?;
+        let subscription = WorkflowSubscription {
+            subscription_id: subscription_id.into(),
+            workflow_name: workflow_name.into(),
+            workflow_version: workflow_version.into(),
+            workflow_hash,
+            event_type: event_type.into(),
+            stream_prefix: stream_prefix.map(str::to_owned),
+            enabled,
+            checkpoint,
+            last_event_id: None,
+            last_run_id: None,
+            blocked_reason: None,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.repository.create_subscription(
+            &subscription,
+            Actor {
+                actor_type: ActorType::User,
+                id: "workflow-subscription-registrar".into(),
+            },
+        )?;
+        Ok(subscription)
+    }
+
+    /// Reconstruct one canonical repository-event subscription.
+    pub fn get_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> Result<WorkflowSubscription, WorkflowError> {
+        self.repository
+            .subscription(subscription_id)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("workflow subscription {subscription_id}"))
+            })
+    }
+
+    /// List bounded subscriptions in deterministic identifier order.
+    pub fn list_subscriptions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<WorkflowSubscription>, WorkflowError> {
+        self.repository
+            .subscriptions(limit.min(MAX_WORKFLOW_SUBSCRIPTIONS))
+            .map_err(Into::into)
+    }
+
+    /// Explicitly enable or disable one subscription after rechecking pinned trust.
+    pub fn set_subscription_enabled(
+        &self,
+        subscription_id: &str,
+        enabled: bool,
+    ) -> Result<WorkflowSubscription, WorkflowError> {
+        let now = format_schedule_time(OffsetDateTime::now_utc())?;
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let subscription = self
+            .repository
+            .subscription(subscription_id)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("workflow subscription {subscription_id}"))
+            })?;
+        if enabled {
+            self.validate_subscription_trust(&subscription)?;
+        }
+        self.repository
+            .set_subscription_enabled(
+                subscription_id,
+                enabled,
+                &now,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "workflow-subscription-operator".into(),
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    /// Evaluate persisted subscriptions against bounded canonical journal work.
+    pub async fn tick_subscriptions_now(
+        &self,
+    ) -> Result<Vec<WorkflowSubscriptionDispatch>, WorkflowError> {
+        let subscriptions = self.repository.subscriptions(MAX_WORKFLOW_SUBSCRIPTIONS)?;
+        let mut dispatches = Vec::new();
+        let mut queued = 0_usize;
+        for subscription in subscriptions
+            .into_iter()
+            .filter(|subscription| subscription.enabled)
+        {
+            if queued >= MAX_SUBSCRIPTION_DISPATCHES_PER_TICK {
+                break;
+            }
+            let subscription_id = subscription.subscription_id.clone();
+            let checkpoint = subscription.checkpoint;
+            match self.tick_subscription(subscription).await {
+                Ok(Some(dispatch)) => {
+                    if dispatch.status == WorkflowSubscriptionDispatchStatus::Queued {
+                        queued = queued.saturating_add(1);
+                    }
+                    dispatches.push(dispatch);
+                }
+                Ok(None) => {}
+                Err(WorkflowError::Effect(_) | WorkflowError::OutcomeUnknown(_)) => {
+                    dispatches.push(WorkflowSubscriptionDispatch {
+                        subscription_id,
+                        status: WorkflowSubscriptionDispatchStatus::Deferred,
+                        checkpoint,
+                        source_event_id: None,
+                        run_id: None,
+                        reason: Some(
+                            "policy-controlled dispatch did not complete; source remains pending"
+                                .into(),
+                        ),
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(dispatches)
+    }
+
+    async fn tick_subscription(
+        &self,
+        subscription: WorkflowSubscription,
+    ) -> Result<Option<WorkflowSubscriptionDispatch>, WorkflowError> {
+        let events = self.journal.read_global(
+            subscription.checkpoint.saturating_add(1),
+            MAX_SUBSCRIPTION_SCAN_EVENTS,
+        )?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+        let matching = events
+            .iter()
+            .find(|event| subscription_matches(&subscription, event))
+            .cloned();
+        let Some(source) = matching else {
+            let domain_seen = events
+                .iter()
+                .any(|event| event.classification == EventClassification::Domain);
+            if !domain_seen && events.len() < MAX_SUBSCRIPTION_SCAN_EVENTS {
+                return Ok(None);
+            }
+            let checkpoint = events
+                .last()
+                .map(|event| event.global_sequence)
+                .unwrap_or(subscription.checkpoint);
+            return self.advance_subscription_checkpoint(&subscription, checkpoint);
+        };
+
+        if let Some(delivery) = self
+            .repository
+            .subscription_delivery(&subscription.subscription_id, &source.event_id)?
+        {
+            return self.acknowledge_duplicate_subscription(&subscription, &source, &delivery);
+        }
+
+        let inputs = self.subscription_inputs(&subscription, &source)?;
+        let definition = match self.validate_subscription_trust(&subscription) {
+            Ok(definition) => definition,
+            Err(WorkflowError::Store(error)) => return Err(error.into()),
+            Err(_) => {
+                return self.block_subscription(
+                    &subscription,
+                    &source,
+                    "pinned workflow definition or call graph is no longer trusted",
+                );
+            }
+        };
+        if let Err(error) = validate_instance(&definition.inputs, &inputs, "subscription input") {
+            if let WorkflowError::Store(error) = error {
+                return Err(error.into());
+            }
+            return self.block_subscription(
+                &subscription,
+                &source,
+                "source event does not satisfy the pinned workflow input schema",
+            );
+        }
+        let run_id = subscription_run_id(&subscription.subscription_id, &source.event_id);
+        let dispatch = self
+            .effects
+            .run(WorkflowEffect {
+                kind: "workflow".into(),
+                action: "workflow.subscription.dispatch".into(),
+                content: json!({
+                    "subscription_id": subscription.subscription_id,
+                    "workflow_name": subscription.workflow_name,
+                    "workflow_version": subscription.workflow_version,
+                    "event": inputs["event"].clone(),
+                    "idempotency_key": inputs["idempotency_key"].clone(),
+                }),
+                idempotency: Some(format!(
+                    "subscription:{}:{}",
+                    subscription.subscription_id, source.event_id
+                )),
+                credential_references: Vec::new(),
+                run_id: run_id.clone(),
+                step_id: "$subscription".into(),
+                definition_step_id: "$subscription".into(),
+                workflow_hash: subscription.workflow_hash.clone(),
+                attempt: 1,
+                compensation: false,
+            })
+            .await;
+        if let Err(error) = dispatch {
+            return match error {
+                WorkflowError::Effect(_) | WorkflowError::OutcomeUnknown(_) => {
+                    Ok(Some(WorkflowSubscriptionDispatch {
+                        subscription_id: subscription.subscription_id,
+                        status: WorkflowSubscriptionDispatchStatus::Deferred,
+                        checkpoint: subscription.checkpoint,
+                        source_event_id: Some(source.event_id),
+                        run_id: None,
+                        reason: Some(
+                            "policy-controlled dispatch did not complete; source remains pending"
+                                .into(),
+                        ),
+                    }))
+                }
+                error => Err(error),
+            };
+        }
+
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let mut current = self
+            .repository
+            .subscription(&subscription.subscription_id)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!(
+                    "workflow subscription {}",
+                    subscription.subscription_id
+                ))
+            })?;
+        if !current.enabled || current.checkpoint != subscription.checkpoint {
+            return Ok(None);
+        }
+        let persisted = self
+            .journal
+            .read_global(source.global_sequence, 1)?
+            .into_iter()
+            .next()
+            .filter(|event| event.event_id == source.event_id)
+            .ok_or_else(|| {
+                WorkflowError::InvalidTransition(
+                    "subscription source event changed during authorization".into(),
+                )
+            })?;
+        if !subscription_matches(&current, &persisted) {
+            return Err(WorkflowError::InvalidTransition(
+                "subscription filter changed during authorization".into(),
+            ));
+        }
+        if let Some(delivery) = self
+            .repository
+            .subscription_delivery(&current.subscription_id, &persisted.event_id)?
+        {
+            return self.acknowledge_duplicate_subscription_locked(
+                &mut current,
+                &persisted,
+                &delivery,
+            );
+        }
+        let current_inputs = self.subscription_inputs(&current, &persisted)?;
+        let current_definition = self.validate_subscription_trust(&current)?;
+        validate_instance(
+            &current_definition.inputs,
+            &current_inputs,
+            "subscription input",
+        )?;
+        if self.repository.run(&run_id)?.is_some() {
+            return Err(WorkflowError::InvalidTransition(format!(
+                "deterministic subscription run {run_id} already exists without its delivery receipt"
+            )));
+        }
+        let delivered_at = format_schedule_time(OffsetDateTime::now_utc())?;
+        current.checkpoint = persisted.global_sequence;
+        current.last_event_id = Some(persisted.event_id.clone());
+        current.last_run_id = Some(run_id.clone());
+        current.blocked_reason = None;
+        current.updated_at = delivered_at.clone();
+        let expected_stream_version = self.subscription_version(&current.subscription_id)?;
+        let delivery = WorkflowSubscriptionDelivery {
+            subscription_id: current.subscription_id.clone(),
+            source_event_id: persisted.event_id.clone(),
+            source_global_sequence: persisted.global_sequence,
+            delivered_at,
+            run_id: run_id.clone(),
+        };
+        self.journal.append_batch(vec![
+            subscription_event(
+                &current,
+                expected_stream_version,
+                "workflow.subscription.delivered.v1",
+                json!({"record": &current, "delivery": &delivery}),
+            ),
+            subscription_delivery_event(&current, &delivery),
+            subscription_run_event(&current, &persisted.event_id, &run_id, current_inputs),
+        ])?;
+        Ok(Some(WorkflowSubscriptionDispatch {
+            subscription_id: current.subscription_id,
+            status: WorkflowSubscriptionDispatchStatus::Queued,
+            checkpoint: persisted.global_sequence,
+            source_event_id: Some(persisted.event_id),
+            run_id: Some(run_id),
+            reason: None,
+        }))
+    }
+
+    fn subscription_inputs(
+        &self,
+        subscription: &WorkflowSubscription,
+        event: &EventEnvelope,
+    ) -> Result<Value, WorkflowError> {
+        let payload = self.journal.decrypt_payload(event)?;
+        Ok(json!({
+            "subscription_id": subscription.subscription_id,
+            "idempotency_key": format!(
+                "subscription:{}:{}",
+                subscription.subscription_id, event.event_id
+            ),
+            "event": {
+                "event_id": event.event_id,
+                "global_sequence": event.global_sequence,
+                "stream_id": event.stream_id,
+                "stream_version": event.stream_version,
+                "classification": event.classification,
+                "event_type": event.event_type,
+                "actor": event.actor,
+                "context": event.context,
+                "occurred_at": event.occurred_at,
+                "payload": payload,
+            },
+        }))
+    }
+
+    fn validate_subscription_trust(
+        &self,
+        subscription: &WorkflowSubscription,
+    ) -> Result<WorkflowDefinition, WorkflowError> {
+        let (definition, current_hash) = self
+            .repository
+            .definition(&subscription.workflow_name, &subscription.workflow_version)?
+            .ok_or_else(|| WorkflowError::NotFound(subscription.workflow_name.clone()))?;
+        if current_hash != subscription.workflow_hash {
+            return Err(WorkflowError::InvalidTransition(
+                "subscription pinned workflow definition changed".into(),
+            ));
+        }
+        validate_call_graph(self.repository.as_ref(), &definition, true)?;
+        Ok(definition)
+    }
+
+    fn advance_subscription_checkpoint(
+        &self,
+        subscription: &WorkflowSubscription,
+        checkpoint: u64,
+    ) -> Result<Option<WorkflowSubscriptionDispatch>, WorkflowError> {
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let mut current = self
+            .repository
+            .subscription(&subscription.subscription_id)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!(
+                    "workflow subscription {}",
+                    subscription.subscription_id
+                ))
+            })?;
+        if !current.enabled || current.checkpoint != subscription.checkpoint {
+            return Ok(None);
+        }
+        current.checkpoint = checkpoint;
+        current.updated_at = format_schedule_time(OffsetDateTime::now_utc())?;
+        let expected_stream_version = self.subscription_version(&current.subscription_id)?;
+        self.journal.append(subscription_event(
+            &current,
+            expected_stream_version,
+            "workflow.subscription.checkpointed.v1",
+            json!({"record": &current}),
+        ))?;
+        Ok(Some(WorkflowSubscriptionDispatch {
+            subscription_id: current.subscription_id,
+            status: WorkflowSubscriptionDispatchStatus::Checkpointed,
+            checkpoint,
+            source_event_id: None,
+            run_id: None,
+            reason: None,
+        }))
+    }
+
+    fn acknowledge_duplicate_subscription(
+        &self,
+        subscription: &WorkflowSubscription,
+        source: &EventEnvelope,
+        delivery: &WorkflowSubscriptionDelivery,
+    ) -> Result<Option<WorkflowSubscriptionDispatch>, WorkflowError> {
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let mut current = self
+            .repository
+            .subscription(&subscription.subscription_id)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!(
+                    "workflow subscription {}",
+                    subscription.subscription_id
+                ))
+            })?;
+        if !current.enabled || current.checkpoint != subscription.checkpoint {
+            return Ok(None);
+        }
+        self.acknowledge_duplicate_subscription_locked(&mut current, source, delivery)
+    }
+
+    fn acknowledge_duplicate_subscription_locked(
+        &self,
+        current: &mut WorkflowSubscription,
+        source: &EventEnvelope,
+        delivery: &WorkflowSubscriptionDelivery,
+    ) -> Result<Option<WorkflowSubscriptionDispatch>, WorkflowError> {
+        let expected_run_id = subscription_run_id(&current.subscription_id, &source.event_id);
+        let run = self.repository.run(&delivery.run_id)?.ok_or_else(|| {
+            StoreError::Verification(format!(
+                "subscription delivery {}:{} has no queued workflow run",
+                current.subscription_id, source.event_id
+            ))
+        })?;
+        if delivery.source_global_sequence != source.global_sequence
+            || delivery.run_id != expected_run_id
+            || run.trigger_kind != Some(WorkflowTriggerKind::Subscription)
+            || run.trigger_id.as_deref() != Some(current.subscription_id.as_str())
+            || run.trigger_occurrence.as_deref() != Some(source.event_id.as_str())
+        {
+            return Err(StoreError::Verification(format!(
+                "subscription delivery {}:{} does not match its source event and run",
+                current.subscription_id, source.event_id
+            ))
+            .into());
+        }
+        current.checkpoint = source.global_sequence;
+        current.last_event_id = Some(source.event_id.clone());
+        current.last_run_id = Some(delivery.run_id.clone());
+        current.updated_at = format_schedule_time(OffsetDateTime::now_utc())?;
+        let expected_stream_version = self.subscription_version(&current.subscription_id)?;
+        self.journal.append(subscription_event(
+            current,
+            expected_stream_version,
+            "workflow.subscription.duplicate_acknowledged.v1",
+            json!({"record": &current, "delivery": delivery}),
+        ))?;
+        Ok(Some(WorkflowSubscriptionDispatch {
+            subscription_id: current.subscription_id.clone(),
+            status: WorkflowSubscriptionDispatchStatus::Duplicate,
+            checkpoint: source.global_sequence,
+            source_event_id: Some(source.event_id.clone()),
+            run_id: Some(delivery.run_id.clone()),
+            reason: None,
+        }))
+    }
+
+    fn block_subscription(
+        &self,
+        subscription: &WorkflowSubscription,
+        source: &EventEnvelope,
+        reason: &str,
+    ) -> Result<Option<WorkflowSubscriptionDispatch>, WorkflowError> {
+        let _guard = self
+            .event_writer
+            .lock()
+            .map_err(|error| StoreError::Adapter(error.to_string()))?;
+        let mut current = self
+            .repository
+            .subscription(&subscription.subscription_id)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!(
+                    "workflow subscription {}",
+                    subscription.subscription_id
+                ))
+            })?;
+        if !current.enabled || current.checkpoint != subscription.checkpoint {
+            return Ok(None);
+        }
+        current.enabled = false;
+        current.blocked_reason = Some(reason.into());
+        current.updated_at = format_schedule_time(OffsetDateTime::now_utc())?;
+        let expected_stream_version = self.subscription_version(&current.subscription_id)?;
+        self.journal.append(subscription_event(
+            &current,
+            expected_stream_version,
+            "workflow.subscription.blocked.v1",
+            json!({
+                "record": &current,
+                "reason": reason,
+                "source_event_id": source.event_id,
+                "source_global_sequence": source.global_sequence,
+            }),
+        ))?;
+        Ok(Some(WorkflowSubscriptionDispatch {
+            subscription_id: current.subscription_id,
+            status: WorkflowSubscriptionDispatchStatus::Blocked,
+            checkpoint: current.checkpoint,
+            source_event_id: Some(source.event_id.clone()),
+            run_id: None,
+            reason: Some(reason.into()),
+        }))
+    }
+
+    fn subscription_version(&self, subscription_id: &str) -> Result<u64, StoreError> {
+        u64::try_from(
+            self.journal
+                .read_stream(&subscription_stream(subscription_id))?
+                .len(),
+        )
+        .map_err(|error| StoreError::Adapter(error.to_string()))
     }
 
     /// Evaluate every due schedule against an explicit UTC clock value.
@@ -3791,8 +4690,9 @@ mod tests {
     };
     use async_trait::async_trait;
     use colossus_contracts::{
-        EventEnvelope, NewEvent, ProjectionWorkItem, SignedCheckpoint,
-        WorkflowScheduleDispatchStatus, WorkflowScheduleMisfirePolicy, WorkflowStatus,
+        Actor, ActorType, EventClassification, EventEnvelope, ExecutionContext, NewEvent,
+        ProjectionWorkItem, SignedCheckpoint, WorkflowScheduleDispatchStatus,
+        WorkflowScheduleMisfirePolicy, WorkflowStatus, WorkflowSubscriptionDispatchStatus,
         WorkflowTriggerKind,
     };
     use colossus_journal_redb::{Ed25519CheckpointSigner, RedbEventJournal};
@@ -3852,6 +4752,40 @@ inputs:
     delivery_id: { type: string }
     headers: { type: object }
     timestamp: { type: string }
+outputs:
+  type: object
+capabilities: []
+maxConcurrency: 2
+stepBudget: 4
+steps:
+  - type: emit
+    id: result
+    value: { ok: true }
+"#;
+
+    const SUBSCRIPTION_WORKFLOW: &str = r#"
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: subscription-smoke
+  version: 1.0.0
+  description: Repository event subscription smoke workflow
+inputs:
+  type: object
+  additionalProperties: false
+  required: [event, idempotency_key, subscription_id]
+  properties:
+    subscription_id: { type: string }
+    idempotency_key: { type: string }
+    event:
+      type: object
+      required: [event_id, global_sequence, stream_id, stream_version, classification, event_type, actor, context, occurred_at, payload]
+      properties:
+        payload:
+          type: object
+          required: [title]
+          properties:
+            title: { type: string }
 outputs:
   type: object
 capabilities: []
@@ -4197,6 +5131,519 @@ steps:
         assert!(!webhook.enabled);
         assert!(webhook.blocked_reason.is_some());
         assert!(effects.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn repository_subscription_is_policy_gated_restartable_and_duplicate_safe() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            effects.clone(),
+        );
+        service
+            .register_definition(SUBSCRIPTION_WORKFLOW, "subscription-test")
+            .expect("register workflow");
+        service
+            .create_subscription(
+                "task-events",
+                "subscription-smoke",
+                "1.0.0",
+                "task.created.v1",
+                Some("task:"),
+                true,
+                Some(0),
+            )
+            .expect("create subscription");
+        journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "memory:not-a-task-stream".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "task.created.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::User,
+                    id: "tester".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({"title": "filtered by stream prefix"}),
+            })
+            .expect("append wrong-stream event");
+        let source = journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "task:alpha".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "task.created.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::User,
+                    id: "tester".into(),
+                },
+                context: ExecutionContext {
+                    correlation_id: "source-correlation".into(),
+                    ..ExecutionContext::default()
+                },
+                payload: json!({"title": "Review durable delivery"}),
+            })
+            .expect("append source event");
+
+        effects.fail("workflow.subscription.dispatch", 1);
+        let deferred = service
+            .tick_subscriptions_now()
+            .await
+            .expect("defer refused dispatch");
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(
+            deferred[0].status,
+            WorkflowSubscriptionDispatchStatus::Deferred
+        );
+        assert_eq!(
+            deferred[0].source_event_id.as_deref(),
+            Some(source.event_id.as_str())
+        );
+        let pending = service
+            .get_subscription("task-events")
+            .expect("pending subscription");
+        assert!(pending.enabled);
+        assert_eq!(pending.checkpoint, 0);
+        assert!(service.list_runs(10).expect("pending runs").is_empty());
+
+        let dispatches = service
+            .tick_subscriptions_now()
+            .await
+            .expect("tick subscriptions");
+        assert_eq!(dispatches.len(), 1);
+        let dispatch = &dispatches[0];
+        assert_eq!(dispatch.status, WorkflowSubscriptionDispatchStatus::Queued);
+        assert_eq!(dispatch.checkpoint, source.global_sequence);
+        assert_eq!(
+            dispatch.source_event_id.as_deref(),
+            Some(source.event_id.as_str())
+        );
+        let run_id = dispatch.run_id.clone().expect("subscription run");
+        let run = service.get_run(&run_id).expect("queued run");
+        assert_eq!(run.status, WorkflowStatus::Queued);
+        assert_eq!(run.trigger_kind, Some(WorkflowTriggerKind::Subscription));
+        assert_eq!(run.trigger_id.as_deref(), Some("task-events"));
+        assert_eq!(
+            run.trigger_occurrence.as_deref(),
+            Some(source.event_id.as_str())
+        );
+        assert_eq!(
+            run.inputs["event"]["payload"]["title"],
+            "Review durable delivery"
+        );
+        assert_eq!(
+            repository
+                .subscription_delivery("task-events", &source.event_id)
+                .expect("delivery lookup")
+                .expect("delivery")
+                .run_id,
+            run_id
+        );
+        let calls = effects.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].action, "workflow.subscription.dispatch");
+        assert_eq!(
+            calls[1].content["event"]["payload"]["title"],
+            "Review durable delivery"
+        );
+
+        let events = journal.read_global(1, usize::MAX).expect("events");
+        let delivered = events
+            .iter()
+            .position(|event| event.event_type == "workflow.subscription.delivered.v1")
+            .expect("subscription transition");
+        assert_eq!(
+            events
+                .get(delivered + 1)
+                .map(|event| event.event_type.as_str()),
+            Some("workflow.subscription.delivery.accepted.v1")
+        );
+        assert_eq!(
+            events
+                .get(delivered + 2)
+                .map(|event| event.event_type.as_str()),
+            Some("workflow.run.queued.v1")
+        );
+
+        let mut rewound = service
+            .get_subscription("task-events")
+            .expect("subscription");
+        rewound.checkpoint = 0;
+        rewound.last_event_id = None;
+        rewound.last_run_id = None;
+        let stream = super::subscription_stream("task-events");
+        journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: stream.clone(),
+                expected_stream_version: u64::try_from(
+                    journal
+                        .read_stream(&stream)
+                        .expect("subscription stream")
+                        .len(),
+                )
+                .expect("stream version"),
+                classification: EventClassification::Workflow,
+                event_type: "workflow.subscription.test_rewound.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::System,
+                    id: "at-least-once-test".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({"record": rewound}),
+            })
+            .expect("simulate stale consumer checkpoint");
+        let duplicate = service
+            .tick_subscriptions_now()
+            .await
+            .expect("redeliver source event");
+        assert_eq!(duplicate.len(), 1);
+        assert_eq!(
+            duplicate[0].status,
+            WorkflowSubscriptionDispatchStatus::Duplicate
+        );
+        assert_eq!(duplicate[0].run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(service.list_runs(10).expect("runs").len(), 1);
+        assert_eq!(
+            effects.calls().len(),
+            2,
+            "duplicate bypasses policy and queueing"
+        );
+
+        let reopened = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal))),
+            Arc::new(RecordingEffects::default()),
+        );
+        assert!(
+            reopened
+                .tick_subscriptions_now()
+                .await
+                .expect("restart tick")
+                .is_empty()
+        );
+        let completed = reopened.drain().await.expect("drain subscription run");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].status, WorkflowStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn subscription_checkpoints_unmatched_events_and_resumes_after_reopen() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            effects.clone(),
+        );
+        service
+            .register_definition(SUBSCRIPTION_WORKFLOW, "subscription-test")
+            .expect("register workflow");
+        let historical = journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "task:historical".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "task.created.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::User,
+                    id: "tester".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({"title": "must not replay by default"}),
+            })
+            .expect("append historical event");
+        service
+            .create_subscription(
+                "future-tasks",
+                "subscription-smoke",
+                "1.0.0",
+                "task.created.v1",
+                None,
+                true,
+                None,
+            )
+            .expect("create subscription");
+        assert_eq!(
+            service
+                .get_subscription("future-tasks")
+                .expect("default checkpoint")
+                .checkpoint,
+            historical.global_sequence
+        );
+        let unmatched = journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "memory:alpha".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "memory.created.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::User,
+                    id: "tester".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({"text": "not a task"}),
+            })
+            .expect("append unmatched event");
+        let checkpoint = service
+            .tick_subscriptions_now()
+            .await
+            .expect("checkpoint unmatched event");
+        assert_eq!(checkpoint.len(), 1);
+        assert_eq!(
+            checkpoint[0].status,
+            WorkflowSubscriptionDispatchStatus::Checkpointed
+        );
+        assert_eq!(checkpoint[0].checkpoint, unmatched.global_sequence);
+        assert!(effects.calls().is_empty());
+
+        let reopened = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal))),
+            Arc::new(RecordingEffects::default()),
+        );
+        assert_eq!(
+            reopened
+                .get_subscription("future-tasks")
+                .expect("reopened subscription")
+                .checkpoint,
+            unmatched.global_sequence
+        );
+        let source = journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "task:beta".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "task.created.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::User,
+                    id: "tester".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({"title": "deliver after restart"}),
+            })
+            .expect("append matching event");
+        let dispatch = reopened
+            .tick_subscriptions_now()
+            .await
+            .expect("dispatch after restart");
+        assert_eq!(dispatch.len(), 1);
+        assert_eq!(
+            dispatch[0].status,
+            WorkflowSubscriptionDispatchStatus::Queued
+        );
+        assert_eq!(dispatch[0].checkpoint, source.global_sequence);
+    }
+
+    #[tokio::test]
+    async fn subscription_schema_and_trust_failures_block_without_consuming_source() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            effects.clone(),
+        );
+        service
+            .register_definition(SUBSCRIPTION_WORKFLOW, "subscription-test")
+            .expect("register workflow");
+        for invalid_event_type in [
+            "task.created",
+            "task.created.v",
+            "task.created.V1",
+            "workflow.run.queued.v1",
+        ] {
+            assert!(
+                service
+                    .create_subscription(
+                        "invalid-source",
+                        "subscription-smoke",
+                        "1.0.0",
+                        invalid_event_type,
+                        None,
+                        true,
+                        Some(0),
+                    )
+                    .is_err(),
+                "invalid source event type {invalid_event_type} must be rejected"
+            );
+        }
+
+        service
+            .create_subscription(
+                "schema-block",
+                "subscription-smoke",
+                "1.0.0",
+                "task.created.v1",
+                None,
+                true,
+                Some(0),
+            )
+            .expect("create schema subscription");
+        let invalid_source = journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "task:invalid-payload".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "task.created.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::User,
+                    id: "tester".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({"not_title": true}),
+            })
+            .expect("append schema-invalid source");
+        let schema_blocked = service
+            .tick_subscriptions_now()
+            .await
+            .expect("evaluate schema-invalid source");
+        assert_eq!(schema_blocked.len(), 1);
+        assert_eq!(
+            schema_blocked[0].status,
+            WorkflowSubscriptionDispatchStatus::Blocked
+        );
+        assert_eq!(
+            schema_blocked[0].source_event_id.as_deref(),
+            Some(invalid_source.event_id.as_str())
+        );
+        let schema_subscription = service
+            .get_subscription("schema-block")
+            .expect("schema-blocked subscription");
+        assert!(!schema_subscription.enabled);
+        assert_eq!(schema_subscription.checkpoint, 0);
+
+        service
+            .create_subscription(
+                "trust-block",
+                "subscription-smoke",
+                "1.0.0",
+                "task.created.v1",
+                None,
+                true,
+                None,
+            )
+            .expect("create trust subscription");
+        let trust_checkpoint = service
+            .get_subscription("trust-block")
+            .expect("trust subscription")
+            .checkpoint;
+        service
+            .register_definition(
+                &SUBSCRIPTION_WORKFLOW.replace("value: { ok: true }", "value: { ok: false }"),
+                "subscription-test-changed",
+            )
+            .expect("change pinned workflow");
+        let trusted_shape_source = journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "task:changed-definition".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "task.created.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::User,
+                    id: "tester".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({"title": "definition no longer trusted"}),
+            })
+            .expect("append trust-invalid source");
+        let trust_blocked = service
+            .tick_subscriptions_now()
+            .await
+            .expect("evaluate trust-invalid source");
+        assert_eq!(trust_blocked.len(), 1);
+        assert_eq!(
+            trust_blocked[0].status,
+            WorkflowSubscriptionDispatchStatus::Blocked
+        );
+        assert_eq!(
+            trust_blocked[0].source_event_id.as_deref(),
+            Some(trusted_shape_source.event_id.as_str())
+        );
+        let trust_subscription = service
+            .get_subscription("trust-block")
+            .expect("trust-blocked subscription");
+        assert!(!trust_subscription.enabled);
+        assert_eq!(trust_subscription.checkpoint, trust_checkpoint);
+        assert!(effects.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deferred_subscription_does_not_starve_later_subscriptions() {
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(Arc::clone(&journal), repository, effects.clone());
+        service
+            .register_definition(SUBSCRIPTION_WORKFLOW, "subscription-test")
+            .expect("register workflow");
+        for subscription_id in ["a-deferred", "z-ready"] {
+            service
+                .create_subscription(
+                    subscription_id,
+                    "subscription-smoke",
+                    "1.0.0",
+                    "task.created.v1",
+                    None,
+                    true,
+                    Some(0),
+                )
+                .expect("create subscription");
+        }
+        let source = journal
+            .append(NewEvent {
+                event_version: 1,
+                stream_id: "task:shared".into(),
+                expected_stream_version: 0,
+                classification: EventClassification::Domain,
+                event_type: "task.created.v1".into(),
+                actor: Actor {
+                    actor_type: ActorType::User,
+                    id: "tester".into(),
+                },
+                context: ExecutionContext::default(),
+                payload: json!({"title": "continue after a deferred dispatch"}),
+            })
+            .expect("append source event");
+        effects.fail("workflow.subscription.dispatch", 1);
+
+        let outcomes = service
+            .tick_subscriptions_now()
+            .await
+            .expect("evaluate both subscriptions");
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].subscription_id, "a-deferred");
+        assert_eq!(
+            outcomes[0].status,
+            WorkflowSubscriptionDispatchStatus::Deferred
+        );
+        assert_eq!(outcomes[0].checkpoint, 0);
+        assert_eq!(outcomes[1].subscription_id, "z-ready");
+        assert_eq!(
+            outcomes[1].status,
+            WorkflowSubscriptionDispatchStatus::Queued
+        );
+        assert_eq!(outcomes[1].checkpoint, source.global_sequence);
+        assert_eq!(service.list_runs(10).expect("queued runs").len(), 1);
+        assert_eq!(effects.calls().len(), 2);
     }
 
     #[test]
@@ -5873,6 +7320,164 @@ compensation:
             .webhook_delivery(WEBHOOK_ID, DELIVERY_ID)
             .expect("reopened delivery")
             .expect("delivery");
+        assert_eq!(replayed_delivery, delivery);
+        let runs = repository.runs(10).expect("reopened runs");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, WorkflowStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn process_kill_after_subscription_batch_recovers_without_duplicate_run() {
+        const CHILD_ENV: &str = "COLOSSUS_WORKFLOW_SUBSCRIPTION_PROCESS_KILL_CHILD";
+        const ROOT_ENV: &str = "COLOSSUS_WORKFLOW_SUBSCRIPTION_PROCESS_KILL_ROOT";
+        const SUBSCRIPTION_ID: &str = "process-kill-subscription";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let root = PathBuf::from(
+                std::env::var_os(ROOT_ENV).expect("subscription process-kill child root"),
+            );
+            let durable_journal = process_kill_journal(&root);
+            let repository: Arc<dyn WorkflowRepository> = Arc::new(
+                EventSourcedWorkflowRepository::new(Arc::clone(&durable_journal)),
+            );
+            let service = WorkflowService::new(
+                Arc::clone(&durable_journal),
+                repository,
+                Arc::new(RecordingEffects::default()),
+            );
+            service
+                .register_definition(SUBSCRIPTION_WORKFLOW, "subscription-process-kill-test")
+                .expect("register subscription workflow");
+            service
+                .create_subscription(
+                    SUBSCRIPTION_ID,
+                    "subscription-smoke",
+                    "1.0.0",
+                    "task.created.v1",
+                    Some("task:"),
+                    true,
+                    Some(0),
+                )
+                .expect("create subscription");
+            durable_journal
+                .append(NewEvent {
+                    event_version: 1,
+                    stream_id: "task:process-kill".into(),
+                    expected_stream_version: 0,
+                    classification: EventClassification::Domain,
+                    event_type: "task.created.v1".into(),
+                    actor: Actor {
+                        actor_type: ActorType::User,
+                        id: "process-kill-test".into(),
+                    },
+                    context: ExecutionContext::default(),
+                    payload: json!({"title": "survive process loss"}),
+                })
+                .expect("append source event");
+            drop(service);
+
+            let journal: Arc<dyn EventJournal> = Arc::new(CrashAfterEventJournal {
+                inner: durable_journal,
+                event_type: "workflow.subscription.delivered.v1",
+            });
+            let repository: Arc<dyn WorkflowRepository> =
+                Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+            let service =
+                WorkflowService::new(journal, repository, Arc::new(RecordingEffects::default()));
+            service
+                .tick_subscriptions_now()
+                .await
+                .expect("subscription batch must terminate this process after commit");
+            panic!("subscription process-kill child returned without terminating");
+        }
+
+        let directory = tempdir().expect("subscription process-kill directory");
+        let output = Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                "tests::process_kill_after_subscription_batch_recovers_without_duplicate_run",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env(ROOT_ENV, directory.path())
+            .output()
+            .expect("spawn subscription process-kill child");
+        assert!(
+            !output.status.success(),
+            "subscription process-kill child unexpectedly succeeded: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let journal = process_kill_journal(directory.path());
+        journal
+            .verify()
+            .expect("verify journal after subscription process kill");
+        let repository: Arc<dyn WorkflowRepository> =
+            Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+        let effects = Arc::new(RecordingEffects::default());
+        let service = WorkflowService::new(
+            Arc::clone(&journal),
+            Arc::clone(&repository),
+            effects.clone(),
+        );
+        let subscription = service
+            .get_subscription(SUBSCRIPTION_ID)
+            .expect("reopen subscription");
+        let source_event_id = subscription
+            .last_event_id
+            .clone()
+            .expect("delivered source event");
+        let run_id = subscription
+            .last_run_id
+            .clone()
+            .expect("queued subscription run");
+        let delivery = repository
+            .subscription_delivery(SUBSCRIPTION_ID, &source_event_id)
+            .expect("reopen subscription delivery")
+            .expect("accepted subscription delivery");
+        assert_eq!(delivery.run_id, run_id);
+        let queued = service.get_run(&run_id).expect("reopen subscription run");
+        assert_eq!(queued.status, WorkflowStatus::Queued);
+        assert_eq!(queued.trigger_kind, Some(WorkflowTriggerKind::Subscription));
+        assert_eq!(queued.trigger_id.as_deref(), Some(SUBSCRIPTION_ID));
+        assert_eq!(
+            queued.trigger_occurrence.as_deref(),
+            Some(source_event_id.as_str())
+        );
+        assert!(
+            service
+                .tick_subscriptions_now()
+                .await
+                .expect("repeat subscription tick")
+                .is_empty(),
+            "recovery must not queue the committed source event twice"
+        );
+        assert!(effects.calls().is_empty());
+        let completed = service
+            .drain()
+            .await
+            .expect("drain recovered subscription run");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].run_id, run_id);
+        assert_eq!(completed[0].status, WorkflowStatus::Completed);
+        assert_eq!(service.list_runs(10).expect("list runs").len(), 1);
+        journal
+            .verify()
+            .expect("verify recovered subscription journal");
+        drop(service);
+        drop(repository);
+        drop(journal);
+
+        let reopened = process_kill_journal(directory.path());
+        reopened
+            .verify()
+            .expect("verify reopened subscription journal");
+        let repository = EventSourcedWorkflowRepository::new(reopened);
+        let replayed_delivery = repository
+            .subscription_delivery(SUBSCRIPTION_ID, &source_event_id)
+            .expect("reopened subscription delivery")
+            .expect("subscription delivery");
         assert_eq!(replayed_delivery, delivery);
         let runs = repository.runs(10).expect("reopened runs");
         assert_eq!(runs.len(), 1);

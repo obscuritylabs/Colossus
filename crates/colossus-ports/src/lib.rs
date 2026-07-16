@@ -13,7 +13,8 @@ use colossus_contracts::{
     RunEventEnvelope, SessionMessage, SessionMessagePage, SessionSummary, SignedCheckpoint,
     SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
     TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
-    WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowWebhook, WorkflowWebhookDelivery,
+    WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowSubscription,
+    WorkflowSubscriptionDelivery, WorkflowWebhook, WorkflowWebhookDelivery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -832,6 +833,38 @@ pub trait WorkflowRepository: Send + Sync {
         webhook_id: &str,
         delivery_id: &str,
     ) -> Result<Option<WorkflowWebhookDelivery>, StoreError>;
+
+    /// Persist one new hash-pinned repository-event subscription.
+    fn create_subscription(
+        &self,
+        subscription: &WorkflowSubscription,
+        actor: Actor,
+    ) -> Result<WorkflowSubscription, StoreError>;
+
+    /// Persist an explicit enabled/disabled subscription transition.
+    fn set_subscription_enabled(
+        &self,
+        subscription_id: &str,
+        enabled: bool,
+        updated_at: &str,
+        actor: Actor,
+    ) -> Result<WorkflowSubscription, StoreError>;
+
+    /// Reconstruct one canonical repository-event subscription.
+    fn subscription(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Option<WorkflowSubscription>, StoreError>;
+
+    /// List bounded subscriptions in deterministic identifier order.
+    fn subscriptions(&self, limit: usize) -> Result<Vec<WorkflowSubscription>, StoreError>;
+
+    /// Reconstruct one accepted source-event delivery for idempotent replay handling.
+    fn subscription_delivery(
+        &self,
+        subscription_id: &str,
+        source_event_id: &str,
+    ) -> Result<Option<WorkflowSubscriptionDelivery>, StoreError>;
 }
 
 /// Disposable search projection for canonical memory identifiers.

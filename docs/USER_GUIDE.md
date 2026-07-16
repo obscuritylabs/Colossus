@@ -283,14 +283,20 @@ colossus --config .colossus/config.yaml workflow status WORKFLOW_RUN_ID
 colossus --config .colossus/config.yaml workflow schedule create nightly \
   release 1.0.0 --cadence-seconds 86400 --inputs '{"branch":"main"}'
 colossus --config .colossus/config.yaml workflow schedule list
+colossus --config .colossus/config.yaml workflow subscription create new-tasks \
+  release 1.0.0 --event-type task.created.v1 --stream-prefix task:
+colossus --config .colossus/config.yaml workflow subscription list
 ```
 
 Definitions are exact-content hash pinned. A changed file is a new trust identity.
 Effectful retries require an explicit idempotency strategy; recovery records abandoned
 attempts as interrupted or unknown instead of rerunning them. Persisted schedules use a
 bounded fixed UTC cadence and explicit skip/fire-once backlog behavior; their schedule
-transition and deterministic queued run commit atomically. See
-[Durable Workflows](WORKFLOWS.md) for the complete schedule lifecycle.
+transition and deterministic queued run commit atomically. Repository-event
+subscriptions use exact domain-event filters, durable global checkpoints, and an exposed
+event idempotency key; their checkpoint, delivery receipt, and queued run also commit
+atomically. A denied dispatch remains pending without stopping unrelated workflow work.
+See [Durable Workflows](WORKFLOWS.md) for all trigger lifecycles.
 
 ## Integrations And MCP
 
