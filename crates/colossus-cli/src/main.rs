@@ -3242,7 +3242,7 @@ async fn dispatch_to_worker_if_active(
     };
     match client.ping().await {
         Ok(_) => {}
-        Err(colossus_worker::WorkerError::Unavailable(_)) => return Ok(false),
+        Err(error) if worker_probe_allows_embedded_fallback(&error) => return Ok(false),
         Err(error) => return Err(error.into()),
     }
     if approval_mode.is_some() {
@@ -4297,6 +4297,10 @@ async fn dispatch_to_worker_if_active(
         }
         Command::Worker { .. } | Command::Config(_) | Command::SandboxHelper => Ok(false),
     }
+}
+
+fn worker_probe_allows_embedded_fallback(error: &colossus_worker::WorkerError) -> bool {
+    matches!(error, colossus_worker::WorkerError::Unavailable(_))
 }
 
 async fn worker_line_runner(
@@ -6049,6 +6053,17 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_fallback_requires_an_absent_worker_not_a_busy_worker() {
+        assert!(worker_probe_allows_embedded_fallback(
+            &colossus_worker::WorkerError::Unavailable("worker-endpoint".into())
+        ));
+        assert!(!worker_probe_allows_embedded_fallback(
+            &colossus_worker::WorkerError::Busy("worker-endpoint".into())
+        ));
+    }
+
     fn session_summary(id: &str) -> SessionSummary {
         SessionSummary {
             id: id.into(),

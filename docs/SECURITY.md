@@ -265,7 +265,9 @@ authenticated shutdown and removes its Unix endpoint. IPC never bypasses the run
 model, workflow, session, policy, permit, journal, and projection work executes through
 the same application services used by embedded mode. Clients fall back to embedded mode
 only when the endpoint is unavailable; an authentication or protocol failure is surfaced
-and never converted into a fallback request.
+and never converted into a fallback request. Windows pipe saturation is likewise a live,
+busy worker state: clients retry it for a bounded interval and never reinterpret it as an
+absent endpoint that permits embedded writer acquisition.
 
 Workflow queueing is journal-native: a worker may claim only `queued` runs and recovery
 never drains `waiting` or `interrupted` runs. A started step without a durable terminal

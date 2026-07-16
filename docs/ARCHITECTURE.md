@@ -208,7 +208,9 @@ writer lease prevents embedded surfaces and the headless worker from opening con
 redb writers. The long-running worker owns that lease and serves a versioned local
 application protocol over a mode-0600 Unix socket or a Windows named pipe. CLI one-shot
 runs, the worker-backed TUI, session operations, and workflow lifecycle operations
-auto-discover the worker and otherwise use the same runtime in-process. Durable task,
+auto-discover the worker and otherwise use the same runtime in-process. A busy Windows
+named pipe is treated as a live worker with bounded connection backoff, never as
+permission to fall through to a second embedded writer. Durable task,
 decision, plan, goal, child-agent, and memory lifecycle commands use that application
 protocol as well. Research, declarative skill, signed pack/bundle, integration, MCP,
 process, and network terminal operations are also dispatched to the worker when active.

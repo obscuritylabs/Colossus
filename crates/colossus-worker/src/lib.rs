@@ -42,9 +42,10 @@ const REPLAY_WINDOW: usize = 4_096;
 #[cfg(not(windows))]
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(windows)]
-// The platform connector retries a busy named pipe for two seconds. Keep the
-// outer bound above that window so concurrent clients can use the retry path.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+// A missing pipe is retried briefly by the platform connector, while a pipe
+// that is known to be busy receives a longer load-shedding window. Keep the
+// outer bound above both so the connector can preserve that distinction.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 type HmacSha256 = Hmac<Sha256>;
@@ -101,6 +102,9 @@ pub enum WorkerError {
     /// No worker answered at the configured endpoint.
     #[error("worker is unavailable at {0}")]
     Unavailable(String),
+    /// A live worker could not accept another connection before the bounded deadline.
+    #[error("worker is busy at {0}")]
+    Busy(String),
 }
 
 /// Versioned operations exposed by the local worker application API.
@@ -1349,10 +1353,14 @@ impl WorkerClient {
     }
 
     async fn connect(&self) -> Result<platform::ClientStream, WorkerError> {
-        tokio::time::timeout(CONNECT_TIMEOUT, platform::connect(&self.endpoint))
-            .await
-            .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))?
-            .map_err(|_| WorkerError::Unavailable(self.endpoint.clone()))
+        match tokio::time::timeout(CONNECT_TIMEOUT, platform::connect(&self.endpoint)).await {
+            Err(_) => Err(WorkerError::Unavailable(self.endpoint.clone())),
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(error)) if platform::connection_is_busy(&error) => {
+                Err(WorkerError::Busy(self.endpoint.clone()))
+            }
+            Ok(Err(_)) => Err(WorkerError::Unavailable(self.endpoint.clone())),
+        }
     }
 }
 
@@ -3421,6 +3429,10 @@ mod platform {
         UnixStream::connect(endpoint).await
     }
 
+    pub fn connection_is_busy(_error: &std::io::Error) -> bool {
+        false
+    }
+
     pub fn endpoint_is_trusted(endpoint: &str) -> Result<bool, WorkerError> {
         let path = Path::new(endpoint);
         let metadata = match fs::symlink_metadata(path) {
@@ -3500,20 +3512,26 @@ mod platform {
     }
 
     pub async fn connect(endpoint: &str) -> Result<ClientStream, std::io::Error> {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let missing_deadline = Instant::now() + Duration::from_secs(2);
+        let busy_deadline = Instant::now() + Duration::from_secs(10);
         loop {
             match ClientOptions::new().open(endpoint) {
                 Ok(client) => return Ok(client),
+                Err(error) if connection_is_busy(&error) && Instant::now() < busy_deadline => {
+                    sleep(Duration::from_millis(10)).await;
+                }
                 Err(error)
-                    if (matches!(error.kind(), ErrorKind::NotFound | ErrorKind::WouldBlock)
-                        || error.raw_os_error() == Some(ERROR_PIPE_BUSY))
-                        && Instant::now() < deadline =>
+                    if error.kind() == ErrorKind::NotFound && Instant::now() < missing_deadline =>
                 {
                     sleep(Duration::from_millis(10)).await;
                 }
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    pub fn connection_is_busy(error: &std::io::Error) -> bool {
+        error.kind() == ErrorKind::WouldBlock || error.raw_os_error() == Some(ERROR_PIPE_BUSY)
     }
 
     pub fn endpoint_is_trusted(_endpoint: &str) -> Result<bool, WorkerError> {
@@ -3527,6 +3545,13 @@ compile_error!("colossus-worker supports only Unix sockets or Windows named pipe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pipe_saturation_is_classified_as_busy() {
+        let error = std::io::Error::from_raw_os_error(231);
+        assert!(platform::connection_is_busy(&error));
+    }
 
     #[test]
     fn workflow_schedule_operation_round_trips_the_worker_contract() {
