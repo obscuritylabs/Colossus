@@ -10,6 +10,7 @@ colossus --config .colossus/config.yaml sandbox doctor
 colossus --config .colossus/config.yaml projection status
 colossus --config .colossus/config.yaml provider profiles
 colossus --config .colossus/config.yaml models routes
+colossus --config .colossus/config.yaml search profiles
 colossus --config .colossus/config.yaml tools list
 ```
 
@@ -70,6 +71,12 @@ input, or unverifiable decision-log masking fail closed. Use `policy doctor`.
 canonical lifecycle; MCP operations require configured servers and tool allowlists;
 goal tools appear only during active goal lineage. Run `tools list` to see the actual
 catalog and effect identities.
+
+For missing `web.search`, confirm both the exact `agent.tools` entry and a valid
+`search.roles.agent` route. For a disabled Deep Research web lane, confirm
+`search.roles.research`. `search query` never falls back to another profile; an
+`outcome_unknown` result must be reconciled with provider state before retrying. See
+[Provider-Neutral Web Search](SEARCH.md).
 
 ## Workspace Or Filesystem Looks Wrong
 

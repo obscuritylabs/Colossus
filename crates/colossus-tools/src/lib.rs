@@ -925,6 +925,21 @@ fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "web.search".into(),
+            description: "Search the web through the operator-configured provider route and return normalized results only."
+                .into(),
+            input_schema: object_schema(
+                json!({
+                    "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10}
+                }),
+                &["query"],
+            ),
+            effect_action: Some("web.search".into()),
+            capability: Some("web.search".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "web.fetch".into(),
             description: "Fetch one exact policy-permitted HTTP(S) URL into bounded quarantine."
                 .into(),
@@ -1227,6 +1242,46 @@ mod tests {
                         arguments: json!({"url": "https://example.test/docs"}),
                     })
                     .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn web_search_is_explicit_and_has_provider_neutral_bounds() {
+        let default_registry = StaticToolRegistry::builtins(&["echo".into()]).expect("catalog");
+        assert!(
+            default_registry
+                .list_specs()
+                .iter()
+                .all(|spec| spec.name != "web.search")
+        );
+        let registry = StaticToolRegistry::builtins(&["web.search".into()]).expect("catalog");
+        let spec = registry.list_specs().pop().expect("web.search spec");
+        assert_eq!(spec.effect_action.as_deref(), Some("web.search"));
+        assert_eq!(spec.capability.as_deref(), Some("web.search"));
+        assert!(
+            registry
+                .validate(&ToolCall {
+                    call_id: "search".into(),
+                    name: "web.search".into(),
+                    arguments: json!({"query": "provider neutral", "limit": 20}),
+                })
+                .is_ok()
+        );
+        for arguments in [
+            json!({"query": ""}),
+            json!({"query": "x", "limit": 0}),
+            json!({"query": "x", "limit": 21}),
+            json!({"query": "x".repeat(4097)}),
+        ] {
+            assert!(
+                registry
+                    .validate(&ToolCall {
+                        call_id: "search".into(),
+                        name: "web.search".into(),
+                        arguments,
+                    })
+                    .is_err()
             );
         }
     }

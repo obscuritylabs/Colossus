@@ -168,6 +168,17 @@ pub enum WorkerOperation {
         /// Logical provider role.
         role: String,
     },
+    /// List safe configured search profile metadata.
+    SearchProfiles,
+    /// Execute one explicit provider-neutral search.
+    SearchQuery {
+        /// Exact configured search role.
+        role: String,
+        /// Search query, bounded by the runtime contract.
+        query: String,
+        /// Requested normalized result count.
+        limit: usize,
+    },
     /// List active model-visible tool schemas.
     ToolsList,
     /// Execute the normal audited model application path.
@@ -2078,6 +2089,8 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ProviderModels { .. } => "provider_models",
         WorkerOperation::ProviderRoutes => "provider_routes",
         WorkerOperation::ProviderRoute { .. } => "provider_route",
+        WorkerOperation::SearchProfiles => "search_profiles",
+        WorkerOperation::SearchQuery { .. } => "search_query",
         WorkerOperation::ToolsList => "tools_list",
         WorkerOperation::RunModel { .. } => "run_model",
         WorkerOperation::RunModelControlled { .. } => "run_model_controlled",
@@ -2350,6 +2363,10 @@ async fn dispatch(
         WorkerOperation::ProviderRoute { role } => {
             Ok(serde_json::to_value(runtime.provider_route(&role)?)?)
         }
+        WorkerOperation::SearchProfiles => Ok(serde_json::to_value(runtime.search_profiles())?),
+        WorkerOperation::SearchQuery { role, query, limit } => Ok(serde_json::to_value(
+            runtime.search(&role, &query, limit).await?,
+        )?),
         WorkerOperation::ToolsList => Ok(serde_json::to_value(runtime.tool_specs())?),
         WorkerOperation::Echo { message } => {
             let result = runtime.echo(&message).await?;

@@ -365,7 +365,8 @@ pack-provided tools for repository-specific verification.
 ### 10.3 Network And Adapter-Backed Tools
 
 - `web.fetch` and `docs.fetch` provide approval-gated, bounded HTTP(S) retrieval.
-- `web.search` is exposed only when a search adapter is configured.
+- `web.search` is exposed only when explicitly enabled and `search.roles.agent` resolves;
+  SearXNG and SerpAPI share a normalized provider-neutral result contract.
 - `mcp.call` is exposed only through an explicitly configured, allowlisted gateway.
 - Connected native integrations expose namespaced tools such as `github.*`,
   `searxng.*`, and `opensearch.*`.
@@ -732,6 +733,11 @@ Repository collection is read-only. Web and MCP lanes require configuration and 
 approval. Disabled, skipped, denied, or failed lanes are recorded as limitations while
 the run continues with available evidence.
 
+The web lane requires an explicit `search.roles.research` route and calls the same
+`SearchProvider` port used by `web.search` and `search query`. Routes never fall back or
+retry automatically. The deprecated v0.8 `research.search` SearXNG form is accepted only
+when top-level `search` is absent.
+
 Each source stores a stable id, human citation label, kind, title, URI, bounded content,
 originating query, metadata, and timestamp. Each claim stores text and one or more source
 labels. Reports cite labels such as `[R1]`, are persisted on the research run, and are
@@ -954,9 +960,9 @@ that the worker must be restarted.
 ## 19. Configuration And Local Storage
 
 Configuration is strict: unknown fields fail validation. It covers provider defaults,
-named model profiles and roles, context budgets, agent turn limits, subagent concurrency,
-memory index, global HTTP transport, research limits/sources/search/MCP, and skill
-override policy.
+named model profiles and roles, provider-neutral search profiles and agent/research
+routes, context budgets, agent turn limits, subagent concurrency, memory index, global
+HTTP transport, research limits/sources/MCP, and skill override policy.
 
 Configuration uses fresh strict YAML and accepts credential references such as
 `env:NAME`. Raw secret values MUST

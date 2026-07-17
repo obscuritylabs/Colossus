@@ -30,12 +30,17 @@ labels, and effect identities.
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Encrypted immutable snapshots |
 | Skills | `skill.scaffold`, `skill.inspect`, `skill.read`, `skill.write`, `skill.validate`, `skill.install`, `skill.resource.list`, `skill.resource.read` | Data-only authoring/resource boundaries |
 | Trace | `trace.show`, `trace.export` | Metadata view; export is a filesystem effect |
-| Fetch/research | `web.fetch`, `docs.fetch`, configured search | Exact network origin and post-effect release |
+| Fetch/research | `web.fetch`, `docs.fetch`, `web.search` | Search uses an explicit operator route; exact network origin and post-effect release |
 | Integrations/MCP | Dynamically connected names | Hidden until configured, allowlisted, and connected |
 
 Tool availability does not imply permission. The built-in PDP is deny by default, and
 sandbox obligations independently constrain roots, executables, environment names,
 network origins, time, output, process count, memory, and concurrency.
+
+`web.search` accepts only `query` and optional `limit`; the model cannot choose its
+provider. It is absent unless explicitly listed in `agent.tools` and a valid
+`search.roles.agent` route exists. Search returns normalized results only, while
+`web.fetch` retrieves an exact result page. See [Provider-Neutral Web Search](SEARCH.md).
 
 ## Files And Processes
 

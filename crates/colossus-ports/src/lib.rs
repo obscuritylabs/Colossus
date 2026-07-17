@@ -10,11 +10,12 @@ use colossus_contracts::{
     ModelToolDefinition, NewEvent, PackInstallation, PackStatus, PlanRecord, PlanStatus,
     PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderEvent,
     ProviderRoute, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun, ResearchSource,
-    RunEventEnvelope, SessionMessage, SessionMessagePage, SessionSummary, SignedCheckpoint,
-    SkillDuplicate, SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
-    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
-    WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowSubscription,
-    WorkflowSubscriptionDelivery, WorkflowWebhook, WorkflowWebhookDelivery,
+    RunEventEnvelope, SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute,
+    SessionMessage, SessionMessagePage, SessionSummary, SignedCheckpoint, SkillDuplicate,
+    SkillRecord, SubagentJob, SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences,
+    ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse, WorkflowDefinition,
+    WorkflowRun, WorkflowSchedule, WorkflowSubscription, WorkflowSubscriptionDelivery,
+    WorkflowWebhook, WorkflowWebhookDelivery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -96,6 +97,26 @@ pub enum ModelProviderError {
     Failed(String),
     /// The external outcome cannot be proven and must not be retried.
     #[error("provider outcome is unknown: {0}")]
+    OutcomeUnknown(String),
+}
+
+/// Search routing, authorization, transport, or normalization failure.
+#[derive(Debug, Error)]
+pub enum SearchError {
+    /// Search is not configured for the requested logical role.
+    #[error("search route unavailable: {0}")]
+    Unavailable(String),
+    /// Search profile or request configuration is invalid.
+    #[error("search configuration failed: {0}")]
+    Configuration(String),
+    /// Policy or approval denied the search before release.
+    #[error("search denied: {0}")]
+    Denied(String),
+    /// Search failed with a known terminal outcome.
+    #[error("search failed: {0}")]
+    Failed(String),
+    /// A dispatched external search may have consumed provider resources.
+    #[error("search outcome is unknown: {0}")]
     OutcomeUnknown(String),
 }
 
@@ -220,6 +241,25 @@ pub trait ModelProvider: Send + Sync {
         }
         Ok(turn)
     }
+}
+
+/// Role-routed, policy-bound provider-neutral web search.
+#[async_trait]
+pub trait SearchProvider: Send + Sync {
+    /// Resolve route metadata without performing an external effect.
+    fn route(&self, role: &str) -> Result<SearchRoute, SearchError>;
+
+    /// Return safe configured profile summaries without resolving credentials.
+    fn profiles(&self) -> Vec<SearchProfileSummary>;
+
+    /// Execute one normalized search through the effect boundary.
+    async fn search(
+        &self,
+        role: &str,
+        actor: Actor,
+        request: SearchRequest,
+        context: ExecutionContext,
+    ) -> Result<SearchResponse, SearchError>;
 }
 
 /// Application observer for provider events released through policy.

@@ -17,6 +17,7 @@
 # Build Workflows And Extensions
 
 - [Built-in Tools](TOOLS.md)
+- [Provider-Neutral Web Search](SEARCH.md)
 - [Workflows](WORKFLOWS.md)
 - [Integrations](INTEGRATIONS.md)
 - [Skills](SKILLS.md)

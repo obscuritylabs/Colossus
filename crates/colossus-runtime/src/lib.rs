@@ -21,12 +21,13 @@ use colossus_contracts::{
     ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
     QuarantinedEffectResult, RegistryPullResult, RegistryPushResult, ResearchClaim, ResearchDepth,
     ResearchRun, ResearchSource, ResearchSourceKind, RiskAssessment, RunTelemetryDetail,
-    RunTelemetrySummary, SessionMessage, SessionMessagePage, SessionSummary, SkillComposition,
-    SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord,
-    SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
-    SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
-    TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
-    WorkStateSnapshot, WorkflowWebhookDispatch,
+    RunTelemetrySummary, SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute,
+    SessionMessage, SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate,
+    SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry,
+    SkillResourceRead, SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob,
+    SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics,
+    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot,
+    WorkflowWebhookDispatch,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -62,8 +63,8 @@ use colossus_ports::{
     MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
     PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
     ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl, RunEventObserver,
-    SessionRepository, SkillRepository, StoreError, ToolError, ToolExecutor, ToolRegistry,
-    UserPromptProvider, WorkRepository, WorkflowRepository,
+    SearchError, SearchProvider, SessionRepository, SkillRepository, StoreError, ToolError,
+    ToolExecutor, ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
 };
 
 const SESSION_MESSAGE_PAGE_LIMIT: usize = 100;
@@ -83,6 +84,10 @@ use colossus_research::{
 use colossus_sandbox::{
     FilesystemExecutor, HttpExecutor, ProcessSpec, SandboxDoctorReport, SandboxExecutorConfig,
     SandboxProcessExecutor, sandbox_doctor,
+};
+use colossus_search::{
+    SearchAdapterError, SearchEffectInput, SearchExecutor, SearchKind, SearchProfile,
+    SearchRegistry, default_search_limit,
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_skills::{
@@ -147,6 +152,9 @@ pub struct RuntimeConfig {
     /// Durable research collection and worker bounds.
     #[serde(default)]
     pub research: ResearchConfig,
+    /// Provider-neutral web-search profiles and explicit role routing.
+    #[serde(default)]
+    pub search: SearchConfig,
     /// Explicit allowlisted stdio Model Context Protocol servers.
     #[serde(default)]
     pub mcp: McpConfig,
@@ -340,6 +348,70 @@ impl Default for ResearchConfig {
             search: ResearchSearchConfig::Disabled,
         }
     }
+}
+
+/// Named provider-neutral search profiles and explicit consumer routes.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchConfig {
+    /// Named first-party search profiles.
+    #[serde(default)]
+    pub profiles: BTreeMap<String, SearchProfileConfig>,
+    /// Exact `agent` and `research` role mappings without fallback.
+    #[serde(default)]
+    pub roles: BTreeMap<String, String>,
+}
+
+/// One strict first-party search adapter profile.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum SearchProfileConfig {
+    /// Direct SearXNG JSON search endpoint.
+    Searxng {
+        /// Exact credential-free `/search` endpoint.
+        endpoint: String,
+        /// Optional environment-backed API-key reference.
+        credential_reference: Option<String>,
+        /// Header receiving the optional SearXNG API key.
+        #[serde(default = "default_searxng_auth_header")]
+        auth_header: String,
+        /// Non-secret HTTP user agent.
+        #[serde(default = "default_search_user_agent")]
+        user_agent: String,
+        /// Per-request transport timeout.
+        #[serde(default = "default_search_timeout_ms")]
+        timeout_ms: u64,
+    },
+    /// Direct SerpAPI Google organic-results endpoint.
+    SerpApi {
+        /// Exact credential-free SerpAPI search endpoint.
+        endpoint: String,
+        /// Required environment-backed SerpAPI key reference.
+        credential_reference: String,
+        /// Non-secret HTTP user agent.
+        #[serde(default = "default_search_user_agent")]
+        user_agent: String,
+        /// Per-request transport timeout.
+        #[serde(default = "default_search_timeout_ms")]
+        timeout_ms: u64,
+    },
+}
+
+fn default_searxng_auth_header() -> String {
+    "X-Searxng-Key".into()
+}
+
+fn default_search_user_agent() -> String {
+    "colossus/0.8".into()
+}
+
+const fn default_search_timeout_ms() -> u64 {
+    30_000
 }
 
 /// Declarative skill discovery and override configuration.
@@ -834,7 +906,7 @@ impl RuntimeConfig {
                 "research.maxSources must be in 1..=100 and research.maxWorkers in 1..=16".into(),
             ));
         }
-        validate_research_search_config(&config.research.search, &config.sandbox)?;
+        validate_search_config(&config)?;
         validate_mcp_config(
             &config.mcp,
             &fs::canonicalize(std::env::current_dir()?)?,
@@ -898,6 +970,7 @@ impl RuntimeConfig {
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
             research: ResearchConfig::default(),
+            search: SearchConfig::default(),
             mcp: McpConfig::default(),
             skills: SkillsConfig::default(),
             packs: PacksConfig::default(),
@@ -1058,6 +1131,119 @@ fn validate_research_search_config(
         return Err(RuntimeError::Config(format!(
             "research search origin {origin} is absent from sandbox.networkDestinations"
         )));
+    }
+    Ok(())
+}
+
+fn effective_search_config(config: &RuntimeConfig) -> Result<SearchConfig, RuntimeError> {
+    let has_new_search = !config.search.profiles.is_empty() || !config.search.roles.is_empty();
+    let has_legacy_search = !matches!(config.research.search, ResearchSearchConfig::Disabled);
+    if has_new_search && has_legacy_search {
+        return Err(RuntimeError::Config(
+            "top-level search and deprecated research.search cannot be configured together".into(),
+        ));
+    }
+    if has_new_search || !has_legacy_search {
+        return Ok(config.search.clone());
+    }
+    let ResearchSearchConfig::Searxng {
+        endpoint,
+        user_agent,
+    } = &config.research.search
+    else {
+        unreachable!("legacy search presence was checked")
+    };
+    Ok(SearchConfig {
+        profiles: BTreeMap::from([(
+            "legacy-research".into(),
+            SearchProfileConfig::Searxng {
+                endpoint: endpoint.clone(),
+                credential_reference: None,
+                auth_header: default_searxng_auth_header(),
+                user_agent: user_agent.clone(),
+                timeout_ms: config.sandbox.timeout_ms,
+            },
+        )]),
+        roles: BTreeMap::from([("research".into(), "legacy-research".into())]),
+    })
+}
+
+fn configured_search_profile(
+    name: &str,
+    config: &SearchProfileConfig,
+) -> Result<SearchProfile, RuntimeError> {
+    let profile = match config {
+        SearchProfileConfig::Searxng {
+            endpoint,
+            credential_reference,
+            auth_header,
+            user_agent,
+            timeout_ms,
+        } => SearchProfile::new(
+            name,
+            SearchKind::Searxng,
+            endpoint,
+            credential_reference.clone(),
+            Some(auth_header.clone()),
+            user_agent,
+            *timeout_ms,
+        ),
+        SearchProfileConfig::SerpApi {
+            endpoint,
+            credential_reference,
+            user_agent,
+            timeout_ms,
+        } => SearchProfile::new(
+            name,
+            SearchKind::SerpApi,
+            endpoint,
+            Some(credential_reference.clone()),
+            None,
+            user_agent,
+            *timeout_ms,
+        ),
+    }?;
+    Ok(profile)
+}
+
+fn search_registry(config: &RuntimeConfig) -> Result<SearchRegistry, RuntimeError> {
+    let config = effective_search_config(config)?;
+    let profiles = config
+        .profiles
+        .iter()
+        .map(|(name, profile)| configured_search_profile(name, profile).map(SearchExecutor::new))
+        .collect::<Result<Vec<_>, _>>()?;
+    SearchRegistry::new(profiles, config.roles).map_err(Into::into)
+}
+
+fn validate_search_config(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    validate_research_search_config(&config.research.search, &config.sandbox)?;
+    let effective = effective_search_config(config)?;
+    if effective
+        .roles
+        .keys()
+        .any(|role| !matches!(role.as_str(), "agent" | "research"))
+    {
+        return Err(RuntimeError::Config(
+            "search roles must be exactly agent or research".into(),
+        ));
+    }
+    for (name, profile) in &effective.profiles {
+        let profile = configured_search_profile(name, profile)?;
+        let origin = profile.network_origin()?;
+        if !config.sandbox.network_destinations.contains(&origin) {
+            return Err(RuntimeError::Config(format!(
+                "search profile {name} origin {origin} is absent from sandbox.networkDestinations"
+            )));
+        }
+    }
+    let registry = search_registry(config)?;
+    if config.agent.tools.iter().any(|tool| tool == "web.search")
+        && registry.resolve("agent").is_err()
+    {
+        return Err(RuntimeError::Config(
+            "active web.search requires an explicit valid search.roles.agent route".into(),
+        ));
     }
     Ok(())
 }
@@ -1337,6 +1523,12 @@ pub enum RuntimeError {
     /// Provider configuration or normalized output failed.
     #[error(transparent)]
     Provider(#[from] ProviderError),
+    /// Search profile, route, transport, or normalization failed.
+    #[error(transparent)]
+    Search(#[from] SearchAdapterError),
+    /// Provider-neutral search port failed after runtime composition.
+    #[error(transparent)]
+    SearchPort(#[from] SearchError),
     /// Agent application loop failed.
     #[error(transparent)]
     Agent(#[from] AgentError),
@@ -2049,6 +2241,7 @@ pub struct Runtime {
     gateway: Arc<EffectGateway>,
     _risk_evaluator: Arc<dyn RiskEvaluator>,
     providers: Arc<ProviderRegistry>,
+    search: Arc<dyn SearchProvider>,
     agent: Arc<AgentService>,
     agent_max_turns: u16,
     subagent_max_concurrent: usize,
@@ -2256,6 +2449,7 @@ impl Runtime {
             recover_unknown_effects(journal.as_ref())?;
         }
         let providers = Arc::new(provider_registry(&config.providers)?);
+        let searches = Arc::new(search_registry(config)?);
         let policy: Arc<dyn PolicyDecisionPoint> = match &config.policy {
             PolicyConfig::BuiltIn {
                 allow_actions,
@@ -2300,7 +2494,12 @@ impl Runtime {
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
-                for action in ["skill.scaffold", "skill.write", "skill.install"] {
+                for action in [
+                    "skill.scaffold",
+                    "skill.write",
+                    "skill.install",
+                    "web.search",
+                ] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
                 for action in [
@@ -2389,6 +2588,19 @@ impl Runtime {
                 }
                 for action in approval_actions {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
+                }
+                if config.search.profiles.is_empty()
+                    && config.search.roles.is_empty()
+                    && matches!(config.research.search, ResearchSearchConfig::Searxng { .. })
+                {
+                    if allow_actions.iter().any(|action| action == "network.http") {
+                        policy = policy.with_action("web.search", DecisionOutcome::Allow);
+                    } else if approval_actions
+                        .iter()
+                        .any(|action| action == "network.http")
+                    {
+                        policy = policy.with_action("web.search", DecisionOutcome::RequireApproval);
+                    }
                 }
                 Arc::new(policy)
             }
@@ -2503,6 +2715,7 @@ impl Runtime {
             "presentation.preferences.update".to_owned(),
             "presentation.history.append".to_owned(),
             "network.http".to_owned(),
+            "web.search".to_owned(),
             "task.create".to_owned(),
             "task.update".to_owned(),
             "task.list".to_owned(),
@@ -2582,6 +2795,10 @@ impl Runtime {
             SafetyKernel::new(known_capabilities),
             permit_key,
         ));
+        let search_provider: Arc<dyn SearchProvider> = Arc::new(GatewaySearchProvider {
+            gateway: Arc::clone(&gateway),
+            searches,
+        });
         let memory_indexes = compose_memory_indexes(config, Arc::clone(&gateway))?;
         let external_work: Arc<dyn ExternalWorkQueue> = Arc::new(JournalExternalWorkQueue::new(
             Arc::clone(&journal),
@@ -2681,9 +2898,8 @@ impl Runtime {
         let research_collector: Arc<dyn ResearchCollector> = Arc::new(GatewayResearchCollector {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
-            http: Arc::clone(&http_executor),
             workspace: workspace.clone(),
-            search: config.research.search.clone(),
+            search: Arc::clone(&search_provider),
             mcp: Arc::clone(&mcp_executor),
         });
         let research_model: Arc<dyn ResearchModel> = Arc::new(GatewayResearchModel {
@@ -2732,6 +2948,7 @@ impl Runtime {
             pack_processes: Some(Arc::clone(&pack_process_executor)),
             integrations: Some(Arc::clone(&integration_executor)),
             mcp: Some(Arc::clone(&mcp_executor)),
+            search: Some(Arc::clone(&search_provider)),
             workspace: workspace.clone(),
             repository_id: repository_id.clone(),
             executables: config
@@ -2832,6 +3049,7 @@ impl Runtime {
             gateway,
             _risk_evaluator: risk_evaluator,
             providers,
+            search: search_provider,
             agent,
             agent_max_turns: config.agent.max_turns,
             subagent_max_concurrent: config.subagents.max_concurrent,
@@ -4576,6 +4794,40 @@ impl Runtime {
         })
     }
 
+    /// Safe configured search profile metadata without resolving credentials.
+    pub fn search_profiles(&self) -> Vec<SearchProfileSummary> {
+        self.search.profiles()
+    }
+
+    /// Resolve one exact search role without performing a network request.
+    pub fn search_route(&self, role: &str) -> Result<SearchRoute, RuntimeError> {
+        self.search.route(role).map_err(Into::into)
+    }
+
+    /// Run one explicit operator search through the same provider-neutral path as agents.
+    pub async fn search(
+        &self,
+        role: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<SearchResponse, RuntimeError> {
+        self.search
+            .search(
+                role,
+                Actor {
+                    actor_type: ActorType::User,
+                    id: "terminal-user".into(),
+                },
+                SearchRequest {
+                    query: query.into(),
+                    limit,
+                },
+                ExecutionContext::default(),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     /// Stable active model-visible tool catalog.
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
         self.tools.list_specs()
@@ -5673,6 +5925,76 @@ async fn invoke_mcp_tool(
 struct GatewayModelProvider {
     gateway: Arc<EffectGateway>,
     providers: Arc<ProviderRegistry>,
+}
+
+struct GatewaySearchProvider {
+    gateway: Arc<EffectGateway>,
+    searches: Arc<SearchRegistry>,
+}
+
+fn search_gateway_error(error: GatewayError) -> SearchError {
+    match error {
+        GatewayError::Denied(message) | GatewayError::Approval(message) => {
+            SearchError::Denied(message)
+        }
+        GatewayError::OutcomeUnknown(message) => SearchError::OutcomeUnknown(message),
+        GatewayError::Safety(message) => SearchError::Configuration(message),
+        error => SearchError::Failed(error.to_string()),
+    }
+}
+
+#[async_trait]
+impl SearchProvider for GatewaySearchProvider {
+    fn route(&self, role: &str) -> Result<SearchRoute, SearchError> {
+        let profile = self
+            .searches
+            .resolve(role)
+            .map_err(|error| SearchError::Unavailable(error.to_string()))?;
+        Ok(SearchRoute {
+            role: role.into(),
+            profile: profile.profile().name().into(),
+            provider: profile.profile().kind().as_str().into(),
+        })
+    }
+
+    fn profiles(&self) -> Vec<SearchProfileSummary> {
+        self.searches.profiles()
+    }
+
+    async fn search(
+        &self,
+        role: &str,
+        actor: Actor,
+        request: SearchRequest,
+        context: ExecutionContext,
+    ) -> Result<SearchResponse, SearchError> {
+        let executor = self
+            .searches
+            .resolve(role)
+            .map_err(|error| SearchError::Unavailable(error.to_string()))?;
+        let profile = executor.profile();
+        let mut effect = effect_request(
+            actor,
+            "web.search",
+            profile.endpoint(),
+            serde_json::to_value(SearchEffectInput {
+                profile: profile.name().into(),
+                request,
+            })
+            .map_err(|error| SearchError::Configuration(error.to_string()))?,
+        );
+        effect.capabilities = vec!["web.search".into()];
+        effect.context = context;
+        effect.credential_references = profile.credential_reference().into_iter().collect();
+        let released = self
+            .gateway
+            .execute(effect, executor.as_ref())
+            .await
+            .map_err(search_gateway_error)?;
+        serde_json::from_slice(&released.bytes).map_err(|error| {
+            SearchError::Failed(format!("invalid normalized search output: {error}"))
+        })
+    }
 }
 
 struct GatewayRiskEvaluator {
@@ -6893,6 +7215,7 @@ struct GatewayToolExecutor {
     pack_processes: Option<Arc<PackProcessExecutor>>,
     integrations: Option<Arc<IntegrationExecutor>>,
     mcp: Option<Arc<McpExecutor>>,
+    search: Option<Arc<dyn SearchProvider>>,
     workspace: PathBuf,
     repository_id: String,
     executables: Vec<PathBuf>,
@@ -8424,6 +8747,31 @@ impl ToolExecutor for GatewayToolExecutor {
                 self.execute_mcp_tool(&call, context, &server, &tool, arguments)
                     .await?
             }
+            "web.search" => {
+                let query = required_tool_string(&call, "query")?.to_owned();
+                let limit = usize::try_from(
+                    optional_tool_u64(&call, "limit")?
+                        .unwrap_or_else(|| u64::try_from(default_search_limit()).unwrap_or(10)),
+                )
+                .map_err(|_| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "limit is too large".into(),
+                })?;
+                let response = self
+                    .search
+                    .as_deref()
+                    .ok_or_else(|| ToolError::Failed("search provider is unavailable".into()))?
+                    .search(
+                        "agent",
+                        model_actor(&call, &context),
+                        SearchRequest { query, limit },
+                        context,
+                    )
+                    .await
+                    .map_err(search_tool_error)?;
+                serde_json::to_string(&response)
+                    .map_err(|error| ToolError::Failed(error.to_string()))?
+            }
             "network.http" | "web.fetch" | "docs.fetch" => {
                 let url = required_tool_string(&call, "url")?;
                 let mut request = effect_request(
@@ -8463,6 +8811,16 @@ impl ToolExecutor for GatewayToolExecutor {
             output,
             exit_code,
         })
+    }
+}
+
+fn search_tool_error(error: SearchError) -> ToolError {
+    match error {
+        SearchError::Denied(message) => ToolError::Denied(message),
+        SearchError::OutcomeUnknown(message) => ToolError::OutcomeUnknown(message),
+        SearchError::Unavailable(message)
+        | SearchError::Configuration(message)
+        | SearchError::Failed(message) => ToolError::Failed(message),
     }
 }
 
@@ -9076,9 +9434,8 @@ impl MemoryRetriever for GatewayMemoryRetriever {
 struct GatewayResearchCollector {
     gateway: Arc<EffectGateway>,
     filesystem: Arc<FilesystemExecutor>,
-    http: Arc<HttpExecutor>,
     workspace: PathBuf,
-    search: ResearchSearchConfig,
+    search: Arc<dyn SearchProvider>,
     mcp: Arc<McpExecutor>,
 }
 
@@ -9177,94 +9534,71 @@ impl GatewayResearchCollector {
         query: &str,
         limit: usize,
     ) -> ResearchCollection {
-        let ResearchSearchConfig::Searxng {
-            endpoint,
-            user_agent,
-        } = &self.search
-        else {
-            return ResearchCollection {
-                status: colossus_contracts::ResearchLaneStatus::Disabled,
-                message: "web research adapter is not configured".into(),
-                sources: Vec::new(),
-            };
+        let context = ExecutionContext {
+            correlation_id: format!("research:{}", run.id),
+            session_id: Some(run.session_id.clone()),
+            run_id: Some(run.id.clone()),
+            ..ExecutionContext::default()
         };
-        let mut url = match Url::parse(endpoint) {
-            Ok(url) => url,
-            Err(error) => return failed_collection(error),
-        };
-        url.query_pairs_mut()
-            .append_pair("q", query)
-            .append_pair("format", "json");
-        let mut request = effect_request(
-            Actor {
-                actor_type: ActorType::System,
-                id: "research-web-collector".into(),
-            },
-            "network.http",
-            url.as_str(),
-            json!({
-                "method": "GET",
-                "headers": {
-                    "accept": "application/json",
-                    "user-agent": user_agent,
-                }
-            }),
-        );
-        request.capabilities = vec!["network.http".into()];
-        request.context.session_id = Some(run.session_id.clone());
-        request.context.run_id = Some(run.id.clone());
-        let released = match self.gateway.execute(request, self.http.as_ref()).await {
-            Ok(released) => released,
-            Err(GatewayError::Denied(error) | GatewayError::Approval(error)) => {
+        let response = match self
+            .search
+            .search(
+                "research",
+                Actor {
+                    actor_type: ActorType::System,
+                    id: "research-web-collector".into(),
+                },
+                SearchRequest {
+                    query: query.into(),
+                    limit: limit.clamp(1, 20),
+                },
+                context,
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(SearchError::Unavailable(message)) => {
+                return ResearchCollection {
+                    status: colossus_contracts::ResearchLaneStatus::Disabled,
+                    message: bounded_error(&message),
+                    sources: Vec::new(),
+                };
+            }
+            Err(SearchError::Denied(message)) => {
                 return ResearchCollection {
                     status: colossus_contracts::ResearchLaneStatus::Denied,
-                    message: bounded_error(&error.to_string()),
+                    message: bounded_error(&message),
                     sources: Vec::new(),
                 };
             }
             Err(error) => return failed_collection(error),
         };
-        let value: Value = match serde_json::from_slice(&released.bytes) {
-            Ok(value) => value,
-            Err(error) => return failed_collection(error),
-        };
-        let Some(results) = value.get("results").and_then(Value::as_array) else {
-            return failed_collection("SearXNG response has no results array");
-        };
-        let sources = results
-            .iter()
-            .filter_map(|item| {
-                let uri = item.get("url").and_then(Value::as_str)?.trim();
-                if uri.is_empty() {
-                    return None;
+        let route = self.search.route("research").ok();
+        let sources = response
+            .results
+            .into_iter()
+            .map(|result| {
+                let mut metadata = BTreeMap::from([(
+                    "collector".into(),
+                    route
+                        .as_ref()
+                        .map_or_else(|| "web.search".into(), |route| route.provider.clone()),
+                )]);
+                if let Some(source) = result.source {
+                    metadata.insert("source".into(), source);
                 }
-                let title = item
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .filter(|title| !title.trim().is_empty())
-                    .unwrap_or(uri);
-                let content = item
-                    .get("content")
-                    .or_else(|| item.get("snippet"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let mut metadata = BTreeMap::from([("collector".into(), "searxng".into())]);
-                if let Some(engine) = item.get("engine").and_then(Value::as_str) {
-                    metadata.insert("engine".into(), bounded_error(engine));
-                }
-                Some(ResearchSourceDraft {
+                ResearchSourceDraft {
                     kind: ResearchSourceKind::Web,
-                    title: title.chars().take(8 * 1024).collect(),
-                    uri: uri.chars().take(8 * 1024).collect(),
-                    content: content.chars().take(256 * 1024).collect(),
+                    title: result.title,
+                    uri: result.url,
+                    content: result.snippet,
                     metadata,
-                })
+                }
             })
-            .take(limit)
             .collect::<Vec<_>>();
         ResearchCollection {
             status: colossus_contracts::ResearchLaneStatus::Completed,
-            message: format!("released {} SearXNG source(s)", sources.len()),
+            message: format!("released {} normalized web source(s)", sources.len()),
             sources,
         }
     }
@@ -10221,10 +10555,11 @@ mod tests {
         InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor,
         MemoryEmbeddingConfig, MemoryOperation, PackProcessDeclaration, PackProcessExecutor,
         PackToolEffectInput, PresentationEffectExecutor, PresentationOperation,
-        ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SemanticMemoryConfig,
-        SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
-        TraceToolExecutor, WorkEffectExecutor, goal_objective_from_plan,
-        recover_interrupted_subagents, recover_unknown_effects, terminal_actor,
+        ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SearchConfig,
+        SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor, SkillOperation,
+        SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
+        goal_objective_from_plan, recover_interrupted_subagents, recover_unknown_effects,
+        terminal_actor,
     };
     use colossus_contracts::{
         Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -10881,6 +11216,45 @@ surprise: true
     }
 
     #[test]
+    fn provider_neutral_search_requires_explicit_valid_routes_and_rejects_legacy_ambiguity() {
+        let mut config = RuntimeConfig::offline_template("state.redb");
+        assert!(!config.agent.tools.iter().any(|tool| tool == "web.search"));
+        config.search = SearchConfig {
+            profiles: std::collections::BTreeMap::from([(
+                "local".into(),
+                SearchProfileConfig::Searxng {
+                    endpoint: "http://127.0.0.1:8888/search".into(),
+                    credential_reference: None,
+                    auth_header: "X-Searxng-Key".into(),
+                    user_agent: "colossus-test".into(),
+                    timeout_ms: 30_000,
+                },
+            )]),
+            roles: std::collections::BTreeMap::from([
+                ("agent".into(), "local".into()),
+                ("research".into(), "local".into()),
+            ]),
+        };
+        config
+            .sandbox
+            .network_destinations
+            .push("http://127.0.0.1:8888".into());
+        config.agent.tools.push("web.search".into());
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+
+        config.search.roles.remove("agent");
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        config.search.roles.insert("agent".into(), "local".into());
+        config.research.search = ResearchSearchConfig::Searxng {
+            endpoint: "http://127.0.0.1:8888/search".into(),
+            user_agent: "legacy".into(),
+        };
+        let error = RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML"))
+            .expect_err("legacy and new search must be ambiguous");
+        assert!(error.to_string().contains("cannot be configured together"));
+    }
+
+    #[test]
     fn semantic_memory_requires_enabled_index_secure_origins_and_valid_profiles() {
         let mut config = RuntimeConfig::offline_template("state.redb");
         config.memory.semantic = SemanticMemoryConfig::Chroma {
@@ -11241,6 +11615,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: directory.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -11480,6 +11855,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: allowed.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -11550,6 +11926,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: allowed.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -11636,6 +12013,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -11682,6 +12060,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -11801,6 +12180,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -11934,6 +12314,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: vec![executable.clone()],
@@ -12133,6 +12514,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -12347,6 +12729,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -12478,6 +12861,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -12700,6 +13084,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -12846,6 +13231,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -13011,6 +13397,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: std::env::current_dir().expect("cwd"),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -13229,6 +13616,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -13553,6 +13941,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: workspace_path,
             repository_id: "repo-test".into(),
             executables: Vec::new(),
@@ -13724,6 +14113,7 @@ surprise: true
             pack_processes: None,
             integrations: None,
             mcp: None,
+            search: None,
             workspace: workspace.path().to_path_buf(),
             repository_id: "repo-test".into(),
             executables: vec![executable],
