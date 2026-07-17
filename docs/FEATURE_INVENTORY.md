@@ -1035,12 +1035,13 @@ to local or air-gapped operation.
 
 ## 22. Delivery Status
 
-Rust 0.8.1 is the active implementation, and every capability in the Section 5 release
-baseline has passing executable evidence. The detailed requirement-to-test mapping lives
-in the [Rust Acceptance Matrix](RUST_ACCEPTANCE_MATRIX.md); test names and source paths
-belong there rather than being repeated in this product contract.
+Rust 0.9.0 is the active implementation, and every capability in the Section 5 release
+baseline has executable evidence. The detailed requirement-to-test mapping lives in the
+[Rust Acceptance Matrix](RUST_ACCEPTANCE_MATRIX.md); test names and source paths belong
+there rather than being repeated in this product contract. Publication still requires
+the explicit platform, security, and artifact release gate.
 
-Release proof for the current baseline:
+Latest published release proof:
 
 - [v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1)
 - [0.8.1 validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29541847312)

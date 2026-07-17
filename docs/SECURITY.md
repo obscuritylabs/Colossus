@@ -1,20 +1,29 @@
 # Security Model
 
-## 0.8 Release Boundary
+## 0.9 Release Boundary
 
-Version 0.8 adds durable schedule, webhook, and repository-event trigger ingress plus
-PostgreSQL journal/projection storage and HTTPS WORM audit export. These are new adapters
-and canonical records, not alternate authority paths: every trigger dispatch, database
-operation, and remote audit delivery retains the ordinary validation, policy, permit,
-quarantine, audit, replay, and unknown-outcome boundaries described below.
+Version 0.9 adds provider-neutral search plus signed pack/skill collections and
+authenticated registry transport. These are new adapters and distribution records, not
+alternate authority paths: every search, collection mutation, and registry transfer
+retains the ordinary validation, policy, permit, quarantine, audit, replay, and
+unknown-outcome boundaries described below.
 
-Selecting PostgreSQL never imports or replaces redb state automatically. Operators must
-provision and verify PostgreSQL explicitly, keep credential values outside YAML, and
-perform any deliberate data transition as a separately reviewed operation. Post-0.8
-source adds signed pack/skill collections and authenticated registry transport through
-the same effect gateway. Registry use remains optional; local verified packs, OCI
-layouts, collections, and signed offline release bundles preserve credential-free
-offline operation.
+Search profiles bind exact SearXNG or SerpAPI endpoints and explicit consumer roles.
+Requests do not fall back or retry implicitly; DNS is pinned, redirects and ambient
+proxies are disabled, credentials are resolved only after permit issuance, and normalized
+results remain quarantined behind mandatory post-effect authorization.
+
+Collection verification requires the collection publisher plus every contained pack
+publisher, exact hashes, complete declared files, data-only skill validation, and an
+acyclic pack dependency closure. Registry transport uses bounded deterministic archives,
+rejects links, traversal, special or undeclared entries, and publishes only to clean
+destinations with create-only semantics. Registry use remains optional; local verified
+packs, OCI layouts, collections, and signed offline release bundles preserve
+credential-free offline operation.
+
+The 0.8 durable workflow triggers, PostgreSQL storage, and HTTPS WORM audit export retain
+their existing boundaries. Selecting PostgreSQL never imports or replaces redb state
+automatically; any deliberate data transition remains a separately reviewed operation.
 
 ## Rust Safety Kernel And Effect Gateway
 

@@ -8,6 +8,43 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-17
+
+### Added
+
+- Added provider-neutral `web.search` with explicit SearXNG or SerpAPI profiles, exact
+  `agent` and `research` role routing, normalized bounded results, operator diagnostics,
+  and shared agent/Deep Research execution.
+- Added reproducible signed collections for packs and data-only skills, including
+  independent publisher verification, complete dependency-closure validation,
+  no-clobber batch installation, and CLI, TUI, worker, and embedded runtime operations.
+- Added authenticated registry pull and create-only push for signed collections using
+  deterministic bounded archives and optional environment-backed credentials.
+
+### Changed
+
+- Consolidated remaining product scope into the feature inventory and removed the
+  superseded standalone roadmap.
+- Made the default provider-neutral search user agent identify the 0.9 release line.
+
+### Security
+
+- `web.search` now crosses the ordinary effect gateway with an exact origin, DNS pinning,
+  redirects and ambient proxies disabled, late credential resolution, mandatory
+  post-effect authorization, and credential removal before normalization or release.
+- Collection and registry operations reject traversal, links, special or undeclared
+  entries, signature or hash mismatches, incomplete pack dependency closure, destination
+  clobbering, and unapproved network or filesystem access.
+
+### Upgrade Notes
+
+- Existing configurations remain valid. The deprecated 0.8 `research.search` SearXNG
+  form is accepted only when top-level `search` is absent; new `web.search` use requires
+  an explicit role mapping and never falls back to another provider.
+- Existing state and installed packs are not migrated or replaced automatically.
+  Collections and registry transport are opt-in, and installation refuses existing
+  destinations.
+
 ## [0.8.1] - 2026-07-16
 
 ### Added

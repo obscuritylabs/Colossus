@@ -1,6 +1,6 @@
 # Rust Runtime Status
 
-Rust 0.8.1 is the active repository-root implementation. It uses Rust 1.96, edition
+Rust 0.9.0 is the active repository-root implementation. It uses Rust 1.96, edition
 2024, strict YAML configuration, and encrypted redb state. It never imports Python
 configuration or SQLite state. Python 0.5 remains frozen at `python-v0.5.0` and on the
 `python-legacy` branch.
@@ -69,15 +69,14 @@ See [Getting Started](GETTING_STARTED.md), [User Guide](USER_GUIDE.md), and
 
 ## Release And Remaining Scope
 
-The repository-root cutover is complete. The exact `v0.8.1` source revision passed the
-explicit release workflow, including build, clean installation, and smoke tests for macOS,
-static Linux, and Windows arm64/x64. The published release includes all six archives,
-checksums, an SPDX inventory, the publisher identity, verification evidence, and a signed
-multi-platform offline bundle. Ordinary `main` pushes continue to run the inexpensive
-validation path; the full matrix belongs to pull requests and explicit release validation.
+The repository-root cutover is complete. Version 0.9.0 adds provider-neutral search and
+signed collection/registry distribution to the previously published baseline. Ordinary
+`main` pushes run the inexpensive validation path; the full platform, security, and
+artifact matrix must pass through explicit release validation before `v0.9.0` is tagged.
 
-The [v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1)
-was built from revision `eda0ce42a52b15d627b545067b64967aa95079ac`; its full
+The latest published release evidence remains the
+[v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1),
+built from revision `eda0ce42a52b15d627b545067b64967aa95079ac`; its full
 [release validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29541847312)
 passed all native runtime, sandbox, policy, dependency, fuzz, and packaging jobs.
 
@@ -86,9 +85,10 @@ webhooks, and durable repository-event subscriptions are included in the 0.8 sou
 tree. Existing redb state remains authoritative unless an operator explicitly selects
 and provisions PostgreSQL; no automatic storage migration occurs.
 
-The current source also supports reproducible signed multi-pack/data-only-skill
-collections, no-clobber verified installation, and permit-bound authenticated registry
-pull/push using the same signed collection format. Registry use is opt-in; local pack,
-OCI, collection, and signed release-bundle verification retain credential-free offline
-paths. The [Feature Inventory](FEATURE_INVENTORY.md#22-delivery-status) is
-the single product-level backlog; the acceptance matrix records executable evidence.
+The 0.9.0 source also supports provider-neutral SearXNG/SerpAPI search routing,
+reproducible signed multi-pack/data-only-skill collections, no-clobber verified
+installation, and permit-bound authenticated registry pull/push using the same signed
+collection format. Search and registry use are opt-in; local pack, OCI, collection, and
+signed release-bundle verification retain credential-free offline paths. The
+[Feature Inventory](FEATURE_INVENTORY.md#22-delivery-status) is the single product-level
+backlog; the acceptance matrix records executable evidence.

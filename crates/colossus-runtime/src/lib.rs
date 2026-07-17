@@ -407,7 +407,7 @@ fn default_searxng_auth_header() -> String {
 }
 
 fn default_search_user_agent() -> String {
-    "colossus/0.8".into()
+    "colossus/0.9".into()
 }
 
 const fn default_search_timeout_ms() -> u64 {
