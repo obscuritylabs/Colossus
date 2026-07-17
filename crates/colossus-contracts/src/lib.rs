@@ -1955,6 +1955,132 @@ pub struct PackVerification {
     pub trust_key_id: Option<String>,
 }
 
+/// Kind of independently verified artifact carried by a signed collection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectionArtifactKind {
+    /// Executable-boundary capability pack with its own manifest and trust decision.
+    Pack,
+    /// Declarative data-only skill tree.
+    Skill,
+}
+
+/// One pack or skill included in a deterministic signed collection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionArtifactEntry {
+    /// Artifact family.
+    pub kind: CollectionArtifactKind,
+    /// Stable manifest identity.
+    pub name: String,
+    /// Exact artifact version.
+    pub version: String,
+    /// Normalized directory path beneath the collection root.
+    pub path: String,
+    /// Pack manifest hash or skill content hash authenticated by the collection.
+    pub content_sha256: String,
+}
+
+/// Strict signed manifest for offline multi-pack and skill distribution.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionManifest {
+    /// Collection format version. Version 1 is currently supported.
+    pub format_version: u16,
+    /// Stable collection name.
+    pub name: String,
+    /// Immutable collection version.
+    pub version: String,
+    /// Publisher identity bound to a trusted signing key.
+    pub publisher: String,
+    /// Explicit reproducible RFC3339 UTC timestamp.
+    pub created_at: String,
+    /// Complete deterministic pack and skill inventory.
+    pub artifacts: Vec<CollectionArtifactEntry>,
+    /// Complete regular-file allowlist excluding this manifest.
+    pub files: Vec<PackFileEntry>,
+    /// At least one trusted Ed25519 signature is required for use.
+    pub signatures: Vec<PackSignature>,
+}
+
+/// Retainable evidence from strict collection and nested-artifact verification.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionVerification {
+    /// Verified collection manifest.
+    pub manifest: CollectionManifest,
+    /// SHA-256 of deterministic unsigned collection manifest bytes.
+    pub manifest_sha256: String,
+    /// Number of hash-listed payload files.
+    pub file_count: usize,
+    /// Sum of declared payload sizes.
+    pub total_bytes: u64,
+    /// Trusted key that authenticated the collection manifest.
+    pub trust_key_id: String,
+    /// Independently verified nested capability packs.
+    pub packs: Vec<PackVerification>,
+    /// Independently verified data-only skills.
+    pub skills: Vec<SkillValidationResult>,
+}
+
+/// Result of deterministically building and signing a collection directory.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionMaterialization {
+    /// Published collection directory.
+    pub path: String,
+    /// Verification evidence for the published bytes.
+    pub verification: CollectionVerification,
+    /// Public signing-key identity without secret material.
+    pub signing_key_id: String,
+}
+
+/// Result of a no-clobber signed collection installation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionInstallation {
+    /// Verification evidence for the source collection.
+    pub verification: CollectionVerification,
+    /// Canonical pack lifecycle states committed in one journal transaction.
+    pub packs: Vec<PackInstallation>,
+    /// Data-only skills installed into the configured user library.
+    pub skills: Vec<SkillInstallResult>,
+}
+
+/// Evidence from an authenticated registry pull into a clean local directory.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryPullResult {
+    /// Credential-free source URL.
+    pub url: String,
+    /// Published clean local collection directory.
+    pub path: String,
+    /// SHA-256 of the received deterministic tar transport.
+    pub transport_sha256: String,
+    /// Exact received transport size.
+    pub transport_bytes: u64,
+    /// Verification evidence for the materialized collection.
+    pub verification: CollectionVerification,
+}
+
+/// Evidence from an authenticated create-only registry push.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryPushResult {
+    /// Credential-free destination URL.
+    pub url: String,
+    /// Verified collection identity.
+    pub collection: String,
+    /// Immutable collection version.
+    pub version: String,
+    /// SHA-256 of the deterministic tar transport.
+    pub transport_sha256: String,
+    /// Exact uploaded transport size.
+    pub transport_bytes: u64,
+    /// True when a pre-existing identical object made the push replay-safe.
+    pub already_present: bool,
+}
+
 /// One immutable file declared by an offline release bundle.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

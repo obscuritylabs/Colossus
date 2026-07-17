@@ -10,7 +10,8 @@ use colossus_audit::{
 use colossus_context::{ContextConfig, ContextService, EventSourcedContextRepository};
 use colossus_contracts::{
     Actor, ActorType, AgentRunOutcome, AgentRunResult, BundleInstallation, BundleMaterialization,
-    BundleSigningKeyInfo, ContextSnapshot, ContextStatus, CredentialReference, DecisionOutcome,
+    BundleSigningKeyInfo, CollectionInstallation, CollectionMaterialization,
+    CollectionVerification, ContextSnapshot, ContextStatus, CredentialReference, DecisionOutcome,
     DecisionPriority, DecisionSource, DecisionStatus, EffectRequest, EventClassification,
     ExecutionContext, FilesystemGrant, GoalIterationResult, GoalRecord, GoalRunResult, GoalStatus,
     IntegrationAuth, IntegrationConnection, IntegrationSummary, KeyDecision, MemoryRecord,
@@ -18,13 +19,14 @@ use colossus_contracts::{
     NewEvent, PackInstallation, PackVerification, PlanRecord, PlanStatus, PlanStep,
     PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo, ProviderReadiness,
     ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn, PublisherTrust,
-    QuarantinedEffectResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
-    ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary, SessionMessage,
-    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
-    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
-    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
-    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall,
-    ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
+    QuarantinedEffectResult, RegistryPullResult, RegistryPushResult, ResearchClaim, ResearchDepth,
+    ResearchRun, ResearchSource, ResearchSourceKind, RiskAssessment, RunTelemetryDetail,
+    RunTelemetrySummary, SessionMessage, SessionMessagePage, SessionSummary, SkillComposition,
+    SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord,
+    SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
+    SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
+    TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
+    WorkStateSnapshot, WorkflowWebhookDispatch,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -2168,7 +2170,11 @@ impl Runtime {
         let extensions: Arc<dyn ExtensionRepository> =
             Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
         let pack_install_root = absolute_path(&config.packs.install_root)?;
-        let packs = Arc::new(PackService::new(Arc::clone(&extensions), pack_install_root));
+        let user_skill_root = absolute_path(&config.skills.user)?;
+        let packs = Arc::new(
+            PackService::new(Arc::clone(&extensions), pack_install_root)
+                .with_skill_install_root(user_skill_root.clone()),
+        );
         let pack_executor = Arc::new(PackExecutor::new(Arc::clone(&packs)));
         let integration_executor = Arc::new(IntegrationExecutor::new(Arc::clone(&extensions))?);
         let integration_specs = integration_executor.tool_specs()?;
@@ -2176,7 +2182,6 @@ impl Runtime {
             .iter()
             .map(|spec| spec.name.clone())
             .collect::<Vec<_>>();
-        let user_skill_root = absolute_path(&config.skills.user)?;
         let mut skill_roots = vec![
             SkillRoot {
                 path: absolute_path(&config.skills.bundled)?,
@@ -2308,7 +2313,7 @@ impl Runtime {
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
-                for action in ["pack.verify", "bundle.verify"] {
+                for action in ["pack.verify", "bundle.verify", "collection.verify"] {
                     policy = policy.with_action(action, DecisionOutcome::Allow);
                 }
                 for action in [
@@ -2320,6 +2325,10 @@ impl Runtime {
                     "bundle.build",
                     "bundle.install",
                     "bundle.key.inspect",
+                    "collection.build",
+                    "collection.install",
+                    "registry.pull",
+                    "registry.push",
                 ] {
                     policy = policy.with_action(action, DecisionOutcome::RequireApproval);
                 }
@@ -2559,6 +2568,11 @@ impl Runtime {
             "bundle.build".to_owned(),
             "bundle.install".to_owned(),
             "bundle.key.inspect".to_owned(),
+            "collection.verify".to_owned(),
+            "collection.build".to_owned(),
+            "collection.install".to_owned(),
+            "registry.pull".to_owned(),
+            "registry.push".to_owned(),
         ];
         known_capabilities.extend(active_pack_extensions.actions.iter().cloned());
         let gateway = Arc::new(EffectGateway::new(
@@ -3167,6 +3181,10 @@ impl Runtime {
             signing_key_reference,
             ..
         }
+        | PackOperation::CollectionBuild {
+            signing_key_reference,
+            ..
+        }
         | PackOperation::BundleKeyInfo {
             signing_key_reference,
         } = &operation
@@ -3175,6 +3193,23 @@ impl Runtime {
                 reference: signing_key_reference.clone(),
                 value_hash: None,
             }];
+        }
+        if let PackOperation::RegistryPull {
+            credential_reference,
+            ..
+        }
+        | PackOperation::RegistryPush {
+            credential_reference,
+            ..
+        } = &operation
+        {
+            request.credential_references = credential_reference
+                .iter()
+                .map(|reference| CredentialReference {
+                    reference: reference.clone(),
+                    value_hash: None,
+                })
+                .collect();
         }
         let released = self
             .gateway
@@ -3270,6 +3305,99 @@ impl Runtime {
     /// List canonical publisher/key trust bindings.
     pub fn list_pack_trust(&self, limit: usize) -> Result<Vec<PublisherTrust>, RuntimeError> {
         self.packs.list_trust(limit).map_err(Into::into)
+    }
+
+    /// Verify a signed multi-pack and skill collection through policy.
+    pub async fn verify_collection(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<CollectionVerification, RuntimeError> {
+        let path = absolute_path(path.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::CollectionVerify { path })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Build and sign a deterministic offline collection through policy.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build_collection(
+        &self,
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+        name: &str,
+        version: &str,
+        publisher: &str,
+        created_at: &str,
+        signing_key_reference: &str,
+    ) -> Result<CollectionMaterialization, RuntimeError> {
+        let source = absolute_path(source.as_ref())?.display().to_string();
+        let destination = absolute_path(destination.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::CollectionBuild {
+                source,
+                destination,
+                name: name.into(),
+                version: version.into(),
+                publisher: publisher.into(),
+                created_at: created_at.into(),
+                signing_key_reference: signing_key_reference.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Install every trusted collection artifact without replacing existing bytes.
+    pub async fn install_collection(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<CollectionInstallation, RuntimeError> {
+        let path = absolute_path(path.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::CollectionInstall { path })
+                .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Pull one authenticated collection transport into a clean local directory.
+    pub async fn pull_registry_collection(
+        &self,
+        url: &str,
+        destination: impl AsRef<Path>,
+        credential_reference: Option<&str>,
+    ) -> Result<RegistryPullResult, RuntimeError> {
+        let destination = absolute_path(destination.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::RegistryPull {
+                url: url.into(),
+                destination,
+                credential_reference: credential_reference.map(str::to_owned),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Push one verified collection through a create-only authenticated registry request.
+    pub async fn push_registry_collection(
+        &self,
+        path: impl AsRef<Path>,
+        url: &str,
+        credential_reference: Option<&str>,
+    ) -> Result<RegistryPushResult, RuntimeError> {
+        let path = absolute_path(path.as_ref())?.display().to_string();
+        serde_json::from_value(
+            self.execute_pack_operation(PackOperation::RegistryPush {
+                path,
+                url: url.into(),
+                credential_reference: credential_reference.map(str::to_owned),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
     /// Invoke one active verified pack tool through approval, sandboxing, and audit.

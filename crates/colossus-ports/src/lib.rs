@@ -721,6 +721,13 @@ pub trait ExtensionRepository: AggregateRepository {
         actor: Actor,
     ) -> Result<PackInstallation, StoreError>;
 
+    /// Atomically append a verified no-clobber collection of pack installations.
+    fn install_packs(
+        &self,
+        installations: Vec<PackInstallation>,
+        actor: Actor,
+    ) -> Result<Vec<PackInstallation>, StoreError>;
+
     /// Append an enable, disable, or uninstall lifecycle transition.
     fn set_pack_status(
         &self,

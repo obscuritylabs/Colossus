@@ -29,10 +29,12 @@ Related references provide additional detail but are not required to understand 
 For a clean reconstruction, give the implementer this file before providing the existing
 source or implementation-focused documentation. Ask it to:
 
-1. Treat every MUST and the System Acceptance Checklist as the compatibility contract.
+1. Treat every MUST in this document as the compatibility contract and use the
+   [Rust Acceptance Matrix](RUST_ACCEPTANCE_MATRIX.md) as its executable evidence index.
 2. Choose its own language, frameworks, module layout, and internal algorithms.
 3. Produce a requirement-to-test matrix keyed by the feature ids in Section 5.
-4. Implement milestones in order, keeping each exit gate runnable.
+4. Implement foundational security and storage requirements before higher-level
+   behaviors, keeping each acceptance gate runnable.
 5. Record ambiguities as explicit product decisions and choose the more restrictive
    security interpretation until clarified.
 
@@ -75,11 +77,16 @@ until the operator explicitly configures and permits a network-capable feature.
 - Colossus is not an unrestricted shell wrapper.
 - Approval-free mode is not a filesystem, network, or operating-system sandbox escape.
 - Skills are not executable plugins. Executable extensions belong in capability packs.
+- Scripts found inside skill directories are never executed automatically.
 - Context compaction does not replace or rewrite persisted conversation history.
 - Memories are contextual facts and preferences, not privileged instructions.
 - Provider hidden chain-of-thought is not a user-facing or persisted product surface.
 - The initial product does not require a graphical desktop interface or remote cloud
   control plane.
+- Child-agent trees are bounded and cannot become self-replicating.
+- The baseline does not require a universal dedicated verification-tool family;
+  repository verification remains available through structured commands and capability
+  packs.
 
 ## 4. Primary Users And Journeys
 
@@ -137,7 +144,7 @@ inspect hashes, audit records, and package contents without network access.
 | EXT-01 | Skills and resources | P1 | Skills compose prompt context under precedence and resource-access rules. |
 | INT-01 | Integrations and credential broker | P2 | Connected services expose normal tools without exposing credentials. |
 | PACK-01 | Capability packs | P2 | Executable extensions are declared, verified, trusted, and lifecycle-managed. |
-| DIST-01 | Offline bundles | P2 | Distributions can be verified and installed without network access. |
+| DIST-01 | Trusted distribution | P2 | Offline bundles and signed pack/skill collections can be verified, transported, and installed without weakening offline operation. |
 
 P0 is the minimum useful and secure product. P1 provides full agent workflow parity. P2
 provides the complete extension and distribution ecosystem.
@@ -974,6 +981,15 @@ Bundle verification MUST reject missing files, hash mismatches, path traversal, 
 escapes, malformed manifests, and invalid signatures. Verification works without network
 access and produces retainable evidence for operators.
 
+Signed collections MUST inventory every nested pack and data-only skill, require trusted
+collection and pack signatures, validate exact pack dependency closure, and refuse
+destination replacement. Registry pull and push MUST cross the normal effect gateway,
+use the signed collection as the authority, pin an explicitly granted network origin,
+resolve only granted credential references inside the adapter, disable implicit redirects
+and proxies, bound transport and extraction, and classify an ambiguous remote mutation as
+an unknown outcome. Registry configuration is optional and MUST NOT add hidden network use
+to local or air-gapped operation.
+
 ## 21. Non-Functional Requirements
 
 ### 21.1 Security
@@ -1011,253 +1027,23 @@ access and produces retainable evidence for operators.
 - Full-text memory search and recent-run telemetry remain responsive for normal local
   state volumes.
 
-## 22. Implementation Milestones
+## 22. Delivery Status
 
-### Milestone 0: Contracts And Safety
+Rust 0.8.1 is the active implementation, and every capability in the Section 5 release
+baseline has passing executable evidence. The detailed requirement-to-test mapping lives
+in the [Rust Acceptance Matrix](RUST_ACCEPTANCE_MATRIX.md); test names and source paths
+belong there rather than being repeated in this product contract.
 
-Checkpoint the passing Python implementation, define AUDIT-01, AUTHZ-01, STORE-01,
-FLOW-01, and MEM-01 acceptance tests, then deliver strict Rust contracts and locked
-dependencies.
+Release proof for the current baseline:
 
-Exit gate: the legacy checkpoint is reproducible and all foundational contracts have
-schema and boundary tests.
+- [v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1)
+- [0.8.1 validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29541847312)
+  for source revision `eda0ce42a52b15d627b545067b64967aa95079ac`
+- [Release Process](RELEASE.md) for the local, pull-request, platform, security, and
+  packaging gates required before publication
 
-### Milestone 0A: Audit And Storage Kernel
-
-Deliver the encrypted embedded journal, repositories, projections, signing, chain
-verification, key providers, audit export, recovery mode, and adapter conformance suites.
-
-Exit gate: concurrency, crash recovery, tampering, truncation, rotation, signatures,
-unknown effects, projection lag, and recovery mode tests pass before any effectful adapter
-is added.
-
-### Milestone 0B: Effect Gateway And Policy
-
-Deliver the safety kernel, built-in and OPA policy providers, approvals, permits,
-two-phase content release, policy diagnostics, sandbox helper/backends, network allowlist
-proxy, and downgrade rules.
-
-Exit gate: no adapter can execute without a valid matching permit, policy failures close,
-and denied quarantined content is never released.
-
-### Milestone 1: Minimum Agent
-
-Deliver echo and compatible model providers, role routing, one-shot runs, streaming,
-workspace reads, git inspection, structured shell execution, mutations with approval,
-run persistence, and elapsed time.
-
-Exit gate: a clean checkout can smoke test offline and complete a multi-turn tool run.
-
-### Milestone 2: Durable Interactive Work
-
-Deliver the TUI, session resume, semantic rendering, preferences/themes, tasks, decisions,
-memories, plans, context budgets, snapshots, and automatic compaction.
-
-Exit gate: a long session can compact, restart, resume, and preserve raw history and
-active commitments.
-
-### Milestone 3: Autonomous Workflows
-
-Deliver versioned YAML workflows, the embedded application API, optional worker, Goal
-Mode, active-goal tools, plan handoff, subagent queue, configurable concurrency,
-drain/cancel/resume, and parent result previews.
-
-Exit gate: bounded goals and parallel child jobs survive process interruption without
-unbounded delegation.
-
-### Milestone 4: Research And Observability
-
-Deliver research planning/collection/workers/synthesis, progress events, source-backed
-citations, deterministic fallbacks, telemetry run lists/details/metrics, and elapsed
-activity rendering.
-
-Exit gate: a repository-only research run produces a persisted cited report and an
-operator can inspect its run telemetry without raw sensitive payloads.
-
-### Milestone 5: Extension And Distribution
-
-Deliver skills/resources, credential-brokered integrations, API import, MCP allowlists,
-capability packs, publisher trust, and offline bundle verification.
-
-Exit gate: an extension can be installed, verified, enabled, used through normal policy,
-disabled, and audited without exposing its credentials.
-
-## 23. System Acceptance Checklist
-
-A reconstruction is complete only when all applicable checks pass:
-
-Cutover note (2026-07-15): Rust 0.7.0 established the active repository-root
-implementation, removed the Python runtime/package from `main`, and passed the
-pull-request security gate. Rust 0.8.0 retains that state/configuration boundary while
-adding durable workflow triggers and explicit PostgreSQL/WORM adapters.
-The [0.7 release run](https://github.com/obscuritylabs/Colossus/actions/runs/29465535984)
-passed on source revision `5cdf9ee14ef33a3e63d72f80494b39b85a1813a4`, and the
-[v0.7.0 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.7.0) contains
-the resulting signed evidence and six native archives.
-
-- [x] Offline install and echo smoke test require no provider credentials or network.
-  All six release jobs installed their native archive into a clean prefix and passed
-  credential-free echo plus encrypted audit verification. The published signed offline
-  bundle independently passed signature, extracted-copy, clean-install, echo, and audit
-  verification with the committed publisher identity.
-- [x] One loopback-live compatible-provider CLI run streams released text across SSE
-  deltas, completes two sequential tool turns, preserves both tool results in provider
-  continuation requests, and returns final output, distinct run/session IDs, durable
-  event count, and positive elapsed time together.
-- [x] Loopback-live malformed provider tool arguments cover invalid JSON and non-object
-  shapes, produce exactly two correction attempts, recover on the third provider turn,
-  and create neither a tool-start event nor the policy-allowed target file.
-- [x] Loopback-live terminal acceptance distinguishes `agent.max_turns` after two valid
-  tool turns from `provider.failed` empty output and three-attempt
-  `provider.invalid_tool_arguments` recovery exhaustion; only the turn-budget path
-  records `run.max_turns.v1`.
-- [x] Loopback-live tool rejection proves filesystem traversal, shell wrappers, and
-  unknown schema fields produce no tool-call effect stream, while deterministic policy
-  denial produces an audited denied effect with no `effect.started`; no attempted marker
-  file is created, including under `full-access`.
-- [x] Every approval mode preserves allowed, deterministic-denied, and approval-required
-  tool semantics in loopback-live agent acceptance; denied writes never reach the
-  filesystem, interactive modes require explicit approval, and `full-access` cannot
-  override a deterministic deny.
-- [x] `risk-auto` invokes a tools-disabled, policy-bound model review only after
-  deterministic policy requires approval for `shell.run`; strict low/allow output
-  auto-proves the re-hashed request, while unavailable, invalid, medium/high, and deny
-  results require an explicit prompt and deterministic denies never invoke the evaluator.
-- [x] One credential-free redb lifecycle reconstructs sessions, messages, events, tasks,
-  decisions, draft plans, superseded memories, bounded goals, completed subagents,
-  offline repository research, and cited sources through fresh CLI processes, with final
-  exact-ID reads and audit-event verification for every named domain.
-- [x] Cross-process CLI acceptance proves automatic compaction is visible through
-  `context status` and `context list`, preserves all raw session messages, emits one
-  immutable snapshot plus prepared-event provenance, and selects the deterministic
-  fallback when model-assisted compaction is unavailable.
-- [x] Cross-process loopback-live CLI acceptance proves Plan Mode omits and rejects
-  workspace mutation before tool execution, creates a canonical structured draft, and
-  atomically consumes each approved plan exactly once through either a fixed-id direct
-  agent run or a plan-linked Goal Mode run.
-- [x] Goal Mode stops correctly on complete, blocked, error, or budget exhaustion.
-- [x] Subagents respect configured concurrency, cannot delegate recursively, wake the
-  scheduler during foreground model delegation, return completed results to the same
-  parent turn, and can be cancelled or resumed after interruption.
-- [x] Research records planned queries, lane decisions, source labels, worker progress,
-  citations, synthesis choice, and limitations.
-- [x] Compact and verbose renderers cover every normalized run/provider event variant and
-  every built-in tool in the strict catalog, including redirected ANSI-free acceptance.
-- [x] UX-02 restores the Python 0.5 human terminal contract: terminal Markdown, semantic
-  cards, source/diff/process previews, list/detail tables, grouped stateful help, slash and
-  skill completion, guided choices, comfortable/compact transcripts, and embedded/worker
-  parity. Interactive output contains no raw JSON by default; explicit or redirected JSON
-  remains stable, bounded, redacted, and ANSI-free. The executable parity matrix is
-  documented in [Terminal UX](TERMINAL_UX.md).
-- [x] Embedded and worker terminal history has bounded hydration, encrypted permit-bound
-  persistence, restart parity, consecutive deduplication, and redacted audit envelopes.
-- [x] Built-in theme palettes cover prompt, assistant, semantic event, and activity-frame
-  styling without emitting ANSI sequences to redirected output.
-- [x] Bounded JSON/TOML custom themes have strict parsing, immutable source-hash-bound
-  preference snapshots, embedded/worker parity, restart reconstruction, and ANSI-free
-  redirected output.
-- [x] Terminal editing keeps Unicode-aware cursor/draft state interface-local without
-  per-keystroke effects, and loopback-live Responses/compatible streamed tool loops pass
-  CLI, TUI/line-runner, worker, ANSI-safety, continuation, and credential non-disclosure checks.
-- [x] UX-03 replaces the former interactive line editor with one Ratatui terminal owner and a
-  pinned composer/footer; durable transcript paging, resize reflow, live-edge scrolling,
-  background input, an eight-turn queue, overlays, Unicode editing, completion, encrypted
-  history, custom themes, inline/alternate-screen restoration, and minimum-size behavior
-  pass reducer, `TestBackend`, PTY, hostile-control-input, and terminal-restoration tests.
-- [x] The TUI transcript is borderless and uses theme-aware speaker, status, glyph, and
-  indentation cues without relying on color alone. Semantic documents retain cards for
-  one-shot compatibility while transcript rendering prevents recursively nested card chrome.
-- [x] Embedded and worker TUI paths render equivalent typed documents and bridge approval,
-  `user.ask`, and cooperative cancellation through authenticated protocol-v4 one-use
-  frames. Cancellation tests prove no later effect begins, remaining tool results stay
-  reconstructable, unknown outcomes remain auditable, and stale workers report explicit
-  restart guidance.
-- [x] Telemetry derives correct duration and counts from persisted event timestamps.
-- [x] Provider, embedding/Chroma, MCP, integration, pack, and signed-bundle adapters keep
-  environment credentials as references through policy and resolve them only inside
-  permit-bearing execution; adversarial provider echo acceptance proves raw values are
-  removed before tool continuation, session history, telemetry, audit, stdout, or stderr.
-- [x] Skills cannot gain executable privilege; packs cannot activate before verification.
-- [x] Audit-chain verification detects tampering.
-- [x] Journal concurrency, encryption/key rotation, tail truncation, signed checkpoints,
-  unknown effects, and read-only recovery behavior pass fault-injection tests.
-- [x] Shared gateway conformance enumerates filesystem, process, network, provider, MCP,
-  embedding, Chroma, integration, memory, domain, workflow, subagent, research, skill,
-  pack/bundle, repository, context, presentation, and audit-export effects and proves no
-  adapter start on rejection; permit tests bind request, decision, actor, obligations,
-  authentication tag, expiry, and one-use consumption.
-- [x] Real-OPA acceptance covers allow, deny, approval re-evaluation, complete nested
-  content and credential-reference disclosure with hard-secret hashing, pinned-CA mTLS,
-  bundle revision, strict invalid responses, outage/readiness, and decision-log warnings;
-  gateway tests additionally prove oversized input is audited and fails closed.
-- [x] Built-in policy forces two-phase release for file, network, remote-provider,
-  subprocess, and memory disclosures even when the global option is disabled. Shared
-  category conformance plus real filesystem, loopback HTTP, provider-normalization,
-  subprocess-tool, and canonical-memory adapter tests prove post-denied bytes never reach
-  the caller, errors, completion events, or audit evidence.
-- [x] Shared conformance covers journal/projection semantics; session, work, memory, and
-  workflow repository lifecycle/reconstruction over both in-memory and encrypted redb;
-  and position, idempotency, search, status, removal, and rebuild behavior for Tantivy and
-  permit-bound Chroma. Canonical fallback retrieval remains usable during index outage and
-  after a destructive rebuild failure until full replay recovers the index.
-- [x] Research and extension adapters pass shared factory-reopen conformance for canonical
-  citations, integration state, pack lifecycle, publisher trust, bounds, and reconstruction.
-- [x] Workflow schema, trust invalidation, restart, bounded parallelism, cycles, input
-  waits, explicit idempotent retries, compensation, cancellation, and unknown outcomes
-  pass durable acceptance tests. Separate-process redb fault tests now cover process loss
-  after synced non-idempotent/idempotent primary effects, after a synced compensation, and
-  immediately after durable step completion, plus parallel sibling replay, linked-child
-  intent repair, and child-first nested recovery without duplicate execution.
-- [x] Persisted fixed-cadence workflow schedules pass shared in-memory/redb repository
-  conformance, clock-controlled misfire and trust-invalidation tests, CLI/TUI/worker
-  contract tests, and a separate-process redb abort immediately after the atomic
-  schedule-fire/queued-run batch with no lost or duplicate occurrence after reopen.
-- [x] Authenticated workflow webhooks pass shared in-memory/redb repository conformance,
-  HMAC/timestamp/replay/body/trust rejection tests, credential-reference-only gateway
-  disclosure, atomic accepted-delivery/run queueing, bounded loopback HTTP parsing, and
-  CLI/TUI/worker/embedded contract and parity tests.
-- [x] Repository-event workflow subscriptions pass shared in-memory/redb repository
-  conformance, exact domain-type and stream filtering, trust/schema blocking,
-  policy-gated dispatch, atomic checkpoint/delivery/run queueing, stale-checkpoint
-  duplicate suppression, CLI/TUI/worker contract tests, and a separate-process redb abort
-  immediately after the atomic delivery batch with no lost or duplicate run after reopen.
-- [x] Sandbox tests cover traversal, symlink, environment, child-process, resource, and
-  network escapes on each supported platform.
-  The final cutover run passed native macOS/Linux arm64/x64 isolation, Windows arm64/x64
-  AppContainer and Job Object isolation, and live OCI/OPA security. Coverage includes
-  filesystem traversal and symlinks, environment, process trees, time and resource
-  limits, authenticated exact-origin forwarding, unlisted destinations, raw-loopback
-  bypass, cleanup, and credential redaction.
-- [x] Production and independent fuzz dependency graphs enforce locked registry sources,
-  explicit licenses and versions, banned crates, and warnings-denied RustSec audits.
-- [x] Active installation, configuration, user, tool, context, skill, integration,
-  workflow, troubleshooting, release, pack, and bundle documentation uses only the Rust
-  YAML/CLI/state contract; executable acceptance parses published examples, validates the
-  workflow definition, confirms documented command routes, and rejects Python-era
-  operator signatures.
-- [x] Formatting, warnings-denied lint, workspace tests, fuzzing, dependency/license and
-  vulnerability policy, and macOS/Linux/Windows arm64/x64 release smoke tests pass.
-  The final hosted `rust-cutover-gate` passed all 19 required jobs, including the complete
-  workspace, bounded fuzzing, production and fuzz supply-chain policy, both pinned Chroma
-  versions, live OCI/OPA security, native sandbox/runtime matrices, and all six native
-  build/install/package jobs.
-- [x] Strict configuration rejects unknown fields, preserves only credential/key references
-  in `config show`, and proves raw unknown secret fields never appear in CLI diagnostics.
-- [x] Unit, integration, boundary, security, type, lint, and packaging checks pass.
-  Local formatting, warnings-denied Clippy, and full workspace tests passed before merge.
-  The exact merged revision then passed the fail-closed hosted cutover gate, clean native
-  installation on all six targets, signed-bundle verification, current/previous Chroma,
-  live OPA/mTLS and OCI security, and the published offline installed-runtime smoke test.
-
-## 24. Explicitly Deferred Product Decisions
-
-These choices are not required to reconstruct the baseline product and should not block
-the milestones above:
-
-- Remote multi-user control plane and authentication.
-- Graphical desktop or browser interface.
-- Unbounded or self-replicating child-agent trees.
-- Storage of raw provider chain-of-thought.
-- Automatic execution of scripts found inside skill directories.
-- A universal dedicated verification tool family; repository verification remains
-  available through structured commands and capability packs.
+The frozen Python inventory is fully represented by the Section 5 baseline. Generic
+possibilities such as another provider, storage backend, trigger, policy engine, or
+terminal adapter are extension points, not unfinished features. A future addition becomes
+product scope only after it receives a concrete requirement and acceptance contract;
+implementation detail and test evidence remain outside this inventory.

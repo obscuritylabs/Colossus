@@ -41,7 +41,8 @@ not expand configured policy or sandbox grants.
 - OpenAI Responses, OpenAI-compatible, and credential-free echo providers with role
   routing, streaming, strict tool schemas, and durable multi-turn sessions.
 - Filesystem, Git, process, network, memory, research, integration, MCP, skill, pack,
-  workflow, goal, and subagent operations routed through one effect gateway.
+  signed-collection/registry, workflow, goal, and subagent operations routed through one
+  effect gateway.
 - Built-in deny-by-default policy or strict OPA decisions, explicit approval proofs,
   one-use permits, bounded quarantine, and post-effect content release.
 - XChaCha20-Poly1305 journal payloads, hash chaining, signed checkpoints, secure anchors,
@@ -64,8 +65,8 @@ not expand configured policy or sandbox grants.
 - [Integrations](docs/INTEGRATIONS.md)
 - [Security Model](docs/SECURITY.md)
 - [Runtime Status](docs/RUST_RECONSTRUCTION.md)
-- [Post-0.8 Roadmap](docs/ROADMAP.md)
-- [Feature Inventory](docs/FEATURE_INVENTORY.md)
+- [Feature Inventory](docs/FEATURE_INVENTORY.md#22-delivery-status)
+- [Rust Acceptance Matrix](docs/RUST_ACCEPTANCE_MATRIX.md)
 
 ## Development
 

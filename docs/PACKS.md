@@ -136,12 +136,43 @@ skill script; executable behavior must be a declared tool or MCP server instead.
 V1 supports installing from local OCI-layout artifacts. The first supported layer must
 contain a pack directory with `colossus.pack.json`.
 
-Remote registry pull, push, auth, hosted registry workflows, and signed multi-pack
-collections are deferred to 0.9.0. The local OCI shape exists so future registry
-support can use the same artifact format without weakening 0.8.0 local verification.
-
 The Rust reconstruction accepts verified local directories plus OCI layout 1.0 sources
 with one OCI image manifest and a supported tar or tar+gzip pack layer. Descriptor sizes
 and SHA-256 digests are checked before bounded extraction. Links, special entries,
 duplicate paths, traversal, remote descriptor URLs, archive bombs, and ambiguous layouts
 fail closed before the extracted pack enters normal verification.
+
+## Collections And Registry
+
+A collection is a signed `colossus.collection.json` inventory over immediate
+`packs/NAME` and `skills/NAME` directories. Builds are reproducible for the same staged
+bytes, timestamp, metadata, and signing seed. Every pack retains its own trusted
+publisher signature; skills remain data-only; exact pack dependency closure must be
+present and acyclic. Install verifies the complete collection, stages every artifact,
+refuses existing destinations, publishes pack lifecycle events as one journal batch,
+and rolls back synchronous failures.
+
+```bash
+colossus collections verify ./collection
+colossus --approval-mode ask collections build ./staged ./collection \
+  --name starter --version 1.0.0 --publisher example \
+  --created-at 2026-07-16T12:00:00Z --signing-key-reference env:COLLECTION_SEED
+colossus --approval-mode ask collections install ./collection
+```
+
+Registry transport uses the same signed collection as a deterministic tar. Pull writes
+only to a clean destination and verifies before publication. Push uses create-only
+`PUT` semantics; a conflict counts as replay success only when the server returns the
+same `X-Content-Sha256`. URLs require HTTPS except for explicit loopback-IP acceptance,
+and optional bearer credentials use `env:VARIABLE` references:
+
+```bash
+colossus --approval-mode ask registry pull https://registry.example/v1/starter/1.0.0 ./starter \
+  --credential-reference env:REGISTRY_TOKEN
+colossus --approval-mode ask registry push ./starter https://registry.example/v1/starter/1.0.0 \
+  --credential-reference env:REGISTRY_TOKEN
+```
+
+The origin and credential variable must also be granted under `sandbox.networkDestinations`
+and `sandbox.environment`. No registry is contacted by default; local verification,
+installation, OCI layouts, and offline bundles remain fully offline.

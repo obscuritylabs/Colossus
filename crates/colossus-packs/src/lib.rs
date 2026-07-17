@@ -6,26 +6,37 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, BundleFileEntry, BundleInstallation, BundleManifest, BundleMaterialization,
-    BundleSigningKeyInfo, BundleVerification, EffectRequest, PackInstallation, PackManifest,
-    PackSignature, PackStatus, PackVerification, PublisherTrust, QuarantinedEffectResult,
+    BundleSigningKeyInfo, BundleVerification, CollectionArtifactEntry, CollectionArtifactKind,
+    CollectionInstallation, CollectionManifest, CollectionMaterialization, CollectionVerification,
+    EffectRequest, PackFileEntry, PackInstallation, PackManifest, PackSignature, PackStatus,
+    PackVerification, PublisherTrust, QuarantinedEffectResult, RegistryPullResult,
+    RegistryPushResult, SkillInstallResult, SkillValidationResult,
 };
 use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
 use colossus_ports::{ExtensionRepository, StoreError};
+use colossus_skills::{copy_verified_skill, inspect_skill_directory};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
+use futures::StreamExt as _;
+use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{Read, Write as _},
+    net::IpAddr,
     path::{Component, Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio::net::lookup_host;
+use tokio_util::io::ReaderStream;
 
 const PACK_MANIFEST: &str = "colossus.pack.json";
 const BUNDLE_MANIFEST: &str = "manifest.json";
+const COLLECTION_MANIFEST: &str = "colossus.collection.json";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -118,6 +129,9 @@ pub enum PackError {
     /// A security or schema invariant was violated.
     #[error("pack verification failed: {0}")]
     Invalid(String),
+    /// A remote mutation may have completed and must not be retried implicitly.
+    #[error("pack remote outcome is unknown: {0}")]
+    OutcomeUnknown(String),
     /// Durable lifecycle state failed.
     #[error(transparent)]
     Store(#[from] StoreError),
@@ -197,6 +211,51 @@ pub enum PackOperation {
         /// Environment reference containing a 32-byte Ed25519 signing seed.
         signing_key_reference: String,
     },
+    /// Verify a signed multi-pack and skill collection without installing it.
+    CollectionVerify {
+        /// Absolute or workspace-relative collection directory.
+        path: String,
+    },
+    /// Build and sign a deterministic collection from `packs/` and `skills/` trees.
+    CollectionBuild {
+        /// Absolute or workspace-relative staged collection payload.
+        source: String,
+        /// Absolute or workspace-relative destination, which must not exist.
+        destination: String,
+        /// Stable collection identity.
+        name: String,
+        /// Immutable collection version.
+        version: String,
+        /// Publisher already bound to the signing key in canonical trust state.
+        publisher: String,
+        /// Explicit reproducible RFC3339 UTC timestamp.
+        created_at: String,
+        /// Environment reference containing a 32-byte Ed25519 signing seed.
+        signing_key_reference: String,
+    },
+    /// Verify and install every pack and skill from a signed collection without clobbering.
+    CollectionInstall {
+        /// Absolute or workspace-relative collection directory.
+        path: String,
+    },
+    /// Pull an authenticated signed collection transport into a clean local directory.
+    RegistryPull {
+        /// Credential-free HTTPS URL or explicit loopback HTTP URL.
+        url: String,
+        /// Absolute clean destination directory.
+        destination: String,
+        /// Optional environment-backed bearer credential reference.
+        credential_reference: Option<String>,
+    },
+    /// Push a verified collection as a deterministic create-only tar transport.
+    RegistryPush {
+        /// Absolute local collection directory.
+        path: String,
+        /// Credential-free HTTPS URL or explicit loopback HTTP URL.
+        url: String,
+        /// Optional environment-backed bearer credential reference.
+        credential_reference: Option<String>,
+    },
 }
 
 impl PackOperation {
@@ -213,6 +272,11 @@ impl PackOperation {
             Self::BundleBuild { .. } => "bundle.build",
             Self::BundleInstall { .. } => "bundle.install",
             Self::BundleKeyInfo { .. } => "bundle.key.inspect",
+            Self::CollectionVerify { .. } => "collection.verify",
+            Self::CollectionBuild { .. } => "collection.build",
+            Self::CollectionInstall { .. } => "collection.install",
+            Self::RegistryPull { .. } => "registry.pull",
+            Self::RegistryPush { .. } => "registry.push",
         }
     }
 
@@ -232,6 +296,13 @@ impl PackOperation {
                 format!("bundle-source:{path}:install-prefix:{prefix}")
             }
             Self::BundleKeyInfo { .. } => "bundle-signing-key:referenced".into(),
+            Self::CollectionVerify { path } | Self::CollectionInstall { path } => {
+                format!("collection-source:{path}")
+            }
+            Self::CollectionBuild { destination, .. } => {
+                format!("collection-destination:{destination}")
+            }
+            Self::RegistryPull { url, .. } | Self::RegistryPush { url, .. } => url.clone(),
         }
     }
 }
@@ -255,15 +326,27 @@ pub fn current_release_target() -> Result<&'static str, PackError> {
 pub struct PackService {
     repository: Arc<dyn ExtensionRepository>,
     install_root: PathBuf,
+    skill_install_root: PathBuf,
 }
 
 impl PackService {
     /// Bind pack operations to the canonical extension repository and configured install root.
     pub fn new(repository: Arc<dyn ExtensionRepository>, install_root: PathBuf) -> Self {
+        let skill_install_root = install_root
+            .parent()
+            .map_or_else(|| PathBuf::from("skills"), |parent| parent.join("skills"));
         Self {
             repository,
             install_root,
+            skill_install_root,
         }
+    }
+
+    /// Override the configured user-skill installation root used by signed collections.
+    #[must_use]
+    pub fn with_skill_install_root(mut self, skill_install_root: PathBuf) -> Self {
+        self.skill_install_root = skill_install_root;
+        self
     }
 
     /// Reconstruct one canonical pack lifecycle.
@@ -444,6 +527,392 @@ impl PackService {
             }
         }
         Ok(())
+    }
+
+    fn verify_collection(&self, root: &Path) -> Result<CollectionVerification, PackError> {
+        verify_collection(root, self.repository.as_ref())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_collection(
+        &self,
+        source: &Path,
+        destination: &Path,
+        name: &str,
+        version: &str,
+        publisher: &str,
+        created_at: &str,
+        signing_seed: [u8; 32],
+    ) -> Result<CollectionMaterialization, PackError> {
+        validate_identity("collection name", name)?;
+        validate_identity("publisher", publisher)?;
+        validate_bounded("collection version", version, 128)?;
+        validate_bundle_timestamp(created_at)?;
+        let source = verified_root(source)?;
+        if fs::symlink_metadata(source.join(COLLECTION_MANIFEST)).is_ok() {
+            return Err(PackError::Invalid(format!(
+                "staged collection payload must not contain {COLLECTION_MANIFEST}"
+            )));
+        }
+        validate_absolute_normalized(destination, "collection destination")?;
+        if fs::symlink_metadata(destination).is_ok() {
+            return Err(PackError::Invalid(format!(
+                "collection destination already exists: {}",
+                destination.display()
+            )));
+        }
+        let parent = destination.parent().ok_or_else(|| {
+            PackError::Invalid("collection destination has no parent directory".into())
+        })?;
+        let parent = verified_root(parent)?;
+        if parent.starts_with(&source) {
+            return Err(PackError::Invalid(
+                "collection destination cannot be inside the staged payload".into(),
+            ));
+        }
+        let temporary = tempfile::Builder::new()
+            .prefix(".collection-build-")
+            .tempdir_in(&parent)?;
+        copy_bundle_payload(&source, temporary.path())?;
+        let artifacts = discover_collection_artifacts(temporary.path(), self.repository.as_ref())?;
+        if artifacts.is_empty() {
+            return Err(PackError::Invalid(
+                "collection must contain at least one pack or skill".into(),
+            ));
+        }
+        let files = collect_collection_entries(temporary.path())?;
+        let signing_key = SigningKey::from_bytes(&signing_seed);
+        let signing_key_id = digest_hex(signing_key.verifying_key().as_bytes());
+        let mut manifest = CollectionManifest {
+            format_version: 1,
+            name: name.into(),
+            version: version.into(),
+            publisher: publisher.into(),
+            created_at: created_at.into(),
+            artifacts,
+            files,
+            signatures: Vec::new(),
+        };
+        let unsigned = canonical_collection_signing_bytes(&manifest)?;
+        manifest.signatures.push(PackSignature {
+            algorithm: "ed25519".into(),
+            key_id: signing_key_id.clone(),
+            signature: BASE64.encode(signing_key.sign(&unsigned).to_bytes()),
+        });
+        let manifest_path = temporary.path().join(COLLECTION_MANIFEST);
+        let mut manifest_file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&manifest_path)?;
+        serde_json::to_writer_pretty(&mut manifest_file, &manifest)?;
+        manifest_file.write_all(b"\n")?;
+        manifest_file.sync_all()?;
+        drop(manifest_file);
+        let verification = self.verify_collection(temporary.path())?;
+        fs::rename(temporary.path(), destination)?;
+        Ok(CollectionMaterialization {
+            path: destination.display().to_string(),
+            verification,
+            signing_key_id,
+        })
+    }
+
+    fn install_collection(
+        &self,
+        root: &Path,
+        actor: Actor,
+    ) -> Result<CollectionInstallation, PackError> {
+        let root = verified_root(root)?;
+        let verification = self.verify_collection(&root)?;
+        let pack_root = ensure_install_root(&self.install_root)?;
+        let skill_root = ensure_install_root(&self.skill_install_root)?;
+        let mut pack_staging = Vec::new();
+        let mut skill_staging = Vec::new();
+        let timestamp = now()?;
+
+        for pack in &verification.packs {
+            if self
+                .repository
+                .get_pack(&pack.manifest.name)?
+                .is_some_and(|installed| installed.status != PackStatus::Uninstalled)
+            {
+                return Err(PackError::Invalid(format!(
+                    "collection refuses to replace installed pack: {}",
+                    pack.manifest.name
+                )));
+            }
+            let destination = pack_root
+                .join(&pack.manifest.name)
+                .join(&pack.manifest.version);
+            if fs::symlink_metadata(&destination).is_ok() {
+                return Err(PackError::Invalid(format!(
+                    "collection pack destination already exists: {}",
+                    destination.display()
+                )));
+            }
+            let parent = destination.parent().ok_or_else(|| {
+                PackError::Invalid("collection pack destination has no parent".into())
+            })?;
+            fs::create_dir_all(parent)?;
+            reject_symlink_chain(&pack_root, parent)?;
+            let temporary = tempfile::Builder::new()
+                .prefix(".collection-pack-")
+                .tempdir_in(parent)?;
+            let artifact = verification
+                .manifest
+                .artifacts
+                .iter()
+                .find(|artifact| {
+                    artifact.kind == CollectionArtifactKind::Pack
+                        && artifact.name == pack.manifest.name
+                })
+                .ok_or_else(|| PackError::Invalid("verified collection pack is absent".into()))?;
+            let source = root.join(&artifact.path);
+            copy_verified_pack(&source, temporary.path(), &pack.manifest)?;
+            let copied = verify_pack(temporary.path(), self.repository.as_ref())?;
+            if copied.manifest_sha256 != pack.manifest_sha256
+                || copied.trust_key_id != pack.trust_key_id
+            {
+                return Err(PackError::Invalid(
+                    "collection pack changed while it was staged".into(),
+                ));
+            }
+            pack_staging.push((temporary, destination, pack.clone()));
+        }
+
+        for skill in &verification.skills {
+            let destination = skill_root.join(&skill.name);
+            if fs::symlink_metadata(&destination).is_ok() {
+                return Err(PackError::Invalid(format!(
+                    "collection refuses to replace installed skill: {}",
+                    skill.name
+                )));
+            }
+            let temporary = tempfile::Builder::new()
+                .prefix(".collection-skill-")
+                .tempdir_in(&skill_root)?;
+            let staged = temporary.path().join("skill");
+            let artifact = verification
+                .manifest
+                .artifacts
+                .iter()
+                .find(|artifact| {
+                    artifact.kind == CollectionArtifactKind::Skill && artifact.name == skill.name
+                })
+                .ok_or_else(|| PackError::Invalid("verified collection skill is absent".into()))?;
+            let result = copy_verified_skill(
+                &root.join(&artifact.path),
+                &staged,
+                &skill.name,
+                &skill.content_sha256,
+            )?;
+            skill_staging.push((temporary, staged, destination, result));
+        }
+
+        let installations = pack_staging
+            .iter()
+            .map(|(_, destination, pack)| PackInstallation {
+                manifest: pack.manifest.clone(),
+                status: PackStatus::Enabled,
+                source: format!(
+                    "collection:{}@{}",
+                    verification.manifest.name, verification.manifest.version
+                ),
+                installed_path: destination.display().to_string(),
+                manifest_sha256: pack.manifest_sha256.clone(),
+                trust_key_id: pack.trust_key_id.clone(),
+                installed_at: timestamp.clone(),
+                updated_at: timestamp.clone(),
+            })
+            .collect::<Vec<_>>();
+        let mut committed = Vec::new();
+        let commit_result = (|| {
+            for (temporary, destination, _) in &pack_staging {
+                fs::rename(temporary.path(), destination)?;
+                committed.push(destination.clone());
+            }
+            for (_, staged, destination, _) in &skill_staging {
+                fs::rename(staged, destination)?;
+                committed.push(destination.clone());
+            }
+            if installations.is_empty() {
+                Ok(Vec::new())
+            } else {
+                self.repository
+                    .install_packs(installations, actor)
+                    .map_err(PackError::from)
+            }
+        })();
+        let packs = match commit_result {
+            Ok(packs) => packs,
+            Err(error) => {
+                for path in committed.iter().rev() {
+                    let _ = fs::remove_dir_all(path);
+                }
+                return Err(error);
+            }
+        };
+        Ok(CollectionInstallation {
+            verification,
+            packs,
+            skills: skill_staging
+                .into_iter()
+                .map(|(_, _, _, result)| result)
+                .collect::<Vec<SkillInstallResult>>(),
+        })
+    }
+
+    async fn registry_pull(
+        &self,
+        url: &str,
+        destination: &Path,
+        credential_reference: Option<&str>,
+        permit: &ExecutionPermit,
+    ) -> Result<RegistryPullResult, PackError> {
+        validate_absolute_normalized(destination, "registry pull destination")?;
+        if fs::symlink_metadata(destination).is_ok() {
+            return Err(PackError::Invalid(format!(
+                "registry pull destination already exists: {}",
+                destination.display()
+            )));
+        }
+        let parent = destination.parent().ok_or_else(|| {
+            PackError::Invalid("registry pull destination has no parent directory".into())
+        })?;
+        let parent = verified_root(parent)?;
+        let (url, client) = registry_client(url, permit).await?;
+        let request = registry_auth(
+            client
+                .get(url.clone())
+                .header("accept", "application/vnd.colossus.collection.v1.tar"),
+            credential_reference,
+            permit,
+        )?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| PackError::Invalid(format!("registry pull failed: {error}")))?;
+        if !response.status().is_success() {
+            return Err(PackError::Invalid(format!(
+                "registry pull returned {}",
+                response.status()
+            )));
+        }
+        if response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            != Some("application/vnd.colossus.collection.v1.tar")
+        {
+            return Err(PackError::Invalid(
+                "registry pull returned an unexpected content type".into(),
+            ));
+        }
+        let limit = permit.obligations().max_output_bytes.min(MAX_ARCHIVE_BYTES);
+        if response.content_length().is_some_and(|size| size > limit) {
+            return Err(PackError::Invalid(
+                "registry collection transport exceeds the permitted bound".into(),
+            ));
+        }
+        let mut transport = tempfile::NamedTempFile::new_in(&parent)?;
+        let mut transport_bytes = 0_u64;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| {
+                PackError::Invalid(format!("registry pull stream failed: {error}"))
+            })?;
+            transport_bytes = transport_bytes
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| PackError::Invalid("registry transport size overflow".into()))?;
+            if transport_bytes > limit {
+                return Err(PackError::Invalid(
+                    "registry collection transport exceeds the permitted bound".into(),
+                ));
+            }
+            transport.write_all(&chunk)?;
+        }
+        transport.as_file_mut().sync_all()?;
+        let transport_sha256 = hash_file(transport.path(), limit)?;
+        let staging = tempfile::Builder::new()
+            .prefix(".registry-pull-")
+            .tempdir_in(&parent)?;
+        extract_collection_archive(transport.path(), staging.path())?;
+        let verification = self.verify_collection(staging.path())?;
+        fs::rename(staging.path(), destination)?;
+        Ok(RegistryPullResult {
+            url: url.to_string(),
+            path: destination.display().to_string(),
+            transport_sha256,
+            transport_bytes,
+            verification,
+        })
+    }
+
+    async fn registry_push(
+        &self,
+        root: &Path,
+        url: &str,
+        credential_reference: Option<&str>,
+        permit: &ExecutionPermit,
+    ) -> Result<RegistryPushResult, PackError> {
+        let root = verified_root(root)?;
+        let verification = self.verify_collection(&root)?;
+        let mut transport = tempfile::NamedTempFile::new()?;
+        write_collection_archive(&root, &verification, transport.as_file_mut())?;
+        transport.as_file_mut().sync_all()?;
+        let transport_bytes = transport.as_file().metadata()?.len();
+        let limit = permit.obligations().max_output_bytes.min(MAX_ARCHIVE_BYTES);
+        if transport_bytes > limit {
+            return Err(PackError::Invalid(
+                "registry collection transport exceeds the permitted bound".into(),
+            ));
+        }
+        let transport_sha256 = hash_file(transport.path(), limit)?;
+        let (url, client) = registry_client(url, permit).await?;
+        let file = tokio::fs::File::from_std(transport.reopen()?);
+        let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
+        let request = registry_auth(
+            client
+                .put(url.clone())
+                .header("content-type", "application/vnd.colossus.collection.v1.tar")
+                .header("content-length", transport_bytes)
+                .header("if-none-match", "*")
+                .header("x-content-sha256", &transport_sha256)
+                .body(body),
+            credential_reference,
+            permit,
+        )?;
+        let response = request.send().await.map_err(|error| {
+            PackError::OutcomeUnknown(format!(
+                "registry push may have completed after transport failure: {error}"
+            ))
+        })?;
+        let already_present = response.status() == reqwest::StatusCode::PRECONDITION_FAILED;
+        if !response.status().is_success() && !already_present {
+            return Err(PackError::Invalid(format!(
+                "registry push returned {}",
+                response.status()
+            )));
+        }
+        if already_present
+            && response
+                .headers()
+                .get("x-content-sha256")
+                .and_then(|value| value.to_str().ok())
+                != Some(transport_sha256.as_str())
+        {
+            return Err(PackError::Invalid(
+                "registry create-only conflict did not prove identical content".into(),
+            ));
+        }
+        Ok(RegistryPushResult {
+            url: url.to_string(),
+            collection: verification.manifest.name,
+            version: verification.manifest.version,
+            transport_sha256,
+            transport_bytes,
+            already_present,
+        })
     }
 
     fn verify_bundle(&self, root: &Path) -> Result<BundleVerification, PackError> {
@@ -634,6 +1103,12 @@ impl EffectExecutor for PackExecutor {
         if let Some(path) = destination_path(&operation) {
             enforce_write_grant(path, &permit)?;
         }
+        if matches!(
+            operation,
+            PackOperation::RegistryPull { .. } | PackOperation::RegistryPush { .. }
+        ) {
+            enforce_registry_credentials(&operation, request)?;
+        }
         let value = match operation {
             PackOperation::Verify { path } => {
                 serde_json::to_value(self.service.verify(Path::new(&path)).map_err(execution)?)
@@ -707,6 +1182,67 @@ impl EffectExecutor for PackExecutor {
             } => serde_json::to_value(signing_key_info(
                 resolve_signing_seed(&signing_key_reference).map_err(execution)?,
             )),
+            PackOperation::CollectionVerify { path } => serde_json::to_value(
+                self.service
+                    .verify_collection(Path::new(&path))
+                    .map_err(execution)?,
+            ),
+            PackOperation::CollectionBuild {
+                source,
+                destination,
+                name,
+                version,
+                publisher,
+                created_at,
+                signing_key_reference,
+            } => serde_json::to_value(
+                self.service
+                    .build_collection(
+                        Path::new(&source),
+                        Path::new(&destination),
+                        &name,
+                        &version,
+                        &publisher,
+                        &created_at,
+                        resolve_signing_seed(&signing_key_reference).map_err(execution)?,
+                    )
+                    .map_err(execution)?,
+            ),
+            PackOperation::CollectionInstall { path } => serde_json::to_value(
+                self.service
+                    .install_collection(Path::new(&path), request.actor.clone())
+                    .map_err(execution)?,
+            ),
+            PackOperation::RegistryPull {
+                url,
+                destination,
+                credential_reference,
+            } => serde_json::to_value(
+                self.service
+                    .registry_pull(
+                        &url,
+                        Path::new(&destination),
+                        credential_reference.as_deref(),
+                        &permit,
+                    )
+                    .await
+                    .map_err(pack_execution)?,
+            ),
+            PackOperation::RegistryPush {
+                path,
+                url,
+                credential_reference,
+            } => serde_json::to_value(
+                self.service
+                    .registry_push(
+                        Path::new(&path),
+                        &url,
+                        credential_reference.as_deref(),
+                        &permit,
+                    )
+                    .await
+                    .map_err(pack_execution)?,
+            ),
         }
         .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         Ok(QuarantinedEffectResult {
@@ -723,8 +1259,12 @@ fn source_path(operation: &PackOperation) -> Option<&Path> {
         PackOperation::Verify { path }
         | PackOperation::Install { path, .. }
         | PackOperation::BundleVerify { path }
-        | PackOperation::BundleInstall { path, .. } => Some(Path::new(path)),
-        PackOperation::BundleBuild { source, .. } => Some(Path::new(source)),
+        | PackOperation::BundleInstall { path, .. }
+        | PackOperation::CollectionVerify { path }
+        | PackOperation::CollectionInstall { path }
+        | PackOperation::RegistryPush { path, .. } => Some(Path::new(path)),
+        PackOperation::BundleBuild { source, .. }
+        | PackOperation::CollectionBuild { source, .. } => Some(Path::new(source)),
         _ => None,
     }
 }
@@ -733,8 +1273,42 @@ fn destination_path(operation: &PackOperation) -> Option<&Path> {
     match operation {
         PackOperation::BundleBuild { destination, .. } => Some(Path::new(destination)),
         PackOperation::BundleInstall { prefix, .. } => Some(Path::new(prefix)),
+        PackOperation::CollectionBuild { destination, .. } => Some(Path::new(destination)),
+        PackOperation::RegistryPull { destination, .. } => Some(Path::new(destination)),
         _ => None,
     }
+}
+
+fn enforce_registry_credentials(
+    operation: &PackOperation,
+    request: &EffectRequest,
+) -> Result<(), ExecutionError> {
+    let expected = match operation {
+        PackOperation::RegistryPull {
+            credential_reference,
+            ..
+        }
+        | PackOperation::RegistryPush {
+            credential_reference,
+            ..
+        } => credential_reference.as_deref(),
+        _ => None,
+    };
+    let actual = request
+        .credential_references
+        .iter()
+        .map(|credential| credential.reference.as_str())
+        .collect::<Vec<_>>();
+    let matches = match expected {
+        Some(reference) => actual == [reference],
+        None => actual.is_empty(),
+    };
+    if !matches {
+        return Err(ExecutionError::Failed(
+            "registry credential references do not match the authorized operation".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn signing_key_info(seed: [u8; 32]) -> BundleSigningKeyInfo {
@@ -820,6 +1394,241 @@ fn resolve_signing_seed(reference: &str) -> Result<[u8; 32], PackError> {
 
 fn execution(error: impl std::fmt::Display) -> ExecutionError {
     ExecutionError::Failed(error.to_string())
+}
+
+fn pack_execution(error: PackError) -> ExecutionError {
+    match error {
+        PackError::OutcomeUnknown(message) => ExecutionError::OutcomeUnknown(message),
+        error => ExecutionError::Failed(error.to_string()),
+    }
+}
+
+async fn registry_client(
+    endpoint: &str,
+    permit: &ExecutionPermit,
+) -> Result<(Url, Client), PackError> {
+    let url = Url::parse(endpoint)
+        .map_err(|error| PackError::Invalid(format!("invalid registry URL: {error}")))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| PackError::Invalid("registry URL must include a host".into()))?;
+    let host_ip = host.parse::<IpAddr>().ok();
+    let loopback_http = url.scheme() == "http" && host_ip.is_some_and(|ip| ip.is_loopback());
+    if !(url.scheme() == "https" || loopback_http)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(PackError::Invalid(
+            "registry URLs require HTTPS (or explicit loopback HTTP) and no credentials, query, or fragment"
+                .into(),
+        ));
+    }
+    let origin = url.origin().ascii_serialization();
+    if !permit
+        .obligations()
+        .network_destinations
+        .iter()
+        .any(|allowed| allowed == &origin)
+    {
+        return Err(PackError::Invalid(format!(
+            "registry origin {origin} is absent from permit obligations"
+        )));
+    }
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| PackError::Invalid("registry URL must resolve to a known port".into()))?;
+    let mut addresses = lookup_host((host, port))
+        .await
+        .map_err(|error| PackError::Invalid(format!("registry DNS resolution failed: {error}")))?
+        .filter(|address| match host_ip {
+            Some(ip) => ip.is_loopback() || !non_public_ip(address.ip()),
+            None => !non_public_ip(address.ip()),
+        })
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(PackError::Invalid(
+            "registry host resolved to no permitted address".into(),
+        ));
+    }
+    addresses.sort();
+    addresses.dedup();
+    addresses.truncate(16);
+    let client = Client::builder()
+        .no_proxy()
+        .redirect(RedirectPolicy::none())
+        .resolve_to_addrs(host, &addresses)
+        .timeout(Duration::from_millis(permit.obligations().timeout_ms))
+        .build()
+        .map_err(|error| PackError::Invalid(format!("registry client failed: {error}")))?;
+    Ok((url, client))
+}
+
+fn registry_auth(
+    request: reqwest::RequestBuilder,
+    credential_reference: Option<&str>,
+    permit: &ExecutionPermit,
+) -> Result<reqwest::RequestBuilder, PackError> {
+    let Some(reference) = credential_reference else {
+        return Ok(request);
+    };
+    let variable = reference.strip_prefix("env:").ok_or_else(|| {
+        PackError::Invalid("registry credentials must use env:VARIABLE references".into())
+    })?;
+    if variable.is_empty()
+        || !variable.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
+        })
+        || !permit
+            .obligations()
+            .allowed_environment
+            .iter()
+            .any(|allowed| allowed == variable)
+    {
+        return Err(PackError::Invalid(
+            "registry credential is absent from permit environment obligations".into(),
+        ));
+    }
+    let secret = std::env::var(variable)
+        .map_err(|_| PackError::Invalid(format!("registry credential {variable} is unset")))?;
+    if secret.is_empty() {
+        return Err(PackError::Invalid(format!(
+            "registry credential {variable} is empty"
+        )));
+    }
+    Ok(request.bearer_auth(secret))
+}
+
+fn non_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+        }
+    }
+}
+
+fn write_collection_archive(
+    root: &Path,
+    verification: &CollectionVerification,
+    output: &mut fs::File,
+) -> Result<(), PackError> {
+    let mut paths = vec![COLLECTION_MANIFEST.to_owned()];
+    paths.extend(
+        verification
+            .manifest
+            .files
+            .iter()
+            .map(|entry| entry.path.clone()),
+    );
+    paths.sort();
+    let mut archive = tar::Builder::new(output);
+    for relative in paths {
+        validate_relative_path(&relative)?;
+        let path = root.join(&relative);
+        reject_symlink_chain(root, &path)?;
+        let metadata = checked_regular_file(&path)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_size(metadata.len());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            header.set_mode(if metadata.permissions().mode() & 0o111 == 0 {
+                0o644
+            } else {
+                0o755
+            });
+        }
+        #[cfg(not(unix))]
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut input = fs::File::open(&path)?;
+        archive.append_data(&mut header, &relative, &mut input)?;
+    }
+    archive.finish()?;
+    Ok(())
+}
+
+fn extract_collection_archive(archive_path: &Path, destination: &Path) -> Result<(), PackError> {
+    let input = fs::File::open(archive_path)?;
+    let mut archive = tar::Archive::new(input);
+    let mut paths = BTreeSet::new();
+    let mut total_bytes = 0_u64;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if paths.len() > MAX_FILES {
+            return Err(PackError::Invalid(format!(
+                "registry collection transport exceeds {} entries",
+                MAX_FILES + 1
+            )));
+        }
+        if !entry.header().entry_type().is_file() {
+            return Err(PackError::Invalid(
+                "registry collection transport contains a link, directory, or special entry".into(),
+            ));
+        }
+        let relative = entry
+            .path()?
+            .to_str()
+            .ok_or_else(|| PackError::Invalid("registry collection paths must be UTF-8".into()))?
+            .to_owned();
+        validate_relative_path(&relative)?;
+        if !paths.insert(relative.clone()) {
+            return Err(PackError::Invalid(format!(
+                "duplicate registry collection path: {relative}"
+            )));
+        }
+        let size = entry.size();
+        if size > MAX_FILE_BYTES {
+            return Err(PackError::Invalid(format!(
+                "registry collection file exceeds {MAX_FILE_BYTES} bytes: {relative}"
+            )));
+        }
+        total_bytes = total_bytes
+            .checked_add(size)
+            .ok_or_else(|| PackError::Invalid("registry extracted size overflow".into()))?;
+        if total_bytes > MAX_TOTAL_BYTES {
+            return Err(PackError::Invalid(format!(
+                "registry extracted files exceed {MAX_TOTAL_BYTES} bytes"
+            )));
+        }
+        let target = destination.join(&relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut output = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&target)?;
+        let copied = std::io::copy(&mut entry, &mut output)?;
+        output.flush()?;
+        if copied != size {
+            return Err(PackError::Invalid(format!(
+                "registry collection file length mismatch: {relative}"
+            )));
+        }
+        apply_archive_permissions(&target, entry.header().mode().unwrap_or(0))?;
+    }
+    if !paths.contains(COLLECTION_MANIFEST) {
+        return Err(PackError::Invalid(format!(
+            "registry collection transport is missing {COLLECTION_MANIFEST}"
+        )));
+    }
+    Ok(())
 }
 
 fn materialize_pack_source(source: &Path) -> Result<MaterializedPack, PackError> {
@@ -1146,6 +1955,92 @@ fn verify_pack(
     })
 }
 
+fn verify_collection(
+    root: &Path,
+    repository: &dyn ExtensionRepository,
+) -> Result<CollectionVerification, PackError> {
+    let root = verified_root(root)?;
+    let manifest: CollectionManifest = read_manifest(&root.join(COLLECTION_MANIFEST))?;
+    validate_collection_manifest(&manifest)?;
+    let (files, total_bytes) = verify_declared_files(&root, &manifest.files)?;
+    reject_undeclared_files(&root, &files, COLLECTION_MANIFEST)?;
+    let unsigned = canonical_collection_signing_bytes(&manifest)?;
+    let manifest_sha256 = digest_hex(&unsigned);
+    let trust_key_id = verify_signatures(
+        &manifest.publisher,
+        &manifest.signatures,
+        &unsigned,
+        repository,
+        true,
+    )?
+    .ok_or_else(|| PackError::Invalid("collection must have a trusted signature".into()))?;
+
+    let mut packs = Vec::new();
+    let mut skills = Vec::new();
+    for artifact in &manifest.artifacts {
+        let path = root.join(&artifact.path);
+        reject_symlink_chain(&root, &path)?;
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(PackError::Invalid(format!(
+                "collection artifact is not a real directory: {}",
+                artifact.path
+            )));
+        }
+        match artifact.kind {
+            CollectionArtifactKind::Pack => {
+                let verification = verify_pack(&path, repository)?;
+                if !verification.trusted {
+                    return Err(PackError::Invalid(format!(
+                        "collection pack must have its own trusted signature: {}",
+                        artifact.name
+                    )));
+                }
+                if verification.manifest.name != artifact.name
+                    || verification.manifest.version != artifact.version
+                    || verification.manifest_sha256 != artifact.content_sha256
+                {
+                    return Err(PackError::Invalid(format!(
+                        "collection pack identity does not match its inventory: {}",
+                        artifact.path
+                    )));
+                }
+                packs.push(verification);
+            }
+            CollectionArtifactKind::Skill => {
+                let inspection =
+                    inspect_skill_directory(&path, &format!("collection:{}", artifact.path))?;
+                if inspection.manifest.name != artifact.name
+                    || inspection.manifest.version != artifact.version
+                    || inspection.content_sha256 != artifact.content_sha256
+                {
+                    return Err(PackError::Invalid(format!(
+                        "collection skill identity does not match its inventory: {}",
+                        artifact.path
+                    )));
+                }
+                skills.push(SkillValidationResult {
+                    name: inspection.manifest.name,
+                    source: inspection.source,
+                    file_count: inspection.files.len(),
+                    content_sha256: inspection.content_sha256,
+                });
+            }
+        }
+    }
+    let packs = order_collection_packs(packs)?;
+    skills.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(CollectionVerification {
+        manifest,
+        manifest_sha256,
+        file_count: files.len(),
+        total_bytes,
+        trust_key_id,
+        packs,
+        skills,
+    })
+}
+
 fn verify_bundle(
     root: &Path,
     repository: &dyn ExtensionRepository,
@@ -1221,6 +2116,258 @@ fn verify_bundle(
         trust_key_id,
         source_revision: manifest.source_revision,
     })
+}
+
+fn validate_collection_manifest(manifest: &CollectionManifest) -> Result<(), PackError> {
+    if manifest.format_version != 1 {
+        return Err(PackError::Invalid(
+            "unsupported collection format_version".into(),
+        ));
+    }
+    validate_identity("collection name", &manifest.name)?;
+    validate_identity("publisher", &manifest.publisher)?;
+    validate_bounded("collection version", &manifest.version, 128)?;
+    validate_bundle_timestamp(&manifest.created_at)?;
+    if manifest.artifacts.is_empty() || manifest.artifacts.len() > MAX_FILES {
+        return Err(PackError::Invalid(
+            "collection artifacts must contain 1..=10000 entries".into(),
+        ));
+    }
+    if manifest.files.is_empty() || manifest.files.len() > MAX_FILES {
+        return Err(PackError::Invalid(
+            "collection files must contain 1..=10000 entries".into(),
+        ));
+    }
+    if manifest.signatures.is_empty() {
+        return Err(PackError::Invalid(
+            "collection signatures cannot be empty".into(),
+        ));
+    }
+    let mut paths = BTreeSet::new();
+    let mut identities = BTreeSet::new();
+    let mut previous = None::<&str>;
+    for artifact in &manifest.artifacts {
+        validate_identity("collection artifact name", &artifact.name)?;
+        validate_bounded("collection artifact version", &artifact.version, 128)?;
+        validate_relative_path(&artifact.path)?;
+        validate_sha256(&artifact.content_sha256)?;
+        let expected_root = match artifact.kind {
+            CollectionArtifactKind::Pack => "packs",
+            CollectionArtifactKind::Skill => "skills",
+        };
+        let components = artifact.path.split('/').collect::<Vec<_>>();
+        if components.len() != 2 || components[0] != expected_root {
+            return Err(PackError::Invalid(format!(
+                "collection artifact path must be {expected_root}/NAME: {}",
+                artifact.path
+            )));
+        }
+        if !paths.insert(&artifact.path) {
+            return Err(PackError::Invalid(format!(
+                "duplicate collection artifact path: {}",
+                artifact.path
+            )));
+        }
+        let kind = match artifact.kind {
+            CollectionArtifactKind::Pack => "pack",
+            CollectionArtifactKind::Skill => "skill",
+        };
+        if !identities.insert(format!("{kind}:{}", artifact.name)) {
+            return Err(PackError::Invalid(format!(
+                "duplicate collection artifact identity: {kind}:{}",
+                artifact.name
+            )));
+        }
+        if previous.is_some_and(|value| value >= artifact.path.as_str()) {
+            return Err(PackError::Invalid(
+                "collection artifacts must be sorted by unique path".into(),
+            ));
+        }
+        previous = Some(&artifact.path);
+    }
+    let mut previous_file = None::<&str>;
+    let mut artifact_files = BTreeMap::<&str, usize>::new();
+    for file in &manifest.files {
+        validate_relative_path(&file.path)?;
+        validate_sha256(&file.sha256)?;
+        validate_bounded("content_type", &file.content_type, 256)?;
+        if previous_file.is_some_and(|value| value >= file.path.as_str()) {
+            return Err(PackError::Invalid(
+                "collection files must be sorted by unique path".into(),
+            ));
+        }
+        previous_file = Some(&file.path);
+        let artifact = manifest
+            .artifacts
+            .iter()
+            .find(|artifact| {
+                file.path
+                    .strip_prefix(&artifact.path)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+            })
+            .ok_or_else(|| {
+                PackError::Invalid(format!(
+                    "collection file is outside every declared artifact: {}",
+                    file.path
+                ))
+            })?;
+        *artifact_files.entry(&artifact.path).or_default() += 1;
+    }
+    if manifest
+        .artifacts
+        .iter()
+        .any(|artifact| !artifact_files.contains_key(artifact.path.as_str()))
+    {
+        return Err(PackError::Invalid(
+            "every collection artifact must contain at least one file".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn discover_collection_artifacts(
+    root: &Path,
+    repository: &dyn ExtensionRepository,
+) -> Result<Vec<CollectionArtifactEntry>, PackError> {
+    let mut artifacts = Vec::new();
+    for (directory, kind) in [
+        ("packs", CollectionArtifactKind::Pack),
+        ("skills", CollectionArtifactKind::Skill),
+    ] {
+        let container = root.join(directory);
+        if !container.exists() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&container)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(PackError::Invalid(format!(
+                "collection {directory} root is not a real directory"
+            )));
+        }
+        let mut entries = fs::read_dir(&container)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(PackError::Invalid(format!(
+                    "collection {directory} entries must be real directories: {}",
+                    path.display()
+                )));
+            }
+            let relative = normalized_relative(root, &path)?;
+            match kind {
+                CollectionArtifactKind::Pack => {
+                    let verification = verify_pack(&path, repository)?;
+                    if !verification.trusted {
+                        return Err(PackError::Invalid(format!(
+                            "collection pack must have its own trusted signature: {}",
+                            verification.manifest.name
+                        )));
+                    }
+                    artifacts.push(CollectionArtifactEntry {
+                        kind,
+                        name: verification.manifest.name,
+                        version: verification.manifest.version,
+                        path: relative,
+                        content_sha256: verification.manifest_sha256,
+                    });
+                }
+                CollectionArtifactKind::Skill => {
+                    let inspection = inspect_skill_directory(&path, "collection-build")?;
+                    artifacts.push(CollectionArtifactEntry {
+                        kind,
+                        name: inspection.manifest.name,
+                        version: inspection.manifest.version,
+                        path: relative,
+                        content_sha256: inspection.content_sha256,
+                    });
+                }
+            }
+        }
+    }
+    artifacts.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(artifacts)
+}
+
+fn collect_collection_entries(root: &Path) -> Result<Vec<PackFileEntry>, PackError> {
+    collect_bundle_entries(root)?
+        .into_iter()
+        .map(|entry| {
+            Ok(PackFileEntry {
+                path: entry.path,
+                sha256: entry.sha256,
+                size: entry
+                    .size
+                    .ok_or_else(|| PackError::Invalid("collection file size is absent".into()))?,
+                content_type: "application/octet-stream".into(),
+            })
+        })
+        .collect()
+}
+
+fn order_collection_packs(
+    packs: Vec<PackVerification>,
+) -> Result<Vec<PackVerification>, PackError> {
+    fn visit(
+        name: &str,
+        packs: &BTreeMap<String, PackVerification>,
+        visiting: &mut BTreeSet<String>,
+        visited: &mut BTreeSet<String>,
+        ordered: &mut Vec<PackVerification>,
+    ) -> Result<(), PackError> {
+        if visited.contains(name) {
+            return Ok(());
+        }
+        if !visiting.insert(name.into()) {
+            return Err(PackError::Invalid(format!(
+                "collection pack dependency cycle includes {name}"
+            )));
+        }
+        let pack = packs
+            .get(name)
+            .ok_or_else(|| PackError::Invalid(format!("collection pack is absent: {name}")))?;
+        for dependency in &pack.manifest.dependencies {
+            let (dependency_name, version) = dependency.split_once('@').ok_or_else(|| {
+                PackError::Invalid(format!(
+                    "pack dependency must be name@version: {dependency}"
+                ))
+            })?;
+            let dependency_pack = packs.get(dependency_name).ok_or_else(|| {
+                PackError::Invalid(format!(
+                    "collection is missing dependency closure entry: {dependency}"
+                ))
+            })?;
+            if dependency_pack.manifest.version != version {
+                return Err(PackError::Invalid(format!(
+                    "collection dependency has the wrong exact version: {dependency}"
+                )));
+            }
+            visit(dependency_name, packs, visiting, visited, ordered)?;
+        }
+        visiting.remove(name);
+        visited.insert(name.into());
+        ordered.push(pack.clone());
+        Ok(())
+    }
+
+    let mut by_name = BTreeMap::new();
+    for pack in packs {
+        let name = pack.manifest.name.clone();
+        if by_name.insert(name.clone(), pack).is_some() {
+            return Err(PackError::Invalid(format!(
+                "duplicate collection pack identity: {name}"
+            )));
+        }
+    }
+    let names = by_name.keys().cloned().collect::<Vec<_>>();
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut ordered = Vec::with_capacity(by_name.len());
+    for name in names {
+        visit(&name, &by_name, &mut visiting, &mut visited, &mut ordered)?;
+    }
+    Ok(ordered)
 }
 
 fn validate_bundle_timestamp(created_at: &str) -> Result<(), PackError> {
@@ -1781,6 +2928,15 @@ pub fn canonical_bundle_signing_bytes(manifest: &BundleManifest) -> Result<Vec<u
     canonical_json(&unsigned)
 }
 
+/// Deterministic signed bytes for a collection manifest with signatures removed.
+pub fn canonical_collection_signing_bytes(
+    manifest: &CollectionManifest,
+) -> Result<Vec<u8>, PackError> {
+    let mut unsigned = manifest.clone();
+    unsigned.signatures.clear();
+    canonical_json(&unsigned)
+}
+
 fn canonical_json(value: &impl Serialize) -> Result<Vec<u8>, PackError> {
     fn sorted(value: serde_json::Value) -> serde_json::Value {
         match value {
@@ -2092,22 +3248,35 @@ fn now() -> Result<String, PackError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUNDLE_MANIFEST, PACK_MANIFEST, PackError, PackService, RELEASE_TARGETS,
-        bundle_artifact_path, canonical_bundle_signing_bytes, canonical_pack_signing_bytes,
-        current_release_target, digest_hex,
+        BUNDLE_MANIFEST, COLLECTION_MANIFEST, PACK_MANIFEST, PackError, PackExecutor,
+        PackOperation, PackService, RELEASE_TARGETS, bundle_artifact_path,
+        canonical_bundle_signing_bytes, canonical_collection_signing_bytes,
+        canonical_pack_signing_bytes, current_release_target, digest_hex,
+        extract_collection_archive, write_collection_archive,
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use colossus_contracts::{
-        Actor, ActorType, BundleFileEntry, BundleManifest, PackFileEntry, PackManifest,
-        PackPathReference, PackSignature, PackStatus, PublisherTrust,
+        Actor, ActorType, BundleFileEntry, BundleManifest, CredentialReference, DecisionOutcome,
+        PackFileEntry, PackManifest, PackPathReference, PackSignature, PackStatus, PublisherTrust,
+        SkillManifest,
     };
     use colossus_integrations::EventSourcedExtensionRepository;
+    use colossus_policy::{
+        BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request,
+    };
     use colossus_ports::{EventJournal, ExtensionRepository};
     use colossus_testkit::InMemoryEventJournal;
     use ed25519_dalek::{Signer as _, SigningKey};
     use sha2::{Digest as _, Sha256};
-    use std::{fs, io::Write as _, path::Path, sync::Arc};
+    use std::{
+        fs,
+        io::Write as _,
+        path::Path,
+        sync::{Arc, Mutex},
+    };
     use tempfile::TempDir;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::TcpListener;
 
     fn actor() -> Actor {
         Actor {
@@ -2186,6 +3355,51 @@ mod tests {
             )
             .expect("add trust");
         key_id
+    }
+
+    fn write_signed_pack(
+        root: &Path,
+        name: &str,
+        version: &str,
+        dependencies: Vec<String>,
+        signing_key: &SigningKey,
+        key_id: &str,
+    ) {
+        let mut manifest = write_pack(root);
+        manifest.name = name.into();
+        manifest.version = version.into();
+        manifest.dependencies = dependencies;
+        let unsigned = canonical_pack_signing_bytes(&manifest).expect("canonical pack");
+        manifest.signatures.push(PackSignature {
+            algorithm: "ed25519".into(),
+            key_id: key_id.into(),
+            signature: BASE64.encode(signing_key.sign(&unsigned).to_bytes()),
+        });
+        fs::write(
+            root.join(PACK_MANIFEST),
+            serde_json::to_vec_pretty(&manifest).expect("signed pack manifest"),
+        )
+        .expect("write signed pack");
+    }
+
+    fn write_skill(root: &Path, name: &str, version: &str) {
+        fs::create_dir_all(root).expect("skill root");
+        let manifest = SkillManifest {
+            name: name.into(),
+            version: version.into(),
+            description: "Collection skill.".into(),
+            triggers: vec![name.into()],
+            required_tools: Vec::new(),
+            permissions: Vec::new(),
+            offline_compatible: true,
+        };
+        fs::write(
+            root.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest).expect("skill manifest"),
+        )
+        .expect("write skill manifest");
+        fs::write(root.join("SKILL.md"), "Use this data-only skill safely.\n")
+            .expect("write skill instructions");
     }
 
     fn write_oci_layout(layout: &Path, pack: &Path, gzip: bool) {
@@ -2476,6 +3690,423 @@ mod tests {
                 "pack.uninstalled.v1"
             ]
         );
+    }
+
+    #[test]
+    fn signed_collection_build_is_reproducible_and_installs_dependency_order_without_clobbering() {
+        let root = TempDir::new().expect("root");
+        let source = root.path().join("source");
+        let base = source.join("packs/base");
+        let app = source.join("packs/app");
+        let skill = source.join("skills/reviewer");
+        fs::create_dir_all(&base).expect("base pack");
+        fs::create_dir_all(&app).expect("app pack");
+        write_skill(&skill, "reviewer", "1.0.0");
+        let (journal, repository) = repository();
+        let signing_key = SigningKey::from_bytes(&[31_u8; 32]);
+        let key_id = trust_key(repository.as_ref(), "example", &signing_key);
+        write_signed_pack(&base, "base", "1.0.0", Vec::new(), &signing_key, &key_id);
+        write_signed_pack(
+            &app,
+            "app",
+            "2.0.0",
+            vec!["base@1.0.0".into()],
+            &signing_key,
+            &key_id,
+        );
+        let pack_root = root.path().join("installed-packs");
+        let skill_root = root.path().join("installed-skills");
+        let service = PackService::new(repository, pack_root.clone())
+            .with_skill_install_root(skill_root.clone());
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        let built = service
+            .build_collection(
+                &source,
+                &first,
+                "starter-kit",
+                "1.0.0",
+                "example",
+                "2026-07-16T12:00:00Z",
+                signing_key.to_bytes(),
+            )
+            .expect("build collection");
+        service
+            .build_collection(
+                &source,
+                &second,
+                "starter-kit",
+                "1.0.0",
+                "example",
+                "2026-07-16T12:00:00Z",
+                signing_key.to_bytes(),
+            )
+            .expect("rebuild collection");
+        assert_eq!(built.verification.manifest.artifacts.len(), 3);
+        assert_eq!(
+            built
+                .verification
+                .packs
+                .iter()
+                .map(|pack| pack.manifest.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["base", "app"]
+        );
+        assert_eq!(
+            fs::read(first.join(COLLECTION_MANIFEST)).expect("first manifest"),
+            fs::read(second.join(COLLECTION_MANIFEST)).expect("second manifest")
+        );
+        assert_eq!(
+            canonical_collection_signing_bytes(&built.verification.manifest)
+                .expect("collection bytes"),
+            canonical_collection_signing_bytes(
+                &service
+                    .verify_collection(&second)
+                    .expect("second verification")
+                    .manifest
+            )
+            .expect("second collection bytes")
+        );
+
+        let installed = service
+            .install_collection(&first, actor())
+            .expect("install collection");
+        assert_eq!(
+            installed
+                .packs
+                .iter()
+                .map(|pack| pack.manifest.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["base", "app"]
+        );
+        assert_eq!(installed.skills[0].name, "reviewer");
+        assert!(pack_root.join("base/1.0.0").is_dir());
+        assert!(pack_root.join("app/2.0.0").is_dir());
+        assert!(skill_root.join("reviewer").is_dir());
+        assert!(matches!(
+            service.install_collection(&first, actor()),
+            Err(PackError::Invalid(_))
+        ));
+        assert_eq!(
+            journal.read_stream("pack:base").expect("base events").len(),
+            1
+        );
+        assert_eq!(
+            journal.read_stream("pack:app").expect("app events").len(),
+            1
+        );
+        let reopened =
+            EventSourcedExtensionRepository::new(Arc::clone(&journal) as Arc<dyn EventJournal>);
+        assert_eq!(
+            reopened
+                .list_packs(10)
+                .expect("reconstruct collection pack lifecycles")
+                .iter()
+                .map(|pack| pack.manifest.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["app", "base"]
+        );
+
+        fs::write(
+            second.join("skills/reviewer/SKILL.md"),
+            "tampered instructions\n",
+        )
+        .expect("tamper collection");
+        assert!(matches!(
+            service.verify_collection(&second),
+            Err(PackError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn collection_rejects_incomplete_pack_dependency_closure() {
+        let root = TempDir::new().expect("root");
+        let source = root.path().join("source");
+        let app = source.join("packs/app");
+        fs::create_dir_all(&app).expect("app pack");
+        let (_, repository) = repository();
+        let signing_key = SigningKey::from_bytes(&[37_u8; 32]);
+        let key_id = trust_key(repository.as_ref(), "example", &signing_key);
+        write_signed_pack(
+            &app,
+            "app",
+            "2.0.0",
+            vec!["missing@1.0.0".into()],
+            &signing_key,
+            &key_id,
+        );
+        let service = PackService::new(repository, root.path().join("installed"));
+        assert!(matches!(
+            service.build_collection(
+                &source,
+                &root.path().join("collection"),
+                "incomplete",
+                "1.0.0",
+                "example",
+                "2026-07-16T12:00:00Z",
+                signing_key.to_bytes(),
+            ),
+            Err(PackError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn collection_archive_is_deterministic_and_rejects_special_entries() {
+        let root = TempDir::new().expect("root");
+        let source = root.path().join("source");
+        let skill = source.join("skills/reviewer");
+        write_skill(&skill, "reviewer", "1.0.0");
+        let (_, repository) = repository();
+        let signing_key = SigningKey::from_bytes(&[41_u8; 32]);
+        trust_key(repository.as_ref(), "example", &signing_key);
+        let service = PackService::new(repository, root.path().join("installed"));
+        let collection = root.path().join("collection");
+        let built = service
+            .build_collection(
+                &source,
+                &collection,
+                "archive-test",
+                "1.0.0",
+                "example",
+                "2026-07-16T12:00:00Z",
+                signing_key.to_bytes(),
+            )
+            .expect("build collection");
+        let first = root.path().join("first.tar");
+        let second = root.path().join("second.tar");
+        write_collection_archive(
+            &collection,
+            &built.verification,
+            &mut fs::File::create(&first).expect("first archive"),
+        )
+        .expect("write first archive");
+        write_collection_archive(
+            &collection,
+            &built.verification,
+            &mut fs::File::create(&second).expect("second archive"),
+        )
+        .expect("write second archive");
+        assert_eq!(
+            fs::read(&first).expect("first"),
+            fs::read(&second).expect("second")
+        );
+        let extracted = root.path().join("extracted");
+        fs::create_dir(&extracted).expect("extracted root");
+        extract_collection_archive(&first, &extracted).expect("extract archive");
+        assert_eq!(
+            service
+                .verify_collection(&extracted)
+                .expect("verify extracted")
+                .manifest_sha256,
+            built.verification.manifest_sha256
+        );
+
+        let hostile = root.path().join("hostile.tar");
+        let output = fs::File::create(&hostile).expect("hostile archive");
+        let mut archive = tar::Builder::new(output);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_link_name("../../outside").expect("link name");
+        header.set_cksum();
+        archive
+            .append_data(&mut header, COLLECTION_MANIFEST, std::io::empty())
+            .expect("hostile entry");
+        archive.finish().expect("finish hostile archive");
+        let hostile_destination = root.path().join("hostile-extracted");
+        fs::create_dir(&hostile_destination).expect("hostile destination");
+        assert!(matches!(
+            extract_collection_archive(&hostile, &hostile_destination),
+            Err(PackError::Invalid(_))
+        ));
+        assert!(!root.path().join("outside").exists());
+    }
+
+    #[tokio::test]
+    async fn authenticated_registry_push_and_pull_round_trip_through_effect_gateway() {
+        const TOKEN_VARIABLE: &str = "PATH";
+        assert!(!std::env::var(TOKEN_VARIABLE).expect("test PATH").is_empty());
+        let root = TempDir::new().expect("root");
+        let source = root.path().join("source");
+        write_skill(&source.join("skills/reviewer"), "reviewer", "1.0.0");
+        let (journal, repository) = repository();
+        let signing_key = SigningKey::from_bytes(&[43_u8; 32]);
+        trust_key(repository.as_ref(), "example", &signing_key);
+        let service = Arc::new(PackService::new(
+            repository,
+            root.path().join("installed-packs"),
+        ));
+        let collection = root.path().join("collection");
+        service
+            .build_collection(
+                &source,
+                &collection,
+                "registry-test",
+                "1.0.0",
+                "example",
+                "2026-07-16T12:00:00Z",
+                signing_key.to_bytes(),
+            )
+            .expect("build collection");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("address");
+        let origin = format!("http://{address}");
+        let endpoint = format!("{origin}/collections/registry-test/1.0.0");
+        let stored = Arc::new(Mutex::new(None::<Vec<u8>>));
+        let server_stored = Arc::clone(&stored);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0_u8; 4096];
+                    let count = stream.read(&mut chunk).await.expect("read request");
+                    assert_ne!(count, 0, "request ended before headers");
+                    request.extend_from_slice(&chunk[..count]);
+                    if let Some(index) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                        break index + 4;
+                    }
+                };
+                let headers = String::from_utf8(request[..header_end].to_vec()).expect("headers");
+                assert!(
+                    headers
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer ")
+                );
+                if headers.starts_with("PUT ") {
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .expect("content length");
+                    while request.len() - header_end < content_length {
+                        let mut chunk = [0_u8; 4096];
+                        let count = stream.read(&mut chunk).await.expect("read body");
+                        assert_ne!(count, 0, "request ended before body");
+                        request.extend_from_slice(&chunk[..count]);
+                    }
+                    *server_stored.lock().expect("stored") =
+                        Some(request[header_end..header_end + content_length].to_vec());
+                    stream
+                        .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .await
+                        .expect("write push response");
+                } else {
+                    let body = server_stored
+                        .lock()
+                        .expect("stored")
+                        .clone()
+                        .expect("pushed body");
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.colossus.collection.v1.tar\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write pull headers");
+                    stream.write_all(&body).await.expect("write pull body");
+                }
+            }
+        });
+
+        let policy = BuiltInPolicy::offline_default()
+            .with_action("registry.push", DecisionOutcome::Allow)
+            .with_action("registry.pull", DecisionOutcome::Allow)
+            .with_filesystem_root(root.path().display().to_string(), "write")
+            .with_environment(TOKEN_VARIABLE)
+            .with_network_destination(&origin);
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal) as Arc<dyn EventJournal>,
+            Arc::new(policy),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["registry.push".into(), "registry.pull".into()]),
+            [47_u8; 32],
+        );
+        let executor = PackExecutor::new(Arc::clone(&service));
+        let credential_reference = format!("env:{TOKEN_VARIABLE}");
+        let push = PackOperation::RegistryPush {
+            path: collection.display().to_string(),
+            url: endpoint.clone(),
+            credential_reference: Some(credential_reference.clone()),
+        };
+        let mut request = effect_request(
+            actor(),
+            push.action(),
+            push.resource(),
+            serde_json::to_value(&push).expect("push operation"),
+        );
+        request.capabilities = vec![push.action().into()];
+        request.credential_references = vec![CredentialReference {
+            reference: credential_reference.clone(),
+            value_hash: None,
+        }];
+        gateway
+            .execute(request, &executor)
+            .await
+            .expect("push collection");
+
+        let destination = root.path().join("pulled");
+        let pull = PackOperation::RegistryPull {
+            url: endpoint,
+            destination: destination.display().to_string(),
+            credential_reference: Some(credential_reference.clone()),
+        };
+        let mut request = effect_request(
+            actor(),
+            pull.action(),
+            pull.resource(),
+            serde_json::to_value(&pull).expect("pull operation"),
+        );
+        request.capabilities = vec![pull.action().into()];
+        request.credential_references = vec![CredentialReference {
+            reference: credential_reference,
+            value_hash: None,
+        }];
+        gateway
+            .execute(request, &executor)
+            .await
+            .expect("pull collection");
+        server.await.expect("server");
+        assert_eq!(
+            service
+                .verify_collection(&destination)
+                .expect("verify pulled collection")
+                .manifest_sha256,
+            service
+                .verify_collection(&collection)
+                .expect("verify source collection")
+                .manifest_sha256
+        );
+        let secret = std::env::var(TOKEN_VARIABLE).expect("test credential");
+        let audit = serde_json::to_string(&journal.read_global(1, 200).expect("audit events"))
+            .expect("audit JSON");
+        assert!(!audit.contains(&secret));
+
+        let mismatched_destination = root.path().join("mismatched");
+        let mismatched = PackOperation::RegistryPull {
+            url: format!("{origin}/never-contacted"),
+            destination: mismatched_destination.display().to_string(),
+            credential_reference: Some(format!("env:{TOKEN_VARIABLE}")),
+        };
+        let mut request = effect_request(
+            actor(),
+            mismatched.action(),
+            mismatched.resource(),
+            serde_json::to_value(&mismatched).expect("mismatched operation"),
+        );
+        request.capabilities = vec![mismatched.action().into()];
+        request.credential_references = vec![CredentialReference {
+            reference: "env:HOME".into(),
+            value_hash: None,
+        }];
+        assert!(gateway.execute(request, &executor).await.is_err());
+        assert!(!mismatched_destination.exists());
     }
 
     #[test]

@@ -10,10 +10,11 @@ quarantine, audit, replay, and unknown-outcome boundaries described below.
 
 Selecting PostgreSQL never imports or replaces redb state automatically. Operators must
 provision and verify PostgreSQL explicitly, keep credential values outside YAML, and
-perform any deliberate data transition as a separately reviewed operation. Signed
-multi-pack collections and authenticated remote registry operations are not present in
-0.8 and are deferred to 0.9; local verified packs, OCI layouts, and signed offline
-release bundles remain the supported distribution boundary.
+perform any deliberate data transition as a separately reviewed operation. Post-0.8
+source adds signed pack/skill collections and authenticated registry transport through
+the same effect gateway. Registry use remains optional; local verified packs, OCI
+layouts, collections, and signed offline release bundles preserve credential-free
+offline operation.
 
 ## Rust Safety Kernel And Effect Gateway
 
@@ -104,6 +105,23 @@ publishes a new destination. Installation re-verifies every signature/hash, sele
 running platform's exact artifact path, requires a matching write root, copies through a
 same-directory temporary file, and creates a previously absent executable without
 clobbering. A modified bundle or linked/existing destination fails before release.
+
+Collection construction signs one deterministic inventory over immediate pack and skill
+directories. Verification requires a trusted collection signature, independently trusted
+pack signatures, complete declared files, data-only skill validation, and exact acyclic
+pack dependency closure. Installation re-verifies staged copies, refuses every existing
+destination, batches pack lifecycle events, and rolls back synchronous publication
+failure. Process loss during the multi-path filesystem publication remains an audited
+unknown outcome and is never retried implicitly.
+
+Registry pull/push are approval-required combined network/filesystem effects. They accept
+credential-free HTTPS URLs (or explicit loopback-IP HTTP for acceptance), require the
+exact origin and optional environment variable in the permit, pin DNS, and disable
+redirects and ambient proxies. Credentials are resolved only inside the permit-bearing
+adapter. Deterministic tar extraction rejects traversal, duplicates, links, special
+entries, undeclared files, and size/count overflow before signature verification and
+clean-destination publication. Push is create-only; conflict replay requires an exact
+transport digest, and a transport failure after dispatch is an unknown outcome.
 
 Configured external audit export is itself an effect; it never receives a trusted-service
 bypass. The exporter discloses only ciphertext-free `AuditEvidence` envelope metadata and

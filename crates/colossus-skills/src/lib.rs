@@ -1140,6 +1140,51 @@ fn validation_result(inspection: SkillInspection) -> SkillValidationResult {
     }
 }
 
+/// Strictly inspect one data-only skill tree for a trusted distribution adapter.
+///
+/// The returned evidence contains metadata and hashes only; instruction and resource bodies are
+/// never released by this boundary.
+pub fn inspect_skill_directory(
+    directory: &Path,
+    source: &str,
+) -> Result<SkillInspection, StoreError> {
+    inspect_directory(directory, source)
+}
+
+/// Copy one already-authenticated skill into a clean staging directory and reverify its identity.
+pub fn copy_verified_skill(
+    source: &Path,
+    destination: &Path,
+    expected_name: &str,
+    expected_sha256: &str,
+) -> Result<SkillInstallResult, StoreError> {
+    if destination.exists() {
+        return Err(StoreError::Adapter(format!(
+            "skill staging destination already exists: {}",
+            destination.display()
+        )));
+    }
+    let result = (|| {
+        copy_skill_tree(source, destination)?;
+        let inspection = inspect_directory(destination, "collection-staging")?;
+        if inspection.manifest.name != expected_name || inspection.content_sha256 != expected_sha256
+        {
+            return Err(StoreError::Adapter(
+                "skill source changed while it was copied".into(),
+            ));
+        }
+        Ok(SkillInstallResult {
+            name: inspection.manifest.name,
+            content_sha256: inspection.content_sha256,
+            file_count: inspection.files.len(),
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(destination);
+    }
+    result
+}
+
 fn inspect_directory(directory: &Path, source: &str) -> Result<SkillInspection, StoreError> {
     let parent = directory
         .parent()
