@@ -1,7 +1,11 @@
 target/
 dist/
 site/
+.env
 .cache/mdbook/
 .colossus/config.yaml
+.colossus/config.dev.yaml
+.colossus/dev-keys.env
+.colossus/secure-anchor.dev.json
 .colossus/*.redb*
 .colossus/*memory-index/

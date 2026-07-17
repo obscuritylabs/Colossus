@@ -311,14 +311,28 @@ fn full_matrix_fans_out_after_a_cached_fast_preflight() {
             Some("true")
         );
         assert_eq!(
-            field(environment, "RUSTC_WRAPPER").as_str(),
-            Some("sccache")
+            environment.get("RUSTC_WRAPPER").and_then(Value::as_str),
+            None,
+            "{compile_job_name} must not require sccache before its optional setup succeeds"
         );
         let cache = named_step(compile_job, "Enable shared compiler cache");
         assert_eq!(
             field(cache, "uses").as_str(),
             Some("mozilla-actions/sccache-action@v0.0.10"),
             "{compile_job_name} must use the pinned shared compiler cache action"
+        );
+        assert_eq!(field(cache, "id").as_str(), Some("sccache"));
+        assert_eq!(field(cache, "continue-on-error").as_bool(), Some(true));
+        let activation = named_step(compile_job, "Activate shared compiler cache");
+        assert_eq!(
+            field(activation, "if").as_str(),
+            Some("steps.sccache.outcome == 'success'")
+        );
+        assert!(
+            field(activation, "run")
+                .as_str()
+                .is_some_and(|run| run.contains("RUSTC_WRAPPER=sccache")),
+            "{compile_job_name} must activate sccache only after successful setup"
         );
     }
     for (job_name, job_definition) in jobs {
@@ -328,12 +342,11 @@ fn full_matrix_fans_out_after_a_cached_fast_preflight() {
             .and_then(Value::as_object)
             .and_then(|environment| environment.get("RUSTC_WRAPPER"))
             .and_then(Value::as_str);
-        if wrapper == Some("sccache") {
-            assert!(
-                has_named_step(job, "Enable shared compiler cache"),
-                "{job_name} configures sccache without installing it"
-            );
-        }
+        assert_ne!(
+            wrapper,
+            Some("sccache"),
+            "{job_name} must not make the optional compiler cache a job prerequisite"
+        );
     }
 
     let install = named_step(

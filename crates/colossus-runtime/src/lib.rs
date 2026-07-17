@@ -976,6 +976,32 @@ impl RuntimeConfig {
         }
     }
 
+    /// Replace canonical storage with an isolated environment-keyed development journal.
+    ///
+    /// All non-storage settings are preserved so a developer can reuse provider, policy,
+    /// tool, and sandbox configuration without opening the source journal or credential
+    /// store. The fresh key identity, redb path, and anchor path cannot alias the source
+    /// storage configuration.
+    pub fn with_isolated_development_storage(
+        mut self,
+        state_path: impl Into<PathBuf>,
+        anchor_path: impl Into<PathBuf>,
+    ) -> Self {
+        let instance_id = Uuid::now_v7();
+        self.storage = StorageConfig {
+            path: state_path.into(),
+            adapter: StorageAdapter::Redb,
+            postgres: None,
+            keys: KeyConfig::Environment {
+                journal_variable: "COLOSSUS_DEV_JOURNAL_KEY".into(),
+                journal_key_id: format!("journal-development-{instance_id}"),
+                signing_variable: "COLOSSUS_DEV_SIGNING_KEY".into(),
+                anchor_path: anchor_path.into(),
+            },
+        };
+        self
+    }
+
     /// Render fresh YAML without resolving or exposing secrets.
     pub fn to_yaml(&self) -> Result<String, RuntimeError> {
         serde_saphyr::to_string(self).map_err(|error| RuntimeError::Config(error.to_string()))

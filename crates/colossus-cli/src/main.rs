@@ -893,7 +893,14 @@ enum PreferencesAction {
 #[derive(Subcommand)]
 enum ConfigAction {
     /// Create a strict offline configuration without overwriting an existing file.
-    Init,
+    Init {
+        /// Use isolated redb state and environment keys for source development.
+        #[arg(long)]
+        development: bool,
+        /// Clone non-storage settings from an existing strict configuration.
+        #[arg(long, value_name = "PATH", requires = "development")]
+        from: Option<PathBuf>,
+    },
     /// Parse and print the active configuration with references intact.
     Show,
 }
@@ -2141,19 +2148,50 @@ async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, B
     Ok(serde_json::from_str(&document)?)
 }
 
-fn init_config(path: &Path) -> Result<(), Box<dyn Error>> {
+fn init_config(path: &Path, development: bool, from: Option<&Path>) -> Result<(), Box<dyn Error>> {
     if path.exists() {
         return Err(format!("refusing to overwrite {}", path.display()).into());
     }
-    if let Some(parent) = path.parent() {
+    if !development && from.is_some() {
+        return Err("--from requires --development".into());
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.exists() {
         fs::create_dir_all(parent)?;
     }
-    let state = path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("state.redb");
-    let config = RuntimeConfig::offline_template(state);
-    fs::write(path, config.to_yaml()?)?;
+    let state = parent.join(if development {
+        "state.dev.redb"
+    } else {
+        "state.redb"
+    });
+    let anchor = parent.join("secure-anchor.dev.json");
+    if development && (state.exists() || anchor.exists()) {
+        return Err(format!(
+            "refusing to create {} while isolated development state or anchor already exists; restore the matching config or remove both {} and {}",
+            path.display(),
+            state.display(),
+            anchor.display()
+        )
+        .into());
+    }
+    let config = if let Some(source) = from {
+        RuntimeConfig::from_path(source)?
+    } else {
+        RuntimeConfig::offline_template(&state)
+    };
+    let config = if development {
+        config.with_isolated_development_storage(state, anchor)
+    } else {
+        config
+    };
+    let mut destination = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    destination.write_all(config.to_yaml()?.as_bytes())?;
     println!("created {}", path.display());
     Ok(())
 }
@@ -5692,10 +5730,10 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     if let Command::Config(ConfigCommand {
-        command: ConfigAction::Init,
+        command: ConfigAction::Init { development, from },
     }) = &cli.command
     {
-        return init_config(&cli.config);
+        return init_config(&cli.config, *development, from.as_deref());
     }
     let config = RuntimeConfig::from_path(&cli.config)?;
     if matches!(
@@ -6812,6 +6850,82 @@ mod tests {
         let (prompt, skills) = resolve_skill_mentions("@someone hello", &["repo-review".into()]);
         assert_eq!(prompt, "@someone hello");
         assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn development_config_init_clones_settings_and_isolates_storage() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("config.yaml");
+        let destination = directory.path().join("config.dev.yaml");
+        let mut source_config =
+            RuntimeConfig::offline_template(directory.path().join("state.redb"));
+        source_config.agent.max_turns = 7;
+        fs::write(
+            &source,
+            source_config.to_yaml().expect("source configuration YAML"),
+        )
+        .expect("source configuration");
+
+        init_config(&destination, true, Some(&source)).expect("development configuration");
+        let development =
+            RuntimeConfig::from_path(&destination).expect("strict development config");
+        assert_eq!(development.agent.max_turns, 7);
+        assert_eq!(
+            development.storage.path,
+            directory.path().join("state.dev.redb")
+        );
+        assert_eq!(
+            development.storage.adapter,
+            colossus_runtime::StorageAdapter::Redb
+        );
+        assert!(development.storage.postgres.is_none());
+        match development.storage.keys {
+            colossus_runtime::KeyConfig::Environment {
+                journal_variable,
+                journal_key_id,
+                signing_variable,
+                anchor_path,
+            } => {
+                assert_eq!(journal_variable, "COLOSSUS_DEV_JOURNAL_KEY");
+                assert!(journal_key_id.starts_with("journal-development-"));
+                assert_eq!(signing_variable, "COLOSSUS_DEV_SIGNING_KEY");
+                assert_eq!(anchor_path, directory.path().join("secure-anchor.dev.json"));
+            }
+            colossus_runtime::KeyConfig::Platform { .. } => {
+                panic!("development config must not use the platform credential store")
+            }
+        }
+        assert!(init_config(&destination, true, Some(&source)).is_err());
+    }
+
+    #[test]
+    fn config_init_from_requires_development_mode() {
+        let error = Cli::try_parse_from([
+            "colossus",
+            "config",
+            "init",
+            "--from",
+            ".colossus/config.yaml",
+        ])
+        .err()
+        .expect("--from without --development must fail");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn development_config_init_refuses_orphaned_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("config.dev.yaml");
+        fs::write(directory.path().join("state.dev.redb"), b"orphaned state")
+            .expect("orphaned development state");
+
+        let error =
+            init_config(&destination, true, None).expect_err("orphaned state must fail closed");
+        assert!(error.to_string().contains("restore the matching config"));
+        assert!(!destination.exists());
     }
 
     #[test]

@@ -44,6 +44,17 @@ process and retained only in memory for that process lifetime. Concurrent reques
 one credential-store lookup; failed or denied lookups are never cached. Secure anchors
 remain separately protected and verified against the journal chain.
 
+The opt-in source-development initializer can clone a strict configuration without
+opening its journal or credential store. It replaces the entire storage configuration
+with a fresh redb path, environment-key identity, and separate anchor path. The Unix
+development launcher creates two independent 32-byte keys in an owner-only mode-0600
+file, rejects symbolic or additional hard links, unexpected entries, wrong ownership,
+broader permissions, and key regeneration beside existing development state. It parses
+exact assignments without evaluating the file as shell code. It builds before loading
+the keys and executes the resulting binary directly, keeping the keys out of Cargo and
+dependency build-script environments. Development state is never treated as a migration
+or recovery path for platform-keyed state.
+
 Checkpoint creation persists the independently protected head anchor before redb
 checkpoint metadata. If the process terminates between those writes, verified startup
 recreates the signed checkpoint from the anchored journal head. It also repairs a due

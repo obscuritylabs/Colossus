@@ -4,7 +4,7 @@ Colossus is an auditable agent and workflow runtime written in Rust. It combines
 bounded model/tool loop, durable YAML workflows, an encrypted event journal, policy-bound
 effects, replaceable memory indexes, and an authenticated local worker.
 
-Version 0.8.0 is the active root implementation. Python 0.5 is frozen at the
+Version 0.8.1 is the active root implementation. Python 0.5 is frozen at the
 `python-v0.5.0` tag and on the `python-legacy` branch; new installations use fresh Rust
 YAML and fresh redb state.
 
