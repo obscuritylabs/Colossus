@@ -77,12 +77,18 @@ These remain useful without network:
 - Tantivy lexical memory retrieval and deterministic local embeddings.
 - Versioned YAML workflows and the authenticated local worker.
 - Repository research with deterministic synthesis fallback.
+- Local SearXNG through an explicitly allowlisted loopback `search` profile; this enables
+  agent and research web search without coupling the harness to an internet API.
 - Skills/resources, signed pack verification, audit views, and signed bundle verification.
 
 Network tools, hosted providers, Chroma, remote OPA, MCP servers, integrations, and
 embedding endpoints remain unavailable unless their exact endpoints and credentials are
 deliberately provisioned. An absent adapter degrades explicitly; it does not silently
 attempt discovery.
+
+An offline search gateway may use custom HTTP or gRPC transport behind the
+`SearchProvider` port as long as it preserves explicit routing, permit enforcement, and
+the normalized response contract. See [Provider-Neutral Web Search](SEARCH.md).
 
 ## Local Model Endpoint
 

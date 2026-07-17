@@ -23,6 +23,7 @@ Python package or runtime dependency.
 ## Capabilities
 
 - [Built-in Tools](TOOLS.md)
+- [Provider-Neutral Web Search](SEARCH.md)
 - [Workflows](WORKFLOWS.md)
 - [Integrations](INTEGRATIONS.md)
 - [Skills](SKILLS.md)

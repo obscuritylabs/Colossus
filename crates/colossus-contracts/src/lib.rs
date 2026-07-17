@@ -2427,6 +2427,72 @@ pub struct ProviderRoute {
     pub model: String,
 }
 
+/// Provider-neutral bounded web-search request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchRequest {
+    /// Search query supplied to the configured provider.
+    pub query: String,
+    /// Maximum normalized results, constrained to 1 through 20.
+    pub limit: usize,
+}
+
+/// One normalized ranked web-search result.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchResult {
+    /// One-based provider result rank after normalization.
+    pub rank: usize,
+    /// Bounded human-readable result title.
+    pub title: String,
+    /// Credential-free HTTP(S) result URL.
+    pub url: String,
+    /// Bounded untrusted provider snippet.
+    pub snippet: String,
+    /// Optional provider-reported source or engine label.
+    pub source: Option<String>,
+}
+
+/// Provider-neutral normalized response released after policy.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchResponse {
+    /// Original validated query.
+    pub query: String,
+    /// Number of normalized results.
+    pub count: usize,
+    /// Ranked bounded results.
+    pub results: Vec<SearchResult>,
+}
+
+/// Resolved search role metadata without credentials.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchRoute {
+    /// Requested logical role such as `agent` or `research`.
+    pub role: String,
+    /// Resolved profile name.
+    pub profile: String,
+    /// Search adapter kind.
+    pub provider: String,
+}
+
+/// Safe configured search-profile summary for operator diagnostics.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchProfileSummary {
+    /// Stable profile name.
+    pub profile: String,
+    /// Search adapter kind.
+    pub provider: String,
+    /// Credential-free configured endpoint.
+    pub endpoint: String,
+    /// Credential reference without its value.
+    pub credential_reference: Option<String>,
+    /// Per-request transport timeout.
+    pub timeout_ms: u64,
+}
+
 /// One model visible through a provider catalog endpoint.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

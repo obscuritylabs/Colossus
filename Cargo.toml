@@ -12,6 +12,7 @@ members = [
     "crates/colossus-windows-process",
     "crates/colossus-policy",
     "crates/colossus-provider",
+    "crates/colossus-search",
     "crates/colossus-tools",
     "crates/colossus-agent",
     "crates/colossus-session",
@@ -111,6 +112,7 @@ colossus-mcp = { version = "=0.8.1", path = "crates/colossus-mcp" }
 colossus-packs = { version = "=0.8.1", path = "crates/colossus-packs" }
 colossus-policy = { version = "=0.8.1", path = "crates/colossus-policy" }
 colossus-provider = { version = "=0.8.1", path = "crates/colossus-provider" }
+colossus-search = { version = "=0.8.1", path = "crates/colossus-search" }
 colossus-tools = { version = "=0.8.1", path = "crates/colossus-tools" }
 colossus-agent = { version = "=0.8.1", path = "crates/colossus-agent" }
 colossus-session = { version = "=0.8.1", path = "crates/colossus-session" }

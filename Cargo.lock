@@ -1086,6 +1086,7 @@ dependencies = [
  "colossus-provider",
  "colossus-research",
  "colossus-sandbox",
+ "colossus-search",
  "colossus-session",
  "colossus-skills",
  "colossus-telemetry",
@@ -1136,6 +1137,24 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "colossus-search"
+version = "0.8.1"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "colossus-policy",
+ "colossus-ports",
+ "colossus-testkit",
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
 ]
 
 [[package]]
