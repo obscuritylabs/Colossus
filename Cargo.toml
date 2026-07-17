@@ -83,6 +83,7 @@ tantivy = "0.26.1"
 thiserror = "2.0.18"
 time = { version = "0.3.53", features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.18", features = ["io"] }
 tokio-postgres-rustls = { version = "0.14.0", default-features = false, features = ["ring"] }
 toml = "1.1.2"
 uuid = { version = "1.23.4", features = ["serde", "v7"] }

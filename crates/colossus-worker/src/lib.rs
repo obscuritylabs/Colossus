@@ -802,6 +802,51 @@ pub enum WorkerOperation {
         /// Base64 Ed25519 public key.
         public_key: String,
     },
+    /// Verify a signed server-local pack and skill collection.
+    CollectionVerify {
+        /// Server-local collection directory.
+        path: String,
+    },
+    /// Build and sign a deterministic server-local collection.
+    CollectionBuild {
+        /// Staged payload containing `packs/` and `skills/`.
+        source: String,
+        /// Clean destination directory.
+        destination: String,
+        /// Stable collection name.
+        name: String,
+        /// Immutable collection version.
+        version: String,
+        /// Trusted publisher identity.
+        publisher: String,
+        /// Explicit RFC3339 UTC timestamp.
+        created_at: String,
+        /// Environment reference for the signing seed.
+        signing_key_reference: String,
+    },
+    /// Install every artifact from a trusted collection without clobbering.
+    CollectionInstall {
+        /// Server-local collection directory.
+        path: String,
+    },
+    /// Pull an authenticated signed collection transport to a clean local directory.
+    RegistryPull {
+        /// Credential-free HTTPS URL or explicit loopback HTTP URL.
+        url: String,
+        /// Clean server-local destination directory.
+        destination: String,
+        /// Optional environment-backed bearer credential reference.
+        credential_reference: Option<String>,
+    },
+    /// Push a verified collection using a create-only authenticated request.
+    RegistryPush {
+        /// Server-local collection directory.
+        path: String,
+        /// Credential-free HTTPS URL or explicit loopback HTTP URL.
+        url: String,
+        /// Optional environment-backed bearer credential reference.
+        credential_reference: Option<String>,
+    },
     /// Verify a signed offline release bundle.
     BundleVerify {
         /// Server-local bundle path.
@@ -2135,6 +2180,11 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::PackCall { .. } => "pack_call",
         WorkerOperation::PackTrustList { .. } => "pack_trust_list",
         WorkerOperation::PackTrustAdd { .. } => "pack_trust_add",
+        WorkerOperation::CollectionVerify { .. } => "collection_verify",
+        WorkerOperation::CollectionBuild { .. } => "collection_build",
+        WorkerOperation::CollectionInstall { .. } => "collection_install",
+        WorkerOperation::RegistryPull { .. } => "registry_pull",
+        WorkerOperation::RegistryPush { .. } => "registry_push",
         WorkerOperation::BundleVerify { .. } => "bundle_verify",
         WorkerOperation::BundleKeyInfo { .. } => "bundle_key_info",
         WorkerOperation::BundleBuild { .. } => "bundle_build",
@@ -2827,6 +2877,51 @@ async fn dispatch(
             public_key,
         } => Ok(serde_json::to_value(
             runtime.add_pack_trust(&publisher, &public_key).await?,
+        )?),
+        WorkerOperation::CollectionVerify { path } => Ok(serde_json::to_value(
+            runtime.verify_collection(path).await?,
+        )?),
+        WorkerOperation::CollectionBuild {
+            source,
+            destination,
+            name,
+            version,
+            publisher,
+            created_at,
+            signing_key_reference,
+        } => Ok(serde_json::to_value(
+            runtime
+                .build_collection(
+                    source,
+                    destination,
+                    &name,
+                    &version,
+                    &publisher,
+                    &created_at,
+                    &signing_key_reference,
+                )
+                .await?,
+        )?),
+        WorkerOperation::CollectionInstall { path } => Ok(serde_json::to_value(
+            runtime.install_collection(path).await?,
+        )?),
+        WorkerOperation::RegistryPull {
+            url,
+            destination,
+            credential_reference,
+        } => Ok(serde_json::to_value(
+            runtime
+                .pull_registry_collection(&url, destination, credential_reference.as_deref())
+                .await?,
+        )?),
+        WorkerOperation::RegistryPush {
+            path,
+            url,
+            credential_reference,
+        } => Ok(serde_json::to_value(
+            runtime
+                .push_registry_collection(path, &url, credential_reference.as_deref())
+                .await?,
         )?),
         WorkerOperation::BundleVerify { path } => {
             Ok(serde_json::to_value(runtime.verify_bundle(path).await?)?)

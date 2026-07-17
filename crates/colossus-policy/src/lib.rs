@@ -426,6 +426,8 @@ impl SafetyKernel {
                     | "provider.openai.responses"
                     | "provider.openai.chat"
                     | "provider.models"
+                    | "registry.pull"
+                    | "registry.push"
             ))
         {
             let origin = canonical_network_origin(&request.resource)?;
@@ -1622,6 +1624,8 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             || request.action.starts_with("mcp.")
             || request.action.starts_with("pack.")
             || request.action.starts_with("bundle.")
+            || request.action.starts_with("collection.")
+            || request.action.starts_with("registry.")
             || matches!(
                 request.action.as_str(),
                 "network.http" | "web.search" | "audit.export.worm.write"
@@ -2262,6 +2266,8 @@ mod tests {
             "provider.openai.responses",
             "process.spawn",
             "memory.search",
+            "registry.pull",
+            "registry.push",
         ];
         let mut policy = BuiltInPolicy::offline_default().with_post_effect(false);
         for action in actions {
@@ -2476,7 +2482,12 @@ mod tests {
 
     #[tokio::test]
     async fn network_origins_not_in_obligations_never_reach_adapters() {
-        for action in ["network.http", "audit.export.worm.write"] {
+        for action in [
+            "network.http",
+            "audit.export.worm.write",
+            "registry.pull",
+            "registry.push",
+        ] {
             let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
             let policy =
                 BuiltInPolicy::offline_default().with_action(action, DecisionOutcome::Allow);

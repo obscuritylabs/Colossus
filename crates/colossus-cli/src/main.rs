@@ -153,6 +153,10 @@ const TERMINAL_COMPLETIONS: &[&str] = &[
     "/packs call",
     "/packs trust list",
     "/packs trust add",
+    "/collections verify",
+    "/collections install",
+    "/registry pull",
+    "/registry push",
     "/bundle verify",
     "/integrations",
     "/integration show",
@@ -790,6 +794,10 @@ enum Command {
     Skills(SkillsCommand),
     /// Verify and lifecycle-manage signed capability packs.
     Packs(PacksCommand),
+    /// Build, verify, and install signed pack and skill collections.
+    Collections(CollectionsCommand),
+    /// Pull and push authenticated signed collection transports.
+    Registry(RegistryCommand),
     /// Build, verify, and install signed offline release bundles.
     Bundle(BundleCommand),
     /// Manage persisted integrations and imported OpenAPI tools.
@@ -1995,6 +2003,63 @@ enum PackTrustAction {
 }
 
 #[derive(Args)]
+struct CollectionsCommand {
+    #[command(subcommand)]
+    command: CollectionsAction,
+}
+
+#[derive(Subcommand)]
+enum CollectionsAction {
+    /// Verify a signed collection and every nested artifact.
+    Verify { path: PathBuf },
+    /// Build and sign a deterministic collection from `packs/` and `skills/` directories.
+    Build {
+        source: PathBuf,
+        destination: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        publisher: String,
+        /// Explicit RFC3339 UTC timestamp for reproducible output.
+        #[arg(long)]
+        created_at: String,
+        /// Environment credential reference containing an Ed25519 signing seed.
+        #[arg(long)]
+        signing_key_reference: String,
+    },
+    /// Install all trusted artifacts without replacing existing packs or skills.
+    Install { path: PathBuf },
+}
+
+#[derive(Args)]
+struct RegistryCommand {
+    #[command(subcommand)]
+    command: RegistryAction,
+}
+
+#[derive(Subcommand)]
+enum RegistryAction {
+    /// Pull and verify a collection into a clean local directory.
+    Pull {
+        url: String,
+        destination: PathBuf,
+        /// Optional environment credential reference used as a bearer token.
+        #[arg(long)]
+        credential_reference: Option<String>,
+    },
+    /// Verify and push a collection using create-only registry semantics.
+    Push {
+        path: PathBuf,
+        url: String,
+        /// Optional environment credential reference used as a bearer token.
+        #[arg(long)]
+        credential_reference: Option<String>,
+    },
+}
+
+#[derive(Args)]
 struct BundleCommand {
     #[command(subcommand)]
     command: BundleAction,
@@ -2416,7 +2481,7 @@ fn print_terminal_help(preferences: &TerminalPreferences) {
         ],
         [
             "Extensions",
-            "/packs list|show|verify|install|enable|disable|call · /integrations",
+            "/packs list|show|verify|install|enable|disable|call · /collections verify|install · /registry pull|push · /integrations",
             "Manage trusted extension surfaces",
         ],
         [
@@ -2682,6 +2747,25 @@ fn handle_presentation_command(
 
 fn cli_error(message: impl Into<String>) -> std::io::Error {
     std::io::Error::other(message.into())
+}
+
+fn registry_slash_args<'a>(
+    input: &'a str,
+    usage: &str,
+) -> Result<(&'a str, &'a str, Option<&'a str>), std::io::Error> {
+    let parts = input.split_whitespace().collect::<Vec<_>>();
+    if !(2..=3).contains(&parts.len()) {
+        return Err(cli_error(usage));
+    }
+    if parts
+        .get(2)
+        .is_some_and(|reference| !reference.starts_with("env:"))
+    {
+        return Err(cli_error(format!(
+            "{usage}; credential reference must use env:VARIABLE"
+        )));
+    }
+    Ok((parts[0], parts[1], parts.get(2).copied()))
 }
 
 fn parse_environment(entries: Vec<String>) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
@@ -3590,6 +3674,28 @@ async fn line_runner(
                 .split_once(' ')
                 .ok_or_else(|| cli_error("usage: /packs trust add PUBLISHER BASE64_PUBLIC_KEY"))?;
             print_json(&runtime.add_pack_trust(publisher, public_key.trim()).await?)?;
+        } else if let Some(path) = line.strip_prefix("/collections verify ") {
+            print_json(&runtime.verify_collection(path.trim()).await?)?;
+        } else if let Some(path) = line.strip_prefix("/collections install ") {
+            print_json(&runtime.install_collection(path.trim()).await?)?;
+        } else if let Some(arguments) = line.strip_prefix("/registry pull ") {
+            let (url, destination, credential_reference) = registry_slash_args(
+                arguments,
+                "usage: /registry pull URL DESTINATION [env:VARIABLE]",
+            )?;
+            print_json(
+                &runtime
+                    .pull_registry_collection(url, destination, credential_reference)
+                    .await?,
+            )?;
+        } else if let Some(arguments) = line.strip_prefix("/registry push ") {
+            let (path, url, credential_reference) =
+                registry_slash_args(arguments, "usage: /registry push PATH URL [env:VARIABLE]")?;
+            print_json(
+                &runtime
+                    .push_registry_collection(path, url, credential_reference)
+                    .await?,
+            )?;
         } else if let Some(path) = line.strip_prefix("/bundle verify ") {
             print_json(&runtime.verify_bundle(path.trim()).await?)?;
         } else if line == "/integrations" {
@@ -4468,6 +4574,59 @@ async fn dispatch_to_worker_if_active(
                 return Err("pack not found".into());
             }
             print_json(&result)?;
+            Ok(true)
+        }
+        Command::Collections(command) => {
+            let operation = match &command.command {
+                CollectionsAction::Verify { path } => WorkerOperation::CollectionVerify {
+                    path: path.to_string_lossy().into_owned(),
+                },
+                CollectionsAction::Build {
+                    source,
+                    destination,
+                    name,
+                    version,
+                    publisher,
+                    created_at,
+                    signing_key_reference,
+                } => WorkerOperation::CollectionBuild {
+                    source: source.to_string_lossy().into_owned(),
+                    destination: destination.to_string_lossy().into_owned(),
+                    name: name.clone(),
+                    version: version.clone(),
+                    publisher: publisher.clone(),
+                    created_at: created_at.clone(),
+                    signing_key_reference: signing_key_reference.clone(),
+                },
+                CollectionsAction::Install { path } => WorkerOperation::CollectionInstall {
+                    path: path.to_string_lossy().into_owned(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
+        Command::Registry(command) => {
+            let operation = match &command.command {
+                RegistryAction::Pull {
+                    url,
+                    destination,
+                    credential_reference,
+                } => WorkerOperation::RegistryPull {
+                    url: url.clone(),
+                    destination: destination.to_string_lossy().into_owned(),
+                    credential_reference: credential_reference.clone(),
+                },
+                RegistryAction::Push {
+                    path,
+                    url,
+                    credential_reference,
+                } => WorkerOperation::RegistryPush {
+                    path: path.to_string_lossy().into_owned(),
+                    url: url.clone(),
+                    credential_reference: credential_reference.clone(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
             Ok(true)
         }
         Command::Bundle(command) => {
@@ -5363,6 +5522,48 @@ async fn worker_line_runner(
                     .call(WorkerOperation::PackTrustAdd {
                         publisher: publisher.into(),
                         public_key: public_key.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(path) = line.strip_prefix("/collections verify ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::CollectionVerify {
+                        path: path.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(path) = line.strip_prefix("/collections install ") {
+            print_json(
+                &client
+                    .call(WorkerOperation::CollectionInstall {
+                        path: path.trim().into(),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(arguments) = line.strip_prefix("/registry pull ") {
+            let (url, destination, credential_reference) = registry_slash_args(
+                arguments,
+                "usage: /registry pull URL DESTINATION [env:VARIABLE]",
+            )?;
+            print_json(
+                &client
+                    .call(WorkerOperation::RegistryPull {
+                        url: url.into(),
+                        destination: destination.into(),
+                        credential_reference: credential_reference.map(str::to_owned),
+                    })
+                    .await?,
+            )?;
+        } else if let Some(arguments) = line.strip_prefix("/registry push ") {
+            let (path, url, credential_reference) =
+                registry_slash_args(arguments, "usage: /registry push PATH URL [env:VARIABLE]")?;
+            print_json(
+                &client
+                    .call(WorkerOperation::RegistryPush {
+                        path: path.into(),
+                        url: url.into(),
+                        credential_reference: credential_reference.map(str::to_owned),
                     })
                     .await?,
             )?;
@@ -6408,6 +6609,55 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 } => print_json(&runtime.add_pack_trust(&publisher, &public_key).await?)?,
             },
         },
+        Command::Collections(command) => match command.command {
+            CollectionsAction::Verify { path } => {
+                print_json(&runtime.verify_collection(path).await?)?;
+            }
+            CollectionsAction::Build {
+                source,
+                destination,
+                name,
+                version,
+                publisher,
+                created_at,
+                signing_key_reference,
+            } => print_json(
+                &runtime
+                    .build_collection(
+                        source,
+                        destination,
+                        &name,
+                        &version,
+                        &publisher,
+                        &created_at,
+                        &signing_key_reference,
+                    )
+                    .await?,
+            )?,
+            CollectionsAction::Install { path } => {
+                print_json(&runtime.install_collection(path).await?)?;
+            }
+        },
+        Command::Registry(command) => match command.command {
+            RegistryAction::Pull {
+                url,
+                destination,
+                credential_reference,
+            } => print_json(
+                &runtime
+                    .pull_registry_collection(&url, destination, credential_reference.as_deref())
+                    .await?,
+            )?,
+            RegistryAction::Push {
+                path,
+                url,
+                credential_reference,
+            } => print_json(
+                &runtime
+                    .push_registry_collection(path, &url, credential_reference.as_deref())
+                    .await?,
+            )?,
+        },
         Command::Bundle(command) => match command.command {
             BundleAction::KeyInfo {
                 signing_key_reference,
@@ -7130,6 +7380,42 @@ mod tests {
             .err()
             .expect("removed REPL command");
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn registry_cli_and_tui_arguments_preserve_credential_references() {
+        let cli = Cli::try_parse_from([
+            "colossus",
+            "registry",
+            "pull",
+            "https://registry.example/v1/demo/1.0.0",
+            "./demo",
+            "--credential-reference",
+            "env:REGISTRY_TOKEN",
+        ])
+        .expect("registry pull command");
+        assert!(matches!(
+            cli.command,
+            Command::Registry(RegistryCommand {
+                command: RegistryAction::Pull {
+                    credential_reference: Some(reference),
+                    ..
+                }
+            }) if reference == "env:REGISTRY_TOKEN"
+        ));
+        assert_eq!(
+            registry_slash_args(
+                "./demo https://registry.example/v1/demo/1.0.0 env:REGISTRY_TOKEN",
+                "usage",
+            )
+            .expect("registry slash args"),
+            (
+                "./demo",
+                "https://registry.example/v1/demo/1.0.0",
+                Some("env:REGISTRY_TOKEN")
+            )
+        );
+        assert!(registry_slash_args("./demo https://registry.example token", "usage").is_err());
     }
 
     #[test]

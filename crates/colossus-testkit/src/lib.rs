@@ -1531,6 +1531,27 @@ where
     repository
         .install_pack(installation.clone(), conformance_actor("extension-user"))
         .expect("reinstall pack");
+    let mut batch_pack = installation.clone();
+    batch_pack.manifest.name = "batch-pack".into();
+    repository
+        .install_packs(
+            vec![batch_pack.clone()],
+            conformance_actor("extension-user"),
+        )
+        .expect("install pack batch");
+    assert!(
+        repository
+            .install_packs(Vec::new(), conformance_actor("extension-user"))
+            .is_err()
+    );
+    assert!(
+        repository
+            .install_packs(
+                vec![batch_pack.clone(), batch_pack],
+                conformance_actor("extension-user"),
+            )
+            .is_err()
+    );
     assert!(repository.list_packs(0).is_err());
     assert!(repository.list_packs(1_001).is_err());
 
@@ -1570,7 +1591,7 @@ where
         reopened.get_pack("demo-pack").expect("reopened pack"),
         Some(installation)
     );
-    assert_eq!(reopened.list_packs(10).expect("packs").len(), 1);
+    assert_eq!(reopened.list_packs(10).expect("packs").len(), 2);
     assert_eq!(
         reopened
             .get_publisher_trust(&trust.publisher, &trust.key_id)

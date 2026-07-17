@@ -69,16 +69,16 @@ See [Getting Started](GETTING_STARTED.md), [User Guide](USER_GUIDE.md), and
 
 ## Release And Remaining Scope
 
-The repository-root cutover is complete. The exact `v0.7.0` source revision passed the
-explicit cutover workflow, including build, clean installation, and smoke tests for macOS,
+The repository-root cutover is complete. The exact `v0.8.1` source revision passed the
+explicit release workflow, including build, clean installation, and smoke tests for macOS,
 static Linux, and Windows arm64/x64. The published release includes all six archives,
 checksums, an SPDX inventory, the publisher identity, verification evidence, and a signed
 multi-platform offline bundle. Ordinary `main` pushes continue to run the inexpensive
 validation path; the full matrix belongs to pull requests and explicit release validation.
 
-The [v0.7.0 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.7.0)
-was built from revision `5cdf9ee14ef33a3e63d72f80494b39b85a1813a4`; its full
-[release validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29465535984)
+The [v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1)
+was built from revision `eda0ce42a52b15d627b545067b64967aa95079ac`; its full
+[release validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29541847312)
 passed all native runtime, sandbox, policy, dependency, fuzz, and packaging jobs.
 
 PostgreSQL event storage, HTTPS WORM audit export, persisted schedules, authenticated
@@ -86,7 +86,9 @@ webhooks, and durable repository-event subscriptions are included in the 0.8 sou
 tree. Existing redb state remains authoritative unless an operator explicitly selects
 and provisions PostgreSQL; no automatic storage migration occurs.
 
-Signed multi-pack collections and authenticated remote registry operations are deferred
-to 0.9.0. Local verified pack directories, OCI layouts, and signed offline release
-bundles remain the supported 0.8 distribution boundary. The [Post-0.8 Roadmap](ROADMAP.md)
-tracks those deferred capabilities and their required security evidence.
+The current source also supports reproducible signed multi-pack/data-only-skill
+collections, no-clobber verified installation, and permit-bound authenticated registry
+pull/push using the same signed collection format. Registry use is opt-in; local pack,
+OCI, collection, and signed release-bundle verification retain credential-free offline
+paths. The [Feature Inventory](FEATURE_INVENTORY.md#22-delivery-status) is
+the single product-level backlog; the acceptance matrix records executable evidence.

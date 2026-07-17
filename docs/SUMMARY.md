@@ -34,7 +34,6 @@
 - [Contributing](CONTRIBUTING.md)
 - [Architecture](ARCHITECTURE.md)
 - [Security Model](SECURITY.md)
-- [Feature Inventory](FEATURE_INVENTORY.md)
-- [Post-0.8 Roadmap](ROADMAP.md)
+- [Feature Inventory And Open Work](FEATURE_INVENTORY.md)
 - [Rust Runtime Status](RUST_RECONSTRUCTION.md)
 - [Rust Acceptance Matrix](RUST_ACCEPTANCE_MATRIX.md)

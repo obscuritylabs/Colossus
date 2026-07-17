@@ -319,6 +319,59 @@ impl ExtensionRepository for EventSourcedExtensionRepository {
         Ok(installation)
     }
 
+    fn install_packs(
+        &self,
+        installations: Vec<PackInstallation>,
+        actor: Actor,
+    ) -> Result<Vec<PackInstallation>, StoreError> {
+        if installations.is_empty() {
+            return Err(StoreError::Adapter(
+                "pack installation batch cannot be empty".into(),
+            ));
+        }
+        let mut names = BTreeSet::new();
+        let mut events = Vec::with_capacity(installations.len());
+        for installation in &installations {
+            validate_name(&installation.manifest.name)?;
+            if installation.status == PackStatus::Uninstalled {
+                return Err(StoreError::Adapter(
+                    "a new pack installation cannot start uninstalled".into(),
+                ));
+            }
+            if !names.insert(installation.manifest.name.clone()) {
+                return Err(StoreError::Adapter(format!(
+                    "duplicate pack in installation batch: {}",
+                    installation.manifest.name
+                )));
+            }
+            if let Some(existing) = self.reduce_pack(&installation.manifest.name)?
+                && existing.status != PackStatus::Uninstalled
+            {
+                return Err(StoreError::Adapter(format!(
+                    "pack {} is already installed",
+                    installation.manifest.name
+                )));
+            }
+            let stream_id = Self::pack_stream(&installation.manifest.name);
+            let expected_stream_version = self.journal.read_stream(&stream_id)?.len() as u64;
+            events.push(NewEvent {
+                event_version: 1,
+                stream_id,
+                expected_stream_version,
+                classification: EventClassification::Domain,
+                event_type: "pack.installed.v1".into(),
+                actor: actor.clone(),
+                context: ExecutionContext {
+                    correlation_id: format!("pack-collection:{}", installation.manifest.name),
+                    ..ExecutionContext::default()
+                },
+                payload: serde_json::to_value(installation).map_err(adapter)?,
+            });
+        }
+        self.journal.append_batch(events)?;
+        Ok(installations)
+    }
+
     fn set_pack_status(
         &self,
         name: &str,
