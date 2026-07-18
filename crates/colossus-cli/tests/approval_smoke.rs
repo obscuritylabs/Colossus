@@ -167,12 +167,16 @@ fn write_tool_config(
                 "anchor_path": directory.join("anchor.json")
             }
         },
-        "policy": {
-            "kind": "built_in",
-            "allow_actions": allow_actions,
-            "approval_actions": approval_actions,
-            "require_post_effect": true
+        "access": {
+            "profile": "pinned",
+            "tools": {"include": ["filesystem.write"], "exclude": []},
+            "actions": {
+                "allow": allow_actions,
+                "requireApproval": approval_actions,
+                "deny": []
+            }
         },
+        "policy": {"kind": "built_in", "require_post_effect": true},
         "workflows": {"repository": workflows, "user": workflows},
         "providers": {
             "profiles": {
@@ -186,7 +190,7 @@ fn write_tool_config(
             },
             "roles": {"primary": "loopback"}
         },
-        "agent": {"maxTurns": 4, "tools": ["filesystem.write"]},
+        "agent": {"maxTurns": 4},
         "subagents": {"maxConcurrent": 1},
         "sandbox": {
             "backend": "native",
@@ -273,10 +277,17 @@ storage:
     journal_key_id: approval-test-journal-v1
     signing_variable: COLOSSUS_APPROVAL_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [echo]
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: [provider.echo]
+    deny: []
 policy:
   kind: built_in
-  allow_actions: []
-  approval_actions: [provider.echo]
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -293,7 +304,6 @@ providers:
     primary: echo
 agent:
   maxTurns: 4
-  tools: [echo]
 sandbox:
   backend: native
   profile: approval-test-v1

@@ -2,6 +2,12 @@
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use colossus_access::{
+    AccessConfig, AccessContext, AccessDecision, AccessProfile, AccessResolution,
+    ActionAccessConfig, ActionClass, ActionDescriptor, CapabilitySource, ToolAccessConfig,
+    ToolDescriptor, builtin_action_descriptors, builtin_tool_descriptor, resolve_access,
+    validate_config as validate_access_config,
+};
 use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
 use colossus_audit::{
     AuditExportReport, AuditExportService, AuditExportStatus, GatewayDirectoryAuditExporter,
@@ -95,7 +101,7 @@ use colossus_skills::{
     SkillRoot,
 };
 use colossus_telemetry::TelemetryService;
-use colossus_tools::{StaticToolRegistry, ToolCatalogError};
+use colossus_tools::{StaticToolRegistry, ToolCatalogError, builtin_specs};
 use colossus_work::{EventSourcedWorkRepository, WorkService};
 use colossus_workflow::{
     EventSourcedWorkflowRepository, ValidatedWorkflow, WorkflowEffect, WorkflowEffectRunner,
@@ -125,6 +131,8 @@ use uuid::Uuid;
 pub struct RuntimeConfig {
     /// Configuration schema version.
     pub schema_version: u16,
+    /// Unified model-visible tool and built-in policy profile.
+    pub access: AccessConfig,
     /// Canonical journal and key settings.
     pub storage: StorageConfig,
     /// Optional durable external audit evidence export.
@@ -204,21 +212,18 @@ pub enum AuditExporterConfig {
     },
 }
 
-/// Bounded agent-loop and active tool configuration.
+/// Bounded agent-loop configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentConfig {
     /// Maximum provider turns in one run.
     pub max_turns: u16,
-    /// Exact model-visible built-in tool names.
-    pub tools: Vec<String>,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_turns: DEFAULT_MAX_TURNS,
-            tools: vec!["echo".into()],
         }
     }
 }
@@ -660,14 +665,8 @@ pub enum KeyConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PolicyConfig {
-    /// Offline deny-by-default policy.
+    /// Metadata-driven built-in policy.
     BuiltIn {
-        /// Additional exact actions to allow.
-        #[serde(default)]
-        allow_actions: Vec<String>,
-        /// Exact actions that require approval and re-evaluation.
-        #[serde(default)]
-        approval_actions: Vec<String>,
         /// Require post-effect content authorization.
         #[serde(default)]
         require_post_effect: bool,
@@ -701,9 +700,51 @@ pub struct WorkflowLibraryConfig {
     pub user: PathBuf,
 }
 
+/// Safe summary of one explicit legacy configuration migration.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ConfigMigrationReport {
+    /// Selected live or pinned access profile.
+    pub profile: AccessProfile,
+    /// Legacy exact tool entries removed or transferred.
+    pub legacy_tool_count: usize,
+    /// Legacy allow entries transferred to explicit action overrides.
+    pub transferred_allow_actions: usize,
+    /// Legacy approval entries transferred to explicit action overrides.
+    pub transferred_approval_actions: usize,
+    /// Whether future applicable tools now inherit through a live profile.
+    pub live_tool_inheritance: bool,
+}
+
 impl RuntimeConfig {
     /// Strictly parse YAML with no unknown fields.
     pub fn from_yaml(yaml: &str) -> Result<Self, RuntimeError> {
+        let document: Value = serde_saphyr::from_str(yaml)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let root = document.as_object().ok_or_else(|| {
+            RuntimeError::Config("configuration root must be a YAML mapping".into())
+        })?;
+        let has_legacy_tools = root
+            .get("agent")
+            .and_then(Value::as_object)
+            .is_some_and(|agent| agent.contains_key("tools"));
+        let has_legacy_actions =
+            root.get("policy")
+                .and_then(Value::as_object)
+                .is_some_and(|policy| {
+                    policy.contains_key("allow_actions") || policy.contains_key("approval_actions")
+                });
+        if !root.contains_key("access") {
+            return Err(RuntimeError::Config(
+                "access is required; run `colossus --config PATH config migrate --output NEW_PATH` for a legacy configuration"
+                    .into(),
+            ));
+        }
+        if has_legacy_tools || has_legacy_actions {
+            return Err(RuntimeError::Config(
+                "legacy agent.tools and policy action lists cannot be combined with access; run config migrate"
+                    .into(),
+            ));
+        }
         let config: Self = serde_saphyr::from_str(yaml)
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
         if config.schema_version != 1 {
@@ -711,6 +752,11 @@ impl RuntimeConfig {
                 "schemaVersion must be exactly 1".into(),
             ));
         }
+        validate_access_config(
+            &config.access,
+            matches!(&config.policy, PolicyConfig::Opa { .. }),
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
         match (config.storage.adapter, config.storage.postgres.as_ref()) {
             (StorageAdapter::Redb, None) => {}
             (StorageAdapter::Redb, Some(_)) => {
@@ -865,33 +911,6 @@ impl RuntimeConfig {
                 "subagents.maxConcurrent must be at least 1".into(),
             ));
         }
-        StaticToolRegistry::builtins(&config.agent.tools)?;
-        let git_tools_active = config
-            .agent
-            .tools
-            .iter()
-            .any(|tool| matches!(tool.as_str(), "git.status" | "git.diff" | "git.show"));
-        let configured_git_executables = config
-            .sandbox
-            .executables
-            .iter()
-            .filter(|path| {
-                path.file_stem()
-                    .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("git"))
-            })
-            .count();
-        if git_tools_active && configured_git_executables != 1 {
-            return Err(RuntimeError::Config(
-                "active Git tools require exactly one sandbox executable named git".into(),
-            ));
-        }
-        if config.agent.tools.iter().any(|tool| tool == "shell.run")
-            && config.sandbox.executables.is_empty()
-        {
-            return Err(RuntimeError::Config(
-                "active shell.run requires at least one exact sandbox executable".into(),
-            ));
-        }
         config.context.validate()?;
         if !(1..=100).contains(&config.memory.retrieval_limit) {
             return Err(RuntimeError::Config(
@@ -939,11 +958,112 @@ impl RuntimeConfig {
         Self::from_yaml(&fs::read_to_string(path).map_err(RuntimeError::Io)?)
     }
 
+    /// Convert one legacy schema-version-1 shape without opening state or resolving credentials.
+    pub fn migrate_legacy_yaml(
+        yaml: &str,
+        profile: AccessProfile,
+    ) -> Result<(Self, ConfigMigrationReport), RuntimeError> {
+        let mut document: Value = serde_saphyr::from_str(yaml)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let root = document.as_object_mut().ok_or_else(|| {
+            RuntimeError::Config("configuration root must be a YAML mapping".into())
+        })?;
+        if root.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+            return Err(RuntimeError::Config(
+                "schemaVersion must be exactly 1".into(),
+            ));
+        }
+        if root.contains_key("access") {
+            return Err(RuntimeError::Config(
+                "configuration already contains access and does not require migration".into(),
+            ));
+        }
+        let legacy_tools = match root.get_mut("agent") {
+            Some(agent) => agent
+                .as_object_mut()
+                .ok_or_else(|| RuntimeError::Config("agent must be a YAML mapping".into()))?
+                .remove("tools")
+                .map(|tools| {
+                    serde_json::from_value::<Vec<String>>(tools)
+                        .map_err(|error| RuntimeError::Config(error.to_string()))
+                })
+                .transpose()?
+                .unwrap_or_else(|| vec!["echo".into()]),
+            None => vec!["echo".into()],
+        };
+        let policy = root
+            .get_mut("policy")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| RuntimeError::Config("policy must be a YAML mapping".into()))?;
+        let external_policy = policy.get("kind").and_then(Value::as_str) == Some("opa");
+        let mut allow = policy
+            .remove("allow_actions")
+            .map(|actions| {
+                serde_json::from_value::<Vec<String>>(actions)
+                    .map_err(|error| RuntimeError::Config(error.to_string()))
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let approval = policy
+            .remove("approval_actions")
+            .map(|actions| {
+                serde_json::from_value::<Vec<String>>(actions)
+                    .map_err(|error| RuntimeError::Config(error.to_string()))
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let approval_set = approval.iter().collect::<BTreeSet<_>>();
+        allow.retain(|action| !approval_set.contains(action));
+        let access = AccessConfig {
+            profile,
+            tools: ToolAccessConfig {
+                include: if profile == AccessProfile::Pinned {
+                    legacy_tools.clone()
+                } else {
+                    Vec::new()
+                },
+                exclude: Vec::new(),
+            },
+            actions: ActionAccessConfig {
+                allow,
+                require_approval: approval,
+                deny: Vec::new(),
+            },
+        };
+        validate_access_config(&access, external_policy)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let report = ConfigMigrationReport {
+            profile,
+            legacy_tool_count: legacy_tools.len(),
+            transferred_allow_actions: access.actions.allow.len(),
+            transferred_approval_actions: access.actions.require_approval.len(),
+            live_tool_inheritance: matches!(
+                profile,
+                AccessProfile::Development | AccessProfile::AllowAll
+            ),
+        };
+        root.insert(
+            "access".into(),
+            serde_json::to_value(&access)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        let migrated = serde_saphyr::to_string(&document)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let config = Self::from_yaml(&migrated)?;
+        Ok((config, report))
+    }
+
+    /// Select the profile used by a newly generated configuration.
+    pub fn set_access_profile(&mut self, profile: AccessProfile) {
+        self.access.profile = profile;
+    }
+
     /// Safe offline configuration template using the platform credential store.
     pub fn offline_template(state_path: impl Into<PathBuf>) -> Self {
         let instance_id = Uuid::now_v7();
         Self {
             schema_version: 1,
+            access: AccessConfig::default(),
             storage: StorageConfig {
                 path: state_path.into(),
                 adapter: StorageAdapter::Redb,
@@ -956,8 +1076,6 @@ impl RuntimeConfig {
             },
             audit: AuditConfig::default(),
             policy: PolicyConfig::BuiltIn {
-                allow_actions: Vec::new(),
-                approval_actions: Vec::new(),
                 require_post_effect: false,
             },
             workflows: WorkflowLibraryConfig {
@@ -1236,14 +1354,6 @@ fn validate_search_config(config: &RuntimeConfig) -> Result<(), RuntimeError> {
                 "search profile {name} origin {origin} is absent from sandbox.networkDestinations"
             )));
         }
-    }
-    let registry = search_registry(config)?;
-    if config.agent.tools.iter().any(|tool| tool == "web.search")
-        && registry.resolve("agent").is_err()
-    {
-        return Err(RuntimeError::Config(
-            "active web.search requires an explicit valid search.roles.agent route".into(),
-        ));
     }
     Ok(())
 }
@@ -2248,6 +2358,7 @@ pub struct Runtime {
     subagent_notify: Arc<Notify>,
     subagent_drain_lock: TokioMutex<()>,
     tools: Arc<dyn ToolRegistry>,
+    access: AccessResolution,
     filesystem_executor: Arc<FilesystemExecutor>,
     process_executor: Arc<SandboxProcessExecutor>,
     http_executor: Arc<HttpExecutor>,
@@ -2371,10 +2482,6 @@ impl Runtime {
         let pack_executor = Arc::new(PackExecutor::new(Arc::clone(&packs)));
         let integration_executor = Arc::new(IntegrationExecutor::new(Arc::clone(&extensions))?);
         let integration_specs = integration_executor.tool_specs()?;
-        let integration_actions = integration_specs
-            .iter()
-            .map(|spec| spec.name.clone())
-            .collect::<Vec<_>>();
         let mut skill_roots = vec![
             SkillRoot {
                 path: absolute_path(&config.skills.bundled)?,
@@ -2450,10 +2557,94 @@ impl Runtime {
         }
         let providers = Arc::new(provider_registry(&config.providers)?);
         let searches = Arc::new(search_registry(config)?);
+        let access_config = &config.access;
+        let mut candidate_tool_specs = builtin_specs();
+        let mut tool_descriptors = candidate_tool_specs
+            .iter()
+            .map(|spec| builtin_tool_descriptor(&spec.name))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        candidate_tool_specs.extend(integration_specs.clone());
+        tool_descriptors.extend(integration_specs.iter().map(|spec| {
+            ToolDescriptor::new(
+                &spec.name,
+                "integrations",
+                CapabilitySource::Integration,
+                Vec::new(),
+            )
+        }));
+        candidate_tool_specs.extend(active_pack_extensions.tool_specs.clone());
+        tool_descriptors.extend(active_pack_extensions.tool_specs.iter().map(|spec| {
+            ToolDescriptor::new(
+                &spec.name,
+                "packs",
+                CapabilitySource::SignedPack,
+                Vec::new(),
+            )
+        }));
+        let mut action_descriptors = builtin_action_descriptors();
+        let mut described_actions = action_descriptors
+            .iter()
+            .map(|descriptor| descriptor.name.clone())
+            .collect::<BTreeSet<_>>();
+        for spec in &integration_specs {
+            if let Some(action) = spec.effect_action.as_ref()
+                && described_actions.insert(action.clone())
+            {
+                action_descriptors.push(ActionDescriptor::new(
+                    action,
+                    ActionClass::ExternalNetwork,
+                    CapabilitySource::Integration,
+                ));
+            }
+        }
+        for action in &active_pack_extensions.actions {
+            if described_actions.insert(action.clone()) {
+                action_descriptors.push(ActionDescriptor::new(
+                    action,
+                    ActionClass::Execution,
+                    CapabilitySource::SignedPack,
+                ));
+            }
+        }
+        let configured_git_executables = config
+            .sandbox
+            .executables
+            .iter()
+            .filter(|path| {
+                path.file_stem()
+                    .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("git"))
+            })
+            .count();
+        let access_context = AccessContext {
+            filesystem_read: config
+                .sandbox
+                .filesystem
+                .iter()
+                .any(|grant| matches!(grant.mode.as_str(), "read" | "write" | "metadata")),
+            filesystem_write: config
+                .sandbox
+                .filesystem
+                .iter()
+                .any(|grant| grant.mode == "write"),
+            git_executable: configured_git_executables == 1,
+            any_executable: !config.sandbox.executables.is_empty(),
+            network_destination: !config.sandbox.network_destinations.is_empty(),
+            agent_search_route: searches.resolve("agent").is_ok(),
+            interactive: user_prompts.is_some(),
+            mcp_configured: !active_pack_extensions.mcp.servers.is_empty(),
+        };
+        let access = resolve_access(
+            access_config,
+            &candidate_tool_specs,
+            action_descriptors,
+            tool_descriptors,
+            &access_context,
+            matches!(&config.policy, PolicyConfig::Opa { .. }),
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
         let policy: Arc<dyn PolicyDecisionPoint> = match &config.policy {
             PolicyConfig::BuiltIn {
-                allow_actions,
-                approval_actions,
                 require_post_effect,
             } => {
                 let mut policy = BuiltInPolicy::offline_default()
@@ -2470,83 +2661,35 @@ impl Runtime {
                         config.sandbox.max_memory_bytes,
                         config.sandbox.max_concurrency,
                     );
-                for action in [
-                    "filesystem.read",
-                    "filesystem.list",
-                    "filesystem.metadata",
-                    "filesystem.search",
-                    "skill.resource.list",
-                    "skill.resource.read",
-                    "skill.inspect",
-                    "skill.read",
-                    "skill.validate",
-                    "repo.map",
-                    "repo.symbol_search",
-                    "repo.references",
-                    "repo.file_summary",
-                    "context.show",
-                    "context.snapshots",
-                    "patch.preview",
-                    "presentation.preferences.update",
-                    "presentation.history.append",
-                    "workflow.webhook.ingest",
-                    "workflow.subscription.dispatch",
-                ] {
-                    policy = policy.with_action(action, DecisionOutcome::Allow);
+                for action in &access.actions {
+                    let outcome = match action.decision {
+                        AccessDecision::Allow => DecisionOutcome::Allow,
+                        AccessDecision::RequireApproval => DecisionOutcome::RequireApproval,
+                        AccessDecision::Deny => DecisionOutcome::Deny,
+                        AccessDecision::ExternalPolicy => {
+                            return Err(RuntimeError::Config(
+                                "built-in policy received an external access decision".into(),
+                            ));
+                        }
+                    };
+                    policy = policy.with_action(&action.name, outcome);
                 }
-                for action in [
-                    "skill.scaffold",
-                    "skill.write",
-                    "skill.install",
-                    "web.search",
-                ] {
-                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
-                }
-                for action in [
-                    "context.compact",
-                    "context.restore",
-                    "patch.apply",
-                    "patch.reverse",
-                    "trace.export",
-                    "workflow.start",
-                ] {
-                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
-                }
-                for action in ["pack.verify", "bundle.verify", "collection.verify"] {
-                    policy = policy.with_action(action, DecisionOutcome::Allow);
-                }
-                for action in [
-                    "pack.install",
-                    "pack.enable",
-                    "pack.disable",
-                    "pack.uninstall",
-                    "pack.trust.add",
-                    "bundle.build",
-                    "bundle.install",
-                    "bundle.key.inspect",
-                    "collection.build",
-                    "collection.install",
-                    "registry.pull",
-                    "registry.push",
-                ] {
-                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
-                }
-                for action in &active_pack_extensions.actions {
-                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
-                }
-                if !active_pack_extensions.mcp.servers.is_empty() {
-                    policy = policy.with_action("mcp.tools", DecisionOutcome::Allow);
-                    policy = policy.with_action("mcp.call", DecisionOutcome::RequireApproval);
-                }
-                for action in [
-                    "integration.openapi.import",
-                    "integration.connect",
-                    "integration.disconnect",
-                ]
-                .into_iter()
-                .chain(integration_actions.iter().map(String::as_str))
+                if config.search.profiles.is_empty()
+                    && config.search.roles.is_empty()
+                    && matches!(config.research.search, ResearchSearchConfig::Searxng { .. })
                 {
-                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
+                    let legacy_outcome = match access.action_decision("network.http") {
+                        Some(AccessDecision::Allow) => DecisionOutcome::Allow,
+                        Some(AccessDecision::RequireApproval) => DecisionOutcome::RequireApproval,
+                        Some(AccessDecision::Deny) | None => DecisionOutcome::Deny,
+                        Some(AccessDecision::ExternalPolicy) => {
+                            return Err(RuntimeError::Config(
+                                "built-in legacy search received an external access decision"
+                                    .into(),
+                            ));
+                        }
+                    };
+                    policy = policy.with_action("web.search", legacy_outcome);
                 }
                 for root in [&config.workflows.repository, &config.workflows.user] {
                     if let Ok(root) = absolute_path(root).and_then(fs::canonicalize) {
@@ -2582,25 +2725,6 @@ impl Runtime {
                         restriction.allowed_environment.clone(),
                         restriction.network_destinations.clone(),
                     );
-                }
-                for action in allow_actions {
-                    policy = policy.with_action(action, DecisionOutcome::Allow);
-                }
-                for action in approval_actions {
-                    policy = policy.with_action(action, DecisionOutcome::RequireApproval);
-                }
-                if config.search.profiles.is_empty()
-                    && config.search.roles.is_empty()
-                    && matches!(config.research.search, ResearchSearchConfig::Searxng { .. })
-                {
-                    if allow_actions.iter().any(|action| action == "network.http") {
-                        policy = policy.with_action("web.search", DecisionOutcome::Allow);
-                    } else if approval_actions
-                        .iter()
-                        .any(|action| action == "network.http")
-                    {
-                        policy = policy.with_action("web.search", DecisionOutcome::RequireApproval);
-                    }
                 }
                 Arc::new(policy)
             }
@@ -2681,113 +2805,11 @@ impl Runtime {
             Arc::clone(&process_executor),
         )?);
         let http_executor = Arc::new(HttpExecutor::new());
-        let mut known_capabilities = vec![
-            "provider.echo".to_owned(),
-            "provider.openai.responses".to_owned(),
-            "provider.openai.chat".to_owned(),
-            "provider.models".to_owned(),
-            "provider.call".to_owned(),
-            "workflow.execute".to_owned(),
-            "filesystem.read".to_owned(),
-            "filesystem.list".to_owned(),
-            "filesystem.metadata".to_owned(),
-            "filesystem.search".to_owned(),
-            "filesystem.write".to_owned(),
-            "audit.export.write".to_owned(),
-            "audit.export.worm.write".to_owned(),
-            "process.spawn".to_owned(),
-            "shell.run".to_owned(),
-            "git.status".to_owned(),
-            "git.diff".to_owned(),
-            "git.show".to_owned(),
-            "repo.map".to_owned(),
-            "repo.symbol_search".to_owned(),
-            "repo.references".to_owned(),
-            "repo.file_summary".to_owned(),
-            "context.show".to_owned(),
-            "context.compact".to_owned(),
-            "context.snapshots".to_owned(),
-            "context.restore".to_owned(),
-            "patch.preview".to_owned(),
-            "patch.apply".to_owned(),
-            "patch.reverse".to_owned(),
-            "trace.export".to_owned(),
-            "presentation.preferences.update".to_owned(),
-            "presentation.history.append".to_owned(),
-            "network.http".to_owned(),
-            "web.search".to_owned(),
-            "task.create".to_owned(),
-            "task.update".to_owned(),
-            "task.list".to_owned(),
-            "decision.create".to_owned(),
-            "decision.update".to_owned(),
-            "decision.archive".to_owned(),
-            "decision.supersede".to_owned(),
-            "decision.list".to_owned(),
-            "plan.create".to_owned(),
-            "plan.show".to_owned(),
-            "plan.approve_request".to_owned(),
-            "plan.execute".to_owned(),
-            "goal.create".to_owned(),
-            "goal.show".to_owned(),
-            "goal.update".to_owned(),
-            "goal.iteration.record".to_owned(),
-            "subagent.create".to_owned(),
-            "subagent.read".to_owned(),
-            "subagent.list".to_owned(),
-            "subagent.start".to_owned(),
-            "subagent.complete".to_owned(),
-            "subagent.fail".to_owned(),
-            "subagent.cancel".to_owned(),
-            "subagent.interrupt".to_owned(),
-            "subagent.requeue".to_owned(),
-            "memory.create".to_owned(),
-            "memory.update".to_owned(),
-            "memory.archive".to_owned(),
-            "memory.supersede".to_owned(),
-            "memory.read".to_owned(),
-            "memory.list".to_owned(),
-            "memory.search".to_owned(),
-            "memory.index.status".to_owned(),
-            "memory.index.sync".to_owned(),
-            "memory.index.rebuild".to_owned(),
-            "embedding.openai.create".to_owned(),
-            "memory.index.chroma.upsert".to_owned(),
-            "memory.index.chroma.remove".to_owned(),
-            "memory.index.chroma.search".to_owned(),
-            "memory.index.chroma.status".to_owned(),
-            "memory.index.chroma.reset".to_owned(),
-            "research.run".to_owned(),
-            "skill.scaffold".to_owned(),
-            "skill.inspect".to_owned(),
-            "skill.read".to_owned(),
-            "skill.write".to_owned(),
-            "skill.validate".to_owned(),
-            "skill.install".to_owned(),
-            "skill.resource.list".to_owned(),
-            "skill.resource.read".to_owned(),
-            "integration.openapi.import".to_owned(),
-            "integration.connect".to_owned(),
-            "integration.disconnect".to_owned(),
-            "integration.invoke".to_owned(),
-            "mcp.invoke".to_owned(),
-            "pack.verify".to_owned(),
-            "pack.install".to_owned(),
-            "pack.enable".to_owned(),
-            "pack.disable".to_owned(),
-            "pack.uninstall".to_owned(),
-            "pack.trust.add".to_owned(),
-            "bundle.verify".to_owned(),
-            "bundle.build".to_owned(),
-            "bundle.install".to_owned(),
-            "bundle.key.inspect".to_owned(),
-            "collection.verify".to_owned(),
-            "collection.build".to_owned(),
-            "collection.install".to_owned(),
-            "registry.pull".to_owned(),
-            "registry.push".to_owned(),
-        ];
-        known_capabilities.extend(active_pack_extensions.actions.iter().cloned());
+        let known_capabilities = access
+            .actions
+            .iter()
+            .map(|action| action.name.clone())
+            .collect::<Vec<_>>();
         let gateway = Arc::new(EffectGateway::new(
             Arc::clone(&journal),
             Arc::clone(&policy),
@@ -2860,31 +2882,14 @@ impl Runtime {
             limit: config.memory.retrieval_limit,
             repository_id: repository_id.clone(),
         });
-        let mut active_tools = config
-            .agent
-            .tools
-            .iter()
-            .filter(|name| name.as_str() != "user.ask" || user_prompts.is_some())
-            .cloned()
+        let active_tools = access
+            .active_tool_names()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let tool_specs = candidate_tool_specs
+            .into_iter()
+            .filter(|spec| active_tools.contains(&spec.name))
             .collect::<Vec<_>>();
-        if user_prompts.is_some() && !active_tools.iter().any(|name| name == "user.ask") {
-            active_tools.push("user.ask".into());
-        }
-        for goal_tool in ["goal.show", "goal.update"] {
-            if !active_tools.iter().any(|name| name == goal_tool) {
-                active_tools.push(goal_tool.into());
-            }
-        }
-        if mcp_executor.is_configured() {
-            for mcp_tool in ["mcp.servers", "mcp.tools", "mcp.call"] {
-                if !active_tools.iter().any(|name| name == mcp_tool) {
-                    active_tools.push(mcp_tool.into());
-                }
-            }
-        }
-        let mut tool_specs = StaticToolRegistry::builtins(&active_tools)?.list_specs();
-        tool_specs.extend(integration_specs);
-        tool_specs.extend(active_pack_extensions.tool_specs.clone());
         let tool_registry: Arc<dyn ToolRegistry> = Arc::new(StaticToolRegistry::new(tool_specs)?);
         let model_provider: Arc<dyn ModelProvider> = Arc::new(GatewayModelProvider {
             gateway: Arc::clone(&gateway),
@@ -3056,6 +3061,7 @@ impl Runtime {
             subagent_notify,
             subagent_drain_lock: TokioMutex::new(()),
             tools: tool_registry,
+            access,
             filesystem_executor,
             process_executor,
             http_executor,
@@ -4831,6 +4837,44 @@ impl Runtime {
     /// Stable active model-visible tool catalog.
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
         self.tools.list_specs()
+    }
+
+    /// Active tool catalog with resolved access metadata and existing schema fields.
+    pub fn tool_catalog(&self) -> Vec<Value> {
+        let metadata = self
+            .access
+            .tools
+            .iter()
+            .map(|tool| (tool.name.as_str(), tool))
+            .collect::<BTreeMap<_, _>>();
+        self.tools
+            .list_specs()
+            .into_iter()
+            .map(|spec| {
+                let access = metadata
+                    .get(spec.name.as_str())
+                    .expect("active tool must have access metadata");
+                json!({
+                    "name": spec.name,
+                    "description": spec.description,
+                    "input_schema": spec.input_schema,
+                    "effect_action": spec.effect_action,
+                    "capability": spec.capability,
+                    "max_output_bytes": spec.max_output_bytes,
+                    "profile": self.access.profile,
+                    "family": access.family,
+                    "source": access.source,
+                    "action_class": access.action_class,
+                    "decision": access.decision,
+                    "selection_reason": access.reason,
+                })
+            })
+            .collect()
+    }
+
+    /// Credential-free effective tool and action profile report.
+    pub fn effective_access(&self) -> &AccessResolution {
+        &self.access
     }
 
     /// List safe metadata for explicitly configured MCP servers.
@@ -10980,6 +11024,15 @@ mod tests {
     fn strict_config_rejects_unknown_fields() {
         let yaml = r#"
 schemaVersion: 1
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
 storage:
   path: state.redb
   keys:
@@ -10989,8 +11042,6 @@ storage:
     signing_key_id: signing
 policy:
   kind: built_in
-  allow_actions: []
-  approval_actions: []
   require_post_effect: false
 workflows:
   repository: .colossus/workflows
@@ -10998,6 +11049,97 @@ workflows:
 surprise: true
 "#;
         assert!(RuntimeConfig::from_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn access_is_required_and_legacy_configuration_migrates_explicitly() {
+        let active = RuntimeConfig::offline_template("state.redb");
+        let mut document: Value = serde_saphyr::from_str(&active.to_yaml().expect("active YAML"))
+            .expect("configuration value");
+        let root = document.as_object_mut().expect("configuration mapping");
+        root.get_mut("agent")
+            .and_then(Value::as_object_mut)
+            .expect("agent mapping")
+            .insert("tools".into(), json!(["echo", "task.list"]));
+        let policy = root
+            .get_mut("policy")
+            .and_then(Value::as_object_mut)
+            .expect("policy mapping");
+        policy.insert("allow_actions".into(), json!(["task.list"]));
+        policy.insert("approval_actions".into(), json!(["filesystem.write"]));
+        let mixed = serde_saphyr::to_string(&document).expect("mixed YAML");
+        assert!(
+            RuntimeConfig::from_yaml(&mixed)
+                .expect_err("mixed configuration must fail")
+                .to_string()
+                .contains("cannot be combined with access")
+        );
+        document
+            .as_object_mut()
+            .expect("configuration mapping")
+            .remove("access");
+        let yaml = serde_saphyr::to_string(&document).expect("legacy YAML");
+        let error = RuntimeConfig::from_yaml(&yaml).expect_err("legacy must be rejected");
+        assert!(error.to_string().contains("config migrate"));
+
+        let (development, report) =
+            RuntimeConfig::migrate_legacy_yaml(&yaml, colossus_access::AccessProfile::Development)
+                .expect("development migration");
+        let access = development.access;
+        assert_eq!(access.profile, colossus_access::AccessProfile::Development);
+        assert!(access.tools.include.is_empty());
+        assert_eq!(access.actions.allow, ["task.list"]);
+        assert_eq!(access.actions.require_approval, ["filesystem.write"]);
+        assert!(report.live_tool_inheritance);
+
+        let (pinned, report) =
+            RuntimeConfig::migrate_legacy_yaml(&yaml, colossus_access::AccessProfile::Pinned)
+                .expect("pinned migration");
+        assert_eq!(pinned.access.tools.include, ["echo", "task.list"]);
+        assert!(!report.live_tool_inheritance);
+    }
+
+    #[test]
+    fn built_in_registry_classifies_every_tool_once() {
+        let specs = colossus_tools::builtin_specs();
+        let names = specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(names.len(), specs.len(), "duplicate built-in tool");
+        let tool_descriptors = specs
+            .iter()
+            .map(|spec| colossus_access::builtin_tool_descriptor(&spec.name))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("complete built-in tool metadata");
+        let resolution = colossus_access::resolve_access(
+            &colossus_access::AccessConfig {
+                profile: colossus_access::AccessProfile::AllowAll,
+                ..colossus_access::AccessConfig::default()
+            },
+            &specs,
+            colossus_access::builtin_action_descriptors(),
+            tool_descriptors,
+            &colossus_access::AccessContext {
+                filesystem_read: true,
+                filesystem_write: true,
+                git_executable: true,
+                any_executable: true,
+                network_destination: true,
+                agent_search_route: true,
+                interactive: true,
+                mcp_configured: true,
+            },
+            false,
+        )
+        .expect("complete built-in registry");
+        assert_eq!(resolution.active_tool_names().len(), specs.len());
+        assert!(
+            resolution
+                .tools
+                .windows(2)
+                .all(|pair| pair[0].name < pair[1].name)
+        );
     }
 
     #[test]
@@ -11152,15 +11294,8 @@ surprise: true
     }
 
     #[test]
-    fn agent_config_rejects_unknown_tools_and_unbounded_turns() {
+    fn agent_config_rejects_unbounded_turns_and_invalid_runtime_limits() {
         let mut config = RuntimeConfig::offline_template("state.redb");
-        config.agent.tools = vec!["surprise".into()];
-        assert!(
-            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
-            "unknown active tool was accepted"
-        );
-
-        config.agent.tools = vec!["echo".into()];
         config.agent.max_turns = 101;
         assert!(
             RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
@@ -11168,19 +11303,6 @@ surprise: true
         );
 
         config.agent.max_turns = 24;
-        config.agent.tools = vec!["git.status".into()];
-        assert!(
-            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
-            "Git tool without an exact git executable was accepted"
-        );
-
-        config.agent.tools = vec!["shell.run".into()];
-        assert!(
-            RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
-            "shell.run without an exact executable was accepted"
-        );
-
-        config.agent.tools = vec!["echo".into()];
         config.memory.retrieval_limit = 0;
         assert!(
             RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
@@ -11218,7 +11340,6 @@ surprise: true
     #[test]
     fn provider_neutral_search_requires_explicit_valid_routes_and_rejects_legacy_ambiguity() {
         let mut config = RuntimeConfig::offline_template("state.redb");
-        assert!(!config.agent.tools.iter().any(|tool| tool == "web.search"));
         config.search = SearchConfig {
             profiles: std::collections::BTreeMap::from([(
                 "local".into(),
@@ -11239,11 +11360,10 @@ surprise: true
             .sandbox
             .network_destinations
             .push("http://127.0.0.1:8888".into());
-        config.agent.tools.push("web.search".into());
         assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
 
         config.search.roles.remove("agent");
-        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+        assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
         config.search.roles.insert("agent".into(), "local".into());
         config.research.search = ResearchSearchConfig::Searxng {
             endpoint: "http://127.0.0.1:8888/search".into(),

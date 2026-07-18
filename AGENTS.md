@@ -8,6 +8,10 @@ This file is the short map. Keep deeper details in `docs/`.
 - Keep `domain` dependency-free.
 - Keep CLI and TUI as interfaces only; no model, tool, policy, or state logic
   should live there.
+- Keep crate roots (`lib.rs` and `main.rs`) as thin public API or composition
+  surfaces. Split nontrivial configuration, metadata, resolution/service logic,
+  adapters, and tests into focused modules instead of accumulating unrelated
+  responsibilities in one file.
 - Add or update tests for every behavior change.
 - Rust is the active root implementation. Python 0.5 is retained only on
   `python-v0.5.0` and `python-legacy`; do not reintroduce its package or state.

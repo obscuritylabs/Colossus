@@ -10,6 +10,7 @@
 - [Installation](INSTALLATION.md)
 - [User Guide](USER_GUIDE.md)
 - [Configuration](CONFIGURATION.md)
+- [Unified Access Profiles](ACCESS_PROFILES.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Terminal UX](TERMINAL_UX.md)
 - [Context Compaction](CONTEXT.md)

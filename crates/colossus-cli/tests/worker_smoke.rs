@@ -190,10 +190,17 @@ storage:
     journal_key_id: worker-test-journal-v1
     signing_variable: COLOSSUS_WORKER_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [echo]
+    exclude: []
+  actions:
+    allow: [filesystem.read, process.spawn, research.run, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.update, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, workflow.webhook.ingest, presentation.preferences.update, presentation.history.append, context.show, context.snapshots]
+    requireApproval: [plan.approve_request]
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [filesystem.read, process.spawn, research.run, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.update, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, workflow.webhook.ingest]
-  approval_actions: [plan.approve_request]
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -210,7 +217,6 @@ providers:
     primary: echo
 agent:
   maxTurns: 4
-  tools: [echo]
 sandbox:
   backend: broker
   profile: worker-test-v1

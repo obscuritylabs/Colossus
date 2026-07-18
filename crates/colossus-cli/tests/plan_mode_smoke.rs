@@ -149,15 +149,22 @@ data: [DONE]
                     "anchor_path": directory.path().join("anchor.json")
                 }
             },
-            "policy": {
-                "kind": "built_in",
-                "allow_actions": [
+            "access": {
+                "profile": "pinned",
+                "tools": {
+                    "include": ["filesystem.write", "plan.create", "goal.update"],
+                    "exclude": []
+                },
+                "actions": {
+                    "allow": [
                     "provider.openai.chat", "filesystem.write", "plan.create", "plan.execute",
                     "goal.create", "goal.update", "goal.iteration.record"
-                ],
-                "approval_actions": ["plan.approve_request"],
-                "require_post_effect": true
+                    ],
+                    "requireApproval": ["plan.approve_request"],
+                    "deny": []
+                }
             },
+            "policy": {"kind": "built_in", "require_post_effect": true},
             "workflows": {"repository": workflows, "user": workflows},
             "providers": {
                 "profiles": {
@@ -171,10 +178,7 @@ data: [DONE]
                 },
                 "roles": {"primary": "test"}
             },
-            "agent": {
-                "maxTurns": 4,
-                "tools": ["filesystem.write", "plan.create", "goal.update"]
-            },
+            "agent": {"maxTurns": 4},
             "subagents": {"maxConcurrent": 1},
             "sandbox": {
                 "backend": "native",

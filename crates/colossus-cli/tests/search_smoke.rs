@@ -62,10 +62,17 @@ storage:
     journal_key_id: search-test-journal-v1
     signing_variable: COLOSSUS_SEARCH_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [echo, web.search]
+    exclude: []
+  actions:
+    allow: [web.search]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [web.search]
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -82,7 +89,6 @@ search:
     research: local
 agent:
   maxTurns: 4
-  tools: [echo, web.search]
 sandbox:
   backend: native
   profile: search-test-v1

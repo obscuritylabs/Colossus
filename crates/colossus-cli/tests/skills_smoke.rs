@@ -55,10 +55,17 @@ storage:
     journal_key_id: skill-test-journal-v1
     signing_variable: COLOSSUS_SKILL_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [echo, skill.resource.list, skill.resource.read]
+    exclude: []
+  actions:
+    allow: [skill.inspect, skill.read, skill.validate, skill.resource.list, skill.resource.read]
+    requireApproval: [skill.scaffold, skill.write, skill.install]
+    deny: []
 policy:
   kind: built_in
-  allow_actions: []
-  approval_actions: []
   require_post_effect: false
 workflows:
   repository: {workflows}
@@ -72,7 +79,6 @@ skills:
   disabled: []
 agent:
   maxTurns: 4
-  tools: [echo, skill.resource.list, skill.resource.read]
 sandbox:
   backend: native
   profile: skill-test-v1

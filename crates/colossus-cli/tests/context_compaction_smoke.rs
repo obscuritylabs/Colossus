@@ -48,10 +48,17 @@ storage:
     journal_key_id: context-test-journal-v1
     signing_variable: COLOSSUS_CONTEXT_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [echo]
+    exclude: []
+  actions:
+    allow: [context.show, context.snapshots]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: []
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -68,7 +75,6 @@ providers:
     primary: echo
 agent:
   maxTurns: 4
-  tools: [echo]
 subagents:
   maxConcurrent: 1
 context:

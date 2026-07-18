@@ -49,10 +49,17 @@ audit:
   exporter:
     kind: directory
     path: {exports}
+access:
+  profile: pinned
+  tools:
+    include: [echo]
+    exclude: []
+  actions:
+    allow: [audit.export.write]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [audit.export.write]
-  approval_actions: []
   require_post_effect: false
 workflows:
   repository: {workflows}

@@ -45,10 +45,17 @@ storage:
     journal_key_id: mcp-test-journal-v1
     signing_variable: COLOSSUS_MCP_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: [research.run]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [research.run]
-  approval_actions: []
   require_post_effect: false
 workflows:
   repository: {workflows}

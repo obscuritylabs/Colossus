@@ -12,6 +12,19 @@ colossus --config .colossus/config.yaml config show
 `config init` refuses to overwrite. Use source control or an explicit backup before
 replacing configuration; there is intentionally no force flag.
 
+Configurations created before unified access profiles are intentionally rejected even
+though `schemaVersion` remains `1`. Migrate to a new path:
+
+```bash
+colossus --config .colossus/config.yaml config migrate \
+  --output .colossus/config.migrated.yaml
+```
+
+Migration defaults to live `development` inheritance and transfers legacy action
+choices. Use `--access-profile pinned` to transfer the old exact tool list instead.
+Migration never overwrites its source or an existing output. Inspect the result with
+`config effective` before making it active.
+
 ## Isolated Source Development
 
 Source builds can avoid platform credential-store prompts by using the development
@@ -51,6 +64,15 @@ environment references:
 <!-- rust-config-example:start -->
 ```yaml
 schemaVersion: 1
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
 storage:
   path: .colossus/state.redb
   keys:
@@ -61,8 +83,6 @@ storage:
     anchor_path: .colossus/secure-anchor.json
 policy:
   kind: built_in
-  allow_actions: []
-  approval_actions: []
   require_post_effect: false
 workflows:
   repository: .colossus/workflows
@@ -79,7 +99,6 @@ providers:
     primary: echo
 agent:
   maxTurns: 24
-  tools: [echo]
 subagents:
   maxConcurrent: 10
 sandbox:
@@ -145,7 +164,7 @@ Mozilla WebPKI root set is the default TLS policy. A private deployment can inst
 ## Provider Profiles And Roles
 
 Supported kinds are `echo`, `open_ai_responses`, and `open_ai_compatible`. Network
-providers need a version base URL, an exact origin grant, and an explicit policy action.
+providers need a version base URL, an exact origin grant, and an access decision.
 Credential values are resolved only after a permit; configuration contains only
 `env:VARIABLE` references.
 
@@ -168,13 +187,6 @@ providers:
     research_planner: openrouter
     research_worker: openrouter
     research_synthesizer: openrouter
-policy:
-  kind: built_in
-  allow_actions:
-    - provider.openai.chat
-    - provider.models
-  approval_actions: []
-  require_post_effect: true
 sandbox:
   networkDestinations:
     - https://openrouter.ai
@@ -182,8 +194,9 @@ sandbox:
 
 The `sandbox` fragment supplements the other required sandbox fields; do not replace the
 whole section with that fragment. For OpenAI Responses use `open_ai_responses`,
-`https://api.openai.com/v1`, `env:OPENAI_API_KEY`, and policy action
-`provider.openai.responses`.
+`https://api.openai.com/v1`, and `env:OPENAI_API_KEY`. The `development` and `minimal`
+profiles allow configured provider calls; `pinned` requires exact provider action
+overrides.
 
 Role resolution is visible without secrets:
 
@@ -199,25 +212,37 @@ Specialized roles fall back to `primary` when not mapped. A provider origin must
 `networkDestinations` exactly by scheme, host, and effective port; URL paths belong only
 in `baseUrl`.
 
-## Policy
+## Access And Policy
 
-Built-in policy is deny by default:
+The required `access` block selects the model-visible tool surface and built-in action
+decisions. The `policy` block selects the decision engine and retains obligations such
+as post-effect authorization:
 
 ```yaml
+access:
+  profile: development
+  tools:
+    include: []
+    exclude:
+      - shell.run
+  actions:
+    allow:
+      - filesystem.write
+    requireApproval:
+      - context.restore
+    deny:
+      - integration.invoke
 policy:
   kind: built_in
-  allow_actions:
-    - filesystem.read
-    - provider.openai.chat
-  approval_actions:
-    - filesystem.write
-    - shell.run
   require_post_effect: true
 ```
 
-Approval actions are not grants: an action also needs the matching resource obligation
-from `sandbox`. `--approval-mode ask`, `risk-auto`, or `full-access` can satisfy an
-approval obligation but cannot add roots, executables, destinations, or actions.
+Tool inclusion changes visibility only; it never grants the tool's effect action.
+`deny`, `requireApproval`, and `allow` must contain exact, non-overlapping action names.
+Use `profile: allow_all` instead of an action wildcard. An approval decision is not a
+sandbox grant: the action still needs matching roots, executables, destinations, trust,
+and one-use permits. Approval modes can satisfy an approval obligation but cannot add
+those authorities.
 
 OPA configuration uses strict disclosure and TLS fields:
 
@@ -233,11 +258,15 @@ policy:
   timeout_ms: 5000
 ```
 
+With OPA, the access profile still selects tools, but OPA is the sole action decision
+point. `access.actions` must be empty.
+
 Remote OPA requires HTTPS, pinned trust, mTLS, a fixed decision path, disclosure
 acknowledgement, and verified decision-log masking. Diagnose it with:
 
 ```bash
 colossus --config .colossus/config.yaml policy doctor
+colossus --config .colossus/config.yaml config effective
 ```
 
 ## Sandbox And Capabilities
@@ -279,29 +308,37 @@ failure is fail-closed and never becomes broker execution. Broker mode requires
 and use an exact Docker or Podman executable.
 Run `sandbox doctor` before enabling process effects.
 
-## Agent Tools
+## Access Profiles And Agent Tools
 
-`agent.tools` is the exact model-visible built-in catalog. Unknown names fail startup.
-The default is only `echo`; add capabilities deliberately and pair effectful tools with
-policy and sandbox grants.
+New configurations default to `development`, which inherits applicable first-party
+tools and configured, trusted extensions. `minimal` exposes pure support tools.
+`allow_all` allows all registered trusted actions but does not bypass safety or sandbox
+enforcement. `pinned` exposes only exact includes and denies actions except
+`provider.echo` unless overridden.
 
 ```yaml
+access:
+  profile: development
+  tools:
+    include: []
+    exclude:
+      - shell.run
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
+
 agent:
   maxTurns: 24
-  tools:
-    - echo
-    - filesystem.list
-    - filesystem.read
-    - filesystem.search
-    - git.status
-    - git.diff
-    - repo.map
-    - tool.search
 ```
 
-Git tools require exactly one configured executable whose filename is `git` (or
-`git.exe`). `shell.run` requires at least one exact executable. Inspect the resolved
-model schemas with `colossus --config .colossus/config.yaml tools list`.
+`tools.include: ["*"]` selects every applicable trusted tool without granting its
+actions. An exact include with a missing static prerequisite is a configuration error;
+an inherited tool with the same missing prerequisite is hidden and explained by
+diagnostics. Git tools require exactly one configured executable whose filename is `git`
+(or `git.exe`), while `shell.run` requires an exact executable. Inspect active and hidden
+resolution with `config effective`, and active schemas with `tools list`. See
+[Unified Access Profiles](ACCESS_PROFILES.md).
 
 ## Context, Memory, And Research
 
@@ -349,8 +386,9 @@ memory:
       dimensions: 384
 ```
 
-Chroma and remote embedding origins also need exact network and policy grants. Canonical
-records remain available when an index is unavailable; use `memories index status|sync|rebuild`.
+Chroma and remote embedding origins also need exact network grants and access decisions.
+Canonical records remain available when an index is unavailable; use
+`memories index status|sync|rebuild`.
 
 Provider-neutral search uses named profiles plus explicit `agent` and `research` routes:
 
@@ -369,9 +407,6 @@ search:
   roles:
     agent: local
     research: local
-
-agent:
-  tools: [echo, web.search]
 ```
 
 Every profile origin must be present in `sandbox.networkDestinations`. Provider choice
@@ -379,6 +414,9 @@ never appears in model arguments, and routes do not fall back or retry. The v0.8
 `research.search.kind: searxng` form remains a deprecated research-only fallback when
 top-level `search` is absent; configuring both forms is rejected. See
 [Provider-Neutral Web Search](SEARCH.md) for SearXNG, SerpAPI, policy, and diagnostics.
+`development` and `allow_all` inherit `web.search` when the `agent` route is valid.
+`pinned` requires `web.search` in `access.tools.include`; visibility still does not grant
+the action.
 
 ## Workflows, Skills, Packs, And MCP
 
@@ -420,8 +458,9 @@ mcp:
       maxOutputBytes: 1048576
 ```
 
-The command, working directory, environment names, and tool must also fit sandbox and
-policy obligations. MCP output is quarantined and hard-secret redacted before release.
+The command, working directory, environment names, and tool must also fit access
+decisions and sandbox obligations. MCP output is quarantined and hard-secret redacted
+before release.
 
 ## Audit Export
 
@@ -435,7 +474,8 @@ audit:
     path: /absolute/path/to/audit-evidence
 ```
 
-Grant `audit.export.write`, approval if required, and a matching filesystem write root.
+Set the intended `audit.export.write` access decision and a matching filesystem write
+root.
 Use `audit exporter-status`, `audit exporter-drain`, and operator-authorized
 `audit exporter-reset` for durable queue management.
 
@@ -452,7 +492,7 @@ sandbox:
   networkDestinations: [https://worm.example]
 ```
 
-Grant `audit.export.worm.write` in policy. The endpoint must end in `/`, contain no
+Set the intended `audit.export.worm.write` access decision. The endpoint must end in `/`, contain no
 credentials/query/fragment, and enforce retention or object lock independently. Colossus
 uses deterministic content-hashed names and create-only HTTP semantics; it does not infer
 WORM durability from a successful HTTP response.
@@ -469,6 +509,7 @@ After every edit, run:
 
 ```bash
 colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml config effective
 colossus --config .colossus/config.yaml state doctor
 colossus --config .colossus/config.yaml policy doctor
 colossus --config .colossus/config.yaml sandbox doctor

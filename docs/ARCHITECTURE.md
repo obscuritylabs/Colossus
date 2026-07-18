@@ -11,6 +11,7 @@ is explicit:
 colossus-cli -> colossus-runtime -> colossus-agent -> colossus-ports
                     |                  |                ^
                     |                  +-> colossus-tools+
+                    +-> colossus-access -> colossus-contracts
                     +-> colossus-policy -----------------+
                     +-> colossus-workflow ---------------+
                     +-> colossus-provider -> colossus-policy
@@ -36,6 +37,15 @@ malformed-argument correction turns, and emits a distinct max-turn terminal even
 `colossus-tools` owns the immutable active catalog and JSON Schema validation. The
 runtime adapters translate validated effectful tools into normal gateway requests; pure
 computation such as `echo` remains outside the permission boundary by design.
+
+`colossus-access` owns first-party capability metadata, trusted source classes, access
+profiles, prerequisite diagnostics, tool selection, and built-in action resolution.
+Runtime composition supplies all built-in candidates plus connected integrations and
+enabled reverified signed-pack tools. The resolver emits two independent products: a
+model-visible base catalog and an exact action-decision map. Plan Mode, Goal Mode,
+interactive UI, and child-agent scopes narrow the catalog afterward. OPA replaces only
+the built-in action-decision branch; it does not replace tool selection, the Safety
+Kernel, permits, sandboxing, or quarantine.
 
 `colossus-session` is the canonical session repository. Session creation and every user,
 assistant, and tool-result message append to one optimistic `session:{id}` journal
@@ -94,8 +104,8 @@ Subagents are canonical queued work records owned by the same work repository. A
 pins parent session/run/call lineage, an isolated child session, model role, bounded task,
 lifecycle timestamps, and bounded released output or redacted error. The runtime drains
 queued jobs in batches no larger than `subagents.maxConcurrent` and each child invokes
-the normal `colossus-agent` service with the same provider router, policy gateway,
-approval provider, tool executor, context preparation, and journal. Child request
+the normal `colossus-agent` service with the same resolved access catalog, provider
+router, policy gateway, approval provider, tool executor, context preparation, and journal. Child request
 definitions remove `agent.delegate`; the executor also rejects delegation whenever
 `ExecutionContext.subagent_id` is present. Running jobs found at startup become
 `interrupted` and are never silently retried.
@@ -462,7 +472,7 @@ report as a normal assistant session message so later chat turns can continue fr
 Search and MCP are adapter concerns. The default config keeps web search disabled and
 MCP unconfigured. Deep Research requires an explicit `search.roles.research` route and
 uses the same normalized path as model and CLI searches. `web.search` becomes visible to
-the model only when listed in `agent.tools` and `search.roles.agent` is valid. Search
+the model when the access profile selects it and `search.roles.agent` is valid. Search
 credentials stay in provider configuration and environment variables rather than in the
 provider-neutral tool input.
 Research planner, worker, and synthesizer model roles default to `primary` unless

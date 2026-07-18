@@ -466,13 +466,22 @@ cannot ignore a denied callback and continue the effect. A denied item never rea
 either observer.
 
 The Rust agent loop receives tool specifications and execution through separate ports.
-The active catalog is explicit in configuration, rejects duplicate/unknown names, and
-compiles every object schema at startup. Each model call is validated against that schema
-before policy or an adapter sees it. Unknown and invalid calls become correlated error
-results without reaching an executor. Effectful file and network tools construct ordinary
-effect requests with model/run provenance and can execute only through the gateway;
-policy denial and unknown outcomes stop the loop. Malformed provider argument syntax is
-never repaired locally and can trigger at most two metadata-only correction turns.
+The active catalog is resolved from a required access profile, exact overrides, trusted
+capability metadata, and static prerequisites. Duplicate, overlapping, unknown, or
+unclassified entries fail closed, and every object schema is compiled at startup. Each
+model call is validated against that schema before policy or an adapter sees it. Unknown
+and invalid calls become correlated error results without reaching an executor.
+Effectful file and network tools construct ordinary effect requests with model/run
+provenance and can execute only through the gateway; policy denial and unknown outcomes
+stop the loop. Malformed provider argument syntax is never repaired locally and can
+trigger at most two metadata-only correction turns.
+
+Tool visibility, action authorization, and resource enforcement are separate. Explicit
+tool inclusion never grants an effect action. `allow_all` changes registered built-in
+decisions only; it cannot trust an extension, satisfy a prerequisite, expand a sandbox
+grant, bypass the Safety Kernel, mint a permit, skip quarantine, or avoid mandatory
+post-effect authorization. With OPA, profiles still select tools and OPA is the sole
+action decision point.
 
 Rust session message bodies remain encrypted canonical journal payloads. The disposable
 session projection stores only bounded discovery fields and never copies full assistant
@@ -517,7 +526,7 @@ any undisclosed tool is denied before tool lifecycle or adapter execution. Direc
 execution atomically records `plan.executed.v1` with the exact pending run id before the
 agent starts; failure does not make the plan replayable.
 
-Goal Mode does not broaden authority: every iteration uses the same provider, active
+Goal Mode does not broaden authority: every iteration uses the same provider, resolved
 tools, policy channel, approvals, sandbox, context preparation, and journal. Goal ids are
 runtime-injected and cannot be supplied in model arguments. The private work adapter
 checks the active goal and session again after permit minting. Terminal `complete` and
@@ -570,7 +579,7 @@ Memory injected on a later turn is explicitly labeled as background context rath
 instructions.
 
 Skill Mode treats skills as prompt/context data, not executable plugins. Active skills
-are validated against the agent allowlist and active tool catalog before provider calls;
+are validated against the effective access catalog before provider calls;
 `required_tools` never auto-approves a tool. Skill audit records include names, versions,
 and sources only, not full `SKILL.md` bodies.
 
@@ -647,19 +656,20 @@ Security-sensitive defaults:
 
 - Keep environment allowlists narrow.
 - Keep output caps and timeouts bounded.
-- Require approval for mutation, elevated filesystem access, or network access.
+- Use `development` or stricter profiles when mutation, execution, and network actions
+  should retain approval.
 - Preserve command, decision, and memory audit records.
 
-## Built-in Tool Permission Matrix
+## Development Profile Permission Matrix
 
-| Tool family | Filesystem | Network | Approval | Offline default |
+| Tool family | Filesystem | Network | Approval | Development behavior |
 | --- | --- | --- | --- | --- |
 | `filesystem.list/read/search` | Read | Denied | No | Enabled |
 | `filesystem.write/replace` | Write | Denied | Yes | Enabled |
 | `git.status/diff/show` | Read | Denied | No | Enabled |
 | `shell.run` | Write-capable | Denied | Yes | Enabled |
 | `task.*` | None | Denied | No | Enabled, session-persisted |
-| `decision.*` | None | Denied | Mutations | Enabled, session-persisted |
+| `decision.*` | None | Denied | No | Enabled, session-persisted |
 | `memory.*` | None | Denied | No | Enabled, global/repo/session persisted |
 | `goal.show/update` | None | Denied | No | Enabled only inside active goal-mode provider turns |
 | `plan.create/show` | None | Denied | No | Enabled, session-persisted |
@@ -669,15 +679,15 @@ Security-sensitive defaults:
 | `repo.*` | Read | Denied | No | Enabled |
 | `agent.*` | None | Denied | No | Enabled, durable queued child-agent jobs |
 | `web.fetch` and `docs.fetch` | None | Allowed by spec | Yes | Bounded HTTP(S) fetch after approval |
-| `web.search` | None | Exact configured origin | Yes, by default | Exposed only with an explicit tool and valid `agent` route; post-effect release is mandatory |
-| `mcp.servers/tools` | None | Denied | No | Returns unconfigured state |
+| `web.search` | None | Exact configured origin | Yes | Exposed only with a valid `agent` route; post-effect release is mandatory |
+| `mcp.servers/tools` | None | Denied | No | Hidden until an exact MCP server is configured |
 | `mcp.call` | None | Allowed by spec | Yes | Adapter extension point, not exposed by default |
 | `github.*`, `searxng.*`, `opensearch.*`, and `openapi.NAME.*` | None | Allowed by spec | Yes | Exposed only after integration connection |
 | Deep research | Read | Allowed by configured lanes | Network/MCP lanes | Persists cited reports and source records |
 | `trace.show` | Read | Denied | No | Enabled |
 | `trace.export` | Write | Denied | Yes | Enabled |
 | `context.show/compact/snapshots` | None | Denied | No | Enabled |
-| `context.restore` | None | Denied | Yes | Enabled |
+| `context.restore` | None | Denied | No | Enabled as a Colossus-owned state change |
 | `skill.scaffold` | Write | Denied | Yes | Enabled, writes manifest/SKILL.md and requested resource dirs in installed skill directory only |
 | `skill.inspect/read` | Read | Denied | No | Enabled, installed user skill files only |
 | `skill.write` | Write | Denied | Yes | Enabled, installed user skill files only; existing files require expected SHA-256 |
@@ -685,9 +695,11 @@ Security-sensitive defaults:
 | `skill.install` | Write | Denied | Yes | Enabled, validates a local skill directory and installs into `~/.agents/skills` |
 | `skill.resource.list/read` | Read | Denied | No | Enabled, active skill resources only |
 
-The default policy requires approval for declared mutations, explicit approval flags,
-network-capable tools, and high-risk tools. The orchestrator validates model-provided
-tool arguments against the tool schema before requesting approval.
+The default `development` profile allows provider calls, reads, and Colossus-owned state
+changes. It requires approval for workspace mutations, execution, external network,
+installation, and administration. The orchestrator validates model-provided tool
+arguments against the tool schema before requesting approval. Exact action overrides can
+narrow or intentionally change these defaults without changing tool visibility.
 
 ## Approval Modes
 

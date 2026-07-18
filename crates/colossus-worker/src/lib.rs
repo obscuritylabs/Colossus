@@ -181,6 +181,8 @@ pub enum WorkerOperation {
     },
     /// List active model-visible tool schemas.
     ToolsList,
+    /// Show credential-free effective tool and action resolution.
+    AccessEffective,
     /// Execute the normal audited model application path.
     RunModel {
         /// Logical role.
@@ -2092,6 +2094,7 @@ fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::SearchProfiles => "search_profiles",
         WorkerOperation::SearchQuery { .. } => "search_query",
         WorkerOperation::ToolsList => "tools_list",
+        WorkerOperation::AccessEffective => "access_effective",
         WorkerOperation::RunModel { .. } => "run_model",
         WorkerOperation::RunModelControlled { .. } => "run_model_controlled",
         WorkerOperation::RunPlan { .. } => "run_plan",
@@ -2367,7 +2370,8 @@ async fn dispatch(
         WorkerOperation::SearchQuery { role, query, limit } => Ok(serde_json::to_value(
             runtime.search(&role, &query, limit).await?,
         )?),
-        WorkerOperation::ToolsList => Ok(serde_json::to_value(runtime.tool_specs())?),
+        WorkerOperation::ToolsList => Ok(serde_json::to_value(runtime.tool_catalog())?),
+        WorkerOperation::AccessEffective => Ok(serde_json::to_value(runtime.effective_access())?),
         WorkerOperation::Echo { message } => {
             let result = runtime.echo(&message).await?;
             Ok(json!({
