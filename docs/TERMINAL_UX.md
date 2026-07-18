@@ -51,7 +51,7 @@ typed data and protocol-v4 prompts rather than terminal markup.
 | Discovery | tools, repositories, skills, web, MCP, integrations, packs | family-specific counts, identifiers, status, provenance, and bounded previews |
 | Lists | tools, sessions, work, research, telemetry, extensions | adaptive borderless collection rows with highlighted identity, readable wrapped metadata, semantic status, and explicit empty states |
 | Help and completion | stateful help table, inline type-ahead, slash completion, `@skill` completion | fish-style history hints plus an adaptive visible menu while typing `/` commands or `@skill` names, theme-aware ghost text, keyboard selection and acceptance, and grouped help with current settings |
-| Choices | labeled option tables, resume picker, free-form fallback | guided numbered choices with exact-ID selection, validation retry, blank cancellation, and slash-command handoff |
+| Choices | labeled option tables, resume picker, free-form fallback | one responsive session picker with recent-message previews, highlighted keyboard selection, exact-ID commands, bounded scrolling, fail-closed cancellation, and worker/embedded parity |
 | Themes | five built-ins, custom themes, prompt/toolbar/event previews | immutable palettes drive a numbered picker, full semantic preview, active-state table, dynamic completion, safe scaffold output, strict validation, and readable custom-theme search locations |
 | Worker mode | same user-facing behavior as embedded mode | typed documents, prompts, cancellation, and terminal styling are semantically equivalent |
 
@@ -71,6 +71,9 @@ typed data and protocol-v4 prompts rather than terminal markup.
 - Approval and `user.ask` use focus-taking one-use overlays that preserve the current
   draft. Blank, cancelled, timed-out, disconnected, replayed, or malformed answers fail
   closed.
+- `/resume` and `/session resume` use one responsive, scrollable picker surface with
+  recent-user previews. Up/Down changes the highlighted session and Enter accepts it;
+  exact session IDs remain available as command arguments.
 - Alternate-screen mode is the default. `--no-alt-screen` selects Ratatui inline mode,
   and Zellij selects inline mode automatically. Raw mode, bracketed paste, cursor state,
   and screen ownership are restored by an RAII guard.

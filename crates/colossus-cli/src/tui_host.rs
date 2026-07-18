@@ -38,6 +38,45 @@ use tokio::sync::{mpsc, oneshot};
 
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
+fn resumable_sessions(mut sessions: Vec<SessionSummary>, limit: usize) -> Vec<SessionSummary> {
+    sessions.retain(|session| session.message_count > 0);
+    sessions.truncate(limit);
+    sessions
+}
+
+fn session_picker_choice(session: &SessionSummary) -> String {
+    let title = compact_text(session.title.as_deref().unwrap_or("Untitled"), 36);
+    let preview = session
+        .last_user_preview
+        .as_deref()
+        .map(|preview| compact_text(preview, 120))
+        .filter(|preview| !preview.is_empty())
+        .unwrap_or_else(|| "No user message preview".into());
+    let short_id = session.id.chars().take(8).collect::<String>();
+    let updated_at = compact_timestamp(&session.updated_at);
+    format!(
+        "{title} · {} msgs · {short_id} · {updated_at}\n{preview}",
+        session.message_count
+    )
+}
+
+fn compact_text(value: &str, maximum_characters: usize) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(maximum_characters)
+        .collect()
+}
+
+fn compact_timestamp(value: &str) -> String {
+    value
+        .get(..16)
+        .map(|timestamp| format!("{}Z", timestamp.replace('T', " ")))
+        .unwrap_or_else(|| value.to_owned())
+}
+
 /// One active TUI event destination shared by trusted approval and input providers.
 #[derive(Default)]
 pub(super) struct TuiPromptRouter {
@@ -77,6 +116,7 @@ impl TuiPromptRouter {
                 title,
                 document,
                 choices,
+                initial_choice: None,
                 allow_free_form,
                 response: response_tx,
             }))
@@ -265,6 +305,7 @@ impl EmbeddedInteractiveHost {
         title: &str,
         document: PresentationDocument,
         choices: Vec<String>,
+        initial_choice: Option<usize>,
     ) -> Result<Option<String>, String> {
         let (response_tx, response_rx) = oneshot::channel();
         events
@@ -273,6 +314,7 @@ impl EmbeddedInteractiveHost {
                 title: title.into(),
                 document,
                 choices,
+                initial_choice,
                 allow_free_form: false,
                 response: response_tx,
             }))
@@ -308,6 +350,9 @@ impl EmbeddedInteractiveHost {
                         )));
                     }
                     let names = self.themes.names();
+                    let initial_choice = names
+                        .iter()
+                        .position(|name| name == preferences.theme_name());
                     let selected = self
                         .choose(
                             events,
@@ -315,6 +360,7 @@ impl EmbeddedInteractiveHost {
                             "Choose theme",
                             self.themes.selection_document(preferences.theme_name()),
                             names,
+                            initial_choice,
                         )
                         .await?;
                     let Some(selected) = selected else {
@@ -635,42 +681,42 @@ impl EmbeddedInteractiveHost {
             return self.switch_session(argument.into()).await;
         }
         let limit = argument.parse::<usize>().unwrap_or(10).clamp(1, 100);
-        let sessions = self
-            .runtime
-            .list_sessions(limit)
-            .map_err(|error| error.to_string())?;
+        let sessions = resumable_sessions(
+            self.runtime
+                .list_sessions(100)
+                .map_err(|error| error.to_string())?,
+            limit,
+        );
+        if sessions.is_empty() {
+            return Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text(
+                    "No sessions with messages are available to resume.".into(),
+                )),
+            ));
+        }
         let choices = sessions
             .iter()
-            .map(|session| {
-                format!(
-                    "{} · {} · {} messages",
-                    session.id,
-                    session.title.as_deref().unwrap_or("Untitled"),
-                    session.message_count
-                )
-            })
+            .map(session_picker_choice)
             .collect::<Vec<_>>();
-        let document = document_from_json(
-            &serde_json::to_value(&sessions).map_err(|error| error.to_string())?,
-            Some("Resume session"),
-        );
         let Some(selected) = self
             .choose(
                 events,
                 "session-picker",
                 "Resume session",
-                document,
-                choices,
+                PresentationDocument::new(),
+                choices.clone(),
+                Some(0),
             )
             .await?
         else {
             return Ok(HostCommandResult::document(PresentationDocument::new()));
         };
-        let session_id = selected
-            .split(" · ")
-            .next()
-            .ok_or_else(|| "selected session is malformed".to_owned())?;
-        self.switch_session(session_id.into()).await
+        let selected = choices
+            .iter()
+            .position(|choice| choice == &selected)
+            .and_then(|index| sessions.get(index))
+            .ok_or_else(|| "selected session is not available".to_owned())?;
+        self.switch_session(selected.id.clone()).await
     }
 
     async fn switch_session(&self, session_id: String) -> Result<HostCommandResult, String> {
@@ -1312,6 +1358,7 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
                     body,
                 }),
                 choices: prompt.choices,
+                initial_choice: None,
                 allow_free_form: prompt.allow_free_form,
                 response: response_tx,
             }))
@@ -1364,6 +1411,36 @@ impl WorkerInteractiveHost {
             &self.value(operation).await?,
             title,
         )))
+    }
+
+    async fn choose(
+        &self,
+        events: &mpsc::Sender<HostEvent>,
+        id: &str,
+        title: &str,
+        choices: Vec<String>,
+    ) -> Result<Option<String>, String> {
+        let (response_tx, response_rx) = oneshot::channel();
+        events
+            .send(HostEvent::Prompt(InteractivePrompt {
+                id: id.into(),
+                title: title.into(),
+                document: PresentationDocument::new(),
+                choices,
+                initial_choice: Some(0),
+                allow_free_form: false,
+                response: response_tx,
+            }))
+            .await
+            .map_err(|_| "terminal event loop disconnected".to_owned())?;
+        match tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+            .await
+            .map_err(|_| "interactive choice timed out".to_owned())?
+            .map_err(|_| "interactive choice was dropped".to_owned())?
+        {
+            PromptResponse::Answer(answer) => Ok(Some(answer)),
+            PromptResponse::Cancelled => Ok(None),
+        }
     }
 
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
@@ -1425,6 +1502,49 @@ impl WorkerInteractiveHost {
             footer: Some(self.footer(&session_id, "ready").await?),
             clear_transcript: false,
         })
+    }
+
+    async fn resume_session(
+        &self,
+        arguments: &str,
+        events: &mpsc::Sender<HostEvent>,
+    ) -> Result<HostCommandResult, String> {
+        let argument = arguments.trim();
+        if !argument.is_empty() && argument.parse::<usize>().is_err() {
+            return self.switch_session(argument.into()).await;
+        }
+        let limit = argument.parse::<usize>().unwrap_or(10).clamp(1, 100);
+        let sessions = resumable_sessions(
+            serde_json::from_value::<Vec<SessionSummary>>(
+                self.value(WorkerOperation::SessionList { limit: 100 })
+                    .await?,
+            )
+            .map_err(|error| error.to_string())?,
+            limit,
+        );
+        if sessions.is_empty() {
+            return Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text(
+                    "No sessions with messages are available to resume.".into(),
+                )),
+            ));
+        }
+        let choices = sessions
+            .iter()
+            .map(session_picker_choice)
+            .collect::<Vec<_>>();
+        let Some(selected) = self
+            .choose(events, "session-picker", "Resume session", choices.clone())
+            .await?
+        else {
+            return Ok(HostCommandResult::document(PresentationDocument::new()));
+        };
+        let selected = choices
+            .iter()
+            .position(|choice| choice == &selected)
+            .and_then(|index| sessions.get(index))
+            .ok_or_else(|| "selected session is not available".to_owned())?;
+        self.switch_session(selected.id.clone()).await
     }
 
     async fn presentation_command(
@@ -1538,6 +1658,7 @@ impl WorkerInteractiveHost {
         arguments: &str,
         session_id: &str,
         sticky_skills: &[String],
+        events: &mpsc::Sender<HostEvent>,
     ) -> Result<HostCommandResult, String> {
         if let Some(result) = self.presentation_command(name, arguments).await? {
             return Ok(result);
@@ -1601,15 +1722,14 @@ impl WorkerInteractiveHost {
                     .map_err(|error| error.to_string())?;
                     self.switch_session(session.id).await
                 }
+                "resume" => self.resume_session("", events).await,
                 value if value.starts_with("resume ") => {
                     self.switch_session(value.trim_start_matches("resume ").trim().into())
                         .await
                 }
-                _ => Err("worker TUI requires /session resume SESSION_ID".into()),
+                _ => Err("/session expects show, new, resume, or resume SESSION_ID".into()),
             },
-            "resume" if !arguments.trim().is_empty() => {
-                self.switch_session(arguments.trim().into()).await
-            }
+            "resume" => self.resume_session(arguments, events).await,
             "work" => {
                 let state = serde_json::from_value::<WorkStateSnapshot>(
                     self.value(WorkerOperation::WorkState {
@@ -2008,11 +2128,11 @@ impl InteractiveHost for WorkerInteractiveHost {
         command: RuntimeCommand,
         session_id: &str,
         sticky_skills: &[String],
-        _events: mpsc::Sender<HostEvent>,
+        events: mpsc::Sender<HostEvent>,
     ) -> Result<HostCommandResult, String> {
         match command {
             RuntimeCommand::Known { name, arguments } => {
-                self.execute_known(&name, &arguments, session_id, sticky_skills)
+                self.execute_known(&name, &arguments, session_id, sticky_skills, &events)
                     .await
             }
         }
@@ -2111,5 +2231,56 @@ fn _bounded_path(value: &str) -> Result<PathBuf, String> {
         Err("path is required".into())
     } else {
         Ok(PathBuf::from(value.trim()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(
+        id: &str,
+        message_count: u64,
+        preview: Option<&str>,
+        title: Option<&str>,
+    ) -> SessionSummary {
+        SessionSummary {
+            id: id.into(),
+            title: title.map(str::to_owned),
+            created_at: "2026-07-18T01:00:00Z".into(),
+            updated_at: "2026-07-18T01:41:50.425459Z".into(),
+            message_count,
+            last_run_id: None,
+            last_user_preview: preview.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn session_picker_choice_prioritizes_human_context_over_full_ids() {
+        let choice = session_picker_choice(&session(
+            "019f72e2-c116-7fa3-b668-5778378e114f",
+            12,
+            Some("How can we\nget   sccache working locally?"),
+            Some("Build speed"),
+        ));
+        assert_eq!(
+            choice,
+            "Build speed · 12 msgs · 019f72e2 · 2026-07-18 01:41Z\nHow can we get sccache working locally?"
+        );
+        assert!(!choice.contains("c116-7fa3"));
+    }
+
+    #[test]
+    fn resume_picker_excludes_empty_sessions_before_applying_the_limit() {
+        let sessions = resumable_sessions(
+            vec![
+                session("empty", 0, None, None),
+                session("first", 2, Some("first"), None),
+                session("second", 3, Some("second"), None),
+            ],
+            1,
+        );
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "first");
     }
 }
