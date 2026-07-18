@@ -69,6 +69,7 @@ pub use contract::{
 };
 pub use state::TuiState;
 
+#[cfg(test)]
 use app::*;
 use render::*;
 use state::*;

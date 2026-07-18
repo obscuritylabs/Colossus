@@ -74,6 +74,7 @@ pub use operations::{WorkerError, WorkerOperation};
 pub use server::WorkerServer;
 
 use authentication::*;
+#[cfg(test)]
 use client::handshake_timeout_error;
 use dispatch::*;
 use frames::*;
