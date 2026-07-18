@@ -1,0 +1,386 @@
+use super::*;
+
+pub(super) fn search_tool_error(error: SearchError) -> ToolError {
+    match error {
+        SearchError::Denied(message) => ToolError::Denied(message),
+        SearchError::OutcomeUnknown(message) => ToolError::OutcomeUnknown(message),
+        SearchError::Unavailable(message)
+        | SearchError::Configuration(message)
+        | SearchError::Failed(message) => ToolError::Failed(message),
+    }
+}
+
+pub(super) fn required_tool_string<'a>(
+    call: &'a ToolCall,
+    field: &str,
+) -> Result<&'a str, ToolError> {
+    call.arguments
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be a string"),
+        })
+}
+
+pub(super) fn optional_tool_string<'a>(
+    call: &'a ToolCall,
+    field: &str,
+) -> Result<Option<&'a str>, ToolError> {
+    match call.arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be a string"),
+        }),
+    }
+}
+
+pub(super) fn optional_tool_bool(call: &ToolCall, field: &str) -> Result<Option<bool>, ToolError> {
+    match call.arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be a boolean"),
+        }),
+    }
+}
+
+pub(super) fn tool_plan_steps(call: &ToolCall) -> Result<Vec<PlanStep>, ToolError> {
+    let values = call
+        .arguments
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: "steps must be an array".into(),
+        })?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let object = value
+                .as_object()
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "each plan step must be an object".into(),
+                })?;
+            let title = object.get("title").and_then(Value::as_str).ok_or_else(|| {
+                ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "each plan step title must be a string".into(),
+                }
+            })?;
+            let detail = object
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let requires_mutation = object
+                .get("requires_mutation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Ok(PlanStep {
+                index: u32::try_from(index + 1).map_err(|_| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: "too many plan steps".into(),
+                })?,
+                title: title.into(),
+                detail: detail.into(),
+                requires_mutation,
+            })
+        })
+        .collect()
+}
+
+pub(super) fn optional_tool_u64(call: &ToolCall, field: &str) -> Result<Option<u64>, ToolError> {
+    match call.arguments.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(value)) => {
+            value
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: format!("{field} must be a non-negative integer"),
+                })
+        }
+        Some(_) => Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be an integer"),
+        }),
+    }
+}
+
+pub(super) fn optional_tool_value<T: serde::de::DeserializeOwned>(
+    call: &ToolCall,
+    field: &str,
+) -> Result<Option<T>, ToolError> {
+    call.arguments
+        .get(field)
+        .cloned()
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| ToolError::InvalidArguments {
+                tool: call.name.clone(),
+                message: format!("{field} is invalid: {error}"),
+            })
+        })
+        .transpose()
+}
+
+pub(super) fn tool_limit(call: &ToolCall, default: usize) -> Result<usize, ToolError> {
+    optional_tool_u64(call, "limit")?.map_or(Ok(default), |value| {
+        usize::try_from(value).map_err(|error| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("limit is invalid: {error}"),
+        })
+    })
+}
+
+pub(super) fn required_tool_string_array(
+    call: &ToolCall,
+    field: &str,
+) -> Result<Vec<String>, ToolError> {
+    optional_tool_string_array(call, field)?.ok_or_else(|| ToolError::InvalidArguments {
+        tool: call.name.clone(),
+        message: format!("{field} must be an array of strings"),
+    })
+}
+
+pub(super) fn optional_tool_string_array(
+    call: &ToolCall,
+    field: &str,
+) -> Result<Option<Vec<String>>, ToolError> {
+    let Some(value) = call.arguments.get(field) else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be an array"),
+        })?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: format!("{field} entries must be strings"),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(values))
+}
+
+pub(super) fn optional_tool_environment(
+    call: &ToolCall,
+    field: &str,
+) -> Result<BTreeMap<String, String>, ToolError> {
+    let Some(value) = call.arguments.get(field) else {
+        return Ok(BTreeMap::new());
+    };
+    value
+        .as_object()
+        .ok_or_else(|| ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("{field} must be an object"),
+        })?
+        .iter()
+        .map(|(name, value)| {
+            value
+                .as_str()
+                .map(|value| (name.clone(), value.to_owned()))
+                .ok_or_else(|| ToolError::InvalidArguments {
+                    tool: call.name.clone(),
+                    message: format!("{field}.{name} must be a string"),
+                })
+        })
+        .collect()
+}
+
+pub(super) fn tool_process_spec(
+    cwd: PathBuf,
+    args: Vec<String>,
+    environment: BTreeMap<String, String>,
+    timeout_ms: Option<u64>,
+    max_output_bytes: Option<u64>,
+) -> ProcessSpec {
+    ProcessSpec {
+        cwd,
+        args,
+        environment,
+        stdin_base64: None,
+        timeout_ms,
+        max_output_bytes,
+    }
+}
+
+pub(super) fn safe_git_path(value: &str) -> Result<String, ToolError> {
+    let path = Path::new(value);
+    if value.starts_with(':')
+        || value.contains('\0')
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(component, std::path::Component::ParentDir)
+                || matches!(component.as_os_str().to_str(), Some(".git" | ".colossus"))
+        })
+    {
+        return Err(ToolError::Denied(
+            "Git pathspecs must stay inside the workspace and outside control state".into(),
+        ));
+    }
+    Ok(value.into())
+}
+
+pub(super) fn validate_git_revision(value: &str) -> Result<(), ToolError> {
+    if value.starts_with('-')
+        || value.contains('\0')
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'.' | b'_' | b'/' | b'-' | b'^' | b'~' | b':' | b'@' | b'{' | b'}'
+                )
+        })
+    {
+        return Err(ToolError::Denied(
+            "Git revision contains an option or unsupported character".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn is_shell_wrapper(value: &str) -> bool {
+    Path::new(value)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "sh" | "bash"
+                    | "zsh"
+                    | "fish"
+                    | "dash"
+                    | "ksh"
+                    | "cmd"
+                    | "powershell"
+                    | "pwsh"
+                    | "wscript"
+                    | "cscript"
+            )
+        })
+}
+
+pub(super) fn model_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf, ToolError> {
+    let requested = Path::new(input);
+    if requested.is_absolute()
+        || requested.components().any(|component| {
+            matches!(component, std::path::Component::ParentDir)
+                || component.as_os_str() == ".colossus"
+        })
+    {
+        return Err(ToolError::Denied(
+            "model filesystem paths must be workspace-relative and outside .colossus".into(),
+        ));
+    }
+    Ok(workspace.join(requested))
+}
+
+pub(super) fn workspace_relative(workspace: &Path, path: &Path) -> Result<String, ToolError> {
+    let relative = path
+        .strip_prefix(workspace)
+        .map_err(|_| ToolError::Denied("filesystem result escaped the active workspace".into()))?;
+    if relative.as_os_str().is_empty() {
+        Ok(".".into())
+    } else {
+        Ok(relative.to_string_lossy().into_owned())
+    }
+}
+
+pub(super) fn bounded_tool_text(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.into();
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    text[..end].into()
+}
+
+pub(super) fn goal_objective_from_plan(plan: &PlanRecord) -> String {
+    let mut objective = format!(
+        "Execute approved plan {}.\n\nOriginal request:\n{}",
+        plan.id, plan.prompt
+    );
+    if !plan.content.trim().is_empty() {
+        objective.push_str("\n\nApproved plan:\n");
+        objective.push_str(&plan.content);
+    }
+    objective.push_str("\n\nOrdered steps:");
+    for step in &plan.steps {
+        objective.push_str(&format!(
+            "\n{}. {}{}",
+            step.index,
+            step.title,
+            if step.requires_mutation {
+                " [mutation]"
+            } else {
+                ""
+            }
+        ));
+        if !step.detail.is_empty() {
+            objective.push_str(" — ");
+            objective.push_str(&step.detail);
+        }
+    }
+    bounded_tool_text(&objective, 64 * 1024)
+}
+
+pub(super) fn model_actor(call: &ToolCall, context: &ExecutionContext) -> Actor {
+    Actor {
+        actor_type: if context.subagent_id.is_some() {
+            ActorType::Subagent
+        } else {
+            ActorType::Model
+        },
+        id: context.subagent_id.as_ref().map_or_else(
+            || format!("tool-call:{}", call.call_id),
+            |id| format!("subagent:{id}:tool-call:{}", call.call_id),
+        ),
+    }
+}
+
+pub(super) fn terminal_actor() -> Actor {
+    Actor {
+        actor_type: ActorType::User,
+        id: "terminal-user".into(),
+    }
+}
+
+pub(super) fn tool_gateway_error(error: GatewayError) -> ToolError {
+    match error {
+        GatewayError::Denied(message) | GatewayError::Approval(message) => {
+            ToolError::Denied(message)
+        }
+        GatewayError::OutcomeUnknown(message) => ToolError::OutcomeUnknown(message),
+        error => ToolError::Failed(error.to_string()),
+    }
+}
+
+pub(super) fn mcp_runtime_tool_error(error: RuntimeError) -> ToolError {
+    match error {
+        RuntimeError::Gateway(error) => tool_gateway_error(error),
+        RuntimeError::Mcp(McpError::UnknownServer(message) | McpError::ToolDenied(message)) => {
+            ToolError::Denied(message)
+        }
+        RuntimeError::Mcp(McpError::InvalidArguments(message)) => ToolError::InvalidArguments {
+            tool: "mcp.call".into(),
+            message,
+        },
+        error => ToolError::Failed(error.to_string()),
+    }
+}
