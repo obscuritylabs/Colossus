@@ -45,8 +45,9 @@ not expand configured policy or sandbox grants.
   effect gateway.
 - Provider-neutral web search with explicit SearXNG or SerpAPI role routing shared by
   agents, Deep Research, and operator diagnostics.
-- Built-in deny-by-default policy or strict OPA decisions, explicit approval proofs,
-  one-use permits, bounded quarantine, and post-effect content release.
+- Metadata-driven access profiles coordinating tool visibility and built-in action
+  decisions, or strict OPA decisions, with explicit approval proofs, one-use permits,
+  bounded quarantine, and post-effect content release.
 - XChaCha20-Poly1305 journal payloads, hash chaining, signed checkpoints, secure anchors,
   recovery mode, redacted audit views, PostgreSQL storage, and directory/HTTPS-WORM evidence export.
 - Canonical redb or PostgreSQL repositories, disposable projections, Tantivy lexical memory, optional
@@ -61,6 +62,7 @@ not expand configured policy or sandbox grants.
 - [Getting Started](docs/GETTING_STARTED.md)
 - [User Guide](docs/USER_GUIDE.md)
 - [Configuration](docs/CONFIGURATION.md)
+- [Unified Access Profiles](docs/ACCESS_PROFILES.md)
 - [Built-in Tools](docs/TOOLS.md)
 - [Terminal UX](docs/TERMINAL_UX.md)
 - [Workflows](docs/WORKFLOWS.md)

@@ -50,6 +50,7 @@ Create strict configuration beside the fresh Rust state:
 ```bash
 colossus --config .colossus/config.yaml config init
 colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml config effective
 colossus --config .colossus/config.yaml run "hello"
 colossus --config .colossus/config.yaml audit verify
 ```
@@ -61,6 +62,12 @@ same command emits JSON containing `run_id`, `session_id`, `profile: "echo"`,
 store for mandatory journal/signing keys; headless deployments can explicitly configure
 environment key references instead. Rust never silently writes plaintext canonical
 state.
+
+New configurations use the `development` access profile. It inherits applicable trusted
+tools, allows provider/read/Colossus-state actions, and requires approval for workspace
+mutation, execution, external network, installation, and administration. Choose a
+different starting profile with `config init --access-profile
+minimal|development|allow-all|pinned`.
 
 ## Start The Terminal UI
 
@@ -104,9 +111,9 @@ expands policy.
 
 ## Understand Approvals
 
-One-shot commands default to `deny`; the interactive TUI defaults to `ask`. Approval modes
-satisfy policy obligations but never add actions, filesystem roots, executable identities,
-or network origins:
+One-shot commands default to `deny`; the interactive TUI defaults to `ask`. Approval
+modes satisfy an access/policy approval obligation but never make a hidden tool visible
+or add actions, filesystem roots, executable identities, or network origins:
 
 ```bash
 colossus --config .colossus/config.yaml --approval-mode ask \
@@ -177,6 +184,7 @@ files.
 ## Next Steps
 
 - Read the [User Guide](USER_GUIDE.md) for the complete command surface.
+- Choose and diagnose [Unified Access Profiles](ACCESS_PROFILES.md).
 - Try versioned definitions from [Workflows](WORKFLOWS.md).
 - Review [Security](SECURITY.md) before enabling effects.
 - Use [Offline and Airgapped Operation](OFFLINE_AIRGAP.md) for isolated deployments.

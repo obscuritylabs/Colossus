@@ -145,7 +145,8 @@ fn validate_spec(spec: &ToolSpec) -> Result<(), ToolCatalogError> {
     Ok(())
 }
 
-fn builtin_specs() -> Vec<ToolSpec> {
+/// Return every supported built-in tool specification.
+pub fn builtin_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "echo".into(),

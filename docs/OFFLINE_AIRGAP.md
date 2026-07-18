@@ -52,6 +52,7 @@ SQLite database:
 mkdir -p .colossus/workflows
 colossus --config .colossus/config.yaml config init
 colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml config effective
 colossus --config .colossus/config.yaml run "offline smoke"
 colossus --config .colossus/config.yaml audit verify
 ```
@@ -64,7 +65,10 @@ those values into the YAML file. There is no plaintext journal fallback.
 
 The offline smoke proves strict config parsing, encrypted journal creation, a complete
 agent turn through `echo`, durable events, a signed checkpoint, and chain verification.
-The sandbox network allowlist is empty by default.
+The sandbox network allowlist is empty by default. The generated `development` access
+profile can inherit local tools as their exact prerequisites are configured; unavailable
+tools remain hidden. Use `minimal` for the smallest onboarding surface or `pinned` for a
+reviewed, stable catalog.
 
 ## Offline-Safe Capabilities
 
@@ -148,6 +152,7 @@ Inside the isolated environment:
 ```bash
 colossus --version
 colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml config effective
 colossus --config .colossus/config.yaml policy doctor
 colossus --config .colossus/config.yaml state doctor
 colossus --config .colossus/config.yaml sandbox doctor

@@ -2,8 +2,9 @@
 
 Integrations expose external operations as strict tools without exposing raw credentials
 to the model. Connection lifecycle is canonical event-sourced state. Tools remain hidden
-until connected, and every call crosses policy, exact-origin networking, quarantine,
-hard-secret redaction, post-effect release, and audit.
+until connected and selected by the access profile. Every call crosses policy,
+exact-origin networking, quarantine, hard-secret redaction, post-effect release, and
+audit.
 
 ## Credential References
 
@@ -18,7 +19,7 @@ colossus --config .colossus/config.yaml --approval-mode ask \
 ```
 
 The provider or integration origin must also appear exactly in
-`sandbox.networkDestinations`, and the policy must allow or require approval for the
+`sandbox.networkDestinations`, and access/OPA must allow or require approval for the
 corresponding operation. Pending-auth connections stay hidden from model tools.
 
 ## Lifecycle Commands
@@ -32,6 +33,9 @@ colossus --config .colossus/config.yaml --approval-mode ask \
   integrations disconnect github
 ```
 
+`development` and `allow_all` inherit operations only after a canonical connection is
+active. `minimal` does not inherit effectful integration operations; `pinned` requires
+their exact names in `access.tools.include`. `config effective` explains selection, and
 `tools list` shows only operations currently exposed to the agent.
 
 ## GitHub

@@ -7,10 +7,11 @@ docs, and tests without putting vendor-specific code in the core agent.
 
 ## Core Model
 
-- Installed packs are available capabilities.
+- Only enabled, reverified, trusted packs are access candidates.
 - Connected integrations expose model-callable tools.
 - Pack secrets are credential refs, not raw values.
-- Pack tools still pass through policy, approval, audit, output limits, and redaction.
+- Pack tools still pass through access resolution, policy, approval, audit, output
+  limits, and redaction.
 - Skills inside packs are still prompt/resource data. Colossus does not execute scripts
   directly from a skill directory.
 - Native code is out-of-process through declared MCP servers, not imported into Colossus.
@@ -113,8 +114,11 @@ its verified executable and pack root, then adds configured filesystem roots or 
 destinations only when that exact declaration requests them. OPA receives pack name,
 version, manifest hash, and declared permissions as policy input.
 
-Enabled fixed-argument tools enter the normal model tool registry on the next runtime
-start and execute only through the authenticated sandbox helper. Enabled pack MCP
+Enabled fixed-argument tools enter access resolution on the next runtime start.
+`development` and `allow_all` inherit them; `minimal` does not inherit effectful pack
+tools, and `pinned` requires exact includes. Their actions remain execution-class
+effects, requiring approval under `development`, and execute only through the
+authenticated sandbox helper. Enabled pack MCP
 servers enter the configured MCP allowlist with pack-specific effect actions and the
 same permission restriction, credential broker, quarantine, post-effect authorization,
 and redaction path as first-party MCP configuration.

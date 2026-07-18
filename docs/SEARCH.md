@@ -32,8 +32,15 @@ search:
     agent: local
     research: local
 
-agent:
-  tools: [echo, web.search]
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
 
 sandbox:
   networkDestinations:
@@ -42,10 +49,10 @@ sandbox:
 ```
 
 Routes are exact. Colossus does not automatically fall back, load balance, or retry.
-`web.search` is absent from the model-visible catalog unless it is listed in
-`agent.tools` and `search.roles.agent` resolves to a valid profile. Deep Research uses
-the same normalized path, but its web lane is disabled unless `search.roles.research` is
-configured.
+`development` and `allow_all` expose `web.search` when `search.roles.agent` resolves to a
+valid profile. `pinned` additionally requires an exact `access.tools.include` entry.
+Deep Research uses the same normalized path, but its web lane is disabled unless
+`search.roles.research` is configured.
 
 `schemaVersion` remains `1`; search profiles do not migrate canonical state.
 
@@ -137,9 +144,9 @@ boundary:
 - A transport failure after dispatch is `outcome_unknown`; callers must not silently
   retry a potentially billable request.
 
-The built-in policy classifies `web.search` as approval-required by default and always
-requires a post-effect decision. Operator policy can explicitly allow the action for a
-trusted unattended route while preserving post-effect quarantine.
+The `development` profile classifies `web.search` as approval-required by default.
+Operators can explicitly allow the action for a trusted unattended route while
+preserving post-effect quarantine.
 
 ## Compatibility
 
@@ -183,8 +190,8 @@ workflow, or model schema.
 
 ## Troubleshooting
 
-- `active web.search requires ... search.roles.agent`: add an exact `agent` route or
-  remove `web.search` from `agent.tools`.
+- `unmet prerequisite: agent search route`: add an exact `agent` route, exclude
+  `web.search`, or remove its exact include.
 - `origin ... is absent from sandbox.networkDestinations`: add the exact scheme, host,
   and port; paths do not belong in the origin allowlist.
 - `search route unavailable`: configure the requested `agent` or `research` role. There

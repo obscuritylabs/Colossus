@@ -98,10 +98,17 @@ storage:
     journal_key_id: windows-test-journal-v1
     signing_variable: COLOSSUS_WINDOWS_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: [process.spawn]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [process.spawn]
-  approval_actions: []
   require_post_effect: false
 workflows:
   repository: {workflows}

@@ -73,10 +73,17 @@ storage:
     journal_key_id: integration-test-journal-v1
     signing_variable: COLOSSUS_INTEGRATION_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: []
-  approval_actions: []
   require_post_effect: false
 workflows:
   repository: {workflows}
@@ -90,7 +97,6 @@ skills:
   disabled: []
 agent:
   maxTurns: 4
-  tools: [echo]
 sandbox:
   backend: native
   profile: integration-test-v1

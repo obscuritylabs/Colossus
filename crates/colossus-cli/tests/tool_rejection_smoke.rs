@@ -169,12 +169,16 @@ fn write_config(
                 "anchor_path": directory.join("anchor.json")
             }
         },
-        "policy": {
-            "kind": "built_in",
-            "allow_actions": allow_actions,
-            "approval_actions": [],
-            "require_post_effect": true
+        "access": {
+            "profile": "pinned",
+            "tools": {"include": [tool], "exclude": []},
+            "actions": {
+                "allow": allow_actions,
+                "requireApproval": [],
+                "deny": []
+            }
         },
+        "policy": {"kind": "built_in", "require_post_effect": true},
         "workflows": {"repository": workflows, "user": workflows},
         "providers": {
             "profiles": {
@@ -188,7 +192,7 @@ fn write_config(
             },
             "roles": {"primary": "rejection"}
         },
-        "agent": {"maxTurns": 3, "tools": [tool]},
+        "agent": {"maxTurns": 3},
         "subagents": {"maxConcurrent": 1},
         "sandbox": {
             "backend": "native",

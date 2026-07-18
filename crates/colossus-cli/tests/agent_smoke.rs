@@ -45,10 +45,17 @@ storage:
     journal_key_id: agent-test-journal-v1
     signing_variable: COLOSSUS_AGENT_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [echo, filesystem.list, filesystem.read, filesystem.search]
+    exclude: []
+  actions:
+    allow: [filesystem.read, filesystem.search, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, research.run, context.show, context.compact, context.snapshots, context.restore]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, research.run]
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -65,7 +72,6 @@ providers:
     primary: echo
 agent:
   maxTurns: 4
-  tools: [echo, filesystem.list, filesystem.read, filesystem.search]
 subagents:
   maxConcurrent: 2
 sandbox:
@@ -103,14 +109,17 @@ sandbox:
         String::from_utf8_lossy(&tools.stderr)
     );
     let tools: Value = serde_json::from_slice(&tools.stdout).expect("tool JSON");
-    assert_eq!(tools.as_array().map(Vec::len), Some(6));
+    assert_eq!(tools.as_array().map(Vec::len), Some(4));
     assert_eq!(tools[0]["name"], "echo");
     assert_eq!(tools[0]["effect_action"], Value::Null);
+    assert_eq!(tools[0]["profile"], "pinned");
+    assert_eq!(tools[0]["source"], "core");
+    assert_eq!(tools[0]["family"], "utility");
     assert_eq!(tools[1]["name"], "filesystem.list");
+    assert_eq!(tools[1]["action_class"], "read");
+    assert_eq!(tools[1]["decision"], "deny");
     assert_eq!(tools[2]["name"], "filesystem.read");
     assert_eq!(tools[3]["name"], "filesystem.search");
-    assert_eq!(tools[4]["name"], "goal.show");
-    assert_eq!(tools[5]["name"], "goal.update");
 
     let output = run(
         binary,
@@ -327,8 +336,8 @@ sandbox:
         fs::read_to_string(&config)
             .expect("read config")
             .replace(
-                "allow_actions: [task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, research.run]",
-                "allow_actions: []",
+                "allow: [filesystem.read, filesystem.search, task.create, task.update, decision.create, decision.update, decision.archive, decision.supersede, plan.create, goal.create, goal.show, goal.update, goal.iteration.record, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue, memory.create, memory.archive, memory.supersede, memory.read, memory.list, memory.search, memory.index.status, memory.index.sync, memory.index.rebuild, research.run, context.show, context.compact, context.snapshots, context.restore]",
+                "allow: []",
             ),
     )
     .expect("denied config");

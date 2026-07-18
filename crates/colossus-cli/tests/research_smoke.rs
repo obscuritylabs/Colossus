@@ -81,10 +81,17 @@ storage:
     journal_key_id: research-test-journal-v1
     signing_variable: COLOSSUS_RESEARCH_TEST_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: [research.run, network.http]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [research.run, network.http]
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}

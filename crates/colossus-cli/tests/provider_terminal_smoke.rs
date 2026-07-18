@@ -60,12 +60,16 @@ fn write_failure_config(directory: &Path, origin: &str, tool: &str) -> std::path
                 "anchor_path": directory.join("anchor.json")
             }
         },
-        "policy": {
-            "kind": "built_in",
-            "allow_actions": ["provider.openai.chat", "filesystem.write"],
-            "approval_actions": [],
-            "require_post_effect": true
+        "access": {
+            "profile": "pinned",
+            "tools": {"include": [tool], "exclude": []},
+            "actions": {
+                "allow": ["provider.openai.chat", "filesystem.write"],
+                "requireApproval": [],
+                "deny": []
+            }
         },
+        "policy": {"kind": "built_in", "require_post_effect": true},
         "workflows": {"repository": workflows, "user": workflows},
         "providers": {
             "profiles": {
@@ -79,7 +83,7 @@ fn write_failure_config(directory: &Path, origin: &str, tool: &str) -> std::path
             },
             "roles": {"primary": "failure"}
         },
-        "agent": {"maxTurns": 4, "tools": [tool]},
+        "agent": {"maxTurns": 4},
         "subagents": {"maxConcurrent": 1},
         "sandbox": {
             "backend": "native",
@@ -483,10 +487,17 @@ storage:
     journal_key_id: provider-terminal-journal-v1
     signing_variable: COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [echo]
+    exclude: []
+  actions:
+    allow: [provider.openai.chat]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [provider.openai.chat]
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -503,7 +514,6 @@ providers:
     primary: live
 agent:
   maxTurns: 4
-  tools: [echo]
 subagents:
   maxConcurrent: 1
 sandbox:
@@ -679,10 +689,17 @@ storage:
     journal_key_id: provider-subagent-journal-v1
     signing_variable: COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [agent.delegate, agent.result, agent.list]
+    exclude: []
+  actions:
+    allow: [provider.openai.chat, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [provider.openai.chat, subagent.create, subagent.read, subagent.list, subagent.start, subagent.complete, subagent.fail, subagent.cancel, subagent.interrupt, subagent.requeue]
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -700,7 +717,6 @@ providers:
     subagent_default: delegated
 agent:
   maxTurns: 4
-  tools: [agent.delegate, agent.result, agent.list]
 subagents:
   maxConcurrent: 1
 sandbox:
@@ -790,10 +806,17 @@ storage:
     journal_key_id: responses-terminal-journal-v1
     signing_variable: COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [echo]
+    exclude: []
+  actions:
+    allow: [provider.openai.responses]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [provider.openai.responses]
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -810,7 +833,6 @@ providers:
     primary: responses
 agent:
   maxTurns: 4
-  tools: [echo]
 subagents:
   maxConcurrent: 1
 sandbox:
@@ -939,10 +961,17 @@ storage:
     journal_key_id: malformed-terminal-journal-v1
     signing_variable: COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY
     anchor_path: {anchor}
+access:
+  profile: pinned
+  tools:
+    include: [filesystem.write]
+    exclude: []
+  actions:
+    allow: [provider.openai.chat, filesystem.write]
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: [provider.openai.chat, filesystem.write]
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -959,7 +988,6 @@ providers:
     primary: malformed
 agent:
   maxTurns: 4
-  tools: [filesystem.write]
 subagents:
   maxConcurrent: 1
 sandbox:

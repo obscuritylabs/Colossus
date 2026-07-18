@@ -15,8 +15,10 @@ Python package or runtime dependency.
   connect a model provider.
 - [User Guide](USER_GUIDE.md): daily CLI, TUI, session, work, memory, research, and
   worker operations.
-- [Configuration](CONFIGURATION.md): strict YAML, providers, policy, storage, sandbox,
-  memory, MCP, skills, and workflows.
+- [Configuration](CONFIGURATION.md): strict YAML, providers, access, policy, storage,
+  sandbox, memory, MCP, skills, and workflows.
+- [Unified Access Profiles](ACCESS_PROFILES.md): tool inheritance, action decisions,
+  migration, and effective diagnostics.
 - [Troubleshooting](TROUBLESHOOTING.md): provider, key, policy, sandbox, worker, and
   recovery diagnostics.
 

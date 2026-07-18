@@ -4,6 +4,7 @@ Start with the same bounded diagnostics for every Rust deployment:
 
 ```bash
 colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml config effective
 colossus --config .colossus/config.yaml state doctor
 colossus --config .colossus/config.yaml policy doctor
 colossus --config .colossus/config.yaml sandbox doctor
@@ -22,6 +23,11 @@ secret values.
 Rust YAML denies unknown fields. Compare exact camelCase/snake_case names with
 [Configuration](CONFIGURATION.md), then run `config show`. Common failures are:
 
+- a legacy configuration without required `access` (run `config migrate --output` to a
+  new path);
+- duplicate or overlapping access overrides;
+- an exact tool include with an unmet static prerequisite;
+- action overrides used with `policy.kind: opa`;
 - a network provider without `baseUrl`;
 - an OpenAI Responses profile without `credentialReference`;
 - a remote HTTP origin absent from `sandbox.networkDestinations`;
@@ -44,16 +50,16 @@ colossus --config .colossus/config.yaml run \
   "Reply with exactly: connected"
 ```
 
-Check, in order: role-to-profile route, credential environment variable, provider policy
-action, exact network origin, TLS trust, model identifier, and response shape. HTTP 200
+Check, in order: role-to-profile route, credential environment variable, provider access
+decision, exact network origin, TLS trust, model identifier, and response shape. HTTP 200
 without released assistant content is not a successful turn. Incomplete streams become
 unknown rather than synthesized completion.
 
 ## Policy Denied An Effect
 
-Approval mode cannot repair a deny. Confirm the exact action in `policy.allow_actions`
-or `approval_actions`, then confirm the matching filesystem, executable, environment, or
-network obligation in `sandbox`.
+Approval mode cannot repair a deny. Run `config effective`, confirm the exact action
+decision under `access`, then confirm the matching filesystem, executable, environment,
+or network obligation in `sandbox`.
 
 For an approval obligation, place the global flag before the subcommand:
 
@@ -67,13 +73,14 @@ input, or unverifiable decision-log masking fail closed. Use `policy doctor`.
 
 ## Tool Is Missing
 
-`agent.tools` is an exact allowlist. Integration operations appear only after a connected
-canonical lifecycle; MCP operations require configured servers and tool allowlists;
-goal tools appear only during active goal lineage. Run `tools list` to see the actual
-catalog and effect identities.
+Run `config effective` first. It distinguishes profile exclusion, exact exclusion, and
+an unmet prerequisite. Integration operations appear only after a connected canonical
+lifecycle; MCP operations require configured servers and tool allowlists; signed-pack
+tools require an enabled reverified pack; goal tools appear only during active goal
+lineage. Run `tools list` to see the active catalog and effect identities.
 
-For missing `web.search`, confirm both the exact `agent.tools` entry and a valid
-`search.roles.agent` route. For a disabled Deep Research web lane, confirm
+For missing `web.search`, confirm a profile that inherits it (or a `pinned` exact
+include) and a valid `search.roles.agent` route. For a disabled Deep Research web lane, confirm
 `search.roles.research`. `search query` never falls back to another profile; an
 `outcome_unknown` result must be reconciled with provider state before retrying. See
 [Provider-Neutral Web Search](SEARCH.md).

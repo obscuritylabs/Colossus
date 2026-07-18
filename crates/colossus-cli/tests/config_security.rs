@@ -4,10 +4,8 @@ use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command};
 use tempfile::tempdir;
 
-const JOURNAL_SECRET: &str =
-    "config-journal-secret-111111111111111111111111111111111111111111111111";
-const SIGNING_SECRET: &str =
-    "config-signing-secret-222222222222222222222222222222222222222222222222";
+const JOURNAL_SECRET: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+const SIGNING_SECRET: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 const PROVIDER_SECRET: &str =
     "config-provider-secret-333333333333333333333333333333333333333333333333";
 const RAW_CONFIG_SECRET: &str =
@@ -36,12 +34,16 @@ fn config_document(root: &Path) -> Value {
                 "anchor_path": root.join("anchor.json")
             }
         },
-        "policy": {
-            "kind": "built_in",
-            "allow_actions": ["provider.openai.chat"],
-            "approval_actions": [],
-            "require_post_effect": true
+        "access": {
+            "profile": "pinned",
+            "tools": {"include": ["echo"], "exclude": []},
+            "actions": {
+                "allow": ["provider.openai.chat"],
+                "requireApproval": [],
+                "deny": []
+            }
         },
+        "policy": {"kind": "built_in", "require_post_effect": true},
         "workflows": {
             "repository": root.join("workflows"),
             "user": root.join("workflows")
@@ -58,7 +60,7 @@ fn config_document(root: &Path) -> Value {
             },
             "roles": {"primary": "hosted"}
         },
-        "agent": {"maxTurns": 2, "tools": ["echo"]},
+        "agent": {"maxTurns": 2},
         "subagents": {"maxConcurrent": 1},
         "sandbox": {
             "backend": "native",
@@ -132,6 +134,31 @@ fn config_show_preserves_only_references_and_unknown_secret_fields_fail_without_
             "missing reference: {reference}"
         );
     }
+
+    let effective = command(binary, &config)
+        .args(["config", "effective"])
+        .output()
+        .expect("effective config");
+    assert!(
+        effective.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&effective.stdout),
+        String::from_utf8_lossy(&effective.stderr)
+    );
+    assert_secrets_absent(&effective.stdout);
+    assert_secrets_absent(&effective.stderr);
+    let effective: Value =
+        serde_json::from_slice(&effective.stdout).expect("effective access JSON");
+    assert_eq!(effective["profile"], "pinned");
+    assert!(
+        effective["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| {
+                tool["name"] == "echo"
+                    && tool["availability"] == "active"
+                    && tool["selection_reason"] == "explicit include"
+            }))
+    );
 
     let mut invalid = config_document(directory.path());
     invalid["providers"]["profiles"]["hosted"]["apiKey"] = json!(RAW_CONFIG_SECRET);

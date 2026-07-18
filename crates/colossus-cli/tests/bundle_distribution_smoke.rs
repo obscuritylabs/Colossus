@@ -88,10 +88,17 @@ storage:
     journal_key_id: bundle-smoke-journal-v1
     signing_variable: COLOSSUS_BUNDLE_TEST_CHECKPOINT_KEY
     anchor_path: {anchor}
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
 policy:
   kind: built_in
-  allow_actions: []
-  approval_actions: []
   require_post_effect: true
 workflows:
   repository: {workflows}
@@ -108,7 +115,6 @@ providers:
     primary: echo
 agent:
   maxTurns: 2
-  tools: [echo]
 subagents:
   maxConcurrent: 1
 sandbox:

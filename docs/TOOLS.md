@@ -1,16 +1,19 @@
 # Built-in Tools
 
-The Rust agent sees only exact names listed in `agent.tools`. Each tool has a strict JSON
-Schema with unknown fields denied. Pure tools execute locally; effectful tools construct a
-normal request and cannot reach an adapter without policy authorization, any required
-approval proof, and a matching one-use permit.
+The Rust agent sees the catalog resolved from the required `access` profile, exact
+include/exclude overrides, trusted capability metadata, and current prerequisites. Each
+tool has a strict JSON Schema with unknown fields denied. Pure tools execute locally;
+effectful tools construct a normal request and cannot reach an adapter without policy
+authorization, any required approval proof, and a matching one-use permit.
 
 ```bash
+colossus --config .colossus/config.yaml config effective
 colossus --config .colossus/config.yaml tools list
 ```
 
-The output is the authority for the active model-visible catalog, schemas, mutation
-labels, and effect identities.
+`config effective` explains active and hidden candidates. `tools list` is the authority
+for the active model-visible catalog, schemas, source/family metadata, action class,
+decision, selection reason, mutation labels, and effect identities.
 
 ## Tool Families
 
@@ -33,14 +36,17 @@ labels, and effect identities.
 | Fetch/research | `web.fetch`, `docs.fetch`, `web.search` | Search uses an explicit operator route; exact network origin and post-effect release |
 | Integrations/MCP | Dynamically connected names | Hidden until configured, allowlisted, and connected |
 
-Tool availability does not imply permission. The built-in PDP is deny by default, and
-sandbox obligations independently constrain roots, executables, environment names,
-network origins, time, output, process count, memory, and concurrency.
+Tool availability does not imply permission. Profile defaults and exact action overrides
+produce the built-in decision map, while sandbox obligations independently constrain
+roots, executables, environment names, network origins, time, output, process count,
+memory, and concurrency. Plan Mode, Goal Mode, interactive UI, and child-agent scopes can
+only narrow the resolved catalog.
 
 `web.search` accepts only `query` and optional `limit`; the model cannot choose its
-provider. It is absent unless explicitly listed in `agent.tools` and a valid
-`search.roles.agent` route exists. Search returns normalized results only, while
-`web.fetch` retrieves an exact result page. See [Provider-Neutral Web Search](SEARCH.md).
+provider. It is inherited by `development` and `allow_all` only when a valid
+`search.roles.agent` route exists; `pinned` must include it exactly. Search returns
+normalized results only, while `web.fetch` retrieves an exact result page. See
+[Provider-Neutral Web Search](SEARCH.md).
 
 ## Files And Processes
 
@@ -78,5 +84,6 @@ Archived or superseded records remain auditable but do not steer later turns.
 - Credentials are references and are resolved only after permit validation; raw values
   are hard-redacted from policy input, provider output, transcripts, and audit evidence.
 
-See [Configuration](CONFIGURATION.md) for grants and [Security Model](SECURITY.md) for the
+See [Unified Access Profiles](ACCESS_PROFILES.md) for profile resolution,
+[Configuration](CONFIGURATION.md) for grants, and [Security Model](SECURITY.md) for the
 non-bypassable kernel.

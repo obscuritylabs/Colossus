@@ -10,6 +10,7 @@ members = [
     "crates/colossus-audit",
     "crates/colossus-sandbox",
     "crates/colossus-windows-process",
+    "crates/colossus-access",
     "crates/colossus-policy",
     "crates/colossus-provider",
     "crates/colossus-search",
@@ -95,6 +96,7 @@ windows-sys = "=0.61.2"
 webpki-roots = "1.0.8"
 
 colossus-contracts = { version = "=0.9.0", path = "crates/colossus-contracts" }
+colossus-access = { version = "=0.9.0", path = "crates/colossus-access" }
 colossus-audit = { version = "=0.9.0", path = "crates/colossus-audit" }
 colossus-context = { version = "=0.9.0", path = "crates/colossus-context" }
 colossus-work = { version = "=0.9.0", path = "crates/colossus-work" }

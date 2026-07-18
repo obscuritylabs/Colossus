@@ -5,6 +5,7 @@ mod tui_host;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
+use colossus_access::AccessProfile;
 use colossus_contracts::{
     ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
     MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
@@ -908,9 +909,23 @@ enum ConfigAction {
         /// Clone non-storage settings from an existing strict configuration.
         #[arg(long, value_name = "PATH", requires = "development")]
         from: Option<PathBuf>,
+        /// Unified tool and built-in policy profile.
+        #[arg(long, default_value = "development")]
+        access_profile: AccessProfile,
+    },
+    /// Convert a legacy schema-version-1 shape without overwriting its source.
+    Migrate {
+        /// New strict configuration path.
+        #[arg(long, value_name = "PATH")]
+        output: PathBuf,
+        /// Unified tool and built-in policy profile.
+        #[arg(long, default_value = "development")]
+        access_profile: AccessProfile,
     },
     /// Parse and print the active configuration with references intact.
     Show,
+    /// Show credential-free effective tool and action resolution.
+    Effective,
 }
 
 #[derive(Args)]
@@ -2213,7 +2228,12 @@ async fn parse_json_argument(runtime: &Runtime, source: &str) -> Result<Value, B
     Ok(serde_json::from_str(&document)?)
 }
 
-fn init_config(path: &Path, development: bool, from: Option<&Path>) -> Result<(), Box<dyn Error>> {
+fn init_config(
+    path: &Path,
+    development: bool,
+    from: Option<&Path>,
+    access_profile: AccessProfile,
+) -> Result<(), Box<dyn Error>> {
     if path.exists() {
         return Err(format!("refusing to overwrite {}", path.display()).into());
     }
@@ -2242,11 +2262,12 @@ fn init_config(path: &Path, development: bool, from: Option<&Path>) -> Result<()
         )
         .into());
     }
-    let config = if let Some(source) = from {
+    let mut config = if let Some(source) = from {
         RuntimeConfig::from_path(source)?
     } else {
         RuntimeConfig::offline_template(&state)
     };
+    config.set_access_profile(access_profile);
     let config = if development {
         config.with_isolated_development_storage(state, anchor)
     } else {
@@ -2259,6 +2280,38 @@ fn init_config(path: &Path, development: bool, from: Option<&Path>) -> Result<()
     destination.write_all(config.to_yaml()?.as_bytes())?;
     println!("created {}", path.display());
     Ok(())
+}
+
+fn migrate_config(
+    source: &Path,
+    output: &Path,
+    access_profile: AccessProfile,
+) -> Result<Value, Box<dyn Error>> {
+    if source == output {
+        return Err("config migration output must differ from the source path".into());
+    }
+    if output.exists() {
+        return Err(format!("refusing to overwrite {}", output.display()).into());
+    }
+    let yaml = fs::read_to_string(source)?;
+    let (config, report) = RuntimeConfig::migrate_legacy_yaml(&yaml, access_profile)?;
+    let parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.exists() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut destination = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)?;
+    destination.write_all(config.to_yaml()?.as_bytes())?;
+    Ok(json!({
+        "source": source,
+        "output": output,
+        "migration": report,
+    }))
 }
 
 fn set_output_mode(mode: OutputMode) {
@@ -5113,6 +5166,12 @@ async fn dispatch_to_worker_if_active(
             print_json(&client.call(operation).await?)?;
             Ok(true)
         }
+        Command::Config(ConfigCommand {
+            command: ConfigAction::Effective,
+        }) => {
+            print_json(&client.call(WorkerOperation::AccessEffective).await?)?;
+            Ok(true)
+        }
         Command::Worker { .. } | Command::Config(_) | Command::SandboxHelper => Ok(false),
     }
 }
@@ -5931,10 +5990,25 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     if let Command::Config(ConfigCommand {
-        command: ConfigAction::Init { development, from },
+        command:
+            ConfigAction::Init {
+                development,
+                from,
+                access_profile,
+            },
     }) = &cli.command
     {
-        return init_config(&cli.config, *development, from.as_deref());
+        return init_config(&cli.config, *development, from.as_deref(), *access_profile);
+    }
+    if let Command::Config(ConfigCommand {
+        command: ConfigAction::Migrate {
+            output,
+            access_profile,
+        },
+    }) = &cli.command
+    {
+        print_json(&migrate_config(&cli.config, output, *access_profile)?)?;
+        return Ok(());
     }
     let config = RuntimeConfig::from_path(&cli.config)?;
     if matches!(
@@ -6027,6 +6101,9 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
         user_prompts,
     )?);
     match cli.command {
+        Command::Config(ConfigCommand {
+            command: ConfigAction::Effective,
+        }) => print_json(runtime.effective_access())?,
         Command::Config(_) => unreachable!("handled before runtime construction"),
         Command::Preferences(command) => match command.command {
             PreferencesAction::Show => print_json(&runtime.presentation_preferences()?)?,
@@ -6110,7 +6187,7 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
             ModelsAction::Route { role } => print_json(&runtime.provider_route(&role)?)?,
         },
         Command::Tools(command) => match command.command {
-            ToolsAction::List => print_json(&runtime.tool_specs())?,
+            ToolsAction::List => print_json(&runtime.tool_catalog())?,
         },
         Command::Sessions(command) => match command.command {
             SessionsAction::List { limit } => print_json(&runtime.list_sessions(limit)?)?,
@@ -7116,7 +7193,13 @@ mod tests {
         )
         .expect("source configuration");
 
-        init_config(&destination, true, Some(&source)).expect("development configuration");
+        init_config(
+            &destination,
+            true,
+            Some(&source),
+            AccessProfile::Development,
+        )
+        .expect("development configuration");
         let development =
             RuntimeConfig::from_path(&destination).expect("strict development config");
         assert_eq!(development.agent.max_turns, 7);
@@ -7145,7 +7228,15 @@ mod tests {
                 panic!("development config must not use the platform credential store")
             }
         }
-        assert!(init_config(&destination, true, Some(&source)).is_err());
+        assert!(
+            init_config(
+                &destination,
+                true,
+                Some(&source),
+                AccessProfile::Development,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -7172,10 +7263,94 @@ mod tests {
         fs::write(directory.path().join("state.dev.redb"), b"orphaned state")
             .expect("orphaned development state");
 
-        let error =
-            init_config(&destination, true, None).expect_err("orphaned state must fail closed");
+        let error = init_config(&destination, true, None, AccessProfile::Development)
+            .expect_err("orphaned state must fail closed");
         assert!(error.to_string().contains("restore the matching config"));
         assert!(!destination.exists());
+    }
+
+    #[test]
+    fn config_migrate_is_non_overwriting_and_supports_pinned_transfer() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("legacy.yaml");
+        let destination = directory.path().join("migrated.yaml");
+        let active = RuntimeConfig::offline_template(directory.path().join("state.redb"));
+        let mut document = serde_json::to_value(&active).expect("configuration value");
+        let root = document.as_object_mut().expect("configuration mapping");
+        root.remove("access");
+        root.get_mut("agent")
+            .and_then(Value::as_object_mut)
+            .expect("agent mapping")
+            .insert("tools".into(), json!(["echo", "task.list"]));
+        let policy = root
+            .get_mut("policy")
+            .and_then(Value::as_object_mut)
+            .expect("policy mapping");
+        policy.insert("allow_actions".into(), json!(["task.list"]));
+        policy.insert("approval_actions".into(), json!(["filesystem.write"]));
+        fs::write(
+            &source,
+            serde_json::to_vec_pretty(&document).expect("legacy JSON"),
+        )
+        .expect("legacy config");
+
+        let report =
+            migrate_config(&source, &destination, AccessProfile::Pinned).expect("migration");
+        assert_eq!(report["migration"]["profile"], "pinned");
+        let migrated = RuntimeConfig::from_path(&destination).expect("active config");
+        let access = migrated.access;
+        assert_eq!(access.tools.include, ["echo", "task.list"]);
+        assert_eq!(access.actions.allow, ["task.list"]);
+        assert_eq!(access.actions.require_approval, ["filesystem.write"]);
+        assert!(
+            migrate_config(&source, &destination, AccessProfile::Development).is_err(),
+            "existing output must not be overwritten"
+        );
+    }
+
+    #[test]
+    fn config_cli_defaults_to_development_and_accepts_allow_all_spelling() {
+        let default =
+            Cli::try_parse_from(["colossus", "config", "init"]).expect("default init command");
+        let Command::Config(ConfigCommand {
+            command: ConfigAction::Init { access_profile, .. },
+        }) = default.command
+        else {
+            panic!("expected config init");
+        };
+        assert_eq!(access_profile, AccessProfile::Development);
+
+        let permissive = Cli::try_parse_from([
+            "colossus",
+            "config",
+            "init",
+            "--access-profile",
+            "allow-all",
+        ])
+        .expect("allow-all profile");
+        let Command::Config(ConfigCommand {
+            command: ConfigAction::Init { access_profile, .. },
+        }) = permissive.command
+        else {
+            panic!("expected config init");
+        };
+        assert_eq!(access_profile, AccessProfile::AllowAll);
+    }
+
+    #[test]
+    fn config_init_generates_all_four_access_profiles() {
+        for profile in [
+            AccessProfile::Minimal,
+            AccessProfile::Development,
+            AccessProfile::AllowAll,
+            AccessProfile::Pinned,
+        ] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let destination = directory.path().join("config.yaml");
+            init_config(&destination, false, None, profile).expect("generated config");
+            let generated = RuntimeConfig::from_path(&destination).expect("strict config");
+            assert_eq!(generated.access.profile, profile);
+        }
     }
 
     #[test]

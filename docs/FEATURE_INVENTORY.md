@@ -127,6 +127,7 @@ inspect hashes, audit records, and package contents without network access.
 | AUTHZ-01 | Universal effect authorization | P0 | No external or sensitive effect can execute without the single policy gateway issuing a matching one-use permit. |
 | STORE-01 | Replaceable storage ports | P0 | Journals, repositories, projections, signing, indexes, embeddings, and exports have conformance-tested adapters. |
 | PROV-01 | Provider abstraction | P0 | Echo, OpenAI Responses, and OpenAI-compatible chat are normalized. |
+| ACCESS-01 | Unified access profiles | P0 | One metadata registry resolves model-visible tools and built-in action decisions without bypassing trust, policy, or sandbox enforcement. |
 | TOOL-01 | Brokered tool system | P0 | Schemas, permissions, policy, approvals, execution, and audit run in order. |
 | SAFE-01 | Policy and approval modes | P0 | `deny`, `ask`, `risk-auto`, and `full-access` preserve exact safety semantics. |
 | STATE-01 | Durable sessions and run history | P0 | Sessions and events survive restarts and can be resumed. |
@@ -320,17 +321,26 @@ Every model-callable tool MUST declare:
 - whether approval is required;
 - whether the operation mutates state;
 - whether a working root is required;
+- trusted source (`core`, integration, MCP, or signed pack);
+- action class and exact effect/Safety Kernel identities;
+- static prerequisites and a bounded availability reason;
 - risk level: low, medium, or high;
 - timeout and maximum output bytes.
 
 The execution order is fixed:
 
 ```text
-schema validation -> deterministic policy -> optional risk review
+access resolution -> schema validation -> deterministic policy -> optional risk review
 -> approval decision -> brokered execution -> bounded result -> event and audit
 ```
 
-### 10.2 Required Offline Tool Catalog
+The required `access` block selects `minimal`, `development`, `allow_all`, or `pinned`.
+Profiles operate on the metadata above; an exact include changes visibility only. Run
+scopes such as Plan Mode, Goal Mode, interactive UI, and child-agent execution may narrow
+the resolved catalog but never broaden it. An unclassified built-in or untrusted
+extension fails closed.
+
+### 10.2 Available Offline Tool Catalog
 
 - Filesystem: `filesystem.list`, `filesystem.read`, `filesystem.search`,
   `filesystem.write`, `filesystem.replace`.
@@ -365,15 +375,17 @@ pack-provided tools for repository-specific verification.
 ### 10.3 Network And Adapter-Backed Tools
 
 - `web.fetch` and `docs.fetch` provide approval-gated, bounded HTTP(S) retrieval.
-- `web.search` is exposed only when explicitly enabled and `search.roles.agent` resolves;
-  SearXNG and SerpAPI share a normalized provider-neutral result contract.
+- `web.search` is exposed when the profile selects it and `search.roles.agent` resolves;
+  `pinned` additionally needs an exact include. SearXNG and SerpAPI share a normalized
+  provider-neutral result contract.
 - `mcp.call` is exposed only through an explicitly configured, allowlisted gateway.
 - Connected native integrations expose namespaced tools such as `github.*`,
   `searxng.*`, and `opensearch.*`.
 - Imported API operations use names like `openapi.NAME.OPERATION`.
 
-Integration-generated tools enter the same schema, policy, approval, execution, event,
-and audit pipeline as built-ins.
+Connected integration and enabled reverified signed-pack tools enter the same access,
+schema, policy, approval, execution, event, and audit pipeline as built-ins. Discovered
+or untrusted extensions remain absent.
 
 ### 10.4 Filesystem And Subprocess Rules
 
@@ -843,7 +855,7 @@ reference, HTTP environment-trust toggle, and shell completion.
 - `goal`: bounded autonomous goal loop.
 - `research`: deep research with persisted cited output.
 - `tui`: interactive session and non-TTY line runner; the former `repl` alias is removed.
-- `config`: initialize and show strict configuration.
+- `config`: initialize, migrate, show, and explain effective strict configuration.
 - `skills`: list, create, validate, and install.
 - `tools`: list the active catalog.
 - `provider` and `models`: diagnostics, catalogs, and routing.
@@ -959,14 +971,20 @@ that the worker must be restarted.
 
 ## 19. Configuration And Local Storage
 
-Configuration is strict: unknown fields fail validation. It covers provider defaults,
-named model profiles and roles, provider-neutral search profiles and agent/research
-routes, context budgets, agent turn limits, subagent concurrency, memory index, global
-HTTP transport, research limits/sources/MCP, and skill override policy.
+Configuration is strict: unknown fields fail validation. It includes the required access
+profile and exact overrides, provider defaults, named model profiles and roles,
+provider-neutral search profiles and agent/research routes, context budgets, agent turn
+limits, subagent concurrency, memory index, global HTTP transport, research
+limits/sources/MCP, and skill override policy.
 
 Configuration uses fresh strict YAML and accepts credential references such as
 `env:NAME`. Raw secret values MUST
 not be written back when configuration is shown.
+
+`schemaVersion: 1` remains active, but legacy exact tool/action lists are rejected with
+an explicit non-overwriting migration path. Migration defaults to live `development`
+inheritance; operators can request `pinned` to transfer an exact catalog. Effective
+diagnostics MUST be bounded and credential-free.
 
 The default canonical adapter is an ACID, crash-safe embedded event store with a stable
 file format. A single transaction appends events, advances stream/global sequence
