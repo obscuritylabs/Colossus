@@ -3,6 +3,7 @@
 This file is the short map. Keep deeper details in `docs/`.
 
 - Read `docs/ARCHITECTURE.md` before changing boundaries.
+- Read `docs/CRATE_STRUCTURE.md` before adding modules or growing a crate root.
 - Read `docs/SECURITY.md` before changing tools, subprocess execution, policy, audit,
   or bundle handling.
 - Keep `domain` dependency-free.
@@ -11,7 +12,8 @@ This file is the short map. Keep deeper details in `docs/`.
 - Keep crate roots (`lib.rs` and `main.rs`) as thin public API or composition
   surfaces. Split nontrivial configuration, metadata, resolution/service logic,
   adapters, and tests into focused modules instead of accumulating unrelated
-  responsibilities in one file.
+  responsibilities in one file. Run `./scripts/check_crate_roots.sh` after structural
+  changes.
 - Add or update tests for every behavior change.
 - Rust is the active root implementation. Python 0.5 is retained only on
   `python-v0.5.0` and `python-legacy`; do not reintroduce its package or state.
