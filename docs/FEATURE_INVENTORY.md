@@ -981,10 +981,10 @@ Configuration uses fresh strict YAML and accepts credential references such as
 `env:NAME`. Raw secret values MUST
 not be written back when configuration is shown.
 
-`schemaVersion: 1` remains active, but legacy exact tool/action lists are rejected with
-an explicit non-overwriting migration path. Migration defaults to live `development`
-inheritance; operators can request `pinned` to transfer an exact catalog. Effective
-diagnostics MUST be bounded and credential-free.
+`schemaVersion: 1` remains active, but removed exact tool/action lists are rejected.
+Before 1.0, configuration changes are applied by directly updating the strict YAML or
+generating a fresh configuration; there is no automatic configuration migration command.
+Effective diagnostics MUST be bounded and credential-free.
 
 The default canonical adapter is an ACID, crash-safe embedded event store with a stable
 file format. A single transaction appends events, advances stream/global sequence

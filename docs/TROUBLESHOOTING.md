@@ -23,8 +23,8 @@ secret values.
 Rust YAML denies unknown fields. Compare exact camelCase/snake_case names with
 [Configuration](CONFIGURATION.md), then run `config show`. Common failures are:
 
-- a legacy configuration without required `access` (run `config migrate --output` to a
-  new path);
+- a configuration without required `access`, or with removed exact tool/action fields
+  (edit the YAML or generate a fresh file with `config init`);
 - duplicate or overlapping access overrides;
 - an exact tool include with an unmet static prerequisite;
 - action overrides used with `policy.kind: opa`;
