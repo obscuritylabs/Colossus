@@ -18,7 +18,7 @@ Python package or runtime dependency.
 - [Configuration](CONFIGURATION.md): strict YAML, providers, access, policy, storage,
   sandbox, memory, MCP, skills, and workflows.
 - [Unified Access Profiles](ACCESS_PROFILES.md): tool inheritance, action decisions,
-  migration, and effective diagnostics.
+  pre-1.0 configuration changes, and effective diagnostics.
 - [Troubleshooting](TROUBLESHOOTING.md): provider, key, policy, sandbox, worker, and
   recovery diagnostics.
 

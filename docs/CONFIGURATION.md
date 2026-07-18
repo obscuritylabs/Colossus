@@ -12,17 +12,18 @@ colossus --config .colossus/config.yaml config show
 `config init` refuses to overwrite. Use source control or an explicit backup before
 replacing configuration; there is intentionally no force flag.
 
-Configurations created before unified access profiles are intentionally rejected even
-though `schemaVersion` remains `1`. Migrate to a new path:
+Colossus is pre-1.0, so configuration shapes may change without an automated migration
+command. Configurations without the required `access` block, or with removed
+`agent.tools`, `policy.allow_actions`, or `policy.approval_actions` fields, are rejected.
+Update the YAML directly or generate a fresh file at a separate path:
 
 ```bash
-colossus --config .colossus/config.yaml config migrate \
-  --output .colossus/config.migrated.yaml
+colossus --config ./config.new.yaml config init --access-profile development
 ```
 
-Migration defaults to live `development` inheritance and transfers legacy action
-choices. Use `--access-profile pinned` to transfer the old exact tool list instead.
-Migration never overwrites its source or an existing output. Inspect the result with
+Copy required provider, storage, policy, sandbox, and integration settings deliberately;
+keep credential references rather than values. `config init` never overwrites an
+existing file. Inspect the completed configuration with `config show` and
 `config effective` before making it active.
 
 ## Isolated Source Development

@@ -913,15 +913,6 @@ enum ConfigAction {
         #[arg(long, default_value = "development")]
         access_profile: AccessProfile,
     },
-    /// Convert a legacy schema-version-1 shape without overwriting its source.
-    Migrate {
-        /// New strict configuration path.
-        #[arg(long, value_name = "PATH")]
-        output: PathBuf,
-        /// Unified tool and built-in policy profile.
-        #[arg(long, default_value = "development")]
-        access_profile: AccessProfile,
-    },
     /// Parse and print the active configuration with references intact.
     Show,
     /// Show credential-free effective tool and action resolution.
@@ -2280,38 +2271,6 @@ fn init_config(
     destination.write_all(config.to_yaml()?.as_bytes())?;
     println!("created {}", path.display());
     Ok(())
-}
-
-fn migrate_config(
-    source: &Path,
-    output: &Path,
-    access_profile: AccessProfile,
-) -> Result<Value, Box<dyn Error>> {
-    if source == output {
-        return Err("config migration output must differ from the source path".into());
-    }
-    if output.exists() {
-        return Err(format!("refusing to overwrite {}", output.display()).into());
-    }
-    let yaml = fs::read_to_string(source)?;
-    let (config, report) = RuntimeConfig::migrate_legacy_yaml(&yaml, access_profile)?;
-    let parent = output
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    if !parent.exists() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut destination = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(output)?;
-    destination.write_all(config.to_yaml()?.as_bytes())?;
-    Ok(json!({
-        "source": source,
-        "output": output,
-        "migration": report,
-    }))
 }
 
 fn set_output_mode(mode: OutputMode) {
@@ -6000,16 +5959,6 @@ async fn runtime_main() -> Result<(), Box<dyn Error>> {
     {
         return init_config(&cli.config, *development, from.as_deref(), *access_profile);
     }
-    if let Command::Config(ConfigCommand {
-        command: ConfigAction::Migrate {
-            output,
-            access_profile,
-        },
-    }) = &cli.command
-    {
-        print_json(&migrate_config(&cli.config, output, *access_profile)?)?;
-        return Ok(());
-    }
     let config = RuntimeConfig::from_path(&cli.config)?;
     if matches!(
         cli.command,
@@ -7270,42 +7219,17 @@ mod tests {
     }
 
     #[test]
-    fn config_migrate_is_non_overwriting_and_supports_pinned_transfer() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let source = directory.path().join("legacy.yaml");
-        let destination = directory.path().join("migrated.yaml");
-        let active = RuntimeConfig::offline_template(directory.path().join("state.redb"));
-        let mut document = serde_json::to_value(&active).expect("configuration value");
-        let root = document.as_object_mut().expect("configuration mapping");
-        root.remove("access");
-        root.get_mut("agent")
-            .and_then(Value::as_object_mut)
-            .expect("agent mapping")
-            .insert("tools".into(), json!(["echo", "task.list"]));
-        let policy = root
-            .get_mut("policy")
-            .and_then(Value::as_object_mut)
-            .expect("policy mapping");
-        policy.insert("allow_actions".into(), json!(["task.list"]));
-        policy.insert("approval_actions".into(), json!(["filesystem.write"]));
-        fs::write(
-            &source,
-            serde_json::to_vec_pretty(&document).expect("legacy JSON"),
-        )
-        .expect("legacy config");
-
-        let report =
-            migrate_config(&source, &destination, AccessProfile::Pinned).expect("migration");
-        assert_eq!(report["migration"]["profile"], "pinned");
-        let migrated = RuntimeConfig::from_path(&destination).expect("active config");
-        let access = migrated.access;
-        assert_eq!(access.tools.include, ["echo", "task.list"]);
-        assert_eq!(access.actions.allow, ["task.list"]);
-        assert_eq!(access.actions.require_approval, ["filesystem.write"]);
-        assert!(
-            migrate_config(&source, &destination, AccessProfile::Development).is_err(),
-            "existing output must not be overwritten"
-        );
+    fn config_cli_does_not_offer_a_migration_command() {
+        let error = Cli::try_parse_from([
+            "colossus",
+            "--config",
+            ".colossus/config.yaml",
+            "config",
+            "migrate",
+        ])
+        .err()
+        .expect("pre-1.0 configuration migration must not be exposed");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]

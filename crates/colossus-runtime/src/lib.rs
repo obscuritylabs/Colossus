@@ -3,10 +3,9 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_access::{
-    AccessConfig, AccessContext, AccessDecision, AccessProfile, AccessResolution,
-    ActionAccessConfig, ActionClass, ActionDescriptor, CapabilitySource, ToolAccessConfig,
-    ToolDescriptor, builtin_action_descriptors, builtin_tool_descriptor, resolve_access,
-    validate_config as validate_access_config,
+    AccessConfig, AccessContext, AccessDecision, AccessProfile, AccessResolution, ActionClass,
+    ActionDescriptor, CapabilitySource, ToolDescriptor, builtin_action_descriptors,
+    builtin_tool_descriptor, resolve_access, validate_config as validate_access_config,
 };
 use colossus_agent::{AgentError, AgentService, DEFAULT_MAX_TURNS, MAX_TURNS};
 use colossus_audit::{
@@ -700,21 +699,6 @@ pub struct WorkflowLibraryConfig {
     pub user: PathBuf,
 }
 
-/// Safe summary of one explicit legacy configuration migration.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ConfigMigrationReport {
-    /// Selected live or pinned access profile.
-    pub profile: AccessProfile,
-    /// Legacy exact tool entries removed or transferred.
-    pub legacy_tool_count: usize,
-    /// Legacy allow entries transferred to explicit action overrides.
-    pub transferred_allow_actions: usize,
-    /// Legacy approval entries transferred to explicit action overrides.
-    pub transferred_approval_actions: usize,
-    /// Whether future applicable tools now inherit through a live profile.
-    pub live_tool_inheritance: bool,
-}
-
 impl RuntimeConfig {
     /// Strictly parse YAML with no unknown fields.
     pub fn from_yaml(yaml: &str) -> Result<Self, RuntimeError> {
@@ -733,15 +717,15 @@ impl RuntimeConfig {
                 .is_some_and(|policy| {
                     policy.contains_key("allow_actions") || policy.contains_key("approval_actions")
                 });
-        if !root.contains_key("access") {
+        if has_legacy_tools || has_legacy_actions {
             return Err(RuntimeError::Config(
-                "access is required; run `colossus --config PATH config migrate --output NEW_PATH` for a legacy configuration"
+                "agent.tools, policy.allow_actions, and policy.approval_actions are not supported; use access.tools and access.actions or generate a fresh configuration with `colossus --config PATH config init`"
                     .into(),
             ));
         }
-        if has_legacy_tools || has_legacy_actions {
+        if !root.contains_key("access") {
             return Err(RuntimeError::Config(
-                "legacy agent.tools and policy action lists cannot be combined with access; run config migrate"
+                "access is required; add an access block or generate a fresh configuration with `colossus --config PATH config init`"
                     .into(),
             ));
         }
@@ -956,101 +940,6 @@ impl RuntimeConfig {
     /// Read and strictly parse a YAML file.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, RuntimeError> {
         Self::from_yaml(&fs::read_to_string(path).map_err(RuntimeError::Io)?)
-    }
-
-    /// Convert one legacy schema-version-1 shape without opening state or resolving credentials.
-    pub fn migrate_legacy_yaml(
-        yaml: &str,
-        profile: AccessProfile,
-    ) -> Result<(Self, ConfigMigrationReport), RuntimeError> {
-        let mut document: Value = serde_saphyr::from_str(yaml)
-            .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        let root = document.as_object_mut().ok_or_else(|| {
-            RuntimeError::Config("configuration root must be a YAML mapping".into())
-        })?;
-        if root.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
-            return Err(RuntimeError::Config(
-                "schemaVersion must be exactly 1".into(),
-            ));
-        }
-        if root.contains_key("access") {
-            return Err(RuntimeError::Config(
-                "configuration already contains access and does not require migration".into(),
-            ));
-        }
-        let legacy_tools = match root.get_mut("agent") {
-            Some(agent) => agent
-                .as_object_mut()
-                .ok_or_else(|| RuntimeError::Config("agent must be a YAML mapping".into()))?
-                .remove("tools")
-                .map(|tools| {
-                    serde_json::from_value::<Vec<String>>(tools)
-                        .map_err(|error| RuntimeError::Config(error.to_string()))
-                })
-                .transpose()?
-                .unwrap_or_else(|| vec!["echo".into()]),
-            None => vec!["echo".into()],
-        };
-        let policy = root
-            .get_mut("policy")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| RuntimeError::Config("policy must be a YAML mapping".into()))?;
-        let external_policy = policy.get("kind").and_then(Value::as_str) == Some("opa");
-        let mut allow = policy
-            .remove("allow_actions")
-            .map(|actions| {
-                serde_json::from_value::<Vec<String>>(actions)
-                    .map_err(|error| RuntimeError::Config(error.to_string()))
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let approval = policy
-            .remove("approval_actions")
-            .map(|actions| {
-                serde_json::from_value::<Vec<String>>(actions)
-                    .map_err(|error| RuntimeError::Config(error.to_string()))
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let approval_set = approval.iter().collect::<BTreeSet<_>>();
-        allow.retain(|action| !approval_set.contains(action));
-        let access = AccessConfig {
-            profile,
-            tools: ToolAccessConfig {
-                include: if profile == AccessProfile::Pinned {
-                    legacy_tools.clone()
-                } else {
-                    Vec::new()
-                },
-                exclude: Vec::new(),
-            },
-            actions: ActionAccessConfig {
-                allow,
-                require_approval: approval,
-                deny: Vec::new(),
-            },
-        };
-        validate_access_config(&access, external_policy)
-            .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        let report = ConfigMigrationReport {
-            profile,
-            legacy_tool_count: legacy_tools.len(),
-            transferred_allow_actions: access.actions.allow.len(),
-            transferred_approval_actions: access.actions.require_approval.len(),
-            live_tool_inheritance: matches!(
-                profile,
-                AccessProfile::Development | AccessProfile::AllowAll
-            ),
-        };
-        root.insert(
-            "access".into(),
-            serde_json::to_value(&access)
-                .map_err(|error| RuntimeError::Config(error.to_string()))?,
-        );
-        let migrated = serde_saphyr::to_string(&document)
-            .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        let config = Self::from_yaml(&migrated)?;
-        Ok((config, report))
     }
 
     /// Select the profile used by a newly generated configuration.
@@ -11052,51 +10941,48 @@ surprise: true
     }
 
     #[test]
-    fn access_is_required_and_legacy_configuration_migrates_explicitly() {
+    fn access_is_required_and_removed_fields_are_rejected() {
         let active = RuntimeConfig::offline_template("state.redb");
         let mut document: Value = serde_saphyr::from_str(&active.to_yaml().expect("active YAML"))
             .expect("configuration value");
-        let root = document.as_object_mut().expect("configuration mapping");
-        root.get_mut("agent")
-            .and_then(Value::as_object_mut)
-            .expect("agent mapping")
-            .insert("tools".into(), json!(["echo", "task.list"]));
-        let policy = root
-            .get_mut("policy")
-            .and_then(Value::as_object_mut)
-            .expect("policy mapping");
-        policy.insert("allow_actions".into(), json!(["task.list"]));
-        policy.insert("approval_actions".into(), json!(["filesystem.write"]));
+        {
+            let root = document.as_object_mut().expect("configuration mapping");
+            root.get_mut("agent")
+                .and_then(Value::as_object_mut)
+                .expect("agent mapping")
+                .insert("tools".into(), json!(["echo", "task.list"]));
+            let policy = root
+                .get_mut("policy")
+                .and_then(Value::as_object_mut)
+                .expect("policy mapping");
+            policy.insert("allow_actions".into(), json!(["task.list"]));
+            policy.insert("approval_actions".into(), json!(["filesystem.write"]));
+        }
         let mixed = serde_saphyr::to_string(&document).expect("mixed YAML");
         assert!(
             RuntimeConfig::from_yaml(&mixed)
-                .expect_err("mixed configuration must fail")
+                .expect_err("removed fields must fail")
                 .to_string()
-                .contains("cannot be combined with access")
+                .contains("are not supported")
         );
-        document
-            .as_object_mut()
-            .expect("configuration mapping")
-            .remove("access");
-        let yaml = serde_saphyr::to_string(&document).expect("legacy YAML");
-        let error = RuntimeConfig::from_yaml(&yaml).expect_err("legacy must be rejected");
-        assert!(error.to_string().contains("config migrate"));
-
-        let (development, report) =
-            RuntimeConfig::migrate_legacy_yaml(&yaml, colossus_access::AccessProfile::Development)
-                .expect("development migration");
-        let access = development.access;
-        assert_eq!(access.profile, colossus_access::AccessProfile::Development);
-        assert!(access.tools.include.is_empty());
-        assert_eq!(access.actions.allow, ["task.list"]);
-        assert_eq!(access.actions.require_approval, ["filesystem.write"]);
-        assert!(report.live_tool_inheritance);
-
-        let (pinned, report) =
-            RuntimeConfig::migrate_legacy_yaml(&yaml, colossus_access::AccessProfile::Pinned)
-                .expect("pinned migration");
-        assert_eq!(pinned.access.tools.include, ["echo", "task.list"]);
-        assert!(!report.live_tool_inheritance);
+        {
+            let root = document.as_object_mut().expect("configuration mapping");
+            root.remove("access");
+            root.get_mut("agent")
+                .and_then(Value::as_object_mut)
+                .expect("agent mapping")
+                .remove("tools");
+            let policy = root
+                .get_mut("policy")
+                .and_then(Value::as_object_mut)
+                .expect("policy mapping");
+            policy.remove("allow_actions");
+            policy.remove("approval_actions");
+        }
+        let yaml = serde_saphyr::to_string(&document).expect("configuration YAML");
+        let error = RuntimeConfig::from_yaml(&yaml).expect_err("missing access must fail");
+        assert!(error.to_string().contains("access is required"));
+        assert!(!error.to_string().contains("migrate"));
     }
 
     #[test]

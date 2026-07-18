@@ -51,8 +51,8 @@ policy:
 ```
 
 `access` is required. The old `agent.tools`, `policy.allow_actions`, and
-`policy.approval_actions` fields are accepted only by the explicit migration reader and
-are rejected in active configuration.
+`policy.approval_actions` fields are no longer supported and are rejected by the strict
+configuration parser.
 
 ## Profile Matrix
 
@@ -63,7 +63,7 @@ are rejected in active configuration.
 | `allow_all` | All applicable trusted tools | All registered trusted actions allowed |
 | `pinned` | Only exact includes | Denied except `provider.echo`; exact action overrides opt in |
 
-`development` is the default for new configurations and migrations. It is designed to
+`development` is the default for new configurations. It is designed to
 let new safe reads appear without repeatedly editing a hard-coded catalog while keeping
 new mutation, execution, and external-network actions approval-gated.
 
@@ -232,28 +232,20 @@ metadata:
 This is how users gain safe access to newly shipped capabilities without changing a
 hard-coded list while compliance configurations remain stable.
 
-## Migration
+## Pre-1.0 Configuration Changes
 
-Active configurations without `access` fail with an actionable migration message even
-though `schemaVersion` remains `1`:
-
-```bash
-colossus --config .colossus/config.yaml config migrate \
-  --output .colossus/config.migrated.yaml
-```
-
-The default migration selects `development`, transfers legacy allow and approval action
-choices into overrides, and replaces the old exact tool list with live inheritance. To
-retain the exact catalog:
+Colossus does not provide a configuration migration command before 1.0. When the strict
+configuration shape changes, update the YAML directly or generate a fresh configuration
+at a separate path:
 
 ```bash
-colossus --config .colossus/config.yaml config migrate \
-  --output .colossus/config.pinned.yaml \
-  --access-profile pinned
+colossus --config ./config.new.yaml config init --access-profile development
 ```
 
-Migration refuses to overwrite either the source or an existing output. It does not
-open canonical state, resolve credentials, or migrate the schema version.
+Copy provider, storage, policy, sandbox, and integration settings deliberately, retaining
+credential references rather than values. To preserve an exact tool catalog, select
+`pinned` and populate both the exact tool includes and action overrides explicitly.
+`config init` refuses to overwrite an existing file.
 
 ## Diagnostics
 
