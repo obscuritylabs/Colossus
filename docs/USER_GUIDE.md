@@ -76,10 +76,13 @@ Useful commands include:
 /exit
 ```
 
-`/resume` opens a focused session overlay. Enter a listed number or exact ID, or press
-Esc/submit a blank answer to cancel. The durable transcript remains scrollable above a
-pinned composer and stable width-aware footer; narrower terminals hide optional footer
-fields instead of moving or overwriting input.
+`/resume` opens a single responsive session picker with the title, message count, recent
+update time, short ID, and latest user-message preview for each non-empty session. Use
+Up/Down (or Tab/Shift-Tab) and Enter to select, PageUp/PageDown to move faster, or Esc to
+cancel. `/resume SESSION_ID` remains available for exact-ID selection. The picker scrolls
+at the 40x12 minimum instead of nesting a session table inside another window. The durable
+transcript remains scrollable above a pinned composer and stable width-aware footer;
+narrower terminals hide optional footer fields instead of moving or overwriting input.
 
 The TUI displays fish-style inline type-ahead from prior prompts, slash commands, theme
 names, and installed `@skills`. Suggestions use each theme's low-emphasis color plus dim

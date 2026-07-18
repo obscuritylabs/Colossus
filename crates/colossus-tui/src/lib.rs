@@ -249,6 +249,8 @@ pub struct InteractivePrompt {
     pub document: PresentationDocument,
     /// Optional exact choices.
     pub choices: Vec<String>,
+    /// Choice highlighted when the prompt opens; `None` preserves blank-submit cancellation.
+    pub initial_choice: Option<usize>,
     /// Whether an answer outside the exact choices is allowed.
     pub allow_free_form: bool,
     /// One-use response channel. Dropping it fails closed.
@@ -453,6 +455,7 @@ enum Overlay {
     Prompt {
         request: InteractivePrompt,
         input: String,
+        selected: Option<usize>,
     },
     HistorySearch {
         query: String,
@@ -948,13 +951,26 @@ fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
         return;
     };
     match overlay {
-        Overlay::Prompt { input, .. } => match key.code {
+        Overlay::Prompt {
+            request,
+            input,
+            selected,
+        } => match key.code {
             KeyCode::Enter => {
                 let overlay = state.overlay.take();
-                if let Some(Overlay::Prompt { request, input }) = overlay {
+                if let Some(Overlay::Prompt {
+                    request,
+                    input,
+                    selected,
+                }) = overlay
+                {
                     let answer = input.trim();
                     let response = if answer.is_empty() {
-                        PromptResponse::Cancelled
+                        selected
+                            .and_then(|index| request.choices.get(index))
+                            .cloned()
+                            .map(PromptResponse::Answer)
+                            .unwrap_or(PromptResponse::Cancelled)
                     } else if let Ok(index) = answer.parse::<usize>() {
                         request
                             .choices
@@ -971,6 +987,35 @@ fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
                     };
                     let _ = request.response.send(response);
                 }
+            }
+            KeyCode::Up | KeyCode::BackTab if !request.choices.is_empty() => {
+                let current = selected.unwrap_or(0);
+                *selected = Some(if current == 0 {
+                    request.choices.len() - 1
+                } else {
+                    current - 1
+                });
+            }
+            KeyCode::Down | KeyCode::Tab if !request.choices.is_empty() => {
+                *selected =
+                    Some(selected.map_or(0, |current| (current + 1) % request.choices.len()));
+            }
+            KeyCode::Home if !request.choices.is_empty() => {
+                *selected = Some(0);
+            }
+            KeyCode::End if !request.choices.is_empty() => {
+                *selected = Some(request.choices.len() - 1);
+            }
+            KeyCode::PageUp if !request.choices.is_empty() => {
+                *selected = Some(selected.unwrap_or(0).saturating_sub(5));
+            }
+            KeyCode::PageDown if !request.choices.is_empty() => {
+                *selected = Some(
+                    selected
+                        .unwrap_or(0)
+                        .saturating_add(5)
+                        .min(request.choices.len() - 1),
+                );
             }
             KeyCode::Backspace => {
                 input.pop();
@@ -1205,9 +1250,13 @@ fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             if state.overlay.is_some() {
                 let _ = request.response.send(PromptResponse::Cancelled);
             } else {
+                let selected = request
+                    .initial_choice
+                    .filter(|index| *index < request.choices.len());
                 state.overlay = Some(Overlay::Prompt {
                     request,
                     input: String::new(),
+                    selected,
                 });
             }
         }
@@ -1827,35 +1876,43 @@ fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
 }
 
 fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
-    let overlay_area = centered_rect(80, 60, area);
+    let overlay_area = match state.overlay.as_ref() {
+        Some(Overlay::Prompt { request, .. })
+            if request.document.is_empty() && !request.choices.is_empty() =>
+        {
+            picker_rect(area, &request.choices)
+        }
+        _ => centered_rect(80, 60, area),
+    };
     frame.render_widget(Clear, overlay_area);
-    let palette = TerminalPalette::for_preferences(&state.preferences);
     let (title, mut lines) = match state.overlay.as_ref() {
-        Some(Overlay::Prompt { request, input }) => {
-            let mut lines = StyledDocumentRenderer::new(
-                state.preferences.clone(),
-                usize::from(overlay_area.width.saturating_sub(4)),
-            )
-            .render(&request.document)
-            .into_iter()
-            .map(|line| {
-                Line::from(
-                    line.spans
-                        .into_iter()
-                        .map(|span| Span::styled(span.content, ratatui_style(span.style)))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>();
-            for (index, choice) in request.choices.iter().enumerate() {
-                lines.push(Line::from(format!("{}. {choice}", index + 1)));
-            }
-            lines.push(Line::default());
-            lines.push(Line::from(vec![
-                Span::styled("> ", ratatui_style(palette.warning_style())),
-                Span::raw(input.clone()),
-            ]));
-            (request.title.clone(), lines)
+        Some(Overlay::Prompt {
+            request,
+            input,
+            selected,
+        }) => {
+            let inner_width = usize::from(overlay_area.width.saturating_sub(2)).max(1);
+            let inner_height = usize::from(overlay_area.height.saturating_sub(2)).max(1);
+            let lines = prompt_lines(
+                request,
+                input,
+                *selected,
+                &state.preferences,
+                inner_width,
+                inner_height,
+            );
+            let title = selected.map_or_else(
+                || request.title.clone(),
+                |selected| {
+                    format!(
+                        "{} · {}/{}",
+                        request.title,
+                        selected + 1,
+                        request.choices.len()
+                    )
+                },
+            );
+            (title, lines)
         }
         Some(Overlay::HistorySearch { query }) => (
             "History search".into(),
@@ -1898,6 +1955,173 @@ fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
             .wrap(Wrap { trim: false }),
         overlay_area,
     );
+}
+
+fn picker_rect(area: Rect, choices: &[String]) -> Rect {
+    let width = if area.width <= 60 {
+        area.width
+    } else {
+        area.width.saturating_sub(8).min(96)
+    };
+    let choice_rows = choices
+        .iter()
+        .map(|choice| choice.lines().count().max(1))
+        .sum::<usize>();
+    let desired_height = u16::try_from(choice_rows.min(14).saturating_add(3))
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(width) / 2),
+        area.y
+            .saturating_add(area.height.saturating_sub(desired_height) / 2),
+        width,
+        desired_height,
+    )
+}
+
+fn prompt_lines(
+    request: &InteractivePrompt,
+    input: &str,
+    selected: Option<usize>,
+    preferences: &TerminalPreferences,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let palette = TerminalPalette::for_preferences(preferences);
+    let document = StyledDocumentRenderer::new(preferences.clone(), width)
+        .render(&request.document)
+        .into_iter()
+        .map(|line| {
+            Line::from(
+                line.spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content, ratatui_style(span.style)))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let choice_rows = request
+        .choices
+        .iter()
+        .map(|choice| choice.lines().count().max(1))
+        .sum::<usize>();
+    let footer_rows = usize::from(height > 0);
+    let minimum_document_rows = if document.is_empty() {
+        0
+    } else {
+        document.len().min(3)
+    };
+    let choice_budget = choice_rows.min(
+        height
+            .saturating_sub(footer_rows)
+            .saturating_sub(minimum_document_rows),
+    );
+    let document_budget = height
+        .saturating_sub(footer_rows)
+        .saturating_sub(choice_budget);
+    let mut lines = document
+        .into_iter()
+        .take(document_budget)
+        .collect::<Vec<_>>();
+
+    if choice_budget > 0 {
+        let focus = selected
+            .unwrap_or(0)
+            .min(request.choices.len().saturating_sub(1));
+        let (start, end) = visible_choice_range(&request.choices, focus, choice_budget);
+        let mut remaining = choice_budget;
+        for (index, choice) in request
+            .choices
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(end.saturating_sub(start))
+        {
+            let is_selected = selected == Some(index);
+            let marker = if is_selected { "› " } else { "  " };
+            let prefix = format!("{marker}{}. ", index + 1);
+            let continuation = " ".repeat(prefix.chars().count());
+            for (line_index, content) in choice.lines().enumerate() {
+                if remaining == 0 {
+                    break;
+                }
+                let prefix = if line_index == 0 {
+                    prefix.as_str()
+                } else {
+                    continuation.as_str()
+                };
+                let available = width.saturating_sub(UnicodeWidthStr::width(prefix));
+                let base_style = if line_index == 0 {
+                    palette.assistant_style()
+                } else {
+                    palette.meta_style()
+                };
+                let style = if is_selected {
+                    ratatui_style(base_style)
+                        .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::REVERSED)
+                } else {
+                    ratatui_style(base_style)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{prefix}{}", truncate_width(content, available)),
+                    style,
+                )));
+                remaining -= 1;
+            }
+        }
+    }
+
+    if footer_rows > 0 {
+        let hint = if !input.is_empty() {
+            format!("Choice: {input} · Enter submit · Esc cancel")
+        } else if selected.is_some() && !request.choices.is_empty() {
+            "↑/↓ move · Enter select · Esc cancel".into()
+        } else if !request.choices.is_empty() {
+            "↑/↓ move · type a number · Esc cancel".into()
+        } else if request.allow_free_form {
+            "Type an answer · Enter submit · Esc cancel".into()
+        } else {
+            "Enter submit · Esc cancel".into()
+        };
+        lines.push(Line::from(Span::styled(
+            truncate_width(&hint, width),
+            ratatui_style(palette.warning_style()),
+        )));
+    }
+    lines
+}
+
+fn visible_choice_range(choices: &[String], selected: usize, row_budget: usize) -> (usize, usize) {
+    if choices.is_empty() || row_budget == 0 {
+        return (0, 0);
+    }
+    let selected = selected.min(choices.len() - 1);
+    let row_count = |choice: &String| choice.lines().count().max(1);
+    let mut start = 0;
+    let mut used = choices[..=selected].iter().map(row_count).sum::<usize>();
+    while start < selected && used > row_budget {
+        used = used.saturating_sub(row_count(&choices[start]));
+        start += 1;
+    }
+    let mut end = selected + 1;
+    while end < choices.len() {
+        let next = row_count(&choices[end]);
+        if used.saturating_add(next) > row_budget {
+            break;
+        }
+        used += next;
+        end += 1;
+    }
+    while start > 0 {
+        let previous = row_count(&choices[start - 1]);
+        if used.saturating_add(previous) > row_budget {
+            break;
+        }
+        start -= 1;
+        used += previous;
+    }
+    (start, end)
 }
 
 fn transcript_from_messages(messages: Vec<SessionMessage>) -> Vec<TranscriptEntry> {
@@ -2631,6 +2855,7 @@ mod tests {
                     "Allow?".into(),
                 )),
                 choices: vec!["allow".into(), "deny".into()],
+                initial_choice: None,
                 allow_free_form: false,
                 response,
             }),
@@ -2639,6 +2864,113 @@ mod tests {
         assert_eq!(received.try_recv(), Ok(PromptResponse::Cancelled));
         assert_eq!(state.draft(), "draft stays here");
         assert!(state.overlay.is_none());
+    }
+
+    #[test]
+    fn prompt_keyboard_selection_returns_the_highlighted_choice() {
+        let mut state = TuiState::from_snapshot(snapshot());
+        let (response, mut received) = oneshot::channel();
+        handle_host_event(
+            &mut state,
+            HostEvent::Prompt(InteractivePrompt {
+                id: "session-picker".into(),
+                title: "Resume session".into(),
+                document: PresentationDocument::new(),
+                choices: vec![
+                    "First session\nFirst preview".into(),
+                    "Second session\nSecond preview".into(),
+                ],
+                initial_choice: Some(0),
+                allow_free_form: false,
+                response,
+            }),
+        );
+        handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        handle_overlay_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(
+            received.try_recv(),
+            Ok(PromptResponse::Answer(
+                "Second session\nSecond preview".into()
+            ))
+        );
+        assert!(state.overlay.is_none());
+    }
+
+    #[test]
+    fn blank_approval_submission_still_fails_closed() {
+        let mut state = TuiState::from_snapshot(snapshot());
+        let (response, mut received) = oneshot::channel();
+        handle_host_event(
+            &mut state,
+            HostEvent::Prompt(InteractivePrompt {
+                id: "approval".into(),
+                title: "Approval".into(),
+                document: PresentationDocument::from_block(PresentationBlock::Text(
+                    "Allow?".into(),
+                )),
+                choices: vec!["Allow once".into(), "Deny".into()],
+                initial_choice: None,
+                allow_free_form: false,
+                response,
+            }),
+        );
+        handle_overlay_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(received.try_recv(), Ok(PromptResponse::Cancelled));
+    }
+
+    #[test]
+    fn resume_picker_is_responsive_and_keeps_the_selected_preview_visible() {
+        for (width, height) in [(40, 12), (80, 24)] {
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            let mut state = TuiState::from_snapshot(snapshot());
+            let choices = (0..10)
+                .map(|index| {
+                    let message_count = index + 1;
+                    format!(
+                        "Session {index} · {message_count} msgs · 2026-07-18 01:4{index} · 019f72e{index}\nPrior user message {index}"
+                    )
+                })
+                .collect::<Vec<_>>();
+            let (response, _received) = oneshot::channel();
+            handle_host_event(
+                &mut state,
+                HostEvent::Prompt(InteractivePrompt {
+                    id: "session-picker".into(),
+                    title: "Resume session".into(),
+                    document: PresentationDocument::new(),
+                    choices,
+                    initial_choice: Some(7),
+                    allow_free_form: false,
+                    response,
+                }),
+            );
+            terminal
+                .draw(|frame| render(frame, &mut state))
+                .expect("draw resume picker");
+            let rendered = terminal.backend().to_string();
+            assert!(
+                rendered.contains("Resume session · 8/10"),
+                "{width}x{height}: {rendered}"
+            );
+            assert!(
+                rendered.contains("Prior user message 7"),
+                "{width}x{height}: {rendered}"
+            );
+            assert!(
+                rendered.contains("Enter select"),
+                "{width}x{height}: {rendered}"
+            );
+            assert!(!rendered.contains("Message count"), "{rendered}");
+            assert!(!rendered.contains("Created at"), "{rendered}");
+            assert!(!rendered.contains("Prior user message 0"), "{rendered}");
+        }
     }
 
     #[test]
