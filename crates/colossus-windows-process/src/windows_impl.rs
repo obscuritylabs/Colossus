@@ -574,16 +574,16 @@ pub(super) fn spawn(request: &SpawnRequest) -> Result<SandboxedChild, WindowsPro
     drop(child_stdin);
     drop(child_stdout);
     drop(child_stderr);
-    Ok(SandboxedChild {
-        pid: process_info.dwProcessId,
-        stdin: Some(parent_stdin.into_file()),
-        stdout: Some(parent_stdout.into_file()),
-        stderr: Some(parent_stderr.into_file()),
+    Ok(SandboxedChild::from_parts(
+        process_info.dwProcessId,
+        parent_stdin.into_file(),
+        parent_stdout.into_file(),
+        parent_stderr.into_file(),
         process,
         job,
         completion_port,
-        _network: network,
-    })
+        network,
+    ))
 }
 
 pub(super) fn wait_timeout(

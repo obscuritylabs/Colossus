@@ -73,6 +73,29 @@ pub enum WindowsProcessError {
 }
 
 impl SandboxedChild {
+    #[cfg(windows)]
+    pub(crate) fn from_parts(
+        pid: u32,
+        stdin: File,
+        stdout: File,
+        stderr: File,
+        process: crate::windows_impl::OwnedHandle,
+        job: crate::windows_impl::OwnedHandle,
+        completion_port: crate::windows_impl::OwnedHandle,
+        network: Option<crate::windows_impl::NetworkGuard>,
+    ) -> Self {
+        Self {
+            pid,
+            stdin: Some(stdin),
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            process,
+            job,
+            completion_port,
+            _network: network,
+        }
+    }
+
     /// Wait for the process for at most `timeout`; `None` means it remains active.
     pub fn wait_timeout(&self, timeout: Duration) -> Result<Option<u32>, WindowsProcessError> {
         #[cfg(windows)]
