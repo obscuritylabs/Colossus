@@ -72,6 +72,17 @@ not expand configured policy or sandbox grants.
 
 ## Development
 
+Use focused crate tests while editing, then run the fast workspace tier:
+
+```bash
+cargo test -p colossus-runtime --lib
+cargo test-fast
+```
+
+For cold or cross-worktree compilation, install `sccache` and prefix Cargo commands with
+`./scripts/cargo-sccache`. See [Contributing](docs/CONTRIBUTING.md) for cache behavior,
+test tiers, and examples.
+
 Run the authoritative Rust gates from the repository root:
 
 ```bash
