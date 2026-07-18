@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly zensical_version="0.0.50"
+readonly zensical_digest="sha256:a67f689607908b47b9979ff8213906477f78826e9f8565f012e06071f883e973"
+readonly zensical_image="zensical/zensical:0.0.50@sha256:a67f689607908b47b9979ff8213906477f78826e9f8565f012e06071f883e973"
+readonly zensical_image_from_components="zensical/zensical:${zensical_version}@${zensical_digest}"
+readonly site_dir="${repository_root}/site"
+
+if [[ "${zensical_image}" != "${zensical_image_from_components}" ]]; then
+  echo "Zensical image version and digest declarations disagree." >&2
+  exit 1
+fi
+
+usage() {
+  echo "usage: scripts/docs-site <build|serve>" >&2
+}
+
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker is required to build or serve the documentation." >&2
+    exit 1
+  fi
+}
+
+verify_site() {
+  test -s "${site_dir}/index.html"
+  test -s "${site_dir}/404.html"
+  test -s "${site_dir}/404/index.html"
+  test -s "${site_dir}/search.json"
+  test -s "${site_dir}/sitemap.xml"
+  test -s "${site_dir}/assets/vendor/mermaid-11.15.0.min.js"
+
+  if ! grep -Fq '<meta name="generator" content="zensical-0.0.50">' \
+    "${site_dir}/index.html"; then
+    echo "homepage is not the generated Zensical product page" >&2
+    exit 1
+  fi
+  if grep -Fq 'noindex, nofollow' "${site_dir}/index.html"; then
+    echo "homepage was overwritten by a compatibility redirect" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'assets/vendor/mermaid-11.15.0.min.js' \
+    "${site_dir}/index.html"; then
+    echo "homepage does not load the pinned local Mermaid runtime" >&2
+    exit 1
+  fi
+  if grep -Fq '"location":"internal/documentation' "${site_dir}/search.json" ||
+    grep -Fq '/internal/documentation/' "${site_dir}/sitemap.xml" ||
+    grep -Fq 'Colossus Product Requirements And Reconstruction Specification' \
+      "${site_dir}/search.json" ||
+    grep -Fq 'Colossus Product Requirements And Reconstruction Specification' \
+      "${site_dir}/sitemap.xml"; then
+    echo "repository-only documentation leaked into published artifacts" >&2
+    exit 1
+  fi
+
+  while IFS=$'\t' read -r legacy_path _target_path _fragment_map _extra_field ||
+    [[ -n "${legacy_path}" ]]; do
+    if [[ -z "${legacy_path}" || "${legacy_path}" == \#* ]]; then
+      continue
+    fi
+    test -s "${site_dir}/${legacy_path#/}"
+  done < "${repository_root}/documentation/legacy-routes.tsv"
+}
+
+if (( $# != 1 )); then
+  usage
+  exit 2
+fi
+
+require_docker
+
+case "$1" in
+  build)
+    mkdir -p "${site_dir}"
+    docker_arguments=(
+      "run" "--rm"
+      "--env" "HOST_UID=$(id -u)"
+      "--env" "HOST_GID=$(id -g)"
+      "--volume" "${repository_root}:/source:ro"
+      "--volume" "${site_dir}:/output"
+      "--entrypoint" "/bin/sh"
+    )
+    docker_arguments+=(
+      "${zensical_image}"
+      "-c"
+      'set -eu
+       mkdir -p /work
+       cp -R /source/docs /work/docs
+       cp /source/zensical.toml /work/zensical.toml
+       cd /work
+       zensical build --clean --strict
+       find /output -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+       cp -R site/. /output/
+       chown -R "${HOST_UID}:${HOST_GID}" /output 2>/dev/null || true'
+    )
+    docker "${docker_arguments[@]}"
+    "${repository_root}/scripts/generate-doc-redirects"
+    verify_site
+    ;;
+  serve)
+    readonly docs_port="${DOCS_PORT:-8000}"
+    docker_arguments=("run" "--rm" "--interactive" "--tty")
+    if [[ "$(uname -s)" == "Linux" ]]; then
+      docker_arguments+=("--user" "$(id -u):$(id -g)")
+    fi
+    docker_arguments+=(
+      "--publish" "${docs_port}:8000"
+      "--volume" "${repository_root}:/docs"
+      "--tmpfs" "/docs/.cache:rw,mode=1777"
+      "${zensical_image}"
+      "serve" "--dev-addr" "0.0.0.0:8000"
+    )
+    exec docker "${docker_arguments[@]}"
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

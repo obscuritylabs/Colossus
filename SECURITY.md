@@ -2,8 +2,8 @@
 
 ## Supported Versions
 
-Colossus is pre-1.0. Security fixes are applied to the active development line unless a
-release branch is explicitly documented in `CHANGELOG.md`.
+Security fixes are applied to the active development line unless a release branch is
+explicitly documented in `CHANGELOG.md`.
 
 ## Reporting a Vulnerability
 
@@ -31,4 +31,7 @@ Security-sensitive areas include:
 - Skill loading and override behavior.
 - Model provider configuration and credential handling.
 
-See [docs/SECURITY.md](docs/SECURITY.md) for the implementation security model.
+See the
+[security architecture](docs/develop/security-architecture.md) for the implementation
+security model and the
+[operator security guides](docs/admin/access-and-approvals.md) for deployment controls.

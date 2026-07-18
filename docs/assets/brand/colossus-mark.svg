@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Colossus monogram</title>
+  <defs>
+    <linearGradient id="ocean" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="#071A2F"/>
+  <path d="M47.8 19.1A20 20 0 1 0 48 44.7l-8.2-6.1a10 10 0 1 1-.1-13.3l8.1-6.2Z" fill="url(#ocean)"/>
+  <circle cx="31.5" cy="32" r="4.5" fill="#E6F8FF"/>
+</svg>

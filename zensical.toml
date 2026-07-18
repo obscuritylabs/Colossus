@@ -1,0 +1,158 @@
+[project]
+site_name = "Colossus"
+site_url = "https://obscuritylabs.github.io/Colossus/"
+site_description = "Professional documentation for using, extending, administering, and developing the Colossus agent runtime."
+site_author = "Obscurity Labs"
+copyright = """Copyright &copy; 2026 Obscurity Labs · <a href="https://github.com/obscuritylabs/Colossus/releases">Releases</a> · <a href="https://github.com/obscuritylabs/Colossus/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/obscuritylabs/Colossus/blob/main/SECURITY.md">Report a vulnerability</a> · <a href="https://github.com/obscuritylabs/Colossus/blob/main/LICENSE">License</a> · <a href="https://github.com/obscuritylabs/Colossus">Repository</a>"""
+docs_dir = "docs"
+site_dir = "site"
+use_directory_urls = true
+not_in_nav = "404.md"
+repo_url = "https://github.com/obscuritylabs/Colossus"
+repo_name = "obscuritylabs/Colossus"
+edit_uri = "https://github.com/obscuritylabs/Colossus/edit/main/docs/"
+extra_css = ["stylesheets/extra.css"]
+extra_javascript = ["assets/vendor/mermaid-11.15.0.min.js"]
+nav = [
+  { "Home" = "index.md" },
+  { "Get started" = [
+    { "Overview" = "get-started/index.md" },
+    { "Install" = "get-started/install.md" },
+    { "Five-minute quickstart" = "get-started/quickstart.md" },
+    { "Connect a model" = "get-started/connect-model.md" },
+    { "First repository task" = "get-started/first-repository-task.md" },
+    { "Core concepts" = "get-started/core-concepts.md" },
+    { "Upgrade and compatibility" = "get-started/upgrade-compatibility.md" },
+  ] },
+  { "Use Colossus" = [
+    { "Overview" = "use/index.md" },
+    { "Agent runs" = "use/agent-runs.md" },
+    { "Terminal UI" = "use/terminal-ui.md" },
+    { "Sessions and context" = "use/sessions-context.md" },
+    { "Tasks, decisions, and plans" = "use/tasks-decisions-plans.md" },
+    { "Goals and subagents" = "use/goals-subagents.md" },
+    { "Memories" = "use/memories.md" },
+    { "Research and web search" = "use/research-search.md" },
+  ] },
+  { "Automate & extend" = [
+    { "Overview" = "extend/index.md" },
+    { "First workflow" = "extend/workflows/first-workflow.md" },
+    { "Workflow authoring" = "extend/workflows/authoring.md" },
+    { "Triggers and recovery" = "extend/workflows/triggers-recovery.md" },
+    { "Skills" = "extend/skills.md" },
+    { "Integrations" = "extend/integrations.md" },
+    { "MCP" = "extend/mcp.md" },
+    { "Packs" = "extend/packs.md" },
+    { "Collections and registry" = "extend/collections-registry.md" },
+  ] },
+  { "Administer & secure" = [
+    { "Overview" = "admin/index.md" },
+    { "Configuration recipes" = "admin/configuration.md" },
+    { "Providers and routing" = "admin/providers-routing.md" },
+    { "Access and approvals" = "admin/access-and-approvals.md" },
+    { "Policy and OPA" = "admin/policy-opa.md" },
+    { "Sandbox" = "admin/sandbox.md" },
+    { "Storage and worker" = "admin/storage-worker.md" },
+    { "Audit, telemetry, and recovery" = "admin/audit-telemetry-recovery.md" },
+    { "Offline operation" = "admin/offline-airgap.md" },
+    { "Troubleshooting" = "admin/troubleshooting.md" },
+  ] },
+  { "Reference" = [
+    { "Overview" = "reference/index.md" },
+    { "CLI" = "reference/cli.md" },
+    { "TUI commands and keys" = "reference/tui.md" },
+    { "Configuration fields" = "reference/configuration.md" },
+    { "Tools and action classes" = "reference/tools-actions.md" },
+    { "Workflow schema" = "reference/workflow-schema.md" },
+    { "Extension manifests" = "reference/extension-formats.md" },
+    { "Bundle format" = "reference/bundle-format.md" },
+    { "Output, environment, and limits" = "reference/output-environment-limits.md" },
+    { "Glossary" = "reference/glossary.md" },
+  ] },
+  { "Develop" = [
+    { "Overview" = "develop/index.md" },
+    { "Contributing" = "develop/contributing.md" },
+    { "Source setup and test tiers" = "develop/setup-testing.md" },
+    { "Architecture overview" = "develop/architecture.md" },
+    { "Rust crate structure" = "develop/crate-structure.md" },
+    { "Runtime and ports" = "develop/runtime-ports.md" },
+    { "State and recovery" = "develop/state-recovery.md" },
+    { "Security architecture" = "develop/security-architecture.md" },
+    { "Extensions and presentation" = "develop/extensions-presentation.md" },
+    { "Documentation authoring" = "develop/documentation.md" },
+  ] },
+]
+
+[project.validation]
+invalid_links = true
+invalid_link_anchors = true
+
+[project.theme]
+variant = "modern"
+language = "en"
+font = false
+logo = "assets/brand/colossus-mark.svg"
+favicon = "assets/brand/colossus-mark.svg"
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "content.code.copy",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.progress",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.tabs.sticky",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+edit = "lucide/pencil"
+view = "lucide/file-code"
+
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.def_list]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions.tables]
+[project.markdown_extensions.toc]
+permalink = true
+
+[project.markdown_extensions.pymdownx.details]
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+line_spans = "__span"
+pygments_lang_class = true
+[project.markdown_extensions.pymdownx.inlinehilite]
+[project.markdown_extensions.pymdownx.keys]
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+[project.markdown_extensions.pymdownx.tasklist]
+custom_checkbox = true

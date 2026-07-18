@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly manifest="${1:-"${repository_root}/documentation/legacy-routes.tsv"}"
+readonly site_dir="${2:-"${repository_root}/site"}"
+readonly canonical_root="https://obscuritylabs.github.io/Colossus"
+readonly published_root="/Colossus"
+
+if [[ ! -f "${manifest}" ]]; then
+  echo "legacy route manifest not found: ${manifest}" >&2
+  exit 1
+fi
+
+if [[ ! -d "${site_dir}" ]]; then
+  echo "site directory not found: ${site_dir}" >&2
+  exit 1
+fi
+
+seen_routes=$'\n'
+generated_count=0
+line_number=0
+
+while IFS=$'\t' read -r legacy_path target_path fragment_map extra_field ||
+  [[ -n "${legacy_path}${target_path}${fragment_map}${extra_field}" ]]; do
+  line_number=$((line_number + 1))
+  legacy_path="${legacy_path%$'\r'}"
+  target_path="${target_path%$'\r'}"
+  fragment_map="${fragment_map%$'\r'}"
+  extra_field="${extra_field%$'\r'}"
+
+  if [[ -z "${legacy_path}" || "${legacy_path}" == \#* ]]; then
+    continue
+  fi
+
+  if [[ -n "${extra_field}" ]]; then
+    echo "${manifest}:${line_number}: expected at most three tab-separated fields" >&2
+    exit 1
+  fi
+
+  if [[ ! "${legacy_path}" =~ ^/[A-Z][A-Z0-9_]*\.html$ ]]; then
+    echo "${manifest}:${line_number}: invalid legacy path: ${legacy_path}" >&2
+    exit 1
+  fi
+
+  if [[ ! "${target_path}" =~ ^/([a-z0-9-]+/)*$ ]]; then
+    echo "${manifest}:${line_number}: target is not a clean directory URL: ${target_path}" >&2
+    exit 1
+  fi
+
+  if [[ "${seen_routes}" == *$'\n'"${legacy_path}"$'\n'* ]]; then
+    echo "${manifest}:${line_number}: duplicate legacy path: ${legacy_path}" >&2
+    exit 1
+  fi
+  seen_routes+="${legacy_path}"$'\n'
+
+  fragment_entries=""
+  if [[ -n "${fragment_map}" ]]; then
+    IFS=',' read -r -a mappings <<< "${fragment_map}"
+    for mapping in "${mappings[@]}"; do
+      if [[ "${mapping}" != *=* ]]; then
+        echo "${manifest}:${line_number}: invalid fragment mapping: ${mapping}" >&2
+        exit 1
+      fi
+      old_fragment="${mapping%%=*}"
+      new_fragment="${mapping#*=}"
+      if [[ ! "${old_fragment}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] ||
+        [[ ! "${new_fragment}" =~ ^[a-z0-9_-]*$ ]]; then
+        echo "${manifest}:${line_number}: invalid fragment mapping: ${mapping}" >&2
+        exit 1
+      fi
+      fragment_entries+="\"${old_fragment}\":\"${new_fragment}\","
+    done
+  fi
+
+  canonical_url="${canonical_root}${target_path}"
+  published_url="${published_root}${target_path}"
+  output_path="${site_dir}/${legacy_path#/}"
+
+  {
+    printf '%s\n' '<!doctype html>'
+    printf '%s\n' '<html lang="en">'
+    printf '%s\n' '<head>'
+    printf '%s\n' '  <meta charset="utf-8">'
+    printf '%s\n' '  <meta name="viewport" content="width=device-width, initial-scale=1">'
+    printf '%s\n' '  <meta name="robots" content="noindex, nofollow">'
+    printf '  <link rel="canonical" href="%s">\n' "${canonical_url}"
+    printf '  <meta http-equiv="refresh" content="0; url=%s">\n' "${published_url}"
+    printf '%s\n' '  <title>Colossus documentation moved</title>'
+    printf '%s\n' '  <script>'
+    printf '%s\n' '    (() => {'
+    printf '      const fragments = {%s};\n' "${fragment_entries}"
+    printf '%s\n' '      const source = window.location.hash.slice(1);'
+    printf '%s\n' '      const mapped = Object.prototype.hasOwnProperty.call(fragments, source)'
+    printf '%s\n' '        ? fragments[source]'
+    printf '%s\n' '        : source;'
+    printf '      const destination = "%s" + (mapped ? "#" + mapped : "");\n' "${published_url}"
+    printf '%s\n' '      window.location.replace(destination);'
+    printf '%s\n' '    })();'
+    printf '%s\n' '  </script>'
+    printf '%s\n' '</head>'
+    printf '%s\n' '<body>'
+    printf '  <main><p>This documentation moved to <a href="%s">%s</a>.</p></main>\n' \
+      "${published_url}" "${published_url}"
+    printf '%s\n' '</body>'
+    printf '%s\n' '</html>'
+  } > "${output_path}"
+
+  generated_count=$((generated_count + 1))
+done < "${manifest}"
+
+if (( generated_count == 0 )); then
+  echo "legacy route manifest contains no redirects: ${manifest}" >&2
+  exit 1
+fi
+
+echo "generated ${generated_count} legacy documentation redirects"

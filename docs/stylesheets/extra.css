@@ -1,0 +1,215 @@
+:root {
+  --colossus-navy-950: #061526;
+  --colossus-navy-900: #0a2038;
+  --colossus-blue-700: #1d4ed8;
+  --colossus-blue-600: #2563eb;
+  --colossus-cyan-400: #22d3ee;
+  --colossus-sky-300: #7dd3fc;
+  --colossus-paper: #f7fbff;
+  --colossus-line: #c8d8e8;
+}
+
+:root > *,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--colossus-navy-900);
+  --md-primary-fg-color--light: #17446d;
+  --md-primary-fg-color--dark: var(--colossus-navy-950);
+  --md-accent-fg-color: var(--colossus-blue-700);
+  --md-typeset-a-color: #1556b8;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 210;
+  --md-primary-fg-color: var(--colossus-sky-300);
+  --md-primary-fg-color--light: #bae6fd;
+  --md-primary-fg-color--dark: #38bdf8;
+  --md-accent-fg-color: var(--colossus-cyan-400);
+  --md-typeset-a-color: var(--colossus-sky-300);
+  --md-default-bg-color: var(--colossus-navy-950);
+  --md-default-fg-color: #e6f3ff;
+  --md-default-fg-color--light: #c2d6e8;
+  --md-code-bg-color: #0b223a;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 3px solid var(--colossus-cyan-400);
+  outline-offset: 3px;
+}
+
+.md-header,
+.md-tabs {
+  background: var(--colossus-navy-950);
+  color: #eaf7ff;
+}
+
+.md-header__button,
+.md-header__title,
+.md-tabs__link {
+  color: inherit;
+}
+
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.75rem;
+  width: 1.75rem;
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  letter-spacing: -0.018em;
+}
+
+.md-typeset h1 {
+  font-weight: 760;
+}
+
+.md-typeset code,
+.md-typeset kbd,
+.md-typeset pre {
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
+}
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--colossus-line);
+  border-radius: 0.5rem;
+  display: table;
+  overflow: hidden;
+  width: 100%;
+}
+
+.md-typeset table:not([class]) th {
+  background: color-mix(in srgb, var(--colossus-navy-900) 8%, transparent);
+}
+
+.md-typeset .hero {
+  background:
+    radial-gradient(circle at 85% 12%, rgb(34 211 238 / 18%), transparent 28rem),
+    linear-gradient(135deg, var(--colossus-navy-950), #0c2b4d);
+  border: 1px solid rgb(125 211 252 / 28%);
+  border-radius: 1rem;
+  color: #eaf7ff;
+  margin: 0 0 2rem;
+  overflow: hidden;
+  padding: clamp(1.5rem, 4vw, 3.5rem);
+}
+
+.md-typeset .hero h1 {
+  color: #fff;
+  font-size: clamp(2.25rem, 6vw, 4.25rem);
+  line-height: 1;
+  margin: 0 0 1rem;
+  max-width: 13ch;
+}
+
+.md-typeset .hero p {
+  color: #c9e7f7;
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  max-width: 44rem;
+}
+
+.md-typeset .hero .md-button {
+  border-color: var(--colossus-sky-300);
+  color: #fff;
+  margin: 0.4rem 0.45rem 0 0;
+}
+
+.md-typeset .hero .md-button--primary {
+  background: var(--colossus-sky-300);
+  color: var(--colossus-navy-950);
+}
+
+.md-typeset .capability-grid,
+.md-typeset .path-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  margin-block: 1.25rem 2rem;
+}
+
+.md-typeset .capability-card,
+.md-typeset .path-card {
+  border: 1px solid color-mix(in srgb, var(--md-default-fg-color) 18%, transparent);
+  border-radius: 0.75rem;
+  padding: 1.15rem 1.25rem;
+}
+
+.md-typeset .capability-card h3,
+.md-typeset .path-card h3 {
+  margin-top: 0;
+}
+
+.md-typeset .tui-shot {
+  background: var(--colossus-navy-950);
+  border: 1px solid rgb(125 211 252 / 30%);
+  border-radius: 0.8rem;
+  box-shadow: 0 1rem 3rem rgb(3 17 31 / 22%);
+  display: block;
+  margin: 1.5rem auto;
+  max-width: 100%;
+}
+
+.md-typeset .diagram-scroll {
+  overflow-x: auto;
+  padding-block: 0.35rem;
+  scrollbar-gutter: stable both-edges;
+}
+
+.md-typeset .diagram-scroll .mermaid {
+  min-width: 34rem;
+}
+
+.md-typeset .diagram-scroll--wide .mermaid {
+  min-width: 50rem;
+}
+
+.md-footer {
+  background: var(--colossus-navy-950);
+  color: #eaf7ff;
+}
+
+.md-footer-meta {
+  color: #c9e7f7;
+}
+
+.md-footer a,
+.md-footer__direction,
+.md-copyright,
+.md-copyright__highlight {
+  color: inherit;
+}
+
+@media screen and (max-width: 44.984375em) {
+  .md-typeset table:not([class]) {
+    display: block;
+  }
+
+  .md-typeset .hero {
+    border-radius: 0.75rem;
+  }
+}

@@ -65,7 +65,7 @@ impl ResearchCollector for OfflineCollector {
                 sources: vec![ResearchSourceDraft {
                     kind,
                     title: "Architecture".into(),
-                    uri: format!("docs/ARCHITECTURE.md#{query}"),
+                    uri: format!("docs/develop/architecture.md#{query}"),
                     content: format!("Evidence for {query}"),
                     metadata: BTreeMap::new(),
                 }],
@@ -113,7 +113,7 @@ fn source(label: &str) -> ResearchSource {
         label: label.into(),
         kind: ResearchSourceKind::Repo,
         title: "Architecture".into(),
-        uri: "docs/ARCHITECTURE.md".into(),
+        uri: "docs/develop/architecture.md".into(),
         content: "The runtime is event sourced.".into(),
         query: "architecture".into(),
         metadata: BTreeMap::new(),

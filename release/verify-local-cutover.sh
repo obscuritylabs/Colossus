@@ -19,7 +19,7 @@ resolve_cargo_tool() {
         return
     fi
 
-    printf 'missing required tool %s; install the pinned version documented in docs/RELEASE.md\n' "$tool" >&2
+    printf 'missing required tool %s; install the pinned version documented in internal/documentation/release-process.md\n' "$tool" >&2
     exit 1
 }
 

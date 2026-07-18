@@ -5,15 +5,19 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/docs.yml"
-      - "book.toml"
       - "docs/**"
-      - "README.md"
+      - "documentation/legacy-routes.tsv"
+      - "scripts/docs-site"
+      - "scripts/generate-doc-redirects"
+      - "zensical.toml"
   pull_request:
     paths:
       - ".github/workflows/docs.yml"
-      - "book.toml"
       - "docs/**"
-      - "README.md"
+      - "documentation/legacy-routes.tsv"
+      - "scripts/docs-site"
+      - "scripts/generate-doc-redirects"
+      - "zensical.toml"
   workflow_dispatch:
 
 permissions:
@@ -23,13 +27,9 @@ concurrency:
   group: documentation-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  MDBOOK_VERSION: "0.5.4"
-  CARGO_INSTALL_ROOT: ${{ github.workspace }}/.cache/mdbook
-
 jobs:
   build:
-    name: Build mdBook site
+    name: Build Zensical site
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -39,32 +39,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install Rust 1.96
-        uses: dtolnay/rust-toolchain@master
+      - name: Build and verify documentation
+        run: ./scripts/docs-site build
+
+      - name: Upload pull request preview
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
         with:
-          toolchain: 1.96.0
-
-      - name: Cache mdBook
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CARGO_INSTALL_ROOT }}
-          key: mdbook-${{ runner.os }}-${{ env.MDBOOK_VERSION }}
-
-      - name: Install pinned mdBook
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ ! -x "$CARGO_INSTALL_ROOT/bin/mdbook" ]; then
-            cargo install mdbook --version "$MDBOOK_VERSION" --locked --root "$CARGO_INSTALL_ROOT"
-          fi
-
-      - name: Build searchable static documentation
-        shell: bash
-        run: |
-          set -euo pipefail
-          "$CARGO_INSTALL_ROOT/bin/mdbook" build
-          test -f site/index.html
-          find site -maxdepth 1 -type f -name 'searchindex*.js' -print -quit | grep -q .
+          name: documentation-preview-pr-${{ github.event.pull_request.number }}
+          path: site
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
 
       - name: Configure GitHub Pages
         if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}

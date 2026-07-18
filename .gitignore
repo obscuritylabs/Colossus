@@ -1,8 +1,8 @@
 target/
 dist/
 site/
+output/playwright/
 .env
-.cache/mdbook/
 .colossus/config.yaml
 .colossus/config.dev.yaml
 .colossus/dev-keys.env
