@@ -1,0 +1,661 @@
+use super::*;
+
+const DEFAULT_POLICY_INPUT_LIMIT: usize = 1024 * 1024;
+pub(super) const PERMIT_LIFETIME_MS: i128 = 30_000;
+
+/// Minimum timeout that leaves the OCI helper enough time to confirm container cleanup.
+pub const MIN_OCI_EFFECT_TIMEOUT_MS: u64 = 5_000;
+/// Minimum timeout for OCI jobs that must also create and remove proxy networks.
+pub const MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS: u64 = 10_000;
+/// Minimum timeout that leaves Windows enough time to confirm Job Object cleanup.
+pub const MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS: u64 = 10_000;
+
+pub(super) type HmacSha256 = Hmac<Sha256>;
+
+pub(super) fn canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, GatewayError> {
+    serde_json::to_vec(value).map_err(|error| GatewayError::Contract(error.to_string()))
+}
+
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+pub(super) fn now_unix_ms() -> i128 {
+    OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000
+}
+
+pub(super) fn approval_proof(
+    request_hash: &str,
+    approved_by: impl Into<String>,
+) -> Result<ApprovalProof, PolicyError> {
+    let approved_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| PolicyError::Unavailable(error.to_string()))?;
+    Ok(ApprovalProof {
+        approval_id: Uuid::now_v7().to_string(),
+        request_hash: request_hash.into(),
+        approved_by: approved_by.into(),
+        approved_at,
+    })
+}
+
+/// Effect gateway failure. Denied content is deliberately absent.
+#[derive(Debug, Error)]
+pub enum GatewayError {
+    /// The safety kernel rejected the request or policy obligations.
+    #[error("safety kernel rejected request: {0}")]
+    Safety(String),
+    /// The policy denied execution or content release.
+    #[error("policy denied effect: {0}")]
+    Denied(String),
+    /// Approval was required but not granted or did not authorize the request.
+    #[error("effect was not approved: {0}")]
+    Approval(String),
+    /// Policy transport or response failure; always fail closed.
+    #[error(transparent)]
+    Policy(#[from] PolicyError),
+    /// Audit durability failed; no effect may continue.
+    #[error(transparent)]
+    Journal(#[from] StoreError),
+    /// Adapter reported a known failure.
+    #[error("effect failed: {0}")]
+    Execution(String),
+    /// Adapter rejected output in a way that permits a bounded application correction.
+    #[error("recoverable effect failure {code}: {message}")]
+    RecoverableExecution {
+        /// Stable application-neutral code.
+        code: String,
+        /// Bounded safe diagnostic.
+        message: String,
+    },
+    /// Adapter outcome is unknown and must not be retried implicitly.
+    #[error("effect outcome is unknown: {0}")]
+    OutcomeUnknown(String),
+    /// Internal strict-contract serialization failed.
+    #[error("contract failure: {0}")]
+    Contract(String),
+}
+
+/// Adapter execution failure classification.
+#[derive(Debug, Error)]
+pub enum ExecutionError {
+    /// Adapter knows the effect failed.
+    #[error("{0}")]
+    Failed(String),
+    /// Adapter output was rejected but a corrected request may safely be attempted.
+    #[error("{code}: {message}")]
+    Recoverable {
+        /// Stable application-neutral code.
+        code: String,
+        /// Bounded safe diagnostic.
+        message: String,
+    },
+    /// Adapter cannot prove whether the external effect occurred.
+    #[error("{0}")]
+    OutcomeUnknown(String),
+    /// Gateway post-effect policy rejected one streamed result before observation.
+    #[error("stream release denied: {0}")]
+    ReleaseDenied(String),
+}
+
+/// Output released only after all required policy decisions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleasedEffectResult {
+    /// Media type supplied by the adapter.
+    pub media_type: String,
+    /// Bounded bytes released to the requester.
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Serialize)]
+pub(super) struct PermitClaims<'a> {
+    pub(super) request_hash: &'a str,
+    pub(super) decision_id: &'a str,
+    pub(super) obligations_hash: &'a str,
+    pub(super) actor_id: &'a str,
+    pub(super) nonce: &'a str,
+    pub(super) expires_at_unix_ms: i128,
+}
+
+/// Opaque, authenticated, one-use execution permit.
+///
+/// External crates can receive this type but cannot construct or clone it.
+///
+/// ```compile_fail
+/// use colossus_policy::ExecutionPermit;
+/// let _forged = ExecutionPermit {
+///     request_hash: String::new(),
+///     decision_id: String::new(),
+///     obligations_hash: String::new(),
+///     actor_id: String::new(),
+///     nonce: String::new(),
+///     expires_at_unix_ms: 0,
+///     authentication_tag: Vec::new(),
+///     consumed: std::sync::atomic::AtomicBool::new(false),
+/// };
+/// ```
+pub struct ExecutionPermit {
+    pub(super) request_hash: String,
+    pub(super) decision_id: String,
+    pub(super) obligations_hash: String,
+    pub(super) actor_id: String,
+    pub(super) nonce: String,
+    pub(super) expires_at_unix_ms: i128,
+    pub(super) authentication_tag: Vec<u8>,
+    pub(super) obligations: PolicyObligations,
+    pub(super) consumed: AtomicBool,
+}
+
+impl ExecutionPermit {
+    /// Canonical request hash authenticated by this permit.
+    pub fn request_hash(&self) -> &str {
+        &self.request_hash
+    }
+
+    /// Decision that authorized this permit.
+    pub fn decision_id(&self) -> &str {
+        &self.decision_id
+    }
+
+    /// Nonce used for IPC replay protection.
+    pub fn nonce(&self) -> &str {
+        &self.nonce
+    }
+
+    /// Permit expiration as Unix milliseconds.
+    pub fn expires_at_unix_ms(&self) -> i128 {
+        self.expires_at_unix_ms
+    }
+
+    /// Obligations the receiving adapter must enforce inside its execution boundary.
+    pub fn obligations(&self) -> &PolicyObligations {
+        &self.obligations
+    }
+}
+
+/// Effectful adapter boundary. A caller cannot invoke it without an opaque permit.
+#[async_trait]
+pub trait EffectExecutor: Send + Sync {
+    /// Execute into quarantine. The permit is non-cloneable and already authenticated.
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError>;
+}
+
+/// Receives bounded adapter chunks that have not yet crossed post-effect policy.
+#[async_trait]
+pub trait QuarantinedEffectObserver: Send {
+    /// Submit one normalized chunk for policy-controlled release.
+    async fn observe(&mut self, result: QuarantinedEffectResult) -> Result<(), ExecutionError>;
+}
+
+/// Effectful adapter capable of producing ordered normalized chunks.
+#[async_trait]
+pub trait StreamingEffectExecutor: Send + Sync {
+    /// Execute with one permit and submit every externally observable chunk to the sink.
+    /// The returned terminal result must exactly match the last submitted chunk.
+    async fn execute_stream(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+        observer: &mut dyn QuarantinedEffectObserver,
+    ) -> Result<QuarantinedEffectResult, ExecutionError>;
+}
+
+/// Observer that can receive only results released by the effect gateway.
+#[async_trait]
+pub trait ReleasedEffectObserver: Send {
+    /// Observe one ordered, bounded, post-authorized result.
+    async fn observe(&mut self, result: ReleasedEffectResult) -> Result<(), ExecutionError>;
+}
+
+/// Hard safety checks policy is never allowed to override.
+pub struct SafetyKernel {
+    known_capabilities: BTreeSet<String>,
+    policy_input_limit: usize,
+}
+
+impl SafetyKernel {
+    /// Construct a kernel with signed/known capability identities.
+    pub fn new(known_capabilities: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            known_capabilities: known_capabilities.into_iter().collect(),
+            policy_input_limit: DEFAULT_POLICY_INPUT_LIMIT,
+        }
+    }
+
+    /// Override the disclosure cap for bounded tests or stricter deployments.
+    pub fn with_policy_input_limit(mut self, bytes: usize) -> Self {
+        self.policy_input_limit = bytes;
+        self
+    }
+
+    pub(super) fn prepare(&self, request: &EffectRequest) -> Result<EffectRequest, GatewayError> {
+        if request.schema_version != 1 || request.request_id.is_empty() {
+            return Err(GatewayError::Safety(
+                "unsupported schema version or empty request id".into(),
+            ));
+        }
+        if request.action.is_empty() || request.resource.is_empty() {
+            return Err(GatewayError::Safety(
+                "action and resource must be non-empty".into(),
+            ));
+        }
+        for capability in &request.capabilities {
+            if !self.known_capabilities.contains(capability) {
+                return Err(GatewayError::Safety(format!(
+                    "unknown or unsigned capability {capability}"
+                )));
+            }
+        }
+        let mut prepared = request.clone();
+        redact_hard_secrets(&mut prepared.content);
+        let size = canonical_bytes(&prepared)?.len();
+        if size > self.policy_input_limit {
+            return Err(GatewayError::Policy(PolicyError::InputTooLarge {
+                limit: self.policy_input_limit,
+            }));
+        }
+        Ok(prepared)
+    }
+
+    pub(super) fn validate_decision(
+        &self,
+        request: &EffectRequest,
+        decision: &PolicyDecision,
+    ) -> Result<(), GatewayError> {
+        let obligations = &decision.obligations;
+        if decision.decision_id.is_empty()
+            || decision.policy_revision.is_empty()
+            || decision.reason.is_empty()
+            || obligations.sandbox_backend.is_empty()
+            || obligations.sandbox_profile.is_empty()
+            || obligations.timeout_ms == 0
+            || obligations.max_output_bytes == 0
+            || obligations.max_processes == 0
+            || obligations.max_memory_bytes == 0
+            || obligations.max_concurrency == 0
+            || obligations.retention.is_empty()
+        {
+            return Err(GatewayError::Policy(PolicyError::InvalidDecision(
+                "required decision field or obligation is absent/zero".into(),
+            )));
+        }
+        if !matches!(
+            obligations.sandbox_backend.as_str(),
+            "broker" | "native" | "oci" | "windows_job"
+        ) {
+            return Err(GatewayError::Safety(format!(
+                "unknown sandbox backend {}",
+                obligations.sandbox_backend
+            )));
+        }
+        if obligations.sandbox_backend == "broker"
+            && is_process_action(&request.action)
+            && !obligations.allow_sandbox_downgrade
+        {
+            return Err(GatewayError::Safety(
+                "process execution cannot downgrade to the broker without an explicit obligation"
+                    .into(),
+            ));
+        }
+        if obligations.sandbox_backend == "windows_job"
+            && is_process_action(&request.action)
+            && !cfg!(target_os = "windows")
+        {
+            return Err(GatewayError::Safety(
+                "windows_job process execution is available only on Windows".into(),
+            ));
+        }
+        if obligations.sandbox_backend == "windows_job"
+            && is_process_action(&request.action)
+            && obligations.timeout_ms < MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS
+        {
+            return Err(GatewayError::Safety(format!(
+                "Windows Job Object process execution requires timeout_ms >= {MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
+            )));
+        }
+        if cfg!(target_os = "windows")
+            && obligations.sandbox_backend == "oci"
+            && is_process_action(&request.action)
+        {
+            return Err(GatewayError::Safety(
+                "OCI process execution is disabled on Windows until path mapping passes live acceptance"
+                    .into(),
+            ));
+        }
+        if obligations.sandbox_backend == "oci"
+            && is_process_action(&request.action)
+            && obligations.timeout_ms < MIN_OCI_EFFECT_TIMEOUT_MS
+        {
+            return Err(GatewayError::Safety(format!(
+                "OCI process execution requires timeout_ms >= {MIN_OCI_EFFECT_TIMEOUT_MS} so cleanup can be confirmed"
+            )));
+        }
+        if obligations.sandbox_backend == "oci"
+            && is_process_action(&request.action)
+            && !obligations.network_destinations.is_empty()
+            && obligations.timeout_ms < MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS
+        {
+            return Err(GatewayError::Safety(format!(
+                "networked OCI process execution requires timeout_ms >= {MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS} so proxy cleanup can be confirmed"
+            )));
+        }
+        let mut environment = BTreeSet::new();
+        for name in &obligations.allowed_environment {
+            if !valid_environment_name(name) || !environment.insert(name.as_str()) {
+                return Err(GatewayError::Safety(
+                    "environment obligations must be unique POSIX-style names".into(),
+                ));
+            }
+        }
+        for destination in &obligations.network_destinations {
+            if canonical_network_origin(destination)? != *destination {
+                return Err(GatewayError::Safety(format!(
+                    "network destination must be a canonical HTTP(S) origin: {destination}"
+                )));
+            }
+        }
+        for grant in &obligations.filesystem {
+            if !absolute_policy_root(&grant.root)
+                || !matches!(
+                    grant.mode.as_str(),
+                    "read" | "write" | "metadata" | "execute"
+                )
+            {
+                return Err(GatewayError::Safety(
+                    "filesystem obligations require absolute roots and known modes".into(),
+                ));
+            }
+        }
+        if decision.outcome == DecisionOutcome::Allow && is_filesystem_action(&request.action) {
+            validate_filesystem_containment(request, obligations)?;
+        }
+        if decision.outcome == DecisionOutcome::Allow
+            && request.phase == EffectPhase::PreEffect
+            && request.action == "web.search"
+            && !obligations.require_post_effect
+        {
+            return Err(GatewayError::Safety(
+                "web.search requires mandatory post-effect authorization".into(),
+            ));
+        }
+        if decision.outcome == DecisionOutcome::Allow
+            && request.phase == EffectPhase::PreEffect
+            && is_process_action(&request.action)
+        {
+            validate_process_obligations(request, obligations)?;
+        }
+        if decision.outcome == DecisionOutcome::Allow
+            && (matches!(
+                request.action.as_str(),
+                "network.http"
+                    | "web.search"
+                    | "audit.export.worm.write"
+                    | "provider.openai.responses"
+                    | "provider.openai.chat"
+                    | "provider.models"
+                    | "registry.pull"
+                    | "registry.push"
+            ))
+        {
+            let origin = canonical_network_origin(&request.resource)?;
+            if !obligations
+                .network_destinations
+                .iter()
+                .any(|allowed| allowed == &origin)
+            {
+                return Err(GatewayError::Safety(format!(
+                    "network destination {origin} is not allowed"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn valid_environment_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+pub(super) fn is_process_action(action: &str) -> bool {
+    action.starts_with("pack.tool.")
+        || action.starts_with("pack.mcp.")
+        || matches!(
+            action,
+            "process.spawn"
+                | "shell.run"
+                | "git.status"
+                | "git.diff"
+                | "git.show"
+                | "mcp.tools"
+                | "mcp.call"
+        )
+}
+
+pub(super) fn is_filesystem_action(action: &str) -> bool {
+    action.starts_with("filesystem.")
+        || action.starts_with("repo.")
+        || matches!(
+            action,
+            "patch.preview" | "patch.apply" | "patch.reverse" | "trace.export"
+        )
+}
+
+pub(super) fn canonical_network_origin(resource: &str) -> Result<String, GatewayError> {
+    let url = Url::parse(resource)
+        .map_err(|error| GatewayError::Safety(format!("invalid network URL: {error}")))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(GatewayError::Safety(
+            "network URLs require HTTP(S), a host, and no embedded credentials".into(),
+        ));
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
+pub(super) fn validate_process_obligations(
+    request: &EffectRequest,
+    obligations: &PolicyObligations,
+) -> Result<(), GatewayError> {
+    let executable_allowed = if obligations.sandbox_backend == "oci" {
+        normalized_absolute_path(&request.resource)
+            && obligations
+                .filesystem
+                .iter()
+                .any(|grant| grant.mode == "execute" && grant.root == request.resource)
+    } else {
+        let executable = canonical_effect_path(&request.resource, false)?;
+        obligations.filesystem.iter().any(|grant| {
+            grant.mode == "execute"
+                && fs::canonicalize(&grant.root).is_ok_and(|root| executable == root)
+        })
+    };
+    if !executable_allowed {
+        return Err(GatewayError::Safety(format!(
+            "executable {} is not explicitly granted",
+            request.resource
+        )));
+    }
+    let cwd = request
+        .content
+        .get("cwd")
+        .and_then(Value::as_str)
+        .ok_or_else(|| GatewayError::Safety("process cwd is absent".into()))?;
+    let cwd = canonical_effect_path(cwd, false)?;
+    let cwd_allowed = obligations.filesystem.iter().any(|grant| {
+        matches!(grant.mode.as_str(), "read" | "write")
+            && fs::canonicalize(&grant.root).is_ok_and(|root| cwd.starts_with(root))
+    });
+    if !cwd_allowed {
+        return Err(GatewayError::Safety(
+            "process cwd is outside allowed filesystem roots".into(),
+        ));
+    }
+    let environment = request
+        .content
+        .get("environment")
+        .and_then(Value::as_object)
+        .ok_or_else(|| GatewayError::Safety("process environment object is absent".into()))?;
+    for name in environment.keys() {
+        if !obligations
+            .allowed_environment
+            .iter()
+            .any(|allowed| allowed == name)
+        {
+            return Err(GatewayError::Safety(format!(
+                "environment variable {name} is not allowed"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn normalized_absolute_path(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() > 1
+        && value
+            .split('/')
+            .skip(1)
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
+}
+
+pub(super) fn validate_filesystem_containment(
+    request: &EffectRequest,
+    obligations: &PolicyObligations,
+) -> Result<(), GatewayError> {
+    let requested_mode = if request.action.contains("write")
+        || matches!(request.action.as_str(), "patch.apply" | "patch.reverse")
+        || request.action == "trace.export"
+    {
+        "write"
+    } else if request.action.contains("metadata") {
+        "metadata"
+    } else {
+        "read"
+    };
+    let target = canonical_effect_path(&request.resource, requested_mode == "write")?;
+    let allowed = obligations.filesystem.iter().any(|grant| {
+        let mode_allowed = grant.mode == "write"
+            || grant.mode == requested_mode
+            || (requested_mode == "metadata" && grant.mode == "read");
+        mode_allowed && fs::canonicalize(&grant.root).is_ok_and(|root| target.starts_with(root))
+    });
+    if !allowed {
+        return Err(GatewayError::Safety(format!(
+            "{} is outside allowed {requested_mode} roots",
+            request.resource
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn canonical_effect_path(
+    resource: &str,
+    allow_missing_leaf: bool,
+) -> Result<std::path::PathBuf, GatewayError> {
+    match fs::canonicalize(resource) {
+        Ok(path) => Ok(path),
+        Err(error) if allow_missing_leaf => {
+            let path = Path::new(resource);
+            let parent = path.parent().ok_or_else(|| {
+                GatewayError::Safety(format!("effect path has no parent: {resource}"))
+            })?;
+            let name = path.file_name().ok_or_else(|| {
+                GatewayError::Safety(format!("effect path has no filename: {resource}"))
+            })?;
+            fs::canonicalize(parent)
+                .map(|parent| parent.join(name))
+                .map_err(|_| GatewayError::Safety(error.to_string()))
+        }
+        Err(error) => Err(GatewayError::Safety(error.to_string())),
+    }
+}
+
+pub(super) fn absolute_policy_root(root: &str) -> bool {
+    Path::new(root).is_absolute()
+        || (root.len() >= 3
+            && root.as_bytes()[0].is_ascii_alphabetic()
+            && root.as_bytes()[1] == b':'
+            && matches!(root.as_bytes()[2], b'\\' | b'/'))
+}
+
+pub(super) fn is_hard_secret_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase().replace('-', "_");
+    matches!(
+        key.as_str(),
+        "authorization"
+            | "proxy_authorization"
+            | "api_key"
+            | "apikey"
+            | "access_token"
+            | "refresh_token"
+            | "private_key"
+            | "client_secret"
+            | "password"
+            | "key_material"
+            | "hidden_reasoning"
+    )
+}
+
+pub(super) fn redact_hard_secrets(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                if is_hard_secret_key(key) && !is_environment_credential_reference(child) {
+                    let bytes = serde_json::to_vec(child).unwrap_or_default();
+                    *child = json!({
+                        "redacted": true,
+                        "sha256": sha256_hex(&bytes),
+                        "size": bytes.len()
+                    });
+                } else {
+                    redact_hard_secrets(child);
+                }
+            }
+        }
+        Value::Array(array) => array.iter_mut().for_each(redact_hard_secrets),
+        _ => {}
+    }
+}
+
+pub(super) fn is_environment_credential_reference(value: &Value) -> bool {
+    value.as_str().is_some_and(|value| {
+        value.strip_prefix("env:").is_some_and(|name| {
+            let mut bytes = name.bytes();
+            bytes
+                .next()
+                .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+                && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        })
+    })
+}
+
+pub(super) fn disclosure_summary(request: &EffectRequest) -> Value {
+    let fields = request
+        .content
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let encoded = serde_json::to_vec(&request.content).unwrap_or_default();
+    json!({
+        "request_id": request.request_id,
+        "phase": request.phase,
+        "action": request.action,
+        "resource": request.resource,
+        "content_fields": fields,
+        "content_size": encoded.len(),
+        "content_hash": sha256_hex(&encoded),
+        "credential_references": request.credential_references,
+        "capabilities": request.capabilities,
+    })
+}

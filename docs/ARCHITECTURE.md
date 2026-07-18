@@ -29,6 +29,11 @@ Effectful adapters require an opaque permit that only `EffectGateway` can mint. 
 the canonical event journal, while repositories, projections, memory indexes, and audit
 exports are replaceable ports.
 
+Crate roots expose public APIs and composition only. Configuration, application
+services, repositories, adapters, protocol handling, interface dispatch, rendering, and
+tests live in responsibility-focused modules. The repository's organization rules and
+root-size guardrail are documented in [Rust Crate Structure](CRATE_STRUCTURE.md).
+
 `colossus-agent` owns the bounded reusable model/tool loop. It consumes role-routed
 `ModelProvider`, `ToolRegistry`, and `ToolExecutor` ports, persists each prepared request
 and normalized event, validates tool arguments before execution, preserves assistant

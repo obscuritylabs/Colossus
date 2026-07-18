@@ -34,6 +34,7 @@
 
 - [Contributing](CONTRIBUTING.md)
 - [Architecture](ARCHITECTURE.md)
+- [Rust Crate Structure](CRATE_STRUCTURE.md)
 - [Security Model](SECURITY.md)
 - [Feature Inventory And Open Work](FEATURE_INVENTORY.md)
 - [Rust Runtime Status](RUST_RECONSTRUCTION.md)

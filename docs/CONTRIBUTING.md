@@ -85,6 +85,11 @@ cargo test-full
 `cargo test-fast` is the normal workspace-wide iteration tier. Before declaring an
 implementation complete, run the authoritative formatting, Clippy, and full workspace
 test gates documented in the root `AGENTS.md`; the fast tier never replaces them.
+Structural changes must also keep crate roots as API/composition surfaces:
+
+```bash
+./scripts/check_crate_roots.sh
+```
 
 ## Run A Development TUI
 
