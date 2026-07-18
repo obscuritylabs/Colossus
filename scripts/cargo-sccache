@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+fail() {
+    printf 'cargo-sccache: %s\n' "$*" >&2
+    exit 1
+}
+
+cargo_bin=$(command -v cargo) || fail "cargo is not installed or not on PATH"
+sccache_bin=$(command -v sccache) || \
+    fail "sccache is not installed; on macOS run: brew install sccache"
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+
+if [ -z "${SCCACHE_BASEDIRS:-}" ]; then
+    base_dirs=$repository
+    if worktrees=$(git -C "$repository" worktree list --porcelain 2>/dev/null); then
+        while IFS= read -r line; do
+            case "$line" in
+                "worktree "*)
+                    worktree=${line#worktree }
+                    case ":$base_dirs:" in
+                        *":$worktree:"*) ;;
+                        *) base_dirs="$base_dirs:$worktree" ;;
+                    esac
+                    ;;
+            esac
+        done <<EOF
+$worktrees
+EOF
+    fi
+    export SCCACHE_BASEDIRS=$base_dirs
+fi
+
+# Cross-worktree reuse is more valuable here than rustc's worktree-local incremental
+# cache. Call cargo directly when optimizing for repeated edits in one warm worktree.
+export RUSTC_WRAPPER="$sccache_bin"
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-5G}"
+
+exec "$cargo_bin" "$@"

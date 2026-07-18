@@ -136,6 +136,50 @@ fn local_cutover_verifier_is_complete_and_tool_version_pinned() {
     }
 }
 
+#[test]
+fn local_test_tiers_and_sccache_wrapper_are_explicit_and_optional() {
+    let cargo_config = fs::read_to_string(repository_root().join(".cargo/config.toml"))
+        .expect("read Cargo configuration");
+    assert!(cargo_config.contains("test-fast = \"test --workspace --lib\""));
+    assert!(cargo_config.contains("test-full = \"test --workspace\""));
+    assert!(
+        !cargo_config.contains("rustc-wrapper"),
+        "the local compiler cache must remain opt-in"
+    );
+
+    let wrapper = fs::read_to_string(repository_root().join("scripts/cargo-sccache"))
+        .expect("read local sccache wrapper");
+    for required in [
+        "#!/bin/sh",
+        "command -v sccache",
+        "RUSTC_WRAPPER",
+        "CARGO_INCREMENTAL",
+        "SCCACHE_BASEDIRS",
+        "SCCACHE_CACHE_SIZE",
+        "exec \"$cargo_bin\" \"$@\"",
+    ] {
+        assert!(
+            wrapper.contains(required),
+            "local sccache wrapper is missing {required:?}"
+        );
+    }
+
+    let agent_guide =
+        fs::read_to_string(repository_root().join("AGENTS.md")).expect("read AGENTS.md");
+    for required in [
+        "cargo test -p <changed-crate> --lib",
+        "cargo test-fast",
+        "cargo test-full",
+        "./scripts/cargo-sccache",
+        "never replace the full completion",
+    ] {
+        assert!(
+            agent_guide.contains(required),
+            "agent test-tier guidance is missing {required:?}"
+        );
+    }
+}
+
 fn mapping<'a>(value: &'a Value, context: &str) -> &'a Map<String, Value> {
     value
         .as_object()
