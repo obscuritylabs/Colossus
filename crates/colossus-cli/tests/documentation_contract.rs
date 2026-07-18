@@ -1,30 +1,17 @@
-//! Rust-first operator documentation acceptance.
+//! Audience-first documentation acceptance.
 
+use colossus_access::builtin_action_descriptors;
 use colossus_runtime::RuntimeConfig;
+use colossus_tools::builtin_specs;
 use colossus_workflow::validate_definition;
-use std::{fs, path::Path, process::Command};
+use serde::Deserialize;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
-const OPERATOR_DOCS: &[&str] = &[
-    "README.md",
-    "docs/README.md",
-    "docs/GETTING_STARTED.md",
-    "docs/INSTALLATION.md",
-    "docs/CONFIGURATION.md",
-    "docs/USER_GUIDE.md",
-    "docs/TOOLS.md",
-    "docs/SEARCH.md",
-    "docs/CONTEXT.md",
-    "docs/SKILLS.md",
-    "docs/PACKS.md",
-    "docs/INTEGRATIONS.md",
-    "docs/WORKFLOWS.md",
-    "docs/TROUBLESHOOTING.md",
-    "docs/RELEASE.md",
-    "docs/OFFLINE_AIRGAP.md",
-    "docs/BUNDLE_FORMAT.md",
-];
-
-const LEGACY_OPERATOR_SIGNATURES: &[&str] = &[
+const LEGACY_PUBLIC_SIGNATURES: &[&str] = &[
     "uv run colossus",
     "colossus-rs",
     "`config.json`",
@@ -45,6 +32,63 @@ const LEGACY_OPERATOR_SIGNATURES: &[&str] = &[
     "/agents resume",
 ];
 
+const HISTORICAL_HTML_ROUTES: &[&str] = &[
+    "ACCESS_PROFILES.html",
+    "ARCHITECTURE.html",
+    "BUNDLE_FORMAT.html",
+    "CONFIGURATION.html",
+    "CONTEXT.html",
+    "CONTRIBUTING.html",
+    "CRATE_STRUCTURE.html",
+    "FEATURE_INVENTORY.html",
+    "GETTING_STARTED.html",
+    "INSTALLATION.html",
+    "INTEGRATIONS.html",
+    "OFFLINE_AIRGAP.html",
+    "PACKS.html",
+    "README.html",
+    "RELEASE.html",
+    "RUST_ACCEPTANCE_MATRIX.html",
+    "RUST_RECONSTRUCTION.html",
+    "SEARCH.html",
+    "SECURITY.html",
+    "SKILLS.html",
+    "TERMINAL_UX.html",
+    "TOOLS.html",
+    "TROUBLESHOOTING.html",
+    "USER_GUIDE.html",
+    "WORKFLOWS.html",
+];
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum Audience {
+    User,
+    Operator,
+    Developer,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+enum PageType {
+    #[serde(rename = "tutorial")]
+    Tutorial,
+    #[serde(rename = "how-to")]
+    HowTo,
+    #[serde(rename = "concept")]
+    Concept,
+    #[serde(rename = "reference")]
+    Reference,
+}
+
+#[derive(Debug, Deserialize)]
+struct Frontmatter {
+    title: String,
+    description: String,
+    audience: Audience,
+    #[serde(rename = "type")]
+    page_type: PageType,
+}
+
 fn repository_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -57,76 +101,332 @@ fn read(relative: &str) -> String {
         .unwrap_or_else(|error| panic!("read {relative}: {error}"))
 }
 
+fn markdown_pages(root: &Path) -> Vec<PathBuf> {
+    fn visit(directory: &Path, pages: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(directory)
+            .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        {
+            let entry = entry.expect("documentation directory entry");
+            let path = entry.path();
+            let file_type = entry.file_type().expect("documentation entry type");
+            if file_type.is_dir() {
+                visit(&path, pages);
+            } else if file_type.is_file()
+                && path.extension().and_then(|value| value.to_str()) == Some("md")
+            {
+                pages.push(path);
+            }
+        }
+    }
+
+    let mut pages = Vec::new();
+    visit(root, &mut pages);
+    pages.sort();
+    pages
+}
+
+fn parse_frontmatter(path: &Path, document: &str) -> Frontmatter {
+    let after_open = document
+        .strip_prefix("---\n")
+        .unwrap_or_else(|| panic!("{} has no YAML frontmatter", path.display()));
+    let (yaml, _) = after_open
+        .split_once("\n---\n")
+        .unwrap_or_else(|| panic!("{} has unterminated YAML frontmatter", path.display()));
+    let metadata: Frontmatter = serde_saphyr::from_str(yaml)
+        .unwrap_or_else(|error| panic!("parse {} frontmatter: {error}", path.display()));
+    assert!(
+        !metadata.title.trim().is_empty(),
+        "{} has an empty title",
+        path.display()
+    );
+    assert!(
+        !metadata.description.trim().is_empty(),
+        "{} has an empty description",
+        path.display()
+    );
+    metadata
+}
+
 #[test]
-fn static_documentation_site_is_complete_searchable_and_python_free() {
-    let configuration = read("book.toml");
+fn zensical_site_is_pinned_searchable_and_complete() {
+    assert!(
+        !repository_root().join("book.toml").exists(),
+        "book.toml must be removed after the atomic Zensical cutover"
+    );
+    assert!(
+        !repository_root().join("docs/SUMMARY.md").exists(),
+        "mdBook navigation must not remain in the published tree"
+    );
+
+    let configuration = read("zensical.toml");
     for required in [
-        "src = \"docs\"",
-        "build-dir = \"site\"",
-        "create-missing = false",
-        "site-url = \"/Colossus/\"",
-        "edit-url-template = \"https://github.com/obscuritylabs/Colossus/edit/main/{path}\"",
-        "[output.html.search]",
-        "enable = true",
+        "[project]",
+        "site_name = \"Colossus\"",
+        "site_url = \"https://obscuritylabs.github.io/Colossus/\"",
+        "docs_dir = \"docs\"",
+        "site_dir = \"site\"",
+        "use_directory_urls = true",
+        "repo_url = \"https://github.com/obscuritylabs/Colossus\"",
+        "edit_uri = \"https://github.com/obscuritylabs/Colossus/edit/main/docs/\"",
+        "variant = \"modern\"",
+        "extra_css = [\"stylesheets/extra.css\"]",
+        "extra_javascript = [\"assets/vendor/mermaid-11.15.0.min.js\"]",
+        "pymdownx.superfences",
+        "name = \"mermaid\"",
+        "navigation.tabs",
+        "navigation.tabs.sticky",
+        "navigation.indexes",
+        "navigation.path",
+        "navigation.top",
+        "content.code.copy",
     ] {
         assert!(
             configuration.contains(required),
-            "book.toml is missing {required:?}"
+            "zensical.toml is missing {required:?}"
         );
     }
+    assert!(
+        !configuration.contains("internal/documentation"),
+        "repository-only documentation entered the public configuration"
+    );
+    let mermaid_runtime = repository_root().join("docs/assets/vendor/mermaid-11.15.0.min.js");
+    assert!(
+        mermaid_runtime.is_file(),
+        "the pinned repository-local Mermaid runtime is missing"
+    );
+    assert!(
+        fs::metadata(&mermaid_runtime)
+            .expect("read local Mermaid runtime metadata")
+            .len()
+            > 1_000_000,
+        "the local Mermaid runtime is not the reviewed standalone distribution"
+    );
+    assert!(
+        repository_root()
+            .join("docs/assets/vendor/mermaid-LICENSE.txt")
+            .is_file(),
+        "the vendored Mermaid license is missing"
+    );
 
-    let summary = read("docs/SUMMARY.md");
-    for entry in fs::read_dir(repository_root().join("docs")).expect("read docs directory") {
-        let path = entry.expect("documentation entry").path();
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if path.extension().and_then(|value| value.to_str()) == Some("md") && name != "SUMMARY.md" {
+    let docs = repository_root().join("docs");
+    let pages = markdown_pages(&docs);
+    assert!(
+        pages.len() >= 50,
+        "expected the complete nested documentation IA"
+    );
+    let mut mermaid_diagrams = 0;
+    for path in &pages {
+        let document = fs::read_to_string(path).expect("read public documentation");
+        let metadata = parse_frontmatter(path, &document);
+        let relative = path.strip_prefix(&docs).expect("page under docs");
+        if relative != Path::new("404.md") {
+            let relative = relative.to_string_lossy().replace('\\', "/");
             assert!(
-                summary.contains(&format!("]({name})")),
-                "docs/{name} is absent from the published navigation"
+                configuration.contains(&format!("\"{relative}\"")),
+                "{} is absent from explicit Zensical navigation",
+                path.display()
             );
         }
+        if matches!(metadata.page_type, PageType::Tutorial | PageType::HowTo) {
+            for heading in [
+                "## Goal",
+                "## Prerequisites",
+                "## Steps",
+                "## Expected result",
+                "## Verification",
+                "## Failure path",
+                "## Next step",
+            ] {
+                assert!(
+                    document.contains(heading),
+                    "{} is a {:?} page without required section {heading:?}",
+                    path.display(),
+                    metadata.page_type
+                );
+            }
+        }
+        let page_diagrams = document.matches("```mermaid").count();
+        if page_diagrams > 0 {
+            mermaid_diagrams += page_diagrams;
+            assert!(
+                document.matches("class=\"diagram-scroll").count() >= page_diagrams,
+                "{} has a Mermaid diagram without a narrow-screen scroll region",
+                path.display()
+            );
+            assert!(
+                document.matches("role=\"region\"").count() >= page_diagrams
+                    && document.matches("tabindex=\"0\"").count() >= page_diagrams
+                    && document.matches("aria-label=\"").count() >= page_diagrams,
+                "{} has a Mermaid diagram without a labeled keyboard-focusable region",
+                path.display()
+            );
+        }
+    }
+    assert_eq!(
+        mermaid_diagrams, 6,
+        "the maintained product and architecture diagram set changed unexpectedly"
+    );
+}
+
+#[test]
+fn pinned_container_wrapper_and_pages_workflow_share_one_build_interface() {
+    let wrapper = read("scripts/docs-site");
+    let reviewed_image = concat!(
+        "zensical/zensical:0.0.50@",
+        "sha256:a67f689607908b47b9979ff8213906477f78826e9f8565f012e06071f883e973"
+    );
+    assert!(
+        wrapper.contains(reviewed_image),
+        "scripts/docs-site does not pin the reviewed image {reviewed_image}"
+    );
+    for required in ["build", "--clean", "--strict", "serve", "docker"] {
+        assert!(
+            wrapper.contains(required),
+            "scripts/docs-site is missing {required:?}"
+        );
     }
 
     let workflow = read(".github/workflows/docs.yml");
     for required in [
-        "MDBOOK_VERSION: \"0.5.4\"",
-        "cargo install mdbook --version",
-        "mdbook\" build",
+        "./scripts/docs-site build",
         "actions/configure-pages@v5",
+        "actions/upload-artifact@v4",
         "actions/upload-pages-artifact@v4",
         "actions/deploy-pages@v4",
         "pages: write",
+        "pull_request:",
+        "branches: [\"main\"]",
     ] {
         assert!(
             workflow.contains(required),
             "documentation workflow is missing {required:?}"
         );
     }
-    for forbidden in ["setup-python", "pip install", "uv run", "pyproject.toml"] {
+    for forbidden in [
+        "setup-python",
+        "pip install",
+        "uv run",
+        "pyproject.toml",
+        "mdbook",
+        "actions/cache",
+    ] {
         assert!(
             !workflow.contains(forbidden),
-            "documentation workflow reintroduced Python tooling via {forbidden:?}"
+            "documentation workflow bypasses the isolated build contract via {forbidden:?}"
         );
     }
 }
 
 #[test]
-fn static_documentation_links_resolve_inside_the_published_source_tree() {
+fn internal_archives_and_legacy_routes_are_explicitly_accounted_for() {
     let docs = repository_root().join("docs");
-    for entry in fs::read_dir(&docs).expect("read docs directory") {
-        let path = entry.expect("documentation entry").path();
-        if path.extension().and_then(|value| value.to_str()) != Some("md") {
-            continue;
-        }
+    for retired in [
+        "FEATURE_INVENTORY.md",
+        "RELEASE.md",
+        "RUST_ACCEPTANCE_MATRIX.md",
+        "RUST_RECONSTRUCTION.md",
+        "TERMINAL_UX.md",
+    ] {
+        assert!(
+            !docs.join(retired).exists(),
+            "{retired} must not remain in the published root"
+        );
+    }
+
+    let archive = repository_root().join("internal/documentation");
+    let archived_pages = markdown_pages(&archive);
+    assert!(
+        archived_pages.len() >= 5,
+        "internal documentation must retain history and acceptance evidence"
+    );
+    for path in archived_pages {
+        let document = fs::read_to_string(&path).expect("read internal documentation");
+        assert!(
+            document.contains("status:"),
+            "{} does not declare current or archived status",
+            path.display()
+        );
+        assert!(
+            document.contains("replacement"),
+            "{} does not identify replacement public documentation",
+            path.display()
+        );
+    }
+
+    let redirects = read("documentation/legacy-routes.tsv");
+    for route in HISTORICAL_HTML_ROUTES {
+        assert!(
+            redirects.contains(route),
+            "legacy route manifest does not cover {route}"
+        );
+    }
+    for required in ["FEATURE_INVENTORY.html", "22-delivery-status=", "fragment"] {
+        assert!(
+            redirects.contains(required),
+            "legacy route manifest is missing {required:?} compatibility metadata"
+        );
+    }
+
+    let generator = read("scripts/generate-doc-redirects");
+    for required in [
+        "rel=\"canonical\"",
+        "noindex, nofollow",
+        "window.location.hash",
+        "http-equiv=\"refresh\"",
+        "<main><p>This documentation moved to <a",
+    ] {
+        assert!(
+            generator.contains(required),
+            "legacy redirect generator is missing {required:?}"
+        );
+    }
+
+    let capture = read("documentation/tui-offline-session.txt");
+    assert_eq!(
+        capture.lines().count(),
+        34,
+        "the real TUI capture must remain a fixed 112x34 frame"
+    );
+    for marker in [
+        "› You",
+        "● Colossus",
+        "primary:echo@echo",
+        "approval=ask",
+        "status=ok",
+    ] {
+        assert!(
+            capture.contains(marker),
+            "the real TUI capture is missing {marker:?}"
+        );
+    }
+    let screenshot =
+        fs::read(repository_root().join("docs/assets/screenshots/tui-offline-session.png"))
+            .expect("read real TUI screenshot");
+    assert!(
+        screenshot.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "the homepage TUI screenshot must be a literal PNG capture"
+    );
+    assert!(
+        !repository_root()
+            .join("docs/assets/screenshots/tui-offline-session.svg")
+            .exists(),
+        "the former illustrative TUI vector must not return"
+    );
+}
+
+#[test]
+fn public_links_resolve_from_nested_source_pages() {
+    let docs = repository_root().join("docs");
+    let canonical_docs = docs.canonicalize().expect("canonical docs directory");
+    for path in markdown_pages(&docs) {
         let document = fs::read_to_string(&path).expect("read documentation page");
         let mut remainder = document.as_str();
         while let Some((_, after_open)) = remainder.split_once("](") {
-            let Some((target, after_close)) = after_open.split_once(')') else {
+            let Some((raw_target, after_close)) = after_open.split_once(')') else {
                 panic!("{} contains an unterminated Markdown link", path.display());
             };
             remainder = after_close;
+            let target = raw_target.trim().trim_matches(['<', '>']);
             if target.starts_with("https://")
                 || target.starts_with("http://")
                 || target.starts_with("mailto:")
@@ -135,11 +435,67 @@ fn static_documentation_links_resolve_inside_the_published_source_tree() {
                 continue;
             }
             let relative = target.split('#').next().expect("relative link target");
+            if relative.is_empty() {
+                continue;
+            }
             assert!(
-                docs.join(relative).is_file(),
+                !relative.starts_with('/'),
+                "{} uses non-portable site-absolute link {target:?}",
+                path.display()
+            );
+            let candidate = path.parent().expect("page parent").join(relative);
+            let candidate = if candidate.is_dir() {
+                candidate.join("index.md")
+            } else {
+                candidate
+            };
+            assert!(
+                candidate.is_file(),
                 "{} links to missing published source {target:?}",
                 path.display()
             );
+            let canonical_candidate = candidate
+                .canonicalize()
+                .unwrap_or_else(|error| panic!("canonicalize {}: {error}", candidate.display()));
+            assert!(
+                canonical_candidate.starts_with(&canonical_docs),
+                "{} links outside the published source tree via {target:?}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn user_and_operator_pages_use_only_current_installed_binary_commands() {
+    let docs = repository_root().join("docs");
+    for path in markdown_pages(&docs) {
+        let document = fs::read_to_string(&path).expect("read public documentation");
+        let metadata = parse_frontmatter(&path, &document);
+        if metadata.audience == Audience::Developer {
+            continue;
+        }
+        for signature in LEGACY_PUBLIC_SIGNATURES {
+            assert!(
+                !document.contains(signature),
+                "{} reintroduced legacy public signature {signature:?}",
+                path.display()
+            );
+        }
+        assert!(
+            !document.contains("cargo "),
+            "{} puts source-build commands in a user or operator page",
+            path.display()
+        );
+
+        if !path.ends_with("get-started/upgrade-compatibility.md") {
+            for historical in ["Python 0.5", "python-v0.5.0", "python-legacy"] {
+                assert!(
+                    !document.contains(historical),
+                    "{} duplicates cutover history outside the compatibility page",
+                    path.display()
+                );
+            }
         }
     }
 }
@@ -154,27 +510,37 @@ fn marked_yaml<'a>(document: &'a str, marker: &str) -> &'a str {
 }
 
 #[test]
-fn active_operator_docs_do_not_reintroduce_python_runtime_commands() {
-    for path in OPERATOR_DOCS {
-        let document = read(path);
-        for signature in LEGACY_OPERATOR_SIGNATURES {
-            assert!(
-                !document.contains(signature),
-                "{path} reintroduced legacy operator signature {signature:?}"
-            );
-        }
-    }
+fn published_config_and_workflow_examples_are_accepted_by_rust_parsers() {
+    let configuration = read("docs/reference/configuration.md");
+    RuntimeConfig::from_yaml(marked_yaml(&configuration, "rust-config-example"))
+        .expect("documented configuration must parse");
+
+    let workflows = read("docs/extend/workflows/authoring.md");
+    validate_definition(marked_yaml(&workflows, "rust-workflow-example"))
+        .expect("documented workflow must validate");
+
+    let workflow_reference = read("docs/reference/workflow-schema.md");
+    validate_definition(marked_yaml(&workflow_reference, "rust-workflow-example"))
+        .expect("reference workflow must validate");
 }
 
 #[test]
-fn published_config_and_workflow_examples_are_accepted_by_the_rust_parsers() {
-    let configuration = read("docs/CONFIGURATION.md");
-    RuntimeConfig::from_yaml(marked_yaml(&configuration, "rust-config-example"))
-        .expect("documented Rust configuration must parse");
-
-    let workflows = read("docs/WORKFLOWS.md");
-    validate_definition(marked_yaml(&workflows, "rust-workflow-example"))
-        .expect("documented workflow must validate");
+fn tools_and_action_reference_covers_the_executable_catalog() {
+    let reference = read("docs/reference/tools-actions.md");
+    for specification in builtin_specs() {
+        assert!(
+            reference.contains(&format!("`{}`", specification.name)),
+            "tools reference omits built-in tool {}",
+            specification.name
+        );
+    }
+    for descriptor in builtin_action_descriptors() {
+        assert!(
+            reference.contains(&format!("`{}`", descriptor.name)),
+            "tools reference omits built-in action {}",
+            descriptor.name
+        );
+    }
 }
 
 #[test]

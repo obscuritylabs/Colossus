@@ -1,0 +1,34 @@
+› You
+  Summarize what Colossus controls before a tool effect.
+
+● Colossus
+  Summarize what Colossus controls before a tool effect.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┌ Message · Enter sends ───────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ Colossus 019f754e · primary:echo@echo · ctx=61/32768 · msgs=2 · approval=ask · status=ok

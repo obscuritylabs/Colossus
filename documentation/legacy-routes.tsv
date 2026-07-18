@@ -1,0 +1,30 @@
+# Legacy Colossus documentation route manifest, version 1.
+# legacy_path	target_path	known_fragment_map
+# Unknown fragments are preserved. A known_fragment_map is a comma-separated
+# list of old=new anchors; an empty new anchor intentionally drops the fragment.
+/README.html	/
+/GETTING_STARTED.html	/get-started/quickstart/
+/INSTALLATION.html	/get-started/install/
+/USER_GUIDE.html	/use/
+/CONFIGURATION.html	/admin/configuration/
+/ACCESS_PROFILES.html	/admin/access-and-approvals/
+/TROUBLESHOOTING.html	/admin/troubleshooting/
+/TERMINAL_UX.html	/use/terminal-ui/
+/CONTEXT.html	/use/sessions-context/
+/TOOLS.html	/reference/tools-actions/
+/SEARCH.html	/use/research-search/
+/WORKFLOWS.html	/extend/workflows/authoring/
+/INTEGRATIONS.html	/extend/integrations/
+/SKILLS.html	/extend/skills/
+/PACKS.html	/extend/packs/
+/OFFLINE_AIRGAP.html	/admin/offline-airgap/
+/BUNDLE_FORMAT.html	/reference/bundle-format/
+/CONTRIBUTING.html	/develop/contributing/
+/ARCHITECTURE.html	/develop/architecture/
+/CRATE_STRUCTURE.html	/develop/crate-structure/
+/SECURITY.html	/develop/security-architecture/
+/FEATURE_INVENTORY.html	/	22-delivery-status=
+/RUST_RECONSTRUCTION.html	/develop/architecture/
+/RUST_ACCEPTANCE_MATRIX.html	/develop/setup-testing/
+/RELEASE.html	/get-started/upgrade-compatibility/
+/SUMMARY.html	/

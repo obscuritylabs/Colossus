@@ -1,0 +1,105 @@
+---
+status: archived
+replacement:
+  - /get-started/upgrade-compatibility/
+  - /develop/architecture/
+  - https://github.com/obscuritylabs/Colossus/blob/main/CHANGELOG.md
+---
+
+# Rust Runtime Status
+
+Rust 0.9.0 is the active repository-root implementation. It uses Rust 1.96, edition
+2024, strict YAML configuration, and encrypted redb state. It never imports Python
+configuration or SQLite state. Python 0.5 remains frozen at `python-v0.5.0` and on the
+`python-legacy` branch.
+
+## Implemented Baseline
+
+- The encrypted, hash-chained event journal is authoritative. It provides optimistic
+  streams, projections, signed checkpoints, protected anchors, recovery mode, unknown
+  effect recovery, audit views, and durable export work.
+- Every external or sensitive effect crosses the safety kernel and built-in or OPA
+  policy before a one-use permit reaches a private adapter. File, process, HTTP,
+  provider, MCP, integration, memory-index, workflow, and extension results remain
+  quarantined until any required release decision succeeds.
+- Native macOS/Linux isolation, Windows AppContainer plus Job Objects, and OCI fallback
+  share exact filesystem, process, environment, resource, and network obligations.
+- Role-routed echo, OpenAI Responses, and OpenAI-compatible providers feed one bounded
+  agent loop. Streaming items are normalized, individually released, and journaled
+  before an interface observes them.
+- `risk-auto` reviews approval-required `shell.run` requests through the policy-bound
+  `risk_evaluator` role with tools disabled. Only a strict `low + allow` result creates
+  an automatic proof; every other result or evaluator failure requires a prompt.
+- Sessions, context snapshots, tasks, decisions, plans, goals, subagents, memories,
+  research, skills, integrations, packs, bundles, presentation preferences, and
+  telemetry are durable application services rather than CLI state.
+- Tantivy is the offline memory index. Optional Chroma and embedding adapters are
+  disposable projections; canonical records are always reloaded and rechecked.
+- Hash-pinned YAML workflows support durable queueing, bounded control flow, waits,
+  idempotent retries, explicit compensation, subworkflows, cancellation, and restart
+  recovery. Persisted fixed-cadence schedules add deterministic skip/fire-once misfire
+  handling, atomic queued-run creation, explicit enable/disable, and process-kill-safe
+  reconstruction.
+- The authenticated worker and embedded runtime expose the same application API. The
+  Ratatui surface owns only editing/layout and renders released typed documents from an
+  `InteractiveHost`; protocol-v4 prompts and cancellation preserve the same boundaries.
+
+The detailed behavioral contract and acceptance evidence live in
+[Feature Inventory](feature-inventory.md) and
+[Rust Acceptance Matrix](rust-acceptance-matrix.md). Current security invariants live in
+[Security architecture](../../docs/develop/security-architecture.md); this status page
+intentionally does not duplicate them.
+
+## Run And Verify
+
+Initialize configuration and start an offline turn:
+
+```bash
+cargo run -p colossus-cli --bin colossus -- config init
+cargo run -p colossus-cli --bin colossus -- run 'Reply with exactly: ok'
+```
+
+Start the interactive surface:
+
+```bash
+cargo run -p colossus-cli --bin colossus
+```
+
+Run the required local implementation checks:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+See [Five-minute quickstart](../../docs/get-started/quickstart.md),
+[Use Colossus](../../docs/use/index.md), and
+[Configuration fields](../../docs/reference/configuration.md) for the supported
+configuration surface.
+
+## Release And Remaining Scope
+
+The repository-root cutover is complete. Version 0.9.0 adds provider-neutral search and
+signed collection/registry distribution to the previously published baseline. Ordinary
+`main` pushes run the inexpensive validation path; the full platform, security, and
+artifact matrix must pass through explicit release validation before `v0.9.0` is tagged.
+
+The latest published release evidence remains the
+[v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1),
+built from revision `eda0ce42a52b15d627b545067b64967aa95079ac`; its full
+[release validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29541847312)
+passed all native runtime, sandbox, policy, dependency, fuzz, and packaging jobs.
+
+PostgreSQL event storage, HTTPS WORM audit export, persisted schedules, authenticated
+webhooks, and durable repository-event subscriptions are included in the 0.8 source
+tree. Existing redb state remains authoritative unless an operator explicitly selects
+and provisions PostgreSQL; no automatic storage migration occurs.
+
+The 0.9.0 source also supports provider-neutral SearXNG/SerpAPI search routing,
+reproducible signed multi-pack/data-only-skill collections, no-clobber verified
+installation, and permit-bound authenticated registry pull/push using the same signed
+collection format. Search and registry use are opt-in; local pack, OCI, collection, and
+signed release-bundle verification retain credential-free offline paths. The
+[Feature Inventory](feature-inventory.md#22-delivery-status) is the archived product-level
+backlog; the acceptance matrix records executable evidence.

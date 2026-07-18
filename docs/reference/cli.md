@@ -1,0 +1,193 @@
+---
+title: CLI reference
+description: Global options, every public command route, defaults, and machine-output contracts.
+audience: developer
+type: reference
+---
+
+# CLI reference
+
+```text
+colossus [OPTIONS] <COMMAND>
+```
+
+## Global options
+
+| Option | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `--config PATH` | YAML path | `.colossus/config.yaml` | Select configuration |
+| `--approval-mode MODE` | `deny`, `ask`, `risk-auto`, `full-access` | See below | Satisfy existing approval obligations |
+| `--output FORMAT` | `auto`, `human`, `json` | `auto` | Select structured output rendering |
+| `--no-alt-screen` | Flag | Off | Run the TUI in an inline viewport |
+| `-h`, `--help` | Flag | — | Show command help |
+| `-V`, `--version` | Flag | — | Show binary version |
+
+Global options appear before the command:
+
+```bash
+colossus --config .colossus/config.yaml --approval-mode ask workflow list
+```
+
+Interactive TUI and the long-running bare `worker` default to `ask`. Other commands
+executed in-process default to `deny`; when an active worker handles a command, that
+worker's configured approval mode applies. Approval mode satisfies an existing approval
+obligation—it never changes an access or policy decision.
+
+## Command groups
+
+| Command | Purpose |
+| --- | --- |
+| `config` | Create and inspect strict YAML configuration |
+| `audit` | Verify, inspect, anchor, and export journal evidence |
+| `policy` | Diagnose built-in or OPA policy |
+| `projection` | Inspect, drain, or rebuild disposable projections |
+| `state` | Diagnose canonical storage, lease, repositories, and projection readiness |
+| `sandbox` | Diagnose native, OCI, or platform isolation |
+| `process` | Execute one exact program without an implicit shell |
+| `network` | Perform policy-allowed brokered HTTP requests |
+| `workflow` | Validate, register, run, trigger, recover, and inspect workflows |
+| `provider` | Inspect and diagnose model profiles |
+| `search` | Inspect and query provider-neutral search routes |
+| `models` | Inspect role-to-profile routing |
+| `tools` | Inspect the resolved strict tool catalog |
+| `sessions` | Create and inspect durable sessions; `run` and TUI attach or resume |
+| `work` | Render bounded actionable work for a session |
+| `preferences` | Inspect or reset presentation preferences |
+| `context` | Inspect, compact, snapshot, and restore long-session context |
+| `tasks` | Create and inspect session tasks |
+| `decisions` | Create and inspect binding key decisions |
+| `plans` | Create, inspect, and approve plans; `run --execute-plan` executes |
+| `goals` | Run and inspect bounded goals |
+| `agents` | Inspect and control durable child-agent jobs |
+| `memories` | Create, search, archive, supersede, and index memories |
+| `research` | Run and inspect source-backed research |
+| `telemetry` | Inspect metadata-only run telemetry |
+| `skills` | Discover, compose, author, validate, and install data-only skills |
+| `packs` | Verify and lifecycle-manage signed capability packs |
+| `collections` | Build, verify, and install signed collections |
+| `registry` | Pull and push authenticated collection transports |
+| `bundle` | Build, verify, and install signed offline bundles |
+| `integrations` | Manage persisted integrations and imported OpenAPI tools |
+| `mcp` | Discover and invoke configured MCP servers |
+| `run` | Execute one audited model turn through a configured role |
+| `echo` | Run the credential-free, network-free smoke provider |
+| `tui` | Start the interactive terminal interface |
+| `worker` | Own the writer lease and drain queued resumable work |
+
+## Complete route index
+
+Every public leaf route in the current binary appears below. Arguments in uppercase are
+positional:
+
+| Group | Leaf routes |
+| --- | --- |
+| `config` | `init`, `show`, `effective` |
+| `audit` | `verify`, `show`, `export`, `anchor-status`, `exporter-status`, `exporter-drain`, `exporter-reset` |
+| `policy` | `doctor` |
+| `projection` | `status`, `drain`, `rebuild [NAME]` |
+| `state` | `doctor` |
+| `sandbox` | `doctor` |
+| `process` | `run EXECUTABLE [-- ARGS...]` |
+| `network` | `get URL` |
+| `workflow` | `validate PATH`, `register PATH`, `list`, `show NAME VERSION`, `run NAME VERSION`, `status RUN_ID`, `resume RUN_ID`, `input RUN_ID INPUT`, `cancel RUN_ID` |
+| `workflow schedule` | `create SCHEDULE_ID NAME VERSION`, `list`, `show SCHEDULE_ID`, `enable SCHEDULE_ID`, `disable SCHEDULE_ID`, `tick` |
+| `workflow webhook` | `create WEBHOOK_ID NAME VERSION`, `list`, `show WEBHOOK_ID`, `enable WEBHOOK_ID`, `disable WEBHOOK_ID`, `ingest WEBHOOK_ID`, `serve` |
+| `workflow subscription` | `create SUBSCRIPTION_ID NAME VERSION`, `list`, `show SUBSCRIPTION_ID`, `enable SUBSCRIPTION_ID`, `disable SUBSCRIPTION_ID`, `tick` |
+| `provider` | `profiles`, `doctor [PROFILE]`, `models [PROFILE]` |
+| `search` | `profiles`, `query QUERY` |
+| `models` | `routes`, `route [ROLE]` |
+| `tools` | `list` |
+| `sessions` | `list`, `show SESSION_ID`, `messages SESSION_ID`, `new [TITLE]` |
+| `work` | `work [--session SESSION_ID]` |
+| `preferences` | `show`, `history`, `reset` |
+| `context` | `status SESSION_ID`, `list SESSION_ID`, `compact SESSION_ID`, `restore SESSION_ID SNAPSHOT_ID` |
+| `tasks` | `list [--session SESSION_ID]`, `show TASK_ID`, `create SESSION_ID TITLE`, `update TASK_ID` |
+| `decisions` | `list [--session SESSION_ID]`, `show DECISION_ID`, `create SESSION_ID TITLE DECISION`, `update DECISION_ID`, `archive DECISION_ID`, `supersede DECISION_ID TITLE DECISION` |
+| `plans` | `list`, `show PLAN_ID`, `create SESSION_ID PROMPT`, `approve PLAN_ID` |
+| `goals` | `list`, `show GOAL_ID`, `run OBJECTIVE --session SESSION_ID` |
+| `agents` | `queue SESSION_ID TASK`, `list`, `show JOB_ID`, `status`, `drain`, `cancel JOB_ID`, `requeue JOB_ID` |
+| `memories` | `list`, `show MEMORY_ID`, `search QUERY`, `create TEXT`, `archive MEMORY_ID`, `supersede MEMORY_ID TEXT` |
+| `memories index` | `status`, `sync`, `rebuild` |
+| `research` | `run QUESTION`, `list`, `show RUN_ID`, `sources RUN_ID`, `claims RUN_ID` |
+| `telemetry` | `runs`, `show RUN_ID`, `metrics` |
+| `skills` | `list`, `show NAME`, `duplicates`, `compose PROMPT`, `scaffold NAME DESCRIPTION`, `inspect NAME`, `file-read NAME PATH`, `write NAME PATH CONTENT`, `validate TARGET`, `install PATH`, `resources NAME`, `read NAME PATH` |
+| `packs` | `list`, `show NAME`, `verify PATH`, `validate PATH`, `install PATH`, `enable NAME`, `disable NAME`, `uninstall NAME`, `call TOOL` |
+| `packs trust` | `list`, `add PUBLISHER --public-key KEY` |
+| `collections` | `verify PATH`, `build SOURCE DESTINATION`, `install PATH` |
+| `registry` | `pull URL DESTINATION`, `push PATH URL` |
+| `bundle` | `key-info`, `verify PATH`, `build SOURCE DESTINATION`, `install PATH --prefix PATH` |
+| `integrations` | `list`, `show NAME`, `connect NAME`, `import-openapi NAME SPEC`, `disconnect NAME`, `call TOOL ARGUMENTS` |
+| `mcp` | `servers`, `tools`, `call SERVER TOOL ARGUMENTS` |
+| Top-level execution | `run [PROMPT]`, `echo MESSAGE`, `tui`, `worker` |
+
+## Important defaults and bounds
+
+| Route | Default or constraint |
+| --- | --- |
+| `audit show` | `--from 1`, `--limit 100` |
+| `audit export` | `--from 1`, `--limit 1000` |
+| `process run` | `--cwd .`; `--env KEY=VALUE` repeats; arguments after `--` are literal |
+| `workflow run` | `--inputs {}`; foreground unless `--queued` |
+| `workflow schedule create` | cadence required in `60..=2678400`; `--misfire fire-once`; enabled by default |
+| Schedule, webhook, subscription `list` | `--limit 100` |
+| `workflow webhook create` | `--replay-window-seconds 300`; `--max-body-bytes 1048576`; enabled by default |
+| `workflow webhook serve` | `--bind 127.0.0.1:8787` |
+| `search query` | `--role agent`; `--limit 10` |
+| `sessions list`, `research list`, `telemetry runs` | `--limit 20` |
+| Most record lists | `--limit 100` |
+| `goals run` | `--role primary`; `--max-iterations 5` in `1..=50` |
+| `agents queue` | `--role subagent_default` |
+| `research run` | `--depth standard`; `--source repo,web,mcp` |
+| `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume` |
+| `tui` | fresh session unless `--session` or `--resume` |
+| `worker` | serves authenticated local IPC; `--once`, `--status`, and `--shutdown` are mutually exclusive |
+
+`run --role` accepts any configured model role, not only `primary`. `--session` and
+`--resume` conflict. Plan creation and execution also conflict:
+`run --plan` creates a draft, while `run --execute-plan PLAN_ID` consumes an approved
+plan; add `--goal` to execute that plan through bounded Goal Mode.
+
+Clap help is the executable authority for every flag and value:
+
+```bash
+colossus COMMAND --help
+colossus COMMAND SUBCOMMAND --help
+```
+
+## JSON output contracts
+
+With `--output json`, one JSON value is written to stdout; diagnostics and optional
+streamed text stay on stderr. Lists are arrays unless the command returns a named page
+or status contract. Important roots are:
+
+| Commands | Root fields |
+| --- | --- |
+| `run` | `run_id`, nullable `session_id`, `role`, `profile`, `model`, `output`, `event_count`, `elapsed_seconds` |
+| `provider doctor` | `profile`, `provider`, `ready`, `tool_calls`, `streaming`, `checks` |
+| `search query` | Array of `rank`, `title`, `url`, `snippet`, nullable `source` |
+| `workflow status` | `run_id`, workflow identity/hash, parent/trigger linkage, `call_depth`, `status`, `inputs`, nullable `outputs`, completion/wait fields |
+| `sessions show` | `id`, nullable `title`, timestamps, `message_count`, nullable `last_run_id`, nullable `last_user_preview` |
+| `research show` | `id`, `session_id`, question/depth/source lanes, `status`, queries, progress, limitations, report/error, timestamps |
+| `telemetry metrics` | Aggregated run/tool/provider/context counters and duration totals |
+| `tools list`, `config effective` | Resolved tool/action records including exact names, source, class, decision, prerequisites, and bounds |
+
+Optional values are JSON `null`; enums and tagged states use documented lowercase
+snake-case strings. `config show` is the deliberate exception: it emits strict YAML so
+references can be reviewed intact. `audit export` emits one redacted JSON object per
+line. Do not parse human or TUI rendering.
+
+## Common routes
+
+```bash
+colossus config init
+colossus config effective
+colossus run "Summarize this repository"
+colossus tui
+colossus sessions list
+colossus workflow list
+colossus audit verify
+```
+
+Machine consumers should pass `--output json` and treat the command's documented JSON
+shape as the contract. Human output is optimized for reading and may change presentation
+without changing application semantics.

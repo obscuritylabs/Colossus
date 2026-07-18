@@ -55,7 +55,7 @@ where
         label: "R1".into(),
         kind: ResearchSourceKind::Repo,
         title: "Architecture".into(),
-        uri: "docs/ARCHITECTURE.md".into(),
+        uri: "docs/develop/architecture.md".into(),
         content: "The runtime is event sourced.".into(),
         query: "architecture".into(),
         metadata: BTreeMap::new(),

@@ -1,0 +1,362 @@
+---
+title: Configuration fields
+description: Strict YAML field groups, defaults, and constraints for Colossus configuration.
+audience: operator
+type: reference
+---
+
+# Configuration fields
+
+Colossus reads one strict YAML document selected by global `--config`. Unknown fields,
+invalid enum values, unsafe paths, incomplete profiles, and inconsistent grants fail
+before runtime construction. Field names are case-sensitive.
+
+## Complete baseline
+
+This credential-free baseline is parser-backed by the documentation contract:
+
+<!-- rust-config-example:start -->
+```yaml
+schemaVersion: 1
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
+storage:
+  path: .colossus/state.redb
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_JOURNAL_KEY
+    journal_key_id: journal-production
+    signing_variable: COLOSSUS_SIGNING_KEY
+    anchor_path: .colossus/secure-anchor.json
+policy:
+  kind: built_in
+  require_post_effect: false
+workflows:
+  repository: .colossus/workflows
+  user: workflows
+providers:
+  profiles:
+    echo:
+      kind: echo
+      model: echo
+      baseUrl: null
+      credentialReference: null
+      timeoutMs: 120000
+  roles:
+    primary: echo
+agent:
+  maxTurns: 24
+subagents:
+  maxConcurrent: 10
+sandbox:
+  backend: native
+  profile: offline-default
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem: []
+  executables: []
+  environment: []
+  networkDestinations: []
+  timeoutMs: 30000
+  maxOutputBytes: 1048576
+  maxProcesses: 16
+  maxMemoryBytes: 268435456
+  maxConcurrency: 1
+```
+<!-- rust-config-example:end -->
+
+Environment-key deployments require independent 32-byte journal and signing values at
+process launch. YAML contains names and identities, never the values.
+
+## Top-level groups
+
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `schemaVersion` | Yes | Strict configuration schema identity |
+| `access` | Yes | Tool selection and built-in action overrides |
+| `storage` | Yes | Journal adapter, key provider, and anchor |
+| `policy` | Yes | Built-in or OPA action decisions |
+| `workflows` | Yes | Repository and user workflow roots |
+| `providers` | No | Named model profiles and role routes; defaults to `echo` |
+| `agent` | No | Agent turn bound; defaults to `24` |
+| `subagents` | No | Child concurrency bound; defaults to `10` |
+| `sandbox` | No | Resource obligations and platform isolation defaults |
+| `context` | No | Long-session compaction controls |
+| `memory` | No | Lexical and optional semantic indexes |
+| `research` | No | Research bounds and compatibility search settings |
+| `search` | No | Named provider-neutral search profiles and routes |
+| `skills` | No | Skill roots, overrides, and disabled names |
+| `packs` | No | Pack installation root |
+| `mcp` | No | Exact stdio server declarations |
+| `audit` | No | External evidence exporter |
+
+## Access
+
+| Field | Values / constraint |
+| --- | --- |
+| `access.profile` | `minimal`, `development`, `allow_all`, `pinned` |
+| `access.tools.include` | Exact tool names; `*` allowed only as the sole wildcard selector |
+| `access.tools.exclude` | Exact tool names; no wildcard |
+| `access.actions.allow` | Exact action names |
+| `access.actions.requireApproval` | Exact action names |
+| `access.actions.deny` | Exact action names |
+
+Include/exclude entries cannot overlap. The three action lists cannot overlap. With
+`policy.kind: opa`, all action override lists are empty.
+
+## Providers and roles
+
+| Field | Values / constraint |
+| --- | --- |
+| `providers.profiles.NAME.kind` | `echo`, `open_ai_responses`, `open_ai_compatible` |
+| `.model` | Non-empty provider model identifier |
+| `.baseUrl` | URL including API path; remote endpoints use HTTPS |
+| `.credentialReference` | `env:VARIABLE` or `null` when supported |
+| `.timeoutMs` | Positive bounded duration |
+| `providers.roles.primary` | Required profile name |
+| Other role fields | Optional profile name; fall back to `primary` |
+
+Known specialized roles are `risk_evaluator`, `context_summarizer`,
+`subagent_default`, `research_planner`, `research_worker`, and
+`research_synthesizer`.
+
+## Storage
+
+| Field | Values / constraint |
+| --- | --- |
+| `storage.path` | Local state or instance path |
+| `storage.adapter` | Omitted/`redb`, or `postgres` |
+| `storage.keys.kind` | `platform` or `environment` |
+| Environment keys | Variable names, key identity, and separate anchor path |
+| Platform keys | Service plus journal/signing key identities |
+| `storage.postgres.connectionVariable` | Environment variable containing libpq URL or key/value string |
+| `storage.postgres.schema` | Deployment-owned schema |
+| `storage.postgres.tls.kind` | `webpki_roots`, `custom_ca`, or narrowly permitted `disabled` |
+| `storage.postgres.statementTimeoutMs` | Positive query bound |
+
+Disabled database TLS is accepted only for loopback or Unix-socket targets.
+
+## Policy and audit
+
+The built-in decision point accepts only:
+
+```yaml
+policy:
+  kind: built_in
+  require_post_effect: false
+```
+
+Remote OPA uses the complete field set below. Remote deployments require the CA and
+client identity paths; acknowledgements are explicit because OPA receives bounded
+logical request content after hard-secret replacement.
+
+```yaml
+policy:
+  kind: opa
+  base_url: https://opa.internal.example
+  decision_path: /v1/data/colossus/effect
+  ca_pem_path: /etc/colossus/opa-ca.pem
+  identity_pem_path: /etc/colossus/opa-client.pem
+  full_content_disclosure_acknowledged: true
+  decision_log_masking_verified: true
+  timeout_ms: 5000
+```
+
+`audit.exporter.kind` is `disabled` by default. The other exact variants are:
+
+```yaml
+audit:
+  exporter:
+    kind: directory
+    path: /var/lib/colossus/audit-export
+```
+
+```yaml
+audit:
+  exporter:
+    kind: worm_http
+    endpoint: https://evidence.example/colossus/
+    credentialReference: env:COLOSSUS_AUDIT_TOKEN
+```
+
+A WORM endpoint is credential-free, HTTPS, and ends with `/`. Its origin must appear in
+`sandbox.networkDestinations`; a credential reference also requires the variable name
+in `sandbox.environment`.
+
+## Sandbox
+
+| Field | Values / constraint |
+| --- | --- |
+| `backend` | `native`, `oci`, `windows_job`, `broker` |
+| `allowBrokerFallback` | Explicit downgrade acknowledgement |
+| `helperPath` | Exact helper path when configured |
+| `ociRuntime` | Exact Docker, Podman, or supported client executable |
+| `ociImage`, `ociProxyImage` | Preloaded immutable `@sha256:` references |
+| `filesystem` | Absolute roots with `read`, `write`, `metadata`, or `execute` mode |
+| `executables` | Absolute executable paths |
+| `environment` | Environment variable names |
+| `networkDestinations` | Canonical origins, no paths or wildcards |
+| `timeoutMs` | Effect timeout |
+| `maxOutputBytes` | Combined released-output bound |
+| `maxProcesses` | Process-tree bound |
+| `maxMemoryBytes` | Process-tree memory bound |
+| `maxConcurrency` | Concurrent sandbox work bound |
+
+## Context, memory, and research defaults
+
+```yaml
+context:
+  autoCompaction: true
+  contextWindowTokens: 32768
+  compactAtPercent: 70
+  targetPercent: 45
+  preserveRecentMessages: 8
+  modelAssisted: true
+memory:
+  indexEnabled: true
+  indexPath: null
+  retrievalLimit: 6
+  semantic:
+    kind: disabled
+research:
+  maxSources: 20
+  maxWorkers: 4
+  search:
+    kind: disabled
+```
+
+Tantivy is a disposable offline lexical index. `memory.semantic.kind: chroma` adds an
+optional candidate projection; canonical memory records remain in the journal.
+
+The Chroma variant is:
+
+```yaml
+memory:
+  indexEnabled: true
+  indexPath: null
+  retrievalLimit: 6
+  semantic:
+    kind: chroma
+    baseUrl: https://chroma.internal.example
+    tenant: colossus
+    database: production
+    collection: memories
+    credentialReference: env:CHROMA_TOKEN
+    timeoutMs: 30000
+    positionPath: .colossus/chroma-position.json
+    embedding:
+      kind: local
+      dimensions: 384
+```
+
+`embedding.kind` is `local` with `dimensions` in `64..=4096`, or
+`open_ai_compatible` with `profile`, `model`, `baseUrl`, optional
+`credentialReference`, `timeoutMs`, and optional `dimensions`. Every remote origin must
+also be a sandbox network destination.
+
+## Search
+
+```yaml
+search:
+  profiles:
+    local:
+      kind: searxng
+      endpoint: http://127.0.0.1:8888/search
+      credentialReference: null
+      timeoutMs: 30000
+  roles:
+    agent: local
+    research: local
+```
+
+Kinds are `searxng` and `serp_api`. SerpAPI requires
+`credentialReference: env:VARIABLE`; SearXNG may use one and defaults `authHeader` to
+`X-Searxng-Key`. Both profiles accept `userAgent` and `timeoutMs`, which default to
+`colossus/0.9` and `30000`. The only route names are `agent` and `research`. Every
+profile origin must be in `sandbox.networkDestinations`. Routes never silently fall
+back.
+
+## Skills, packs, workflows, and MCP
+
+```yaml
+workflows:
+  repository: .colossus/workflows
+  user: workflows
+skills:
+  enabled: true
+  allowUserOverrides: false
+  bundled: bundled-skills
+  repository: .colossus/skills
+  user: skills
+  disabled: []
+packs:
+  installRoot: .colossus/packs
+mcp:
+  servers:
+    local-docs:
+      command: /absolute/path/to/mcp-server
+      args: [--stdio]
+      workingDirectory: /absolute/path/to/repository
+      environment:
+        API_TOKEN: env:MCP_API_TOKEN
+      allowedTools: [search_docs]
+      researchTools:
+        - tool: search_docs
+          title: Internal documentation
+          arguments:
+            query: "{query}"
+      timeoutMs: 30000
+      maxOutputBytes: 1048576
+```
+
+Skill roots are paths; `disabled` accepts unique 1–128 character directory names made
+from ASCII letters, digits, `.`, `_`, and `-`. Pack installation uses only
+`packs.installRoot`.
+
+MCP supports at most 64 configured servers. `command` is an exact absolute executable
+also granted by the sandbox; the working directory needs a containing read or write
+grant; child environment names need both an `env:VARIABLE` reference and a sandbox
+environment grant. A server allows at most 1,024 unique tools and 64 research templates.
+Its optional timeout and output cap may only narrow the sandbox values, and output is at
+least 1,024 bytes.
+
+## Numeric constraints
+
+| Field | Constraint |
+| --- | --- |
+| `agent.maxTurns` | `1..=100`; default `24` |
+| `subagents.maxConcurrent` | At least `1`; default `10` |
+| `context.contextWindowTokens` | At least `1024` |
+| `context.targetPercent` | `1..99` and below `compactAtPercent` |
+| `context.compactAtPercent` | `1..99` |
+| `context.preserveRecentMessages` | At most `1024` |
+| `memory.retrievalLimit` | `1..=100`; default `6` |
+| `research.maxSources` | `1..=100`; default `20` |
+| `research.maxWorkers` | `1..=16`; default `4` |
+| `sandbox.timeoutMs` | Positive; backend-specific minimums may be higher |
+| `sandbox.maxOutputBytes` | At least `1024` |
+| `sandbox.maxProcesses`, `maxMemoryBytes`, `maxConcurrency` | Positive |
+| `storage.postgres.statementTimeoutMs` | `100..=300000`; default `30000` |
+
+## Validation commands
+
+```bash
+colossus --config .colossus/config.yaml config show
+colossus --config .colossus/config.yaml config effective
+colossus --config .colossus/config.yaml state doctor
+colossus --config .colossus/config.yaml policy doctor
+colossus --config .colossus/config.yaml sandbox doctor
+```
+
+`config show` is the authority for parsed values. `config effective` adds resolved tools,
+actions, sources, decisions, and unmet prerequisites without resolving credentials.

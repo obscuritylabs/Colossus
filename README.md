@@ -1,98 +1,74 @@
 # Colossus
 
-Colossus is an auditable agent and workflow runtime written in Rust. It combines a
-bounded model/tool loop, durable YAML workflows, an encrypted event journal, policy-bound
-effects, replaceable memory indexes, and an authenticated local worker.
+Colossus is an auditable runtime for agent work and durable automation. It combines a
+bounded model-and-tool loop, policy-controlled effects, resumable sessions, workflows,
+memory, research, and an encrypted event journal in one Rust binary.
 
-Version 0.9.0 is the active root implementation. Python 0.5 is frozen at the
-`python-v0.5.0` tag and on the `python-legacy` branch; new installations use fresh Rust
-YAML and fresh redb state.
+## Start in five minutes
 
-## Quick Start
-
-Rust 1.96 and edition 2024 are the source-build contract:
+Download the archive for your platform from
+[GitHub Releases](https://github.com/obscuritylabs/Colossus/releases), run the included
+`install.sh` or `install.ps1`, and then initialize a local configuration:
 
 ```bash
-cargo run --offline \
-  -p colossus-cli --bin colossus -- config init
-cargo run --offline \
-  -p colossus-cli --bin colossus -- run "hello"
-cargo run --offline \
-  -p colossus-cli --bin colossus -- audit verify
+colossus config init
+colossus run "Reply with exactly: ready"
+colossus audit verify
 ```
 
-The generated `echo` profile needs no provider credential or network. Native release
-archives contain `install.sh` or `install.ps1`; see [Installation](docs/INSTALLATION.md).
-
-With an installed binary:
+The generated `echo` provider is credential-free and makes this first run completely
+offline. Start the terminal UI with:
 
 ```bash
-colossus --config .colossus/config.yaml config init
-colossus --config .colossus/config.yaml run "Reply with exactly: connected"
-colossus --config .colossus/config.yaml
+colossus
 ```
 
-To operate on another repository, start Colossus from that repository and pass an
-absolute configuration path. The working directory selects workspace identity; it does
-not expand configured policy or sandbox grants.
+The working directory identifies the repository Colossus can reason about. Policy,
+approvals, and sandbox grants still determine which effects it may perform.
 
-## What It Provides
+[Read the five-minute quickstart](docs/get-started/quickstart.md) or open the
+[published documentation](https://obscuritylabs.github.io/Colossus/).
 
-- OpenAI Responses, OpenAI-compatible, and credential-free echo providers with role
-  routing, streaming, strict tool schemas, and durable multi-turn sessions.
-- Filesystem, Git, process, network, memory, research, integration, MCP, skill, pack,
-  signed-collection/registry, workflow, goal, and subagent operations routed through one
-  effect gateway.
-- Provider-neutral web search with explicit SearXNG or SerpAPI role routing shared by
-  agents, Deep Research, and operator diagnostics.
-- Metadata-driven access profiles coordinating tool visibility and built-in action
-  decisions, or strict OPA decisions, with explicit approval proofs, one-use permits,
-  bounded quarantine, and post-effect content release.
-- XChaCha20-Poly1305 journal payloads, hash chaining, signed checkpoints, secure anchors,
-  recovery mode, redacted audit views, PostgreSQL storage, and directory/HTTPS-WORM evidence export.
-- Canonical redb or PostgreSQL repositories, disposable projections, Tantivy lexical memory, optional
-  Chroma semantic memory, and an authenticated worker over local IPC.
-- A responsive Ratatui terminal UI with a durable scrollable transcript, pinned composer,
-  semantic Markdown/cards, overlays, completions, themes, and automatic JSON preservation
-  for redirected line mode.
+## What you can do
+
+- Run bounded agent tasks with streaming, durable sessions, explicit context controls,
+  and provider role routing.
+- Use filesystem, Git, process, search, research, memory, integration, MCP, workflow,
+  goal, and subagent capabilities through one effect gateway.
+- Automate repeatable work with validated YAML workflows, schedules, webhooks,
+  recovery, signed packs, and collections.
+- Apply access profiles, approvals, OPA policy, sandbox limits, encrypted journaling,
+  audit verification, and offline operation without hiding security decisions in a UI.
 
 ## Documentation
 
-- [Searchable documentation site](https://obscuritylabs.github.io/Colossus/)
-- [Getting Started](docs/GETTING_STARTED.md)
-- [User Guide](docs/USER_GUIDE.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Unified Access Profiles](docs/ACCESS_PROFILES.md)
-- [Built-in Tools](docs/TOOLS.md)
-- [Terminal UX](docs/TERMINAL_UX.md)
-- [Workflows](docs/WORKFLOWS.md)
-- [Integrations](docs/INTEGRATIONS.md)
-- [Security Model](docs/SECURITY.md)
-- [Runtime Status](docs/RUST_RECONSTRUCTION.md)
-- [Feature Inventory](docs/FEATURE_INVENTORY.md#22-delivery-status)
-- [Rust Acceptance Matrix](docs/RUST_ACCEPTANCE_MATRIX.md)
+- [Get started](docs/get-started/index.md) — install, connect a model, and complete a
+  first repository task.
+- [Use Colossus](docs/use/index.md) — sessions, the terminal UI, durable work, goals,
+  memories, and research.
+- [Automate and extend](docs/extend/index.md) — workflows, skills, integrations, MCP,
+  packs, and registries.
+- [Administer and secure](docs/admin/index.md) — configuration, routing, access,
+  policy, storage, audit, offline operation, and troubleshooting.
+- [Reference](docs/reference/index.md) — CLI, TUI, configuration, schemas, manifests,
+  limits, and glossary.
+- [Develop](docs/develop/index.md) — source setup, architecture, security boundaries,
+  test tiers, and documentation authoring.
 
-## Development
+Release history lives in [CHANGELOG.md](CHANGELOG.md). Report vulnerabilities using
+the private process in [SECURITY.md](SECURITY.md).
 
-Use focused crate tests while editing, then run the fast workspace tier:
+## Develop
 
-```bash
-cargo test -p colossus-runtime --lib
-cargo test-fast
-```
+Contributor setup, the Rust toolchain contract, focused test tiers, and completion
+gates live in [Develop Colossus](docs/develop/index.md). Keeping source-build commands
+there lets the installation and first-run paths stay binary-first.
 
-For cold or cross-worktree compilation, install `sccache` and prefix Cargo commands with
-`./scripts/cargo-sccache`. See [Contributing](docs/CONTRIBUTING.md) for cache behavior,
-test tiers, and examples.
-
-Run the authoritative Rust gates from the repository root:
+Build or preview the documentation through the pinned containerized toolchain:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
+./scripts/docs-site build
+./scripts/docs-site serve
 ```
 
-The frozen Python implementation is maintained only on its tag and legacy branch; its
-commands, configuration, state, and packaging are not part of the active Rust contract.
+The project is licensed under [Apache License 2.0](LICENSE).
