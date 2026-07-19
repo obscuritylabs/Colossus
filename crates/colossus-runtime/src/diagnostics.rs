@@ -80,7 +80,7 @@ impl Runtime {
         report.canonical_workspace = Some(self.workspace.clone());
         report.sandbox_profile = self.sandbox_profile.clone();
         report.protected_path_exclusions_supported = match self.sandbox_backend.as_str() {
-            "native" => cfg!(any(target_os = "linux", target_os = "macos")),
+            "native" => report.protected_path_exclusions_supported,
             "windows_job" => cfg!(target_os = "windows"),
             "oci" => true,
             _ => false,

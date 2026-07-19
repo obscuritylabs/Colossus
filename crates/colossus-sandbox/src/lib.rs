@@ -70,7 +70,7 @@ use process::*;
 
 mod helper;
 use helper::*;
-pub use helper::{SandboxHelperError, run_helper_stdio};
+pub use helper::{SandboxHelperError, run_helper_stdio, run_native_protection_probe};
 
 mod oci;
 use oci::*;

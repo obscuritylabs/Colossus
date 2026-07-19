@@ -98,7 +98,8 @@ Open `result.json` and confirm that it contains `"profile": "echo"` and
 - **Development sandbox is unsupported:** initialize with
   `--sandbox-profile offline-default` for the network-free echo smoke, then review the
   platform-specific [Sandbox](../admin/sandbox.md) requirements before enabling shell
-  work.
+  work. Ubuntu's AppArmor user-namespace restriction may require the release archive's
+  exact-path profile for a root-owned Colossus installation.
 
 ## Next step
 

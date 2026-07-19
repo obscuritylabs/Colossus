@@ -87,10 +87,23 @@ fn sandbox_helper_requested(mut arguments: impl Iterator<Item = std::ffi::OsStri
         .is_some_and(|argument| argument == "__sandbox-helper")
 }
 
+fn sandbox_protection_probe_requested(
+    mut arguments: impl Iterator<Item = std::ffi::OsString>,
+) -> bool {
+    let _binary = arguments.next();
+    arguments
+        .next()
+        .is_some_and(|argument| argument == "__sandbox-protection-probe")
+}
+
 #[cfg(not(windows))]
 fn main() -> Result<(), Box<dyn Error>> {
     if sandbox_helper_requested(std::env::args_os()) {
         colossus_sandbox::run_helper_stdio()?;
+        return Ok(());
+    }
+    if sandbox_protection_probe_requested(std::env::args_os()) {
+        colossus_sandbox::run_native_protection_probe()?;
         return Ok(());
     }
     runtime_main()
@@ -100,6 +113,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn main() -> Result<(), Box<dyn Error>> {
     if sandbox_helper_requested(std::env::args_os()) {
         colossus_sandbox::run_helper_stdio()?;
+        return Ok(());
+    }
+    if sandbox_protection_probe_requested(std::env::args_os()) {
+        colossus_sandbox::run_native_protection_probe()?;
         return Ok(());
     }
     // MSVC executables reserve a smaller main-thread stack than the other supported

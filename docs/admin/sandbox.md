@@ -17,6 +17,8 @@ Permit only named resources and bounded effects for repository work.
 - Canonical absolute paths for explicit roots and executables.
 - Exact private origins, if private or loopback network access is required.
 - A supported native backend or a preloaded immutable OCI image.
+- On Ubuntu 24.04 or later with restricted unprivileged user namespaces, the
+  exact-path AppArmor profile from the Linux release archive.
 
 ## Steps
 
@@ -78,6 +80,23 @@ Permit only named resources and bounded effects for repository work.
     colossus --config .colossus/config.yaml config effective
     ```
 
+   On affected Ubuntu hosts, `protected_path_exclusions_supported: false` and an
+   AppArmor message mean the host admitted the user namespace but denied the mount
+   capability needed to mask `.colossus`. Install Colossus at a root-owned path and
+   load the archive's exact-path profile:
+
+    ```bash
+    sudo ./install.sh --prefix /usr/local
+    sudo ./install-apparmor.sh /usr/local/bin/colossus
+    /usr/local/bin/colossus -w /path/to/repository sandbox doctor
+    ```
+
+   The installer rejects symlinks, user-replaceable binaries, user-replaceable parent
+   directories, and AppArmor metacharacters. The profile grants `userns` only to that
+   exact executable; Colossus still drops and locks namespace capabilities before
+   starting the requested command. Do not attach the profile to a user-local
+   installation. Use OCI when a root-owned installation is not available.
+
 5. Exercise each effect in a disposable repository before granting it in production.
 
 `shell.run` accepts exactly one of `command` or `argv`. `command` runs a bounded
@@ -124,9 +143,10 @@ connections. Retain the diagnostic and audit evidence.
 
 ## Failure path
 
-Treat unavailable native isolation, an invalid helper, an unpinned OCI image, resource
-cleanup uncertainty, or Windows isolation setup failure as a blocked effect. Colossus
-fails closed; it does not silently fall back to broker execution.
+Treat unavailable native isolation, a failed protected-path probe, an invalid helper, an
+unpinned OCI image, resource cleanup uncertainty, or Windows isolation setup failure as
+a blocked effect. Colossus fails closed; it does not silently fall back to broker
+execution.
 
 ## Next step
 

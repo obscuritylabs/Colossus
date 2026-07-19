@@ -12,6 +12,16 @@ fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
             .into_iter()
             .map(std::ffi::OsString::from)
     ));
+    assert!(sandbox_protection_probe_requested(
+        ["colossus", "__sandbox-protection-probe"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+    ));
+    assert!(!sandbox_protection_probe_requested(
+        ["colossus", "sandbox", "doctor"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+    ));
 }
 
 #[test]

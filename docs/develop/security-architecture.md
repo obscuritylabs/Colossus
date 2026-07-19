@@ -84,6 +84,11 @@ it locks root and ambient-capability securebits, enables no-new-privileges, and 
 the ambient, bounding, permitted, effective, and inheritable capability sets before
 the requested executable starts. The shell therefore cannot unmount its control-state
 masks even though the helper needed namespace-local mount authority during setup.
+On Linux, `sandbox doctor` re-executes the trusted helper in a bounded, no-I/O probe to
+prove that user and mount namespaces can actually be established. Ubuntu hosts that
+restrict unprivileged user namespaces require the shipped AppArmor profile, which grants
+`userns` to one canonical root-owned executable path rather than weakening the
+host-wide restriction.
 The `workspace-development` profile derives workspace authority only for users and
 agents without workflow lineage; control-state paths are denied or masked before the
 command starts.

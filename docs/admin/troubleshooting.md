@@ -35,6 +35,7 @@ colossus --config .colossus/config.yaml tools list
 | Worker rejects the client | `worker --status` workspace | Client and worker selected different canonical workspaces | Restart one side with the same `--workspace`; mismatch is never silently accepted |
 | Shell tool is missing | `config effective` sandbox report | `offline-default`, no explicit executable, unsupported protection, or workflow scope | Use `workspace-development` for an eligible actor or add exact grants |
 | Shell is denied | Action decision and approval mode | `development` requires approval for execution | Use `ask`, or reviewed `risk-auto` for eligible non-workflow shell calls |
+| Linux protected-path probe fails | `sandbox doctor` native details | Ubuntu AppArmor restricts capabilities in unprivileged user namespaces | Install the release archive's exact-path profile against a root-owned Colossus binary, or use OCI; never weaken the host-wide restriction |
 | Public request is denied | `sandbox doctor` destinations | `*` never matches loopback/private/link-local/metadata | Add the exact canonical private origin only when intended |
 | Worker is unavailable | `worker --status` | Writer lease, stale endpoint, key/permission mismatch, incompatible protocol | Preserve state; stop or repair the owning worker |
 | Read-only recovery | `audit verify` and `audit anchor-status` | Chain, checkpoint, anchor, decryption, or projection-position failure | Preserve evidence and investigate; never rewrite canonical events |

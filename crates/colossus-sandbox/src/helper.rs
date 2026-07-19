@@ -47,6 +47,24 @@ pub fn run_helper_stdio() -> Result<(), SandboxHelperError> {
     Ok(())
 }
 
+/// Probe the Linux namespace operations required to mask protected paths.
+///
+/// This runs only through the trusted helper executable before an asynchronous runtime
+/// starts. The process exits immediately, so its private namespaces are discarded.
+#[cfg(target_os = "linux")]
+pub fn run_native_protection_probe() -> Result<(), SandboxHelperError> {
+    enter_linux_protected_namespace()?;
+    drop_linux_namespace_privileges()
+}
+
+/// Non-Linux native backends do not require the rootless mount-namespace probe.
+#[cfg(not(target_os = "linux"))]
+pub fn run_native_protection_probe() -> Result<(), SandboxHelperError> {
+    Err(SandboxHelperError::Setup(
+        "the native protected-path probe is available only on Linux".into(),
+    ))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SandboxJobResult {
@@ -237,31 +255,14 @@ fn apply_protected_filesystem(
     _capabilities: &mut CapabilitySet,
     job: &SandboxJob,
 ) -> Result<(), SandboxHelperError> {
-    use nix::sched::{CloneFlags, unshare};
-    use rustix::{
-        mount::{MountFlags, MountPropagationFlags, mount_bind, mount_change, mount_remount},
-        process::{getgid, getuid},
+    use rustix::mount::{
+        MountFlags, MountPropagationFlags, mount_bind, mount_change, mount_remount,
     };
 
     if job.obligations.protected_filesystem.is_empty() {
         return Ok(());
     }
-    let uid = getuid().as_raw();
-    let gid = getgid().as_raw();
-    unshare(CloneFlags::CLONE_NEWUSER)
-        .map_err(|error| SandboxHelperError::Setup(format!("unshare user namespace: {error}")))?;
-    deny_linux_setgroups(Path::new("/proc/self/setgroups"))?;
-    write_linux_proc_file(Path::new("/proc/self/uid_map"), &format!("0 {uid} 1\n"))
-        .map_err(|error| SandboxHelperError::Setup(format!("map sandbox uid: {error}")))?;
-    write_linux_proc_file(Path::new("/proc/self/gid_map"), &format!("0 {gid} 1\n"))
-        .map_err(|error| SandboxHelperError::Setup(format!("map sandbox gid: {error}")))?;
-    unshare(CloneFlags::CLONE_NEWNS)
-        .map_err(|error| SandboxHelperError::Setup(format!("unshare mount namespace: {error}")))?;
-    mount_change(
-        "/",
-        MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
-    )
-    .map_err(|error| SandboxHelperError::Setup(format!("isolate mount propagation: {error}")))?;
+    enter_linux_protected_namespace()?;
 
     let mask = std::env::temp_dir().join(format!("colossus-mask-{}", job.job_id));
     fs::create_dir(&mask)
@@ -294,6 +295,32 @@ fn apply_protected_filesystem(
         .map_err(|error| SandboxHelperError::Setup(format!("remove path mask source: {error}")))?;
     drop_linux_namespace_privileges()?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn enter_linux_protected_namespace() -> Result<(), SandboxHelperError> {
+    use nix::sched::{CloneFlags, unshare};
+    use rustix::{
+        mount::{MountPropagationFlags, mount_change},
+        process::{getgid, getuid},
+    };
+
+    let uid = getuid().as_raw();
+    let gid = getgid().as_raw();
+    unshare(CloneFlags::CLONE_NEWUSER)
+        .map_err(|error| SandboxHelperError::Setup(format!("unshare user namespace: {error}")))?;
+    deny_linux_setgroups(Path::new("/proc/self/setgroups"))?;
+    write_linux_proc_file(Path::new("/proc/self/uid_map"), &format!("0 {uid} 1\n"))
+        .map_err(|error| SandboxHelperError::Setup(format!("map sandbox uid: {error}")))?;
+    write_linux_proc_file(Path::new("/proc/self/gid_map"), &format!("0 {gid} 1\n"))
+        .map_err(|error| SandboxHelperError::Setup(format!("map sandbox gid: {error}")))?;
+    unshare(CloneFlags::CLONE_NEWNS)
+        .map_err(|error| SandboxHelperError::Setup(format!("unshare mount namespace: {error}")))?;
+    mount_change(
+        "/",
+        MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
+    )
+    .map_err(|error| SandboxHelperError::Setup(format!("isolate mount propagation: {error}")))
 }
 
 #[cfg(target_os = "linux")]

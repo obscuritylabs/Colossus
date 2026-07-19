@@ -132,21 +132,40 @@ pub struct SandboxDoctorReport {
 
 /// Return bounded local sandbox readiness.
 pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let (native_supported, native_details) = {
+    #[cfg(target_os = "linux")]
+    let (native_supported, native_details, protected_path_exclusions_supported) = {
         let support = Sandbox::support_info();
-        (support.is_supported, support.details)
+        let (protected, protection_details) = if support.is_supported {
+            probe_linux_protected_paths(&config.helper_executable)
+        } else {
+            (
+                false,
+                "protected-path namespaces require the native backend".into(),
+            )
+        };
+        (
+            support.is_supported,
+            format!("{}; {protection_details}", support.details),
+            protected,
+        )
+    };
+    #[cfg(target_os = "macos")]
+    let (native_supported, native_details, protected_path_exclusions_supported) = {
+        let support = Sandbox::support_info();
+        (support.is_supported, support.details, support.is_supported)
     };
     #[cfg(target_os = "windows")]
-    let (native_supported, native_details) = (
+    let (native_supported, native_details, protected_path_exclusions_supported) = (
         true,
         "AppContainer filesystem and authenticated WFP proxy-only network isolation with atomically attached Job Object"
             .to_owned(),
+        true,
     );
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    let (native_supported, native_details) = (
+    let (native_supported, native_details, protected_path_exclusions_supported) = (
         false,
         "native isolation is unavailable; configure the OCI backend".to_owned(),
+        false,
     );
     SandboxDoctorReport {
         platform: std::env::consts::OS.into(),
@@ -157,11 +176,7 @@ pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
         oci_image_configured: config.oci_image.is_some(),
         canonical_workspace: None,
         sandbox_profile: String::new(),
-        protected_path_exclusions_supported: cfg!(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "windows"
-        )),
+        protected_path_exclusions_supported,
         protected_paths: Vec::new(),
         resolved_shell: None,
         development_actor_scope: String::new(),
@@ -172,5 +187,70 @@ pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
         derived_executables: Vec::new(),
         network_destinations: Vec::new(),
         public_network_wildcard: None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn probe_linux_protected_paths(helper_executable: &Path) -> (bool, String) {
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+    let mut child = match Command::new(helper_executable)
+        .arg("__sandbox-protection-probe")
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return (
+                false,
+                format!("protected-path namespace probe could not start: {error}"),
+            );
+        }
+    };
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                return (
+                    true,
+                    "rootless protected-path mount namespaces are available".into(),
+                );
+            }
+            Ok(Some(_)) => return (false, linux_protection_failure_details()),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return (
+                    false,
+                    "protected-path namespace probe exceeded its 3 second bound".into(),
+                );
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return (
+                    false,
+                    format!("protected-path namespace probe failed: {error}"),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_protection_failure_details() -> String {
+    let apparmor_restricted =
+        fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+            .is_ok_and(|value| value.trim() == "1");
+    if apparmor_restricted {
+        "rootless protected-path namespaces are blocked by the host AppArmor user-namespace restriction; install the exact-path Colossus AppArmor profile or use OCI"
+            .into()
+    } else {
+        "rootless protected-path mount namespaces are unavailable; use a supported native host or OCI"
+            .into()
     }
 }
