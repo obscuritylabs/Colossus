@@ -1141,6 +1141,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "ignore",
+ "nix 0.31.3",
  "nono",
  "rappct",
  "regex",

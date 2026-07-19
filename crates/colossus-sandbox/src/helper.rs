@@ -237,10 +237,10 @@ fn apply_protected_filesystem(
     _capabilities: &mut CapabilitySet,
     job: &SandboxJob,
 ) -> Result<(), SandboxHelperError> {
+    use nix::sched::{CloneFlags, unshare};
     use rustix::{
         mount::{MountFlags, MountPropagationFlags, mount_bind, mount_change, mount_remount},
         process::{getgid, getuid},
-        thread::{UnshareFlags, unshare},
     };
 
     if job.obligations.protected_filesystem.is_empty() {
@@ -248,8 +248,8 @@ fn apply_protected_filesystem(
     }
     let uid = getuid().as_raw();
     let gid = getgid().as_raw();
-    unshare(UnshareFlags::NEWUSER | UnshareFlags::NEWNS)
-        .map_err(|error| SandboxHelperError::Setup(format!("unshare mount namespace: {error}")))?;
+    unshare(CloneFlags::CLONE_NEWUSER)
+        .map_err(|error| SandboxHelperError::Setup(format!("unshare user namespace: {error}")))?;
     if Path::new("/proc/self/setgroups").exists() {
         fs::write("/proc/self/setgroups", "deny")
             .map_err(|error| SandboxHelperError::Setup(format!("deny setgroups: {error}")))?;
@@ -258,6 +258,8 @@ fn apply_protected_filesystem(
         .map_err(|error| SandboxHelperError::Setup(format!("map sandbox uid: {error}")))?;
     fs::write("/proc/self/gid_map", format!("0 {gid} 1\n"))
         .map_err(|error| SandboxHelperError::Setup(format!("map sandbox gid: {error}")))?;
+    unshare(CloneFlags::CLONE_NEWNS)
+        .map_err(|error| SandboxHelperError::Setup(format!("unshare mount namespace: {error}")))?;
     mount_change(
         "/",
         MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,

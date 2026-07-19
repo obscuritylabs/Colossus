@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
+    assert!(sandbox_helper_requested(
+        ["colossus", "__sandbox-helper"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+    ));
+    assert!(!sandbox_helper_requested(
+        ["colossus", "sandbox", "doctor"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+    ));
+}
+
+#[test]
 fn embedded_fallback_requires_an_absent_worker_not_a_busy_worker() {
     assert!(worker_probe_allows_embedded_fallback(
         &colossus_worker::WorkerError::Unavailable("worker-endpoint".into())

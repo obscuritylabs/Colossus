@@ -80,13 +80,28 @@ use worker_shell::*;
 use workflow_args::*;
 use workflow_commands::*;
 
+fn sandbox_helper_requested(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> bool {
+    let _binary = arguments.next();
+    arguments
+        .next()
+        .is_some_and(|argument| argument == "__sandbox-helper")
+}
+
 #[cfg(not(windows))]
 fn main() -> Result<(), Box<dyn Error>> {
+    if sandbox_helper_requested(std::env::args_os()) {
+        colossus_sandbox::run_helper_stdio()?;
+        return Ok(());
+    }
     runtime_main()
 }
 
 #[cfg(windows)]
 fn main() -> Result<(), Box<dyn Error>> {
+    if sandbox_helper_requested(std::env::args_os()) {
+        colossus_sandbox::run_helper_stdio()?;
+        return Ok(());
+    }
     // MSVC executables reserve a smaller main-thread stack than the other supported
     // platforms. Debug runtime composition can exceed that reserve before a command is
     // dispatched, so keep the actual async entrypoint on one explicitly bounded thread.
