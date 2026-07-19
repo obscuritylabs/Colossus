@@ -131,10 +131,6 @@ body:has(.home-page) .md-main__inner {
   max-width: 66.2rem;
 }
 
-body:has(.home-page) .md-sidebar--secondary {
-  display: none;
-}
-
 body:has(.home-page) .md-content {
   max-width: 100%;
 }
@@ -156,7 +152,7 @@ body:has(.home-page) .md-content__button {
 .md-typeset .home-hero {
   display: block;
   min-height: 15rem;
-  padding: 0.7rem 13rem 2.4rem 0.7rem;
+  padding: 0.7rem 0 2.4rem 0.7rem;
 }
 
 .md-typeset .home-hero__copy h1 {
@@ -216,43 +212,25 @@ body:has(.home-page) .md-content__button {
   display: block;
   margin: 0 0 1.25rem;
   max-width: none;
-  overflow: hidden;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
   text-align: left;
   width: 100%;
 }
 
-.md-typeset .home-proof__slice {
-  background: var(--colossus-navy-950);
-  overflow: hidden;
-  position: relative;
-}
-
-.md-typeset .home-proof__slice img {
+.md-typeset .home-proof__image {
   border: 0;
   display: block;
+  height: auto;
   margin: 0;
   max-width: none;
-  position: absolute;
+  min-width: 0;
   width: 100%;
 }
 
-.md-typeset .home-proof__slice--top {
-  height: 8.8rem;
-}
-
-.md-typeset .home-proof__slice--top img {
-  left: 0;
-  top: 0;
-}
-
-.md-typeset .home-proof__slice--bottom {
-  border-top: 1px solid rgb(125 211 252 / 16%);
-  height: 5.5rem;
-}
-
-.md-typeset .home-proof__slice--bottom img {
-  bottom: 0;
-  left: 0;
+.md-typeset figure.home-proof:focus-visible {
+  outline: 0.15rem solid var(--md-accent-fg-color);
+  outline-offset: 0.15rem;
 }
 
 .md-typeset .home-audiences,
@@ -427,16 +405,6 @@ body:has(.home-page) .md-content__button {
     max-width: 66.2rem;
   }
 
-  body:has(.home-page) .md-sidebar--primary {
-    display: none;
-  }
-
-  body:has(.home-page) .md-sidebar--secondary {
-    display: block;
-    margin-left: -12.1rem;
-    z-index: 2;
-  }
-
   body:has(.home-page) .md-sidebar--secondary .md-sidebar__inner {
     border-left: 1px solid var(--colossus-home-line);
     padding-left: 1rem;
@@ -452,13 +420,6 @@ body:has(.home-page) .md-content__button {
     margin-top: 0.24rem;
   }
 
-  body:has(.home-page) .md-content {
-    flex: 0 0 100%;
-  }
-
-  body:has(.home-page) .md-content__inner {
-    margin-inline: 0;
-  }
 }
 
 .md-typeset .diagram-scroll {
@@ -550,17 +511,8 @@ body:has(.home-page) .md-content__button {
     width: 100%;
   }
 
-  .md-typeset .home-proof__slice--top {
-    height: auto;
-  }
-
-  .md-typeset .home-proof__slice--top img {
-    max-width: 100%;
-    position: static;
-  }
-
-  .md-typeset .home-proof__slice--bottom {
-    display: none;
+  .md-typeset .home-proof__image {
+    min-width: 42rem;
   }
 
   .md-typeset .home-audience-grid {

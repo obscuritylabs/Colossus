@@ -3,6 +3,8 @@ title: Colossus
 description: Run auditable AI agents, durable workflows, and trusted extensions from one local-first runtime.
 audience: user
 type: concept
+hide:
+  - navigation
 ---
 
 <div class="home-page" markdown>
@@ -28,20 +30,12 @@ evidence stay visible.</p>
 
 </div>
 
-<figure class="home-proof">
-  <div class="home-proof__slice home-proof__slice--top">
-    <img
-      src="assets/screenshots/tui-offline-session.png"
-      alt="The real Colossus terminal UI showing a deterministic offline prompt and echo-provider response"
-    >
-  </div>
-  <div class="home-proof__slice home-proof__slice--bottom" aria-hidden="true">
-    <img src="assets/screenshots/tui-offline-session.png" alt="">
-  </div>
-  <figcaption class="home-visually-hidden">
-    Two regions from one deterministic offline session show the transcript, composer,
-    approval mode, provider, context, and completion status.
-  </figcaption>
+<figure class="home-proof" tabindex="0">
+  <img
+    class="home-proof__image"
+    src="assets/screenshots/tui-offline-session.png"
+    alt="Colossus terminal showing a completed offline prompt, composer, approval mode, and successful status"
+  >
 </figure>
 
 <section class="home-outcomes" aria-labelledby="why-colossus" markdown>

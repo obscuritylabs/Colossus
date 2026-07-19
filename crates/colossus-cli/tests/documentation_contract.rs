@@ -384,8 +384,21 @@ fn internal_archives_and_legacy_routes_are_explicitly_accounted_for() {
     let capture = read("documentation/tui-offline-session.txt");
     assert_eq!(
         capture.lines().count(),
-        34,
-        "the real TUI capture must remain a fixed 112x34 frame"
+        12,
+        "the real TUI capture must remain a fixed 112x12 frame"
+    );
+    let capture_width = capture
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .expect("the real TUI capture must not be empty");
+    assert_eq!(
+        capture_width, 112,
+        "the real TUI capture must retain its 112-column display width"
+    );
+    assert!(
+        capture.lines().all(|line| line.chars().count() <= 112),
+        "the real TUI capture must not overflow its 112-column display width"
     );
     for marker in [
         "› You",
@@ -406,6 +419,41 @@ fn internal_archives_and_legacy_routes_are_explicitly_accounted_for() {
         screenshot.starts_with(b"\x89PNG\r\n\x1a\n"),
         "the homepage TUI screenshot must be a literal PNG capture"
     );
+    assert!(
+        screenshot.len() >= 33,
+        "the homepage TUI screenshot must contain a complete PNG IHDR chunk"
+    );
+    assert_eq!(
+        u32::from_be_bytes(screenshot[8..12].try_into().expect("IHDR length")),
+        13,
+        "the homepage TUI screenshot must begin with a 13-byte IHDR chunk"
+    );
+    assert_eq!(
+        &screenshot[12..16],
+        b"IHDR",
+        "the homepage TUI screenshot must begin with an IHDR chunk"
+    );
+    let width = u32::from_be_bytes(screenshot[16..20].try_into().expect("PNG width"));
+    let height = u32::from_be_bytes(screenshot[20..24].try_into().expect("PNG height"));
+    assert_eq!(
+        (width, height),
+        (1184, 304),
+        "the homepage TUI screenshot must retain its reproducible compact composition"
+    );
+    let renderer = read("scripts/render-docs-tui-capture");
+    for marker in [
+        "pango-view",
+        "Menlo 17",
+        "#06182a",
+        "#dceeff",
+        "--margin=\"28 32\"",
+        "--antialias=gray",
+    ] {
+        assert!(
+            renderer.contains(marker),
+            "the TUI screenshot renderer is missing {marker:?}"
+        );
+    }
     assert!(
         !repository_root()
             .join("docs/assets/screenshots/tui-offline-session.svg")
