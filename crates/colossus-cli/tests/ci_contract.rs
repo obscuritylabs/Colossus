@@ -92,8 +92,8 @@ fn linux_user_namespace_profile_is_exact_hardened_and_accepted() {
     for required in [
         "Prepare exact-path AppArmor profile for workspace tests",
         "Install exact-path AppArmor profile for Linux acceptance",
-        "/opt/colossus-ci/colossus",
-        "COLOSSUS_NATIVE_TEST_BINARY=/opt/colossus-ci/colossus",
+        "/usr/local/libexec/colossus-ci/colossus",
+        "COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus",
         "release/install-apparmor.sh \"$stage/install-apparmor.sh\"",
         "release/colossus.apparmor.in \"$stage/colossus.apparmor.in\"",
     ] {

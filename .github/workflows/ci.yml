@@ -150,11 +150,11 @@ jobs:
         shell: bash
         run: |
           cargo build --locked -p colossus-cli --bin colossus
-          sudo install -d -o root -g root -m 0755 /opt/colossus-ci
+          sudo install -d -o root -g root -m 0755 /usr/local/libexec/colossus-ci
           sudo install -o root -g root -m 0755 \
-            target/debug/colossus /opt/colossus-ci/colossus
-          sudo release/install-apparmor.sh /opt/colossus-ci/colossus
-          echo 'COLOSSUS_NATIVE_TEST_BINARY=/opt/colossus-ci/colossus' >> "$GITHUB_ENV"
+            target/debug/colossus /usr/local/libexec/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/local/libexec/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus' >> "$GITHUB_ENV"
 
       - name: Run workspace tests
         run: cargo test --locked --workspace
@@ -211,11 +211,11 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          sudo install -d -o root -g root -m 0755 /opt/colossus-ci
+          sudo install -d -o root -g root -m 0755 /usr/local/libexec/colossus-ci
           sudo install -o root -g root -m 0755 \
-            target/debug/colossus /opt/colossus-ci/colossus
-          sudo release/install-apparmor.sh /opt/colossus-ci/colossus
-          echo 'COLOSSUS_NATIVE_TEST_BINARY=/opt/colossus-ci/colossus' >> "$GITHUB_ENV"
+            target/debug/colossus /usr/local/libexec/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/local/libexec/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus' >> "$GITHUB_ENV"
 
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
