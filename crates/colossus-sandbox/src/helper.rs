@@ -250,10 +250,7 @@ fn apply_protected_filesystem(
     let gid = getgid().as_raw();
     unshare(CloneFlags::CLONE_NEWUSER)
         .map_err(|error| SandboxHelperError::Setup(format!("unshare user namespace: {error}")))?;
-    if Path::new("/proc/self/setgroups").exists() {
-        fs::write("/proc/self/setgroups", "deny")
-            .map_err(|error| SandboxHelperError::Setup(format!("deny setgroups: {error}")))?;
-    }
+    deny_linux_setgroups(Path::new("/proc/self/setgroups"))?;
     fs::write("/proc/self/uid_map", format!("0 {uid} 1\n"))
         .map_err(|error| SandboxHelperError::Setup(format!("map sandbox uid: {error}")))?;
     fs::write("/proc/self/gid_map", format!("0 {gid} 1\n"))
@@ -297,6 +294,51 @@ fn apply_protected_filesystem(
         .map_err(|error| SandboxHelperError::Setup(format!("remove path mask source: {error}")))?;
     drop_linux_namespace_privileges()?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn deny_linux_setgroups(path: &Path) -> Result<(), SandboxHelperError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let state = fs::read_to_string(path)
+        .map_err(|error| SandboxHelperError::Setup(format!("read setgroups state: {error}")))?;
+    if !setgroups_write_required(&state)? {
+        return Ok(());
+    }
+    if let Err(error) = fs::write(path, "deny") {
+        let state = fs::read_to_string(path).map_err(|read_error| {
+            SandboxHelperError::Setup(format!(
+                "deny setgroups: {error}; read resulting state: {read_error}"
+            ))
+        })?;
+        if !setgroups_write_required(&state)? {
+            return Ok(());
+        }
+        return Err(SandboxHelperError::Setup(format!(
+            "deny setgroups: {error}"
+        )));
+    }
+    let state = fs::read_to_string(path).map_err(|error| {
+        SandboxHelperError::Setup(format!("verify denied setgroups state: {error}"))
+    })?;
+    if setgroups_write_required(&state)? {
+        return Err(SandboxHelperError::Setup(
+            "setgroups remained allowed after denial".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn setgroups_write_required(state: &str) -> Result<bool, SandboxHelperError> {
+    match state.trim() {
+        "allow" => Ok(true),
+        "deny" => Ok(false),
+        state => Err(SandboxHelperError::Setup(format!(
+            "unsupported setgroups state {state:?}"
+        ))),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -435,7 +477,7 @@ impl WindowsProtectedAclGuard {
     ) -> Result<Self, SandboxHelperError> {
         let icacls = fs::canonicalize(system_root.join("System32").join("icacls.exe"))
             .map_err(|error| SandboxHelperError::Setup(format!("Windows icacls: {error}")))?;
-        let sid = package.as_string();
+        let sid = package.as_string().to_owned();
         let mut protected = paths
             .iter()
             .map(fs::canonicalize)
@@ -926,4 +968,16 @@ pub(super) fn native_runtime_paths() -> Vec<&'static Path> {
     .into_iter()
     .map(Path::new)
     .collect()
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::setgroups_write_required;
+
+    #[test]
+    fn setgroups_mapping_only_writes_for_allow_state() {
+        assert!(setgroups_write_required("allow\n").expect("allow state"));
+        assert!(!setgroups_write_required("deny\n").expect("deny state"));
+        assert!(setgroups_write_required("unexpected\n").is_err());
+    }
 }
