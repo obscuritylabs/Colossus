@@ -255,9 +255,7 @@ fn apply_protected_filesystem(
     _capabilities: &mut CapabilitySet,
     job: &SandboxJob,
 ) -> Result<(), SandboxHelperError> {
-    use rustix::mount::{
-        MountFlags, MountPropagationFlags, mount_bind, mount_change, mount_remount,
-    };
+    use rustix::mount::{MountFlags, mount_bind, mount_remount};
 
     if job.obligations.protected_filesystem.is_empty() {
         return Ok(());

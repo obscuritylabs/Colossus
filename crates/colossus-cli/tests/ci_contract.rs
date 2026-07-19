@@ -75,7 +75,9 @@ fn linux_user_namespace_profile_is_exact_hardened_and_accepted() {
         "[ ! -L \"$requested_binary\" ]",
         "realpath -e",
         "stat -c '%u'",
-        "0$mode & 022",
+        "stat -c '%g'",
+        "0$mode & 020",
+        "0$mode & 002",
         "apparmor_parser -r",
         "/etc/apparmor.d/colossus",
     ] {

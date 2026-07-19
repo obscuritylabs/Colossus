@@ -43,9 +43,13 @@ esac
 candidate=$binary
 while [ "$candidate" != "/" ]; do
     owner=$(stat -c '%u' -- "$candidate")
+    group=$(stat -c '%g' -- "$candidate")
     mode=$(stat -c '%a' -- "$candidate")
-    if [ "$owner" -ne 0 ] || [ $((0$mode & 022)) -ne 0 ]; then
-        printf 'refusing a replaceable AppArmor attachment: %s must be root-owned and not group/other writable\n' "$candidate" >&2
+    group_writable=$((0$mode & 020))
+    other_writable=$((0$mode & 002))
+    if [ "$owner" -ne 0 ] || [ "$other_writable" -ne 0 ] ||
+        { [ "$group_writable" -ne 0 ] && [ "$group" -ne 0 ]; }; then
+        printf 'refusing a replaceable AppArmor attachment: %s must be root-controlled and not writable by unprivileged users\n' "$candidate" >&2
         exit 1
     fi
     candidate=$(dirname -- "$candidate")
