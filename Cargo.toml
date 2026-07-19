@@ -48,6 +48,7 @@ repository = "https://github.com/obscuritylabs/Colossus"
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
 base64 = "0.22.1"
+capctl = "0.2.4"
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.6.1", features = ["derive"] }
 command-group = "=5.0.1"

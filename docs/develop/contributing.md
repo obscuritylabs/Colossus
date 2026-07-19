@@ -40,7 +40,11 @@ review.
 4. Iterate with the smallest relevant test tier, then run the completion gates described
    in [Source setup and test tiers](setup-testing.md).
 
-5. Use a Conventional Commit message:
+5. Before merging, inspect every unresolved pull-request review thread and required
+   check, including automated ChatGPT/Codex review. Address each actionable finding in
+   code and tests; do not treat a green build as a substitute for review resolution.
+
+6. Use a Conventional Commit message:
 
     ```text
     <type>[optional scope][!]: <description>
@@ -76,4 +80,5 @@ unrelated worktree changes.
 ## Next step
 
 Open a review with the behavioral outcome, affected boundaries, focused tests, and full
-gate results in the description.
+gate results in the description. Recheck unresolved human and automated review threads
+after the final push and before merge.

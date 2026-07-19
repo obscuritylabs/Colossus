@@ -79,7 +79,11 @@ executables, bounded arguments, isolated shell homes/temp directories, sanitized
 command paths, bounded process trees, and selected native, Windows, or OCI isolation.
 The Linux helper is dispatched before the asynchronous CLI runtime starts so it can
 establish and map its rootless user namespace while still single-threaded, then create
-the private mount namespace used to mask protected paths.
+the private mount namespace used to mask protected paths. After mounting those masks,
+it locks root and ambient-capability securebits, enables no-new-privileges, and clears
+the ambient, bounding, permitted, effective, and inheritable capability sets before
+the requested executable starts. The shell therefore cannot unmount its control-state
+masks even though the helper needed namespace-local mount authority during setup.
 The `workspace-development` profile derives workspace authority only for users and
 agents without workflow lineage; control-state paths are denied or masked before the
 command starts.

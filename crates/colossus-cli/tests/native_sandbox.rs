@@ -135,6 +135,16 @@ sandbox:
             .is_some_and(|paths| !paths.is_empty())
     );
 
+    let shell_command = if cfg!(target_os = "linux") {
+        concat!(
+            "pwd > workspace-pwd.txt; ",
+            "if /bin/umount .colossus 2>/dev/null; then ",
+            "echo unmounted > unmount-result.txt; fi; ",
+            "echo escaped > .colossus/marker.txt"
+        )
+    } else {
+        "pwd > workspace-pwd.txt; echo escaped > .colossus/marker.txt"
+    };
     let execution = run_in_workspace(
         binary,
         workspace.path(),
@@ -149,7 +159,7 @@ sandbox:
             ".",
             "--",
             "-c",
-            "pwd > workspace-pwd.txt; echo escaped > .colossus/marker.txt",
+            shell_command,
         ],
     );
     assert!(
@@ -160,6 +170,10 @@ sandbox:
     let outcome: Value = serde_json::from_slice(&execution.stdout).expect("process outcome");
     assert_eq!(outcome["success"], false);
     assert!(workspace.path().join("workspace-pwd.txt").exists());
+    assert!(
+        !workspace.path().join("unmount-result.txt").exists(),
+        "the sandboxed shell removed its protected-path mount"
+    );
     assert_eq!(
         fs::read_to_string(marker).expect("protected marker"),
         "protected"

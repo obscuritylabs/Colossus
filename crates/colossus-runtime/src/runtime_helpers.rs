@@ -1,13 +1,5 @@
 use super::*;
 
-pub(super) fn absolute_path(path: &Path) -> Result<PathBuf, std::io::Error> {
-    if path.is_absolute() {
-        Ok(path.to_owned())
-    } else {
-        std::env::current_dir().map(|directory| directory.join(path))
-    }
-}
-
 pub(super) fn workspace_absolute_path(workspace: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_owned()

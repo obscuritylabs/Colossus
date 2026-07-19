@@ -1,3 +1,4 @@
+use super::extensions::extension_path;
 use super::{
     AuditExporterConfig, ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
     GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
@@ -667,6 +668,22 @@ fn shell_helpers_enforce_noninteractive_isolated_execution() {
         assert_eq!(environment["TMPDIR"], isolated.path().display().to_string());
         assert_eq!(environment["PATH"], "/bin:/usr/bin");
     }
+}
+
+#[test]
+fn extension_paths_resolve_against_the_embedded_runtime_workspace() {
+    let workspace = tempdir().expect("workspace");
+    let relative = std::path::Path::new("artifacts/demo.pack");
+    assert_eq!(
+        extension_path(workspace.path(), relative),
+        workspace.path().join(relative).display().to_string()
+    );
+
+    let absolute = workspace.path().join("absolute.pack");
+    assert_eq!(
+        extension_path(workspace.path(), &absolute),
+        absolute.display().to_string()
+    );
 }
 
 #[tokio::test]

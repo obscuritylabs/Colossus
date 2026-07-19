@@ -295,7 +295,42 @@ fn apply_protected_filesystem(
     }
     fs::remove_dir(&mask)
         .map_err(|error| SandboxHelperError::Setup(format!("remove path mask source: {error}")))?;
+    drop_linux_namespace_privileges()?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn drop_linux_namespace_privileges() -> Result<(), SandboxHelperError> {
+    use capctl::{
+        caps::{CapState, ambient, bounding},
+        prctl::{Secbits, get_securebits, set_no_new_privs, set_securebits},
+    };
+
+    let mut securebits = get_securebits()
+        .map_err(|error| SandboxHelperError::Setup(format!("read securebits: {error}")))?;
+    securebits.remove(Secbits::KEEP_CAPS);
+    securebits.insert(
+        Secbits::NOROOT
+            | Secbits::NOROOT_LOCKED
+            | Secbits::NO_SETUID_FIXUP
+            | Secbits::NO_SETUID_FIXUP_LOCKED
+            | Secbits::KEEP_CAPS_LOCKED
+            | Secbits::NO_CAP_AMBIENT_RAISE
+            | Secbits::NO_CAP_AMBIENT_RAISE_LOCKED,
+    );
+    set_securebits(securebits)
+        .map_err(|error| SandboxHelperError::Setup(format!("lock securebits: {error}")))?;
+    set_no_new_privs()
+        .map_err(|error| SandboxHelperError::Setup(format!("set no-new-privileges: {error}")))?;
+    ambient::clear().map_err(|error| {
+        SandboxHelperError::Setup(format!("clear ambient capabilities: {error}"))
+    })?;
+    bounding::clear().map_err(|error| {
+        SandboxHelperError::Setup(format!("clear bounding capabilities: {error}"))
+    })?;
+    CapState::empty().set_current().map_err(|error| {
+        SandboxHelperError::Setup(format!("clear namespace capabilities: {error}"))
+    })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
