@@ -1,5 +1,11 @@
 use super::*;
 
+pub(super) fn extension_path(workspace: &Path, path: &Path) -> String {
+    workspace_absolute_path(workspace, path)
+        .display()
+        .to_string()
+}
+
 impl Runtime {
     pub(super) async fn execute_integration_operation(
         &self,
@@ -135,7 +141,7 @@ impl Runtime {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<PackVerification, RuntimeError> {
-        let path = absolute_path(path.as_ref())?.display().to_string();
+        let path = extension_path(&self.workspace, path.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::Verify { path })
                 .await?,
@@ -149,7 +155,7 @@ impl Runtime {
         path: impl AsRef<Path>,
         allow_untrusted: bool,
     ) -> Result<PackInstallation, RuntimeError> {
-        let path = absolute_path(path.as_ref())?.display().to_string();
+        let path = extension_path(&self.workspace, path.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::Install {
                 path,
@@ -213,7 +219,7 @@ impl Runtime {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<CollectionVerification, RuntimeError> {
-        let path = absolute_path(path.as_ref())?.display().to_string();
+        let path = extension_path(&self.workspace, path.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::CollectionVerify { path })
                 .await?,
@@ -233,8 +239,8 @@ impl Runtime {
         created_at: &str,
         signing_key_reference: &str,
     ) -> Result<CollectionMaterialization, RuntimeError> {
-        let source = absolute_path(source.as_ref())?.display().to_string();
-        let destination = absolute_path(destination.as_ref())?.display().to_string();
+        let source = extension_path(&self.workspace, source.as_ref());
+        let destination = extension_path(&self.workspace, destination.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::CollectionBuild {
                 source,
@@ -255,7 +261,7 @@ impl Runtime {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<CollectionInstallation, RuntimeError> {
-        let path = absolute_path(path.as_ref())?.display().to_string();
+        let path = extension_path(&self.workspace, path.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::CollectionInstall { path })
                 .await?,
@@ -270,7 +276,7 @@ impl Runtime {
         destination: impl AsRef<Path>,
         credential_reference: Option<&str>,
     ) -> Result<RegistryPullResult, RuntimeError> {
-        let destination = absolute_path(destination.as_ref())?.display().to_string();
+        let destination = extension_path(&self.workspace, destination.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::RegistryPull {
                 url: url.into(),
@@ -289,7 +295,7 @@ impl Runtime {
         url: &str,
         credential_reference: Option<&str>,
     ) -> Result<RegistryPushResult, RuntimeError> {
-        let path = absolute_path(path.as_ref())?.display().to_string();
+        let path = extension_path(&self.workspace, path.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::RegistryPush {
                 path,
@@ -356,7 +362,7 @@ impl Runtime {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<colossus_contracts::BundleVerification, RuntimeError> {
-        let path = absolute_path(path.as_ref())?.display().to_string();
+        let path = extension_path(&self.workspace, path.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::BundleVerify { path })
                 .await?,
@@ -377,8 +383,8 @@ impl Runtime {
         source_revision: Option<&str>,
         signing_key_reference: &str,
     ) -> Result<BundleMaterialization, RuntimeError> {
-        let source = absolute_path(source.as_ref())?.display().to_string();
-        let destination = absolute_path(destination.as_ref())?.display().to_string();
+        let source = extension_path(&self.workspace, source.as_ref());
+        let destination = extension_path(&self.workspace, destination.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::BundleBuild {
                 source,
@@ -401,8 +407,8 @@ impl Runtime {
         path: impl AsRef<Path>,
         prefix: impl AsRef<Path>,
     ) -> Result<BundleInstallation, RuntimeError> {
-        let path = absolute_path(path.as_ref())?.display().to_string();
-        let prefix = absolute_path(prefix.as_ref())?.display().to_string();
+        let path = extension_path(&self.workspace, path.as_ref());
+        let prefix = extension_path(&self.workspace, prefix.as_ref());
         serde_json::from_value(
             self.execute_pack_operation(PackOperation::BundleInstall { path, prefix })
                 .await?,

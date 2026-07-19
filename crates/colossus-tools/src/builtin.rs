@@ -318,9 +318,16 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "shell.run".into(),
-            description: "Run structured argv in the workspace without shell parsing.".into(),
-            input_schema: object_schema(
+            description:
+                "Run a non-interactive shell command or exact argv inside the selected workspace."
+                    .into(),
+            input_schema: object_schema_with(
                 json!({
+                    "command": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 65536
+                    },
                     "argv": {
                         "type": "array",
                         "minItems": 1,
@@ -337,7 +344,13 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
                     "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000},
                     "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576}
                 }),
-                &["argv"],
+                &[],
+                json!({
+                    "oneOf": [
+                        {"required": ["command"]},
+                        {"required": ["argv"]}
+                    ]
+                }),
             ),
             effect_action: Some("shell.run".into()),
             capability: Some("shell.run".into()),

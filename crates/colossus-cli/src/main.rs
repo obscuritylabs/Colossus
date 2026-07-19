@@ -22,7 +22,7 @@ use colossus_presentation::{
     StreamDisplayMode, TerminalDocumentRenderer, TerminalPalette, TerminalPreferences,
     ThemeLibrary, ThemeName, TranscriptDensity, document_from_json,
 };
-use colossus_runtime::{Runtime, RuntimeConfig};
+use colossus_runtime::{Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_tui::{BootstrapRequest, ScreenMode, TuiOptions, run_tui};
 use colossus_worker::{WorkerApprovalMode, WorkerClient, WorkerOperation, WorkerServer};
 use serde_json::{Value, json};
@@ -80,13 +80,45 @@ use worker_shell::*;
 use workflow_args::*;
 use workflow_commands::*;
 
+fn sandbox_helper_requested(mut arguments: impl Iterator<Item = std::ffi::OsString>) -> bool {
+    let _binary = arguments.next();
+    arguments
+        .next()
+        .is_some_and(|argument| argument == "__sandbox-helper")
+}
+
+fn sandbox_protection_probe_requested(
+    mut arguments: impl Iterator<Item = std::ffi::OsString>,
+) -> bool {
+    let _binary = arguments.next();
+    arguments
+        .next()
+        .is_some_and(|argument| argument == "__sandbox-protection-probe")
+}
+
 #[cfg(not(windows))]
 fn main() -> Result<(), Box<dyn Error>> {
+    if sandbox_helper_requested(std::env::args_os()) {
+        colossus_sandbox::run_helper_stdio()?;
+        return Ok(());
+    }
+    if sandbox_protection_probe_requested(std::env::args_os()) {
+        colossus_sandbox::run_native_protection_probe()?;
+        return Ok(());
+    }
     runtime_main()
 }
 
 #[cfg(windows)]
 fn main() -> Result<(), Box<dyn Error>> {
+    if sandbox_helper_requested(std::env::args_os()) {
+        colossus_sandbox::run_helper_stdio()?;
+        return Ok(());
+    }
+    if sandbox_protection_probe_requested(std::env::args_os()) {
+        colossus_sandbox::run_native_protection_probe()?;
+        return Ok(());
+    }
     // MSVC executables reserve a smaller main-thread stack than the other supported
     // platforms. Debug runtime composition can exceed that reserve before a command is
     // dispatched, so keep the actual async entrypoint on one explicitly bounded thread.

@@ -40,12 +40,15 @@ verifiable state.
 3. Create fresh configuration and state:
 
     ```bash
-    colossus --config .colossus/config.yaml config init
+    colossus -w . --config .colossus/config.yaml config init \
+      --sandbox-profile offline-default
     colossus --config .colossus/config.yaml config show
     colossus --config .colossus/config.yaml config effective
     ```
 
 4. Keep `sandbox.networkDestinations` empty, or limit it to exact loopback origins.
+   Never use `*` in an air-gapped configuration: it intentionally means public HTTP(S)
+   egress.
    The built-in `echo` route, redb journal, built-in policy, local workflows, repository
    tools, and lexical index need no internet access.
 
@@ -62,6 +65,10 @@ verifiable state.
 
 For a local OpenAI-compatible model, grant only its loopback origin and route
 `providers.roles.primary` to the local profile.
+
+`workspace-development` may still be used for a physically disconnected developer
+workstation, but it supplies workspace writes and a shell. `offline-default` remains the
+recommended audit/smoke baseline and never acquires those derived grants.
 
 ## Expected result
 

@@ -7,9 +7,11 @@ type: reference
 
 # Configuration fields
 
-Colossus reads one strict YAML document selected by global `--config`. Unknown fields,
-invalid enum values, unsafe paths, incomplete profiles, and inconsistent grants fail
-before runtime construction. Field names are case-sensitive.
+Colossus reads one strict YAML document selected by global `--config`. Global
+`-w, --workspace` defaults to the current directory, is canonicalized once, and is the
+base for relative config and workspace-owned paths. Unknown fields, invalid enum values,
+unsafe paths, incomplete profiles, and inconsistent grants fail before runtime
+construction. Field names are case-sensitive.
 
 ## Complete baseline
 
@@ -57,7 +59,7 @@ subagents:
   maxConcurrent: 10
 sandbox:
   backend: native
-  profile: offline-default
+  profile: workspace-development
   allowBrokerFallback: false
   helperPath: null
   ociRuntime: null
@@ -198,6 +200,7 @@ in `sandbox.environment`.
 | Field | Values / constraint |
 | --- | --- |
 | `backend` | `native`, `oci`, `windows_job`, `broker` |
+| `profile` | `offline-default` or `workspace-development` |
 | `allowBrokerFallback` | Explicit downgrade acknowledgement |
 | `helperPath` | Exact helper path when configured |
 | `ociRuntime` | Exact Docker, Podman, or supported client executable |
@@ -205,12 +208,26 @@ in `sandbox.environment`.
 | `filesystem` | Absolute roots with `read`, `write`, `metadata`, or `execute` mode |
 | `executables` | Absolute executable paths |
 | `environment` | Environment variable names |
-| `networkDestinations` | Canonical origins, no paths or wildcards |
+| `networkDestinations` | Canonical origins, or `*` for public HTTP(S) only |
 | `timeoutMs` | Effect timeout |
 | `maxOutputBytes` | Combined released-output bound |
 | `maxProcesses` | Process-tree bound |
 | `maxMemoryBytes` | Process-tree memory bound |
 | `maxConcurrency` | Concurrent sandbox work bound |
+
+`workspace-development` derives a write grant for the canonical selected workspace, a
+trusted platform shell, Git when available, read-only system command/runtime roots, an
+isolated `HOME` and temp directory, and a sanitized `PATH`. Explicit sandbox entries are
+additive. `.colossus` and canonical runtime control paths are protected from shell
+access; the control directory is created before sandbox obligations are derived,
+including on a fresh workspace. These derived grants apply only to terminal users and
+agents without workflow lineage and are rejected with OPA.
+
+`*` matches public `http` and `https` origins only. Loopback, private, link-local, and
+metadata destinations require exact canonical origins. It does not authorize raw
+sockets, non-HTTP protocols, credentials, actions, or sandbox bypass. All network paths
+retain proxy-only process egress, DNS pinning, TLS authority checks, no ambient proxies,
+no redirects, bounded connections, and private-address rejection.
 
 ## Context, memory, and research defaults
 
@@ -286,6 +303,50 @@ Kinds are `searxng` and `serp_api`. SerpAPI requires
 profile origin must be in `sandbox.networkDestinations`. Routes never silently fall
 back.
 
+## OpenRouter plus local SearXNG development example
+
+```yaml
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
+providers:
+  profiles:
+    openrouter:
+      kind: open_ai_compatible
+      model: openrouter/free
+      baseUrl: https://openrouter.ai/api/v1
+      credentialReference: env:OPENROUTER_API_KEY
+      timeoutMs: 120000
+  roles:
+    primary: openrouter
+    risk_evaluator: openrouter
+search:
+  profiles:
+    local:
+      kind: searxng
+      endpoint: http://127.0.0.1:8888/search
+      credentialReference: null
+      timeoutMs: 30000
+  roles:
+    agent: local
+    research: local
+sandbox:
+  backend: native
+  profile: workspace-development
+  networkDestinations:
+    - "*"
+    - http://127.0.0.1:8888
+```
+
+The wildcard covers public OpenRouter HTTPS. The local SearXNG loopback origin remains
+an exact entry. The provider credential stays outside YAML.
+
 ## Skills, packs, workflows, and MCP
 
 ```yaml
@@ -358,5 +419,7 @@ colossus --config .colossus/config.yaml policy doctor
 colossus --config .colossus/config.yaml sandbox doctor
 ```
 
-`config show` is the authority for parsed values. `config effective` adds resolved tools,
-actions, sources, decisions, and unmet prerequisites without resolving credentials.
+`config show` is the authority for parsed values. `config effective` adds the canonical
+workspace, explicit and derived grants, resolved shell, protected paths, wildcard
+meaning, tools, actions, sources, decisions, and unmet prerequisites without resolving
+credentials.

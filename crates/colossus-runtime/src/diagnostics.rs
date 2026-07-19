@@ -1,6 +1,11 @@
 use super::*;
 
 impl Runtime {
+    /// Canonical workspace used by repository and model-facing tools.
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
     /// Projection position, lag, and readiness for every built-in reducer.
     pub fn projection_status(&self) -> Result<Vec<ProjectionStatus>, RuntimeError> {
         self.projections.status().map_err(Into::into)
@@ -71,7 +76,36 @@ impl Runtime {
 
     /// Native/OCI helper readiness and configured fallback status.
     pub fn sandbox_doctor(&self) -> SandboxDoctorReport {
-        sandbox_doctor(&self.sandbox_executor_config)
+        let mut report = sandbox_doctor(&self.sandbox_executor_config);
+        report.canonical_workspace = Some(self.workspace.clone());
+        report.sandbox_profile = self.sandbox_profile.clone();
+        report.protected_path_exclusions_supported = match self.sandbox_backend.as_str() {
+            "native" => report.protected_path_exclusions_supported,
+            "windows_job" => cfg!(target_os = "windows"),
+            "oci" => true,
+            _ => false,
+        };
+        report.protected_paths = self.development_sandbox.protected_filesystem.clone();
+        report.resolved_shell = self.development_sandbox.shell.clone();
+        report.development_actor_scope =
+            "terminal users, main agents, and child agents without workflow lineage".into();
+        report.sanitized_command_roots =
+            std::env::split_paths(&std::ffi::OsString::from(&self.development_sandbox.path))
+                .collect();
+        report.explicit_filesystem = self.sandbox_filesystem.clone();
+        report.derived_filesystem = self.development_sandbox.filesystem.clone();
+        report.explicit_executables = self.sandbox_executables.clone();
+        report.derived_executables = self.development_sandbox.executables.clone();
+        report.network_destinations = self.sandbox_network_destinations.clone();
+        report.public_network_wildcard = self
+            .sandbox_network_destinations
+            .iter()
+            .any(|destination| destination == "*")
+            .then(|| {
+                "public HTTP(S) only; private, loopback, link-local, and metadata origins require exact entries"
+                    .into()
+            });
+        report
     }
 
     /// Provider profile readiness without performing network effects.
@@ -162,14 +196,44 @@ impl Runtime {
                     "action_class": access.action_class,
                     "decision": access.decision,
                     "selection_reason": access.reason,
+                    "canonical_workspace": self.workspace,
+                    "sandbox_profile": self.sandbox_profile,
+                    "development_grant_scope": "terminal users, main agents, and child agents without workflow lineage",
                 })
             })
             .collect()
     }
 
     /// Credential-free effective tool and action profile report.
-    pub fn effective_access(&self) -> &AccessResolution {
-        &self.access
+    pub fn effective_access(&self) -> Value {
+        let mut value = serde_json::to_value(&self.access).unwrap_or_else(|_| json!({}));
+        if let Some(report) = value.as_object_mut() {
+            report.insert("canonical_workspace".into(), json!(self.workspace));
+            report.insert(
+                "sandbox".into(),
+                json!({
+                    "profile": self.sandbox_profile,
+                    "development_actor_scope": "terminal users, main agents, and child agents without workflow lineage",
+                    "resolved_shell": self.development_sandbox.shell,
+                    "protected_paths": self.development_sandbox.protected_filesystem,
+                    "sanitized_command_roots": std::env::split_paths(
+                        &std::ffi::OsString::from(&self.development_sandbox.path)
+                    ).collect::<Vec<_>>(),
+                    "filesystem": {
+                        "explicit": self.sandbox_filesystem,
+                        "derived": self.development_sandbox.filesystem,
+                    },
+                    "executables": {
+                        "explicit": self.sandbox_executables,
+                        "derived": self.development_sandbox.executables,
+                    },
+                    "network_destinations": self.sandbox_network_destinations,
+                    "public_wildcard": self.sandbox_network_destinations.iter().any(|destination| destination == "*")
+                        .then_some("public HTTP(S) only; exact entries remain required for non-public origins"),
+                }),
+            );
+        }
+        value
     }
 
     /// List safe metadata for explicitly configured MCP servers.

@@ -73,6 +73,10 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - `colossus-domain` has no dependencies.
 - Ports are owned by the application, not infrastructure.
 - The runtime owns adapter construction and opaque permit-bearing executors.
+- Runtime composition canonicalizes one explicit workspace. CLI `-w, --workspace`,
+  embedded open options, and worker workspace matching all feed that same boundary.
+- Access resolution produces visibility and action decisions; sandbox-profile
+  resolution independently produces explicit and derived resource obligations.
 - CLI and TUI construct requests, invoke application services, and render typed results.
 - Crate roots expose a focused API or composition surface; nontrivial logic belongs in
   named modules.

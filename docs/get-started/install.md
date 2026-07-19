@@ -91,6 +91,20 @@ required, verify a signed offline bundle as described in
 Use `--prefix PATH` on macOS or Linux, or `-Prefix PATH` on Windows, to choose another
 installation root.
 
+For `sandbox.profile: workspace-development` on Ubuntu 24.04 or later, first install the
+Linux binary at a root-owned, non-replaceable path and then load the archive's narrowly
+attached AppArmor profile:
+
+```bash
+sudo ./install.sh --prefix /usr/local
+sudo ./install-apparmor.sh /usr/local/bin/colossus
+```
+
+This is not required for the offline quickstart or on hosts where `sandbox doctor`
+already reports protected-path exclusions as supported. Do not disable Ubuntu's
+host-wide unprivileged-user-namespace restriction; use the exact-path profile or the OCI
+backend.
+
 ### 4. Confirm the executable
 
 === "macOS and Linux"

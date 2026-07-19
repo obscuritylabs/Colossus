@@ -10,6 +10,7 @@ pub(super) async fn dispatch(
             "ready": true,
             "protocol_version": PROTOCOL_VERSION,
             "pid": std::process::id(),
+            "workspace": runtime.workspace(),
         })),
         WorkerOperation::AuditVerify => Ok(serde_json::to_value(runtime.journal().verify()?)?),
         WorkerOperation::AuditRead { from, limit } => Ok(serde_json::to_value(
@@ -60,7 +61,7 @@ pub(super) async fn dispatch(
             runtime.search(&role, &query, limit).await?,
         )?),
         WorkerOperation::ToolsList => Ok(serde_json::to_value(runtime.tool_catalog())?),
-        WorkerOperation::AccessEffective => Ok(serde_json::to_value(runtime.effective_access())?),
+        WorkerOperation::AccessEffective => Ok(runtime.effective_access()),
         WorkerOperation::Echo { message } => {
             let result = runtime.echo(&message).await?;
             Ok(json!({

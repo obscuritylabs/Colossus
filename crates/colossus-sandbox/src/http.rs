@@ -38,16 +38,20 @@ impl EffectExecutor for HttpExecutor {
             ));
         }
         let origin = url.origin().ascii_serialization();
-        if !permit.obligations().network_destinations.contains(&origin) {
-            return Err(adapter_failure("HTTP origin is not permitted"));
-        }
+        let matched =
+            network_destination_match(&permit.obligations().network_destinations, &origin)
+                .map_err(adapter_failure)?
+                .ok_or_else(|| adapter_failure("HTTP origin is not permitted"))?;
         let host = url
             .host_str()
             .ok_or_else(|| adapter_failure("HTTP URL has no host"))?;
         let port = url
             .port_or_known_default()
             .ok_or_else(|| adapter_failure("HTTP URL has no port"))?;
-        let addresses = resolve_destinations(host, port).await?;
+        let allow_non_public = matched == NetworkDestinationMatch::Exact
+            && (host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+        let addresses = resolve_destinations(host, port, allow_non_public).await?;
         let client = Client::builder()
             .redirect(RedirectPolicy::none())
             .no_proxy()
@@ -222,12 +226,12 @@ impl EffectExecutor for HttpExecutor {
 pub(super) async fn resolve_destinations(
     host: &str,
     port: u16,
+    allow_non_public: bool,
 ) -> Result<Vec<SocketAddr>, ExecutionError> {
-    let host_is_ip = host.parse::<IpAddr>().is_ok();
     let mut addresses = lookup_host((host, port))
         .await
         .map_err(adapter_failure)?
-        .filter(|address| host_is_ip || !non_public_ip(address.ip()))
+        .filter(|address| allow_non_public || !non_public_network_address(address.ip()))
         .collect::<Vec<_>>();
     if addresses.is_empty() {
         return Err(adapter_failure(
@@ -244,12 +248,13 @@ pub(super) async fn connect_destination(
     host: &str,
     port: u16,
     pinned: Option<&[SocketAddr]>,
+    allow_non_public: bool,
 ) -> Result<TcpStream, ExecutionError> {
     let mut attempts = FuturesUnordered::new();
     let addresses = if let Some(pinned) = pinned {
         pinned.to_vec()
     } else {
-        resolve_destinations(host, port).await?
+        resolve_destinations(host, port, allow_non_public).await?
     };
     for address in addresses {
         attempts.push(TcpStream::connect(address));
@@ -264,29 +269,11 @@ pub(super) async fn connect_destination(
     ))
 }
 
-pub(super) fn non_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.is_unspecified()
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-        }
-    }
-}
-
 pub(super) struct AllowlistProxy {
     pub(super) address: SocketAddr,
     pub(super) shutdown: Option<oneshot::Sender<()>>,
     pub(super) task: tokio::task::JoinHandle<()>,
+    pub(super) observed_origins: Arc<Mutex<BTreeSet<String>>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -320,7 +307,12 @@ pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
         || bootstrap.permit_nonce.is_empty()
         || bootstrap.expires_at_unix_ms < now_ms
         || bootstrap.allowed_origins.is_empty()
-        || bootstrap.resolved_origins.len() != bootstrap.allowed_origins.len()
+        || bootstrap.resolved_origins.len()
+            != bootstrap
+                .allowed_origins
+                .iter()
+                .filter(|origin| origin.as_str() != "*")
+                .count()
         || bootstrap.max_connections == 0
         || bootstrap.max_connections > 256
         || bootstrap.connection_timeout_ms == 0
@@ -328,6 +320,9 @@ pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
         return Err(adapter_failure("invalid OCI proxy bootstrap"));
     }
     for origin in &bootstrap.allowed_origins {
+        if origin == "*" {
+            continue;
+        }
         let url = Url::parse(origin).map_err(adapter_failure)?;
         if !matches!(url.scheme(), "http" | "https")
             || url.host_str().is_none()
@@ -346,6 +341,8 @@ pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
             .port_or_known_default()
             .ok_or_else(|| adapter_failure("OCI proxy origin has no port"))?;
         let host_ip = host.parse::<IpAddr>().ok();
+        let allow_non_public = host.eq_ignore_ascii_case("localhost")
+            || host_ip.is_some_and(non_public_network_address);
         let addresses = bootstrap
             .resolved_origins
             .get(origin)
@@ -354,10 +351,8 @@ pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
             || addresses.len() > 16
             || addresses.iter().any(|address| {
                 address.port() != port
-                    || host_ip.map_or_else(
-                        || non_public_ip(address.ip()),
-                        |host_ip| address.ip() != host_ip,
-                    )
+                    || host_ip.is_some_and(|host_ip| address.ip() != host_ip)
+                    || (!allow_non_public && non_public_ip(address.ip()))
             })
         {
             return Err(adapter_failure(format!(
@@ -390,7 +385,14 @@ pub async fn run_oci_proxy_from_environment() -> Result<(), ExecutionError> {
             let _permit = permit;
             match tokio::time::timeout(
                 connection_timeout,
-                proxy_connection(stream, allowed.as_slice(), resolved.as_ref(), None),
+                proxy_connection(
+                    stream,
+                    allowed.as_slice(),
+                    resolved.as_ref(),
+                    None,
+                    None,
+                    true,
+                ),
             )
             .await
             {
@@ -427,6 +429,8 @@ impl AllowlistProxy {
         let allowed = Arc::new(origins);
         let resolved = Arc::new(BTreeMap::new());
         let authorization = Arc::new(authorization);
+        let observed_origins = Arc::new(Mutex::new(BTreeSet::new()));
+        let task_observed_origins = Arc::clone(&observed_origins);
         let (shutdown, mut shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
             loop {
@@ -437,12 +441,15 @@ impl AllowlistProxy {
                         let allowed = Arc::clone(&allowed);
                         let resolved = Arc::clone(&resolved);
                         let authorization = Arc::clone(&authorization);
+                        let observed_origins = Arc::clone(&task_observed_origins);
                         tokio::spawn(async move {
                             let _ = proxy_connection(
                                 stream,
                                 allowed.as_slice(),
                                 resolved.as_ref(),
                                 authorization.as_deref(),
+                                Some(observed_origins.as_ref()),
+                                false,
                             )
                             .await;
                         });
@@ -454,11 +461,22 @@ impl AllowlistProxy {
             address,
             shutdown: Some(shutdown),
             task,
+            observed_origins,
         })
     }
 
     pub(super) fn port(&self) -> u16 {
         self.address.port()
+    }
+
+    pub(super) fn observed_origins(&self) -> Vec<String> {
+        self.observed_origins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .take(MAX_OBSERVED_ORIGINS)
+            .cloned()
+            .collect()
     }
 }
 
@@ -476,6 +494,8 @@ pub(super) async fn proxy_connection(
     allowed_origins: &[String],
     resolved_origins: &BTreeMap<String, Vec<SocketAddr>>,
     required_authorization: Option<&str>,
+    observed_origins: Option<&Mutex<BTreeSet<String>>>,
+    log_observed_origin: bool,
 ) -> Result<(), ExecutionError> {
     let mut header = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -515,13 +535,15 @@ pub(super) async fn proxy_connection(
     if method.eq_ignore_ascii_case("CONNECT") {
         let (host, port) = authority(target, 443)?;
         let origin = canonical_origin("https", &host, port)?;
-        if !allowed_origins.contains(&origin) {
+        let Some(matched) =
+            network_destination_match(allowed_origins, &origin).map_err(adapter_failure)?
+        else {
             client
                 .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
                 .await
                 .map_err(adapter_failure)?;
             return Ok(());
-        }
+        };
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             .await
@@ -539,8 +561,12 @@ pub(super) async fn proxy_connection(
             &host,
             port,
             resolved_origins.get(&origin).map(Vec::as_slice),
+            matched == NetworkDestinationMatch::Exact
+                && (host.eq_ignore_ascii_case("localhost")
+                    || host.parse::<IpAddr>().is_ok_and(non_public_network_address)),
         )
         .await?;
+        record_observed_origin(&origin, observed_origins, log_observed_origin);
         upstream
             .write_all(&client_hello)
             .await
@@ -561,13 +587,15 @@ pub(super) async fn proxy_connection(
         ));
     }
     let origin = url.origin().ascii_serialization();
-    if !allowed_origins.contains(&origin) {
+    let Some(matched) =
+        network_destination_match(allowed_origins, &origin).map_err(adapter_failure)?
+    else {
         client
             .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
             .await
             .map_err(adapter_failure)?;
         return Ok(());
-    }
+    };
     let host = url
         .host_str()
         .ok_or_else(|| adapter_failure("proxy URL has no host"))?;
@@ -582,8 +610,16 @@ pub(super) async fn proxy_connection(
             "HTTP Host header does not match the permitted request origin",
         ));
     }
-    let mut upstream =
-        connect_destination(host, port, resolved_origins.get(&origin).map(Vec::as_slice)).await?;
+    let mut upstream = connect_destination(
+        host,
+        port,
+        resolved_origins.get(&origin).map(Vec::as_slice),
+        matched == NetworkDestinationMatch::Exact
+            && (host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(non_public_network_address)),
+    )
+    .await?;
+    record_observed_origin(&origin, observed_origins, log_observed_origin);
     let path = if let Some(query) = url.query() {
         format!("{}?{query}", url.path())
     } else {
@@ -611,6 +647,28 @@ pub(super) async fn proxy_connection(
         .await
         .map_err(adapter_failure)?;
     Ok(())
+}
+
+fn record_observed_origin(
+    origin: &str,
+    observed_origins: Option<&Mutex<BTreeSet<String>>>,
+    log_observed_origin: bool,
+) {
+    if let Some(observed_origins) = observed_origins {
+        let mut observed = observed_origins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if observed.len() < MAX_OBSERVED_ORIGINS {
+            observed.insert(origin.to_owned());
+        }
+    }
+    if log_observed_origin {
+        eprintln!("{OBSERVED_ORIGIN_PREFIX}{origin}");
+    }
+}
+
+pub(super) fn non_public_ip(ip: IpAddr) -> bool {
+    non_public_network_address(ip)
 }
 
 pub(super) fn single_header_value<'a>(

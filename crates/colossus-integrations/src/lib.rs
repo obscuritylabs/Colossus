@@ -10,7 +10,10 @@ use colossus_contracts::{
     IntegrationStatus, IntegrationSummary, NewEvent, PackInstallation, PackStatus, PublisherTrust,
     QuarantinedEffectResult, ToolSpec,
 };
-use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
+use colossus_policy::{
+    EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
+    network_destination_match, non_public_network_address,
+};
 use colossus_ports::{AggregateRepository, EventJournal, ExtensionRepository, StoreError};
 use futures::StreamExt as _;
 use reqwest::header::{HeaderName, HeaderValue};
@@ -19,10 +22,12 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio::net::lookup_host;
 use url::Url;
 
 const MAX_CONNECTIONS: usize = 1_000;

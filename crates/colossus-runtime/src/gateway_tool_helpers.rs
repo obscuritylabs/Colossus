@@ -446,6 +446,49 @@ impl GatewayToolExecutor {
         }
     }
 
+    pub(super) fn shell_executable(&self) -> Result<PathBuf, ToolError> {
+        let matches = self
+            .executables
+            .iter()
+            .filter(|candidate| candidate.to_str().is_some_and(is_shell_wrapper))
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [executable] => Ok((*executable).clone()),
+            [] => Err(ToolError::Denied(
+                "command mode requires workspace-development or one explicit shell executable"
+                    .into(),
+            )),
+            _ => Err(ToolError::Denied(
+                "multiple shell executables are configured; keep one exact shell identity".into(),
+            )),
+        }
+    }
+
+    pub(super) fn sanitized_command_path(&self) -> Result<String, ToolError> {
+        const MAX_ROOTS: usize = 64;
+        let mut roots = std::env::var_os("PATH")
+            .map(|path| {
+                std::env::split_paths(&path)
+                    .filter(|path| path.is_absolute())
+                    .filter_map(|path| fs::canonicalize(path).ok())
+                    .filter(|path| path.is_dir() && !path.starts_with(&self.workspace))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        roots.extend(
+            self.executables
+                .iter()
+                .filter_map(|path| path.parent())
+                .filter_map(|path| fs::canonicalize(path).ok()),
+        );
+        roots.sort();
+        roots.dedup();
+        roots.truncate(MAX_ROOTS);
+        std::env::join_paths(roots)
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|error| ToolError::Failed(format!("cannot construct sanitized PATH: {error}")))
+    }
+
     pub(super) async fn execute_process_tool(
         &self,
         call: &ToolCall,
@@ -501,6 +544,15 @@ impl GatewayToolExecutor {
                 .get("output_truncated")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            observed_origins: value
+                .get("observed_origins")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .take(64)
+                .map(str::to_owned)
+                .collect(),
         })
     }
 }

@@ -31,7 +31,12 @@ colossus --config .colossus/config.yaml tools list
 | Effect is denied | `config effective` | Exact deny or unmet policy obligation | Change the reviewed action decision; approval cannot override deny |
 | Approval never appears | Global option placement | `--approval-mode` placed after subcommand or noninteractive surface | Put the global flag before the subcommand |
 | Tool is missing | `config effective` | Profile exclusion, exact exclude, missing static prerequisite, untrusted extension | Fix selection or prerequisite; do not widen unrelated controls |
-| Repository path is wrong | Process working directory | Colossus started outside the target repository | Restart in the repository and use an absolute config path |
+| Repository path is wrong | `config effective` canonical workspace | Missing or incorrect global `--workspace` | Retry with `-w /canonical/repository`; relative config resolves from it |
+| Worker rejects the client | `worker --status` workspace | Client and worker selected different canonical workspaces | Restart one side with the same `--workspace`; mismatch is never silently accepted |
+| Shell tool is missing | `config effective` sandbox report | `offline-default`, no explicit executable, unsupported protection, or workflow scope | Use `workspace-development` for an eligible actor or add exact grants |
+| Shell is denied | Action decision and approval mode | `development` requires approval for execution | Use `ask`, or reviewed `risk-auto` for eligible non-workflow shell calls |
+| Linux protected-path probe fails | `sandbox doctor` native details | Ubuntu AppArmor restricts capabilities in unprivileged user namespaces | Install the release archive's exact-path profile against a root-owned Colossus binary, or use OCI; never weaken the host-wide restriction |
+| Public request is denied | `sandbox doctor` destinations | `*` never matches loopback/private/link-local/metadata | Add the exact canonical private origin only when intended |
 | Worker is unavailable | `worker --status` | Writer lease, stale endpoint, key/permission mismatch, incompatible protocol | Preserve state; stop or repair the owning worker |
 | Read-only recovery | `audit verify` and `audit anchor-status` | Chain, checkpoint, anchor, decryption, or projection-position failure | Preserve evidence and investigate; never rewrite canonical events |
 | Memory search degraded | `memories index status` | Disposable index unavailable or behind | `sync` or explicitly `rebuild`; canonical records remain |
@@ -44,6 +49,14 @@ Global flags precede the command:
 ```bash
 colossus --config .colossus/config.yaml --approval-mode ask \
   run "Apply the approved change"
+```
+
+For workspace-aware development:
+
+```bash
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml \
+  --approval-mode risk-auto tui
 ```
 
 ## Unknown outcomes

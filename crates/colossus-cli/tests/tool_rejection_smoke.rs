@@ -334,7 +334,8 @@ fn invalid_and_denied_tools_stop_before_effect_execution() {
     assert!(!output.status.success(), "shell wrapper succeeded");
     assert!(!shell_marker.exists(), "shell wrapper created a marker");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("shell wrapper execution is denied: sh"),
+        String::from_utf8_lossy(&output.stderr)
+            .contains("executable sh is not explicitly configured"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );

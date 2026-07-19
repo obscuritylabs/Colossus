@@ -5,6 +5,7 @@ pub(super) fn default_obligations() -> PolicyObligations {
         sandbox_backend: "broker".into(),
         sandbox_profile: "offline-default".into(),
         filesystem: Vec::new(),
+        protected_filesystem: Vec::new(),
         network_destinations: Vec::new(),
         allowed_environment: Vec::new(),
         allow_sandbox_downgrade: false,
@@ -26,6 +27,14 @@ pub struct BuiltInPolicy {
     actions: BTreeMap<String, DecisionOutcome>,
     obligations: PolicyObligations,
     action_obligations: BTreeMap<String, PolicyObligations>,
+    workspace_development: Option<WorkspaceDevelopmentObligations>,
+}
+
+#[derive(Clone)]
+struct WorkspaceDevelopmentObligations {
+    filesystem: Vec<colossus_contracts::FilesystemGrant>,
+    protected_filesystem: Vec<String>,
+    allowed_environment: Vec<String>,
 }
 
 impl BuiltInPolicy {
@@ -36,6 +45,7 @@ impl BuiltInPolicy {
             actions: BTreeMap::from([("provider.echo".into(), DecisionOutcome::Allow)]),
             obligations: default_obligations(),
             action_obligations: BTreeMap::new(),
+            workspace_development: None,
         }
     }
 
@@ -88,6 +98,21 @@ impl BuiltInPolicy {
     /// Allow one exact environment variable name inside sandboxed processes.
     pub fn with_environment(mut self, name: impl Into<String>) -> Self {
         self.obligations.allowed_environment.push(name.into());
+        self
+    }
+
+    /// Add development-only resource obligations for non-workflow users and agents.
+    pub fn with_workspace_development(
+        mut self,
+        filesystem: Vec<colossus_contracts::FilesystemGrant>,
+        protected_filesystem: Vec<String>,
+        allowed_environment: Vec<String>,
+    ) -> Self {
+        self.workspace_development = Some(WorkspaceDevelopmentObligations {
+            filesystem,
+            protected_filesystem,
+            allowed_environment,
+        });
         self
     }
 
@@ -161,6 +186,42 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             .get(&request.action)
             .cloned()
             .unwrap_or_else(|| self.obligations.clone());
+        // `shell.run` always receives these runtime-generated values. They are
+        // isolated/sanitized by the trusted tool executor and cannot be supplied
+        // by model arguments, so legacy explicit-shell configurations do not need
+        // to grant them as ambient caller-controlled environment.
+        if request.action == "shell.run" {
+            obligations.allowed_environment.extend(
+                ["HOME", "PATH", "TEMP", "TMP", "TMPDIR"]
+                    .into_iter()
+                    .map(str::to_owned),
+            );
+        }
+        if let Some(development) = self.workspace_development.as_ref()
+            && inherits_workspace_development(request)
+        {
+            obligations
+                .filesystem
+                .extend(development.filesystem.iter().cloned());
+            obligations
+                .protected_filesystem
+                .extend(development.protected_filesystem.iter().cloned());
+            obligations
+                .allowed_environment
+                .extend(development.allowed_environment.iter().cloned());
+            obligations.filesystem.sort_by(|left, right| {
+                left.root
+                    .cmp(&right.root)
+                    .then_with(|| left.mode.cmp(&right.mode))
+            });
+            obligations
+                .filesystem
+                .dedup_by(|left, right| left.root == right.root && left.mode == right.mode);
+            obligations.protected_filesystem.sort();
+            obligations.protected_filesystem.dedup();
+        }
+        obligations.allowed_environment.sort();
+        obligations.allowed_environment.dedup();
         if request.action.starts_with("filesystem.")
             || is_process_action(&request.action)
             || matches!(
@@ -214,4 +275,12 @@ impl PolicyDecisionPoint for BuiltInPolicy {
             "default": "deny"
         }))
     }
+}
+
+fn inherits_workspace_development(request: &EffectRequest) -> bool {
+    matches!(
+        request.actor.actor_type,
+        ActorType::User | ActorType::Model | ActorType::Subagent
+    ) && request.context.workflow_id.is_none()
+        && request.context.workflow_hash.is_none()
 }

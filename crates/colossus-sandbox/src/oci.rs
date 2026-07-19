@@ -131,6 +131,24 @@ impl OciNetworkResources {
         self.proxy_address
     }
 
+    pub(super) fn observed_origins(&self) -> Result<Vec<String>, SandboxHelperError> {
+        let logs = run_oci_control(
+            &self.runtime,
+            &["logs".into(), self.names.proxy.clone()],
+            &[],
+            "read OCI proxy observed origins",
+        )?;
+        let mut origins = BTreeSet::new();
+        for line in String::from_utf8_lossy(&logs).lines() {
+            if let Some(origin) = line.strip_prefix(OBSERVED_ORIGIN_PREFIX)
+                && origins.len() < MAX_OBSERVED_ORIGINS
+            {
+                origins.insert(origin.to_owned());
+            }
+        }
+        Ok(origins.into_iter().collect())
+    }
+
     pub(super) fn cleanup(&mut self) {
         if self.armed {
             cleanup_oci_resources(&self.runtime, &self.names);
@@ -198,6 +216,9 @@ pub(super) fn resolve_oci_origins_blocking(
 ) -> Result<BTreeMap<String, Vec<SocketAddr>>, SandboxHelperError> {
     let mut resolved = BTreeMap::new();
     for origin in origins {
+        if origin == "*" {
+            continue;
+        }
         let url =
             Url::parse(origin).map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
         let host = url
@@ -206,11 +227,12 @@ pub(super) fn resolve_oci_origins_blocking(
         let port = url
             .port_or_known_default()
             .ok_or_else(|| SandboxHelperError::Setup("OCI proxy origin has no port".into()))?;
-        let host_is_ip = host.parse::<IpAddr>().is_ok();
+        let allow_non_public = host.eq_ignore_ascii_case("localhost")
+            || host.parse::<IpAddr>().is_ok_and(non_public_network_address);
         let mut addresses = (host, port)
             .to_socket_addrs()
             .map_err(|error| SandboxHelperError::Setup(error.to_string()))?
-            .filter(|address| host_is_ip || !non_public_ip(address.ip()))
+            .filter(|address| allow_non_public || !non_public_ip(address.ip()))
             .collect::<Vec<_>>();
         addresses.sort_by_key(|address| usize::from(address.is_ipv6()));
         addresses.dedup();
@@ -329,6 +351,19 @@ pub(super) fn oci_command(
             root.display(),
             root.display(),
             readonly
+        ));
+    }
+    for protected in &job.obligations.protected_filesystem {
+        let protected = fs::canonicalize(protected)
+            .map_err(|error| SandboxHelperError::Setup(format!("protected path: {error}")))?;
+        if !protected.is_dir() || protected.to_string_lossy().contains([',', '\0']) {
+            return Err(SandboxHelperError::Setup(
+                "OCI protected paths must be canonical directories without commas or NUL".into(),
+            ));
+        }
+        command.arg("--mount").arg(format!(
+            "type=tmpfs,target={},readonly,tmpfs-size=4096,tmpfs-mode=0000",
+            protected.display()
         ));
     }
     let mut environment = job.process.environment.clone();

@@ -15,10 +15,27 @@ impl WorkerServer {
         config: &RuntimeConfig,
         approvals: Arc<dyn colossus_ports::ApprovalProvider>,
     ) -> Result<Self, WorkerError> {
+        Self::open_at_workspace(
+            config,
+            approvals,
+            RuntimeOpenOptions::for_workspace(std::env::current_dir()?)?,
+        )
+    }
+
+    /// Open the runtime for one explicit workspace.
+    pub fn open_at_workspace(
+        config: &RuntimeConfig,
+        approvals: Arc<dyn colossus_ports::ApprovalProvider>,
+        options: RuntimeOpenOptions,
+    ) -> Result<Self, WorkerError> {
+        let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
+        let authentication_key = config.worker_ipc_auth_key_at(&options.workspace)?;
         Ok(Self {
-            endpoint: config.worker_ipc_endpoint()?,
-            authentication_key: config.worker_ipc_auth_key()?,
-            runtime: Arc::new(Runtime::open_with_approval(config, approvals)?),
+            endpoint,
+            authentication_key,
+            runtime: Arc::new(Runtime::open_with_options(
+                config, approvals, None, options,
+            )?),
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
         })
@@ -29,17 +46,33 @@ impl WorkerServer {
         config: &RuntimeConfig,
         approval_mode: WorkerApprovalMode,
     ) -> Result<Self, WorkerError> {
+        Self::open_with_mode_at_workspace(
+            config,
+            approval_mode,
+            RuntimeOpenOptions::for_workspace(std::env::current_dir()?)?,
+        )
+    }
+
+    /// Open an interactive worker for one explicit workspace.
+    pub fn open_with_mode_at_workspace(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+        options: RuntimeOpenOptions,
+    ) -> Result<Self, WorkerError> {
         let approvals: Arc<dyn ApprovalProvider> = Arc::new(WorkerInteractiveApproval {
             mode: approval_mode,
         });
         let user_prompts: Arc<dyn UserPromptProvider> = Arc::new(WorkerInteractiveUserPrompt);
+        let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
+        let authentication_key = config.worker_ipc_auth_key_at(&options.workspace)?;
         Ok(Self {
-            endpoint: config.worker_ipc_endpoint()?,
-            authentication_key: config.worker_ipc_auth_key()?,
-            runtime: Arc::new(Runtime::open_with_interfaces(
+            endpoint,
+            authentication_key,
+            runtime: Arc::new(Runtime::open_with_options(
                 config,
                 approvals,
                 Some(user_prompts),
+                options,
             )?),
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),

@@ -521,6 +521,9 @@ pub struct PolicyObligations {
     pub sandbox_profile: String,
     /// Canonical filesystem roots and access modes.
     pub filesystem: Vec<FilesystemGrant>,
+    /// Canonical paths that writable process sandboxes must keep inaccessible.
+    #[serde(default)]
+    pub protected_filesystem: Vec<String>,
     /// Allowed network destination patterns.
     pub network_destinations: Vec<String>,
     /// Exact environment variable names visible to a sandboxed process.

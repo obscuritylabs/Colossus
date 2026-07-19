@@ -61,6 +61,26 @@ steps:
 The schemas describe the top-level input and output values. `capabilities` is the
 definition ceiling; it does not grant policy or sandbox authority.
 
+Workflows never inherit `workspace-development` grants, even when invoked by a main
+agent that has them. An agent executing inside workflow lineage also loses development
+inheritance and is ineligible for `risk-auto`. Configure exact filesystem,
+executables, environment names, and network origins for every effectful workflow.
+
+A locked-down workflow deployment therefore uses an ordinary explicit sandbox profile:
+
+```yaml
+sandbox:
+  backend: native
+  profile: workflow-release-v1
+  filesystem:
+    - root: /srv/releases/repository
+      mode: read
+  executables:
+    - /usr/bin/git
+  environment: []
+  networkDestinations: []
+```
+
 ### 2. Choose a step family
 
 Use the family that expresses the transition directly:

@@ -401,10 +401,19 @@ or untrusted extensions remain absent.
 - Control directories owned by Colossus are denied to generic workspace mutation tools.
 - Text reads and writes are bounded and reject unsafe file types where applicable.
 - Mutating file and patch results include a diff and changed line ranges.
-- Subprocesses use structured argument arrays and MUST NOT use a shell interpreter by
-  default.
-- Timeouts, output caps, working directory, and environment allowlists are enforced by a
-  broker.
+- `shell.run` accepts exactly one of a non-interactive `command` interpreted by a
+  trusted configured/derived shell or a structured `argv` with exact executable
+  resolution. Startup profiles, interactive stdin, persistent PTYs, and background
+  sessions are excluded.
+- Global `--workspace` is canonicalized once. `workspace-development` derives a writable
+  workspace, trusted shell, read-only command roots, isolated home/temp, and sanitized
+  path only for terminal users and agents outside workflow lineage. Colossus control
+  state remains protected by the selected native, Windows, or OCI backend.
+- Timeouts, output caps, working directory, environment allowlists, process trees, and
+  post-effect release are enforced by the sandbox.
+- Network destination `*` means public HTTP(S) only. Private, loopback, link-local, and
+  metadata origins require exact entries; all adapters and process proxies share the
+  same matcher, DNS/TLS pinning, and bounded observed-origin evidence.
 
 ## 11. Policy, Risk, Approval, And Audit
 
@@ -435,9 +444,10 @@ audit labels, and retention obligations.
 
 - `deny`: block every operation that requires approval.
 - `ask`: prompt the user before approval-required operations.
-- `risk-auto`: run model-assisted review for eligible `shell.run` calls and auto-approve
-  only low-risk calls whose recommendation is allow. A model recommendation to deny is
-  escalated to an explicit user prompt.
+- `risk-auto`: run model-assisted review only for model or child-agent `shell.run`
+  outside workflow lineage and auto-approve only low-risk calls whose recommendation is
+  allow. Medium, high, malformed, unavailable, and deny recommendations fall back to an
+  explicit user prompt or denial.
 - `full-access`: auto-approve approval-required operations without prompting and skip
   model-assisted shell risk review.
 
@@ -988,6 +998,12 @@ limits/sources/MCP, and skill override policy.
 Configuration uses fresh strict YAML and accepts credential references such as
 `env:NAME`. Raw secret values MUST
 not be written back when configuration is shown.
+
+The global workspace defaults to the current directory and anchors relative
+configuration, state, workflow, skill, and pack paths. Workers publish the canonical
+workspace and reject mismatched clients. Fresh development configuration selects the
+`workspace-development` sandbox profile unless explicitly overridden; other access
+profiles default to `offline-default`.
 
 `schemaVersion: 1` remains active, but removed exact tool/action lists are rejected.
 Before 1.0, configuration changes are applied by directly updating the strict YAML or

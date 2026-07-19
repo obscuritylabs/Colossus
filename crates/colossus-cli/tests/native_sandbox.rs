@@ -21,6 +21,12 @@ use tempfile::tempdir;
 const JOURNAL_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const SIGNING_KEY: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
+fn colossus_binary() -> std::path::PathBuf {
+    std::env::var_os("COLOSSUS_NATIVE_TEST_BINARY")
+        .map(Into::into)
+        .unwrap_or_else(|| Path::new(env!("CARGO_BIN_EXE_colossus")).to_owned())
+}
+
 fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
     Command::new(binary)
         .arg("--config")
@@ -32,9 +38,162 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
         .expect("run colossus")
 }
 
+fn run_in_workspace(binary: &Path, workspace: &Path, config: &Path, arguments: &[&str]) -> Output {
+    Command::new(binary)
+        .arg("--workspace")
+        .arg(workspace)
+        .arg("--config")
+        .arg(config)
+        .args(arguments)
+        .env("COLOSSUS_TEST_JOURNAL_KEY", JOURNAL_KEY)
+        .env("COLOSSUS_TEST_SIGNING_KEY", SIGNING_KEY)
+        .output()
+        .expect("run colossus in workspace")
+}
+
+#[test]
+fn workspace_development_shell_writes_workspace_but_not_colossus_control_state() {
+    let binary = colossus_binary();
+    let workspace = tempdir().expect("workspace");
+    let control = workspace.path().join(".colossus");
+    fs::create_dir(&control).expect("control directory");
+    let marker = control.join("marker.txt");
+    fs::write(&marker, "protected").expect("marker");
+    let config = control.join("config.yaml");
+    let anchor = control.join("anchor.json");
+    fs::write(
+        &config,
+        format!(
+            r#"schemaVersion: 1
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
+storage:
+  path: .colossus/state.redb
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_TEST_JOURNAL_KEY
+    journal_key_id: workspace-development-test
+    signing_variable: COLOSSUS_TEST_SIGNING_KEY
+    anchor_path: {anchor}
+policy:
+  kind: built_in
+  require_post_effect: false
+workflows:
+  repository: .colossus/workflows
+  user: workflows
+sandbox:
+  backend: native
+  profile: workspace-development
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem: []
+  executables: []
+  environment: []
+  networkDestinations: []
+  timeoutMs: 30000
+  maxOutputBytes: 1048576
+  maxProcesses: 16
+  maxMemoryBytes: 268435456
+  maxConcurrency: 1
+"#,
+            anchor = anchor.display(),
+        ),
+    )
+    .expect("config");
+
+    let doctor = run_in_workspace(
+        &binary,
+        workspace.path(),
+        Path::new(".colossus/config.yaml"),
+        &["sandbox", "doctor"],
+    );
+    assert!(
+        doctor.status.success(),
+        "{}",
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    let doctor: Value = serde_json::from_slice(&doctor.stdout).expect("doctor JSON");
+    let shell = doctor["resolved_shell"]
+        .as_str()
+        .expect("resolved development shell");
+    assert_eq!(
+        doctor["canonical_workspace"].as_str(),
+        workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace")
+            .to_str()
+    );
+    assert_eq!(doctor["sandbox_profile"], "workspace-development");
+    assert_eq!(
+        doctor["protected_path_exclusions_supported"],
+        Value::Bool(true),
+        "workspace-development protection must be proven before shell execution: {doctor}"
+    );
+    assert!(
+        doctor["protected_paths"]
+            .as_array()
+            .is_some_and(|paths| !paths.is_empty())
+    );
+
+    let shell_command = if cfg!(target_os = "linux") {
+        concat!(
+            "pwd > workspace-pwd.txt; ",
+            "if /bin/umount .colossus 2>/dev/null; then ",
+            "echo unmounted > unmount-result.txt; fi; ",
+            "echo escaped > .colossus/marker.txt"
+        )
+    } else {
+        "pwd > workspace-pwd.txt; echo escaped > .colossus/marker.txt"
+    };
+    let execution = run_in_workspace(
+        &binary,
+        workspace.path(),
+        Path::new(".colossus/config.yaml"),
+        &[
+            "--approval-mode",
+            "full-access",
+            "process",
+            "run",
+            shell,
+            "--cwd",
+            ".",
+            "--",
+            "-c",
+            shell_command,
+        ],
+    );
+    assert!(
+        execution.status.success(),
+        "{}",
+        String::from_utf8_lossy(&execution.stderr)
+    );
+    let outcome: Value = serde_json::from_slice(&execution.stdout).expect("process outcome");
+    assert_eq!(outcome["success"], false);
+    assert!(workspace.path().join("workspace-pwd.txt").exists());
+    assert!(
+        !workspace.path().join("unmount-result.txt").exists(),
+        "the sandboxed shell removed its protected-path mount"
+    );
+    assert_eq!(
+        fs::read_to_string(marker).expect("protected marker"),
+        "protected"
+    );
+}
+
 #[test]
 fn native_helper_enforces_filesystem_environment_and_process_tree_boundaries() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let binary = colossus_binary();
     let directory = tempdir().expect("directory");
     let allowed = directory.path().join("allowed");
     let denied = directory.path().join("denied");
@@ -122,7 +281,7 @@ sandbox:
     )
     .expect("config");
 
-    let doctor = run(binary, &config, &["sandbox", "doctor"]);
+    let doctor = run(&binary, &config, &["sandbox", "doctor"]);
     assert!(
         doctor.status.success(),
         "{}",
@@ -136,7 +295,7 @@ sandbox:
     );
 
     let nonzero = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -156,7 +315,7 @@ sandbox:
     assert_eq!(nonzero["exit_code"], 1);
 
     let allowed_output = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -182,7 +341,7 @@ sandbox:
     );
 
     let escaped = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -201,7 +360,7 @@ sandbox:
 
     let traversal_path = allowed.join("..").join("denied").join("denied.txt");
     let traversal = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -219,7 +378,7 @@ sandbox:
     );
 
     let environment = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -241,7 +400,7 @@ sandbox:
     );
 
     let blocked_environment = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -266,7 +425,7 @@ sandbox:
         marker.display()
     );
     let timed_out = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -301,7 +460,7 @@ sandbox:
         .replace("  maxProcesses: 1", "  maxProcesses: 8");
     fs::write(&config, relaxed_config).expect("relax process count");
     let normal_exit = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -334,7 +493,7 @@ sandbox:
     )
     .expect("memory config");
     let memory_limited = run(
-        binary,
+        &binary,
         &memory_config,
         &[
             "process",
@@ -354,7 +513,7 @@ sandbox:
     );
 
     let direct_timeout = run(
-        binary,
+        &binary,
         &config,
         &[
             "process",
@@ -419,7 +578,7 @@ sandbox:
         });
         let denied_url = format!("http://{denied_address}/");
         let denied_network = run(
-            binary,
+            &binary,
             &config,
             &[
                 "process",
@@ -453,7 +612,7 @@ sandbox:
         );
         let allowed_url = format!("{origin}/");
         let allowed_network = run(
-            binary,
+            &binary,
             &config,
             &[
                 "process",

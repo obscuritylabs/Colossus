@@ -144,6 +144,7 @@ pub(super) fn supervise_native_inner_process(
             output_truncated: state.truncated,
             stdout_base64: String::new(),
             stderr_base64: String::new(),
+            observed_origins: Vec::new(),
         });
     }
     if state.truncated {
@@ -265,6 +266,7 @@ pub(super) fn supervise(
         output_truncated: state.truncated,
         stdout_base64: BASE64.encode(stdout),
         stderr_base64: BASE64.encode(stderr),
+        observed_origins: Vec::new(),
     })
 }
 

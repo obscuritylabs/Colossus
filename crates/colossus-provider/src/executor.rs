@@ -359,7 +359,10 @@ impl ProviderExecutor {
             .profile
             .network_origin()?
             .ok_or_else(|| ProviderError::Configuration("network provider has no origin".into()))?;
-        if !permit.obligations().network_destinations.contains(&origin) {
+        if network_destination_match(&permit.obligations().network_destinations, &origin)
+            .map_err(|error| ProviderError::Configuration(error.to_string()))?
+            .is_none()
+        {
             return Err(ProviderError::Configuration(
                 "provider origin is absent from permit obligations".into(),
             ));
@@ -404,7 +407,18 @@ impl ProviderExecutor {
         let port = url
             .port_or_known_default()
             .ok_or_else(|| ProviderError::Configuration("provider URL has no port".into()))?;
-        let addresses = resolve_provider_addresses(host, port).await?;
+        let matched =
+            network_destination_match(&permit.obligations().network_destinations, endpoint)
+                .map_err(|error| ProviderError::Configuration(error.to_string()))?
+                .ok_or_else(|| {
+                    ProviderError::Configuration(
+                        "provider origin is absent from permit obligations".into(),
+                    )
+                })?;
+        let allow_non_public = matched == NetworkDestinationMatch::Exact
+            && (host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+        let addresses = resolve_provider_addresses(host, port, allow_non_public).await?;
         let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
         let client = Client::builder()
             .no_proxy()

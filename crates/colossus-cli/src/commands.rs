@@ -177,11 +177,29 @@ pub(super) enum ConfigAction {
         /// Unified tool and built-in policy profile.
         #[arg(long, default_value = "development")]
         access_profile: AccessProfile,
+        /// Resource sandbox preset; defaults from the selected access profile.
+        #[arg(long, value_enum)]
+        sandbox_profile: Option<SandboxProfile>,
     },
     /// Parse and print the active configuration with references intact.
     Show,
     /// Show credential-free effective tool and action resolution.
     Effective,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(super) enum SandboxProfile {
+    OfflineDefault,
+    WorkspaceDevelopment,
+}
+
+impl SandboxProfile {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::OfflineDefault => "offline-default",
+            Self::WorkspaceDevelopment => "workspace-development",
+        }
+    }
 }
 
 #[derive(Args)]

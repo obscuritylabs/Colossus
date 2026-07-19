@@ -17,14 +17,23 @@ or arbitrary network access.
 - A connected model. See [Connect a model](connect-model.md).
 - A local source repository.
 - The absolute path to the repository.
-- A Colossus configuration stored outside the repository or referenced by an absolute
-  path.
+- A Colossus configuration initialized with
+  `--sandbox-profile offline-default`; this tutorial intentionally does not use the
+  writable development preset.
 
 ## Steps
 
 ### 1. Add one read-only filesystem root
 
-In `.colossus/config.yaml`, add the repository's canonical absolute path:
+Initialize from the repository, then add its canonical absolute path:
+
+```bash
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml config init \
+  --sandbox-profile offline-default
+```
+
+In `.colossus/config.yaml`:
 
 ```yaml
 sandbox:
@@ -39,23 +48,24 @@ executables, and unrelated network origins absent.
 ### 2. Check the effective tool surface
 
 ```bash
-colossus --config /absolute/path/to/.colossus/config.yaml \
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml \
   config effective
 ```
 
 Confirm that repository and filesystem read tools are active, while write and execution
 capabilities remain unavailable or approval-gated without matching grants.
 
-### 3. Start from the repository
+### 3. Select the repository explicitly
 
 ```bash
-cd /absolute/path/to/repository
-colossus --config /absolute/path/to/.colossus/config.yaml run \
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml run \
   "Map this repository. Name its three most important components and cite the files that support your answer. Do not change anything."
 ```
 
-The process working directory selects the active workspace. It never expands the
-configured sandbox root.
+`--workspace` selects the active canonical workspace independently of the caller's
+current directory. It never expands the configured sandbox root.
 
 ## Expected result
 
@@ -68,7 +78,8 @@ Check the repository and the audit trail:
 
 ```bash
 git status --short
-colossus --config /absolute/path/to/.colossus/config.yaml \
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml \
   audit show --limit 20
 ```
 
@@ -79,8 +90,8 @@ provider and read lifecycle without a filesystem mutation.
 
 - **Repository tools are hidden:** verify the absolute read root with
   `config effective`.
-- **Path is outside the workspace:** start Colossus from the intended repository and
-  confirm the root is canonical.
+- **Path is outside the workspace:** pass the intended repository with `--workspace`
+  and confirm the explicit root is canonical.
 - **The model asks to run Git:** this tutorial intentionally grants no executable.
   Ask it to use repository-context and filesystem read tools instead.
 - **The answer lacks evidence:** ask for exact file paths and a bounded second pass.

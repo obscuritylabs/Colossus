@@ -59,6 +59,52 @@ fn canonical_source_and_release_binary_is_colossus() {
 }
 
 #[test]
+fn linux_user_namespace_profile_is_exact_hardened_and_accepted() {
+    let template = fs::read_to_string(repository_root().join("release/colossus.apparmor.in"))
+        .expect("read AppArmor template");
+    assert!(template.contains("profile colossus \"@COLOSSUS_BINARY@\""));
+    assert!(template.contains("  userns,"));
+    assert!(
+        !template.contains("/**/colossus"),
+        "the user-namespace grant must never attach by a replaceable basename glob"
+    );
+
+    let installer = fs::read_to_string(repository_root().join("release/install-apparmor.sh"))
+        .expect("read AppArmor installer");
+    for required in [
+        "[ ! -L \"$requested_binary\" ]",
+        "realpath -e",
+        "stat -c '%u'",
+        "stat -c '%g'",
+        "0$mode & 020",
+        "0$mode & 002",
+        "apparmor_parser -r",
+        "/etc/apparmor.d/colossus",
+    ] {
+        assert!(
+            installer.contains(required),
+            "AppArmor installer is missing hardening contract {required:?}"
+        );
+    }
+
+    let workflow = fs::read_to_string(repository_root().join(".github/workflows/ci.yml"))
+        .expect("read CI workflow");
+    for required in [
+        "Prepare exact-path AppArmor profile for workspace tests",
+        "Install exact-path AppArmor profile for Linux acceptance",
+        "/usr/local/libexec/colossus-ci/colossus",
+        "COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus",
+        "release/install-apparmor.sh \"$stage/install-apparmor.sh\"",
+        "release/colossus.apparmor.in \"$stage/colossus.apparmor.in\"",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "CI/release workflow is missing AppArmor contract {required:?}"
+        );
+    }
+}
+
+#[test]
 fn release_bundle_publisher_identity_is_self_consistent() {
     let source = fs::read_to_string(repository_root().join("release/bundle-publisher.json"))
         .expect("read release bundle publisher identity");

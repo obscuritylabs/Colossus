@@ -630,13 +630,12 @@ pub(super) fn bounded_result<T: Serialize>(
 pub(super) async fn resolve_provider_addresses(
     host: &str,
     port: u16,
+    allow_non_public: bool,
 ) -> Result<Vec<SocketAddr>, ProviderError> {
-    let host_ip = host.parse::<IpAddr>().ok();
-    let loopback_name = host.eq_ignore_ascii_case("localhost");
     let mut addresses = lookup_host((host, port))
         .await
         .map_err(|error| ProviderError::Transport(error.to_string()))?
-        .filter(|address| host_ip.is_some() || loopback_name || !non_public_ip(address.ip()))
+        .filter(|address| allow_non_public || !non_public_network_address(address.ip()))
         .collect::<Vec<_>>();
     addresses.sort_by_key(|address| usize::from(address.is_ipv6()));
     addresses.dedup();
@@ -647,23 +646,4 @@ pub(super) async fn resolve_provider_addresses(
         ));
     }
     Ok(addresses)
-}
-
-pub(super) fn non_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.is_unspecified()
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-        }
-    }
 }

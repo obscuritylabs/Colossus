@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
+    assert!(sandbox_helper_requested(
+        ["colossus", "__sandbox-helper"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+    ));
+    assert!(!sandbox_helper_requested(
+        ["colossus", "sandbox", "doctor"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+    ));
+    assert!(sandbox_protection_probe_requested(
+        ["colossus", "__sandbox-protection-probe"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+    ));
+    assert!(!sandbox_protection_probe_requested(
+        ["colossus", "sandbox", "doctor"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+    ));
+}
+
+#[test]
 fn embedded_fallback_requires_an_absent_worker_not_a_busy_worker() {
     assert!(worker_probe_allows_embedded_fallback(
         &colossus_worker::WorkerError::Unavailable("worker-endpoint".into())
@@ -145,6 +169,7 @@ fn development_config_init_clones_settings_and_isolates_storage() {
         true,
         Some(&source),
         AccessProfile::Development,
+        None,
     )
     .expect("development configuration");
     let development = RuntimeConfig::from_path(&destination).expect("strict development config");
@@ -180,6 +205,7 @@ fn development_config_init_clones_settings_and_isolates_storage() {
             true,
             Some(&source),
             AccessProfile::Development,
+            None,
         )
         .is_err()
     );
@@ -209,7 +235,7 @@ fn development_config_init_refuses_orphaned_state() {
     fs::write(directory.path().join("state.dev.redb"), b"orphaned state")
         .expect("orphaned development state");
 
-    let error = init_config(&destination, true, None, AccessProfile::Development)
+    let error = init_config(&destination, true, None, AccessProfile::Development, None)
         .expect_err("orphaned state must fail closed");
     assert!(error.to_string().contains("restore the matching config"));
     assert!(!destination.exists());
@@ -268,10 +294,68 @@ fn config_init_generates_all_four_access_profiles() {
     ] {
         let directory = tempfile::tempdir().expect("temporary directory");
         let destination = directory.path().join("config.yaml");
-        init_config(&destination, false, None, profile).expect("generated config");
+        init_config(&destination, false, None, profile, None).expect("generated config");
         let generated = RuntimeConfig::from_path(&destination).expect("strict config");
         assert_eq!(generated.access.profile, profile);
+        assert_eq!(
+            generated.sandbox.profile,
+            if profile == AccessProfile::Development {
+                "workspace-development"
+            } else {
+                "offline-default"
+            }
+        );
     }
+}
+
+#[test]
+fn config_init_accepts_an_explicit_sandbox_profile_override() {
+    let parsed = Cli::try_parse_from([
+        "colossus",
+        "config",
+        "init",
+        "--sandbox-profile",
+        "offline-default",
+    ])
+    .expect("sandbox profile override");
+    let Command::Config(ConfigCommand {
+        command: ConfigAction::Init {
+            sandbox_profile, ..
+        },
+    }) = parsed.command
+    else {
+        panic!("expected config init");
+    };
+    assert_eq!(sandbox_profile, Some(SandboxProfile::OfflineDefault));
+
+    let directory = tempfile::tempdir().expect("directory");
+    let destination = directory.path().join("config.yaml");
+    init_config(
+        &destination,
+        false,
+        None,
+        AccessProfile::Development,
+        Some(SandboxProfile::OfflineDefault),
+    )
+    .expect("generated config");
+    let generated = RuntimeConfig::from_path(destination).expect("strict config");
+    assert_eq!(generated.sandbox.profile, "offline-default");
+}
+
+#[test]
+fn worker_workspace_mismatch_is_rejected() {
+    let selected = tempfile::tempdir().expect("selected workspace");
+    let worker = tempfile::tempdir().expect("worker workspace");
+    let status = json!({"workspace": worker.path()});
+    let error = validate_worker_workspace(&status, selected.path())
+        .expect_err("mismatched worker workspace");
+    assert!(
+        error
+            .to_string()
+            .contains("does not match selected workspace")
+    );
+    validate_worker_workspace(&json!({"workspace": selected.path()}), selected.path())
+        .expect("matching worker workspace");
 }
 
 #[test]

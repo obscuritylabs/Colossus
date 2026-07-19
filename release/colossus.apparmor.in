@@ -1,0 +1,9 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# Ubuntu 24.04 restricts capability use inside unprivileged user namespaces unless
+# the executable has an explicit AppArmor userns grant. The installer replaces the
+# token below with one canonical, root-owned Colossus executable path.
+profile colossus "@COLOSSUS_BINARY@" flags=(unconfined) {
+  userns,
+}

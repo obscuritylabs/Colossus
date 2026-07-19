@@ -341,12 +341,18 @@ struct SandboxResult {
     output_truncated: bool,
     stdout_base64: String,
     stderr_base64: String,
+    #[serde(default)]
+    observed_origins: Vec<String>,
 }
 
 fn process_stdout(bytes: &[u8], operation: &McpOperation) -> Result<Vec<u8>, ExecutionError> {
     let result: SandboxResult = serde_json::from_slice(bytes)
         .map_err(|error| operation_error(operation, format!("invalid sandbox result: {error}")))?;
-    let _ = (&result.backend, &result.stderr_base64);
+    let _ = (
+        &result.backend,
+        &result.stderr_base64,
+        &result.observed_origins,
+    );
     if result.timed_out || result.resource_limit_exceeded.is_some() || result.output_truncated {
         return Err(operation_error(
             operation,

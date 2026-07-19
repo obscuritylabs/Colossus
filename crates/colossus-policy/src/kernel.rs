@@ -352,9 +352,9 @@ impl SafetyKernel {
             }
         }
         for destination in &obligations.network_destinations {
-            if canonical_network_origin(destination)? != *destination {
+            if destination != "*" && canonical_network_origin(destination)? != *destination {
                 return Err(GatewayError::Safety(format!(
-                    "network destination must be a canonical HTTP(S) origin: {destination}"
+                    "network destination must be * or a canonical HTTP(S) origin: {destination}"
                 )));
             }
         }
@@ -367,6 +367,28 @@ impl SafetyKernel {
             {
                 return Err(GatewayError::Safety(
                     "filesystem obligations require absolute roots and known modes".into(),
+                ));
+            }
+        }
+        let mut protected = BTreeSet::new();
+        for path in &obligations.protected_filesystem {
+            if !absolute_policy_root(path) || !protected.insert(path.as_str()) {
+                return Err(GatewayError::Safety(
+                    "protected filesystem obligations require unique absolute paths".into(),
+                ));
+            }
+            let canonical = fs::canonicalize(path).map_err(|error| {
+                GatewayError::Safety(format!("protected filesystem path is unavailable: {error}"))
+            })?;
+            let covered_by_write = obligations.filesystem.iter().any(|grant| {
+                grant.mode == "write"
+                    && fs::canonicalize(&grant.root)
+                        .is_ok_and(|root| canonical.starts_with(&root) && canonical != root)
+            });
+            if !covered_by_write {
+                return Err(GatewayError::Safety(
+                    "protected filesystem paths must be strict descendants of writable grants"
+                        .into(),
                 ));
             }
         }
@@ -402,11 +424,7 @@ impl SafetyKernel {
             ))
         {
             let origin = canonical_network_origin(&request.resource)?;
-            if !obligations
-                .network_destinations
-                .iter()
-                .any(|allowed| allowed == &origin)
-            {
+            if network_destination_match(&obligations.network_destinations, &origin)?.is_none() {
                 return Err(GatewayError::Safety(format!(
                     "network destination {origin} is not allowed"
                 )));
@@ -448,7 +466,17 @@ pub(super) fn is_filesystem_action(action: &str) -> bool {
         )
 }
 
-pub(super) fn canonical_network_origin(resource: &str) -> Result<String, GatewayError> {
+/// How one configured network grant authorized a canonical origin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkDestinationMatch {
+    /// The canonical origin was configured exactly.
+    Exact,
+    /// The public HTTP(S) wildcard matched; DNS must still resolve only public addresses.
+    PublicWildcard,
+}
+
+/// Canonicalize a credential-free HTTP(S) URL to its origin.
+pub fn canonical_network_origin(resource: &str) -> Result<String, GatewayError> {
     let url = Url::parse(resource)
         .map_err(|error| GatewayError::Safety(format!("invalid network URL: {error}")))?;
     if !matches!(url.scheme(), "http" | "https")
@@ -461,6 +489,59 @@ pub(super) fn canonical_network_origin(resource: &str) -> Result<String, Gateway
         ));
     }
     Ok(url.origin().ascii_serialization())
+}
+
+/// Match one HTTP(S) resource against exact origins or the public-only wildcard.
+pub fn network_destination_match(
+    destinations: &[String],
+    resource: &str,
+) -> Result<Option<NetworkDestinationMatch>, GatewayError> {
+    let origin = canonical_network_origin(resource)?;
+    if destinations.iter().any(|allowed| allowed == &origin) {
+        return Ok(Some(NetworkDestinationMatch::Exact));
+    }
+    if !destinations.iter().any(|allowed| allowed == "*") {
+        return Ok(None);
+    }
+    let url = Url::parse(&origin)
+        .map_err(|error| GatewayError::Safety(format!("invalid network origin: {error}")))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| GatewayError::Safety("network origin has no host".into()))?;
+    let lower = host.trim_end_matches('.').to_ascii_lowercase();
+    if lower == "localhost"
+        || matches!(
+            lower.as_str(),
+            "metadata.google.internal"
+                | "metadata.goog"
+                | "instance-data"
+                | "instance-data.ec2.internal"
+        )
+        || host.parse::<IpAddr>().is_ok_and(non_public_network_address)
+    {
+        return Ok(None);
+    }
+    Ok(Some(NetworkDestinationMatch::PublicWildcard))
+}
+
+/// Return whether an address is outside public Internet routing.
+pub fn non_public_network_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+        }
+    }
 }
 
 pub(super) fn validate_process_obligations(

@@ -109,9 +109,19 @@ impl SearchExecutor {
         validate_request(&input.request)?;
         validate_credential_disclosure(effect, &self.profile)?;
         let origin = self.profile.network_origin()?;
-        if !permit.obligations().network_destinations.contains(&origin) {
+        let matched =
+            network_destination_match(&permit.obligations().network_destinations, &origin)
+                .map_err(|error| SearchAdapterError::Configuration(error.to_string()))?
+                .ok_or_else(|| {
+                    SearchAdapterError::Configuration(
+                        "search origin is absent from permit obligations".into(),
+                    )
+                })?;
+        if matched == NetworkDestinationMatch::PublicWildcard
+            && url_host_is_non_public_literal(&self.profile.endpoint)?
+        {
             return Err(SearchAdapterError::Configuration(
-                "search origin is absent from permit obligations".into(),
+                "public wildcard cannot authorize a non-public search origin".into(),
             ));
         }
         let mut url = Url::parse(&self.profile.endpoint)?;
@@ -146,7 +156,10 @@ impl SearchExecutor {
         let port = url.port_or_known_default().ok_or_else(|| {
             SearchAdapterError::Configuration("search URL has no known port".into())
         })?;
-        let addresses = resolve_search_addresses(host, port).await?;
+        let allow_non_public = matched == NetworkDestinationMatch::Exact
+            && (host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+        let addresses = resolve_search_addresses(host, port, allow_non_public).await?;
         let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
         let client = Client::builder()
             .no_proxy()

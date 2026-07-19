@@ -1,12 +1,13 @@
 use super::{
     AllowApproval, BuiltInPolicy, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
-    GatewayError, QuarantinedEffectObserver, ReleasedEffectObserver, ReleasedEffectResult,
-    SafetyKernel, StreamingEffectExecutor, effect_request, system_actor,
+    GatewayError, NetworkDestinationMatch, QuarantinedEffectObserver, ReleasedEffectObserver,
+    ReleasedEffectResult, SafetyKernel, StreamingEffectExecutor, effect_request,
+    network_destination_match, system_actor,
 };
 use async_trait::async_trait;
 use colossus_contracts::{
-    DecisionOutcome, QuarantinedEffectResult, RiskAssessment, RiskLevel, RiskRecommendation,
-    RiskStatus,
+    Actor, ActorType, DecisionOutcome, QuarantinedEffectResult, RiskAssessment, RiskLevel,
+    RiskRecommendation, RiskStatus,
 };
 use colossus_ports::{
     ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
@@ -122,7 +123,10 @@ fn shell_request(
     cwd: &std::path::Path,
 ) -> colossus_contracts::EffectRequest {
     let mut request = effect_request(
-        system_actor("risk-test"),
+        Actor {
+            actor_type: ActorType::Model,
+            id: "risk-test".into(),
+        },
         "shell.run",
         executable.display().to_string(),
         serde_json::json!({
@@ -803,6 +807,135 @@ async fn unavailable_or_non_low_risk_review_requires_explicit_approval() {
         assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
         assert_eq!(executor.calls.load(Ordering::Acquire), 1);
     }
+}
+
+#[tokio::test]
+async fn workflow_lineage_never_receives_risk_auto_approval() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("current executable")
+        .canonicalize()
+        .expect("canonical executable");
+    let approvals = Arc::new(RiskAutoApproval {
+        prompts: AtomicUsize::new(0),
+    });
+    let evaluator = Arc::new(StaticRiskEvaluator {
+        calls: AtomicUsize::new(0),
+        assessment: Some(RiskAssessment {
+            risk_level: RiskLevel::Low,
+            recommended_decision: RiskRecommendation::Allow,
+            reason: "would be low risk outside a workflow".into(),
+        }),
+    });
+    let policy = Arc::new(RiskRecordingPolicy {
+        executable: executable.display().to_string(),
+        cwd: directory.path().display().to_string(),
+        saw_available_risk: AtomicUsize::new(0),
+    });
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        policy as Arc<dyn PolicyDecisionPoint>,
+        Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+        SafetyKernel::new(["shell.run".into()]),
+        [45_u8; 32],
+    );
+    let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+    gateway
+        .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+        .expect("bind evaluator");
+    let executor = CountingExecutor {
+        calls: AtomicUsize::new(0),
+    };
+    let mut request = shell_request(&executable, directory.path());
+    request.context.workflow_id = Some("workflow-1".into());
+    request.context.workflow_hash = Some("sha256:workflow".into());
+
+    gateway
+        .execute(request, &executor)
+        .await
+        .expect("explicitly approved workflow effect");
+
+    assert_eq!(evaluator.calls.load(Ordering::Acquire), 0);
+    assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+    assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn workspace_development_obligations_are_removed_by_workflow_lineage() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let policy = BuiltInPolicy::offline_default()
+        .with_action("shell.run", DecisionOutcome::Allow)
+        .with_workspace_development(
+            vec![colossus_contracts::FilesystemGrant {
+                root: workspace.path().display().to_string(),
+                mode: "write".into(),
+            }],
+            Vec::new(),
+            vec!["DEVELOPMENT_TOKEN".into()],
+        );
+    let mut model = shell_request(
+        std::env::current_exe().expect("executable").as_path(),
+        workspace.path(),
+    );
+    let model_decision = policy.decide(&model).await.expect("model decision");
+    assert!(
+        model_decision
+            .obligations
+            .filesystem
+            .iter()
+            .any(|grant| grant.root == workspace.path().display().to_string())
+    );
+    assert!(
+        model_decision
+            .obligations
+            .allowed_environment
+            .contains(&"DEVELOPMENT_TOKEN".into())
+    );
+
+    model.context.workflow_id = Some("workflow-1".into());
+    model.context.workflow_hash = Some("sha256:workflow".into());
+    let workflow_decision = policy.decide(&model).await.expect("workflow decision");
+    assert!(workflow_decision.obligations.filesystem.is_empty());
+    assert!(
+        !workflow_decision
+            .obligations
+            .allowed_environment
+            .contains(&"DEVELOPMENT_TOKEN".into())
+    );
+    assert!(
+        workflow_decision
+            .obligations
+            .allowed_environment
+            .contains(&"PATH".into())
+    );
+}
+
+#[test]
+fn public_network_wildcard_excludes_non_public_and_metadata_origins() {
+    let wildcard = vec!["*".into()];
+    assert_eq!(
+        network_destination_match(&wildcard, "https://example.com/path").expect("public"),
+        Some(NetworkDestinationMatch::PublicWildcard)
+    );
+    for denied in [
+        "http://127.0.0.1:8888/search",
+        "http://10.0.0.1/",
+        "http://169.254.169.254/latest/meta-data",
+        "http://metadata.google.internal/",
+    ] {
+        assert_eq!(
+            network_destination_match(&wildcard, denied).expect("valid URL"),
+            None
+        );
+    }
+    assert_eq!(
+        network_destination_match(
+            &["*".into(), "http://127.0.0.1:8888".into()],
+            "http://127.0.0.1:8888/search",
+        )
+        .expect("exact loopback"),
+        Some(NetworkDestinationMatch::Exact)
+    );
 }
 
 #[tokio::test]

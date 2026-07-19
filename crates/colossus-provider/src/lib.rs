@@ -10,8 +10,9 @@ use colossus_contracts::{
     QuarantinedEffectResult,
 };
 use colossus_policy::{
-    EffectExecutor, ExecutionError, ExecutionPermit, QuarantinedEffectObserver,
-    StreamingEffectExecutor,
+    EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
+    QuarantinedEffectObserver, StreamingEffectExecutor, network_destination_match,
+    non_public_network_address,
 };
 use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};

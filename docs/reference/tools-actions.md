@@ -16,7 +16,7 @@ and output bounds.
 | --- | --- | --- |
 | Utility | `echo`, `user.ask`, `tool.search`, `trace.show` | Pure; `user.ask` requires an interactive interface |
 | Filesystem | `filesystem.list`, `filesystem.read`, `filesystem.search`, `filesystem.write`, `filesystem.replace` | Canonical roots; reads quarantined; writes atomic |
-| Git and process | `git.status`, `git.diff`, `git.show`, `shell.run` | Exact executable, argv, cwd, environment, and resource limits |
+| Git and process | `git.status`, `git.diff`, `git.show`, `shell.run` | Resolved shell or exact executable, command/argv, workspace cwd, isolated environment, and resource limits |
 | Patch | `patch.preview`, `patch.apply`, `patch.reverse` | Preview read; apply/reverse write |
 | Trace export | `trace.export` | Bounded metadata-only workspace write |
 | Repository context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | Workspace-confined reads |
@@ -36,6 +36,32 @@ Every tool schema denies unknown fields. Tool availability does not imply permis
 The access profile and exact overrides decide visibility and the built-in decision;
 policy, approval, trust, the Safety Kernel, permits, sandbox obligations, quarantine, and
 post-effect release remain independent.
+
+## `shell.run`
+
+`shell.run` accepts exactly one invocation form:
+
+```json
+{"command":"cargo test -p colossus-runtime --lib","cwd":".","timeout_ms":120000}
+```
+
+```json
+{"argv":["git","status","--short"],"cwd":"."}
+```
+
+`command` is the recommended form for a bounded non-interactive script. Colossus
+selects the trusted shell supplied by `workspace-development` or one explicit shell
+grant and invokes it without startup profiles. `argv` preserves exact execution and
+requires its first entry to resolve to one configured or derived executable. Shell
+wrappers used in `argv` cannot request login, interactive, or startup-profile behavior.
+
+The `cwd` remains inside the canonical workspace. Colossus supplies an isolated
+`HOME`/temp directory and sanitized absolute `PATH`; model arguments cannot override
+those names or proxy variables. Output and a maximum of 64 allowed proxy
+`observed_origins` are quarantined before release.
+
+Under `development`, execution remains approval-required. `workspace-development`
+supplies resources but never changes that action decision.
 
 ## Tool-to-action exceptions
 
@@ -92,7 +118,9 @@ these operational classes:
 | Administration and recovery | Export reset, recovery transitions | Approval-required |
 
 An action decision never supplies a resource grant. `allow_all` still requires a trusted
-registered action, exact obligations, and permit-bound execution.
+registered action, valid explicit or profile-derived obligations, and permit-bound
+execution. Public `*` network egress is still HTTP(S)-only and excludes non-public
+destinations unless their origins are listed exactly.
 
 ## Call and recovery contract
 

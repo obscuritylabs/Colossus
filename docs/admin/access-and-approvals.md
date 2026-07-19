@@ -16,28 +16,17 @@ Colossus resolves every capability through three separate questions:
 
 <div class="diagram-scroll" markdown tabindex="0" role="region" aria-label="Access resolution diagram">
 
-```mermaid
-flowchart TD
-    A["Trusted capability metadata"] --> B["Access profile"]
-    C["Exact include and exclude"] --> B
-    B --> D{"Static prerequisites met?"}
-    D -- "No, inherited" --> E["Hide and explain"]
-    D -- "No, exact include" --> F["Reject configuration"]
-    D -- "Yes" --> G["Model-visible tool"]
-    G --> H["Exact action decision"]
-    I["Built-in overrides or OPA"] --> H
-    H -- "Deny" --> J["Stop and journal"]
-    H -- "Require approval" --> K["Validate approval proof"]
-    H -- "Allow" --> L["Safety Kernel and permit"]
-    K --> L
-    L --> M["Sandboxed adapter effect"]
-```
+![Access and resource resolution from configuration through enforcement](../diagrams/access-resolution.svg)
 
 </div>
 
-Reading the diagram without color: metadata and explicit selection determine
-visibility; visibility leads to an independent action decision; only an allowed or
-properly approved request can reach the local enforcement and adapter stages.
+Reading the diagram without color: capability metadata and access configuration produce
+the model-visible catalog and built-in decision; workspace plus sandbox configuration
+produce separate resource obligations. Workflow lineage removes development inheritance.
+Authorization, optional risk review, approval, the Safety Kernel, and a one-use permit
+converge before the sandbox may reach the protected workspace or HTTP(S) egress proxy.
+OPA replaces the built-in decision branch only. The editable source is
+[`access-resolution.drawio`](../diagrams/access-resolution.drawio).
 
 ## Profile behavior
 
@@ -86,3 +75,35 @@ satisfied:
 | `full-access` | Satisfy approval obligations automatically |
 
 Approval modes do not convert policy denials into allows and do not add authority.
+
+## Development shell
+
+`development` keeps `shell.run` approval-required. It becomes visible when an executable
+prerequisite exists; the `workspace-development` sandbox preset supplies the trusted
+platform shell, Git when found, a read/write grant for the selected workspace, read-only
+command/runtime roots, and an isolated `HOME`, temp directory, and sanitized `PATH`.
+
+```bash
+colossus -w /absolute/path/to/repository \
+  --approval-mode ask tui
+```
+
+Use `--approval-mode risk-auto` only when the configured risk evaluator is trusted for
+this role. Automatic proof minting is restricted to model or child-agent `shell.run`
+outside workflow lineage, and only a valid low-risk `allow` assessment qualifies.
+Medium, high, malformed, or unavailable assessments fall back to explicit approval or
+denial. Process output remains quarantined and post-effect authorized.
+
+`full-access` satisfies approval requirements without a prompt; it is not a sandbox
+bypass. Prefer it only in bounded disposable environments.
+
+## Workflows and OPA
+
+Durable workflows, system actors, and agents carrying workflow lineage never inherit
+`workspace-development` resources or `risk-auto` proof. They need exact configured
+filesystem, executable, environment, and network grants.
+
+OPA remains the sole action decision point when selected. Automatic
+`workspace-development` grants are rejected with OPA; the OPA decision must return the
+complete resource obligations, while local Safety Kernel, permit, quarantine, sandbox,
+and post-effect checks remain mandatory.

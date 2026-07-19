@@ -146,6 +146,16 @@ jobs:
       - name: Run Clippy with warnings denied
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      - name: Prepare exact-path AppArmor profile for workspace tests
+        shell: bash
+        run: |
+          cargo build --locked -p colossus-cli --bin colossus
+          sudo install -d -o root -g root -m 0755 /usr/local/libexec/colossus-ci
+          sudo install -o root -g root -m 0755 \
+            target/debug/colossus /usr/local/libexec/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/local/libexec/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus' >> "$GITHUB_ENV"
+
       - name: Run workspace tests
         run: cargo test --locked --workspace
 
@@ -192,6 +202,20 @@ jobs:
           workspaces: . -> target
           key: native-sandbox-${{ matrix.runner }}
           cache-targets: false
+
+      - name: Build Linux native helper
+        if: runner.os == 'Linux'
+        run: cargo build --locked -p colossus-cli --bin colossus
+
+      - name: Install exact-path AppArmor profile for Linux acceptance
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo install -d -o root -g root -m 0755 /usr/local/libexec/colossus-ci
+          sudo install -o root -g root -m 0755 \
+            target/debug/colossus /usr/local/libexec/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/local/libexec/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus' >> "$GITHUB_ENV"
 
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
@@ -493,6 +517,10 @@ jobs:
           mkdir -p "$stage" dist
           install -m 0755 target/${{ matrix.target }}/release/colossus "$stage/colossus"
           install -m 0755 release/install.sh "$stage/install.sh"
+          if [[ "${{ matrix.target }}" == *-linux-* ]]; then
+            install -m 0755 release/install-apparmor.sh "$stage/install-apparmor.sh"
+            install -m 0644 release/colossus.apparmor.in "$stage/colossus.apparmor.in"
+          fi
           cp LICENSE "$stage/LICENSE"
           cp README.md "$stage/README.md"
           tar -C "$RUNNER_TEMP" -czf "dist/$package.tar.gz" "$package"
