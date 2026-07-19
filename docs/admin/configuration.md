@@ -20,10 +20,22 @@ effective access surface easy to review.
 
 ## Steps
 
-1. Create the configuration without overwriting any existing file:
+1. Select the repository workspace and create configuration without overwriting any
+   existing file:
 
     ```bash
-    colossus --config .colossus/config.yaml config init
+    colossus -w /absolute/path/to/repository \
+      --config .colossus/config.yaml config init
+    ```
+
+   `config init` defaults `access.profile: development` to
+   `sandbox.profile: workspace-development`. Override either choice explicitly:
+
+    ```bash
+    colossus -w /absolute/path/to/repository \
+      --config .colossus/config.yaml config init \
+      --access-profile pinned \
+      --sandbox-profile offline-default
     ```
 
 2. Parse and render the result:
@@ -55,12 +67,17 @@ Common deployment shapes are:
 | Shape | Provider | Access profile | Network |
 | --- | --- | --- | --- |
 | Offline smoke | `echo` | `minimal` or `development` | Empty |
-| Repository work | Configured local or hosted provider | `development` | Exact provider origins |
+| Interactive repository work | Configured local or hosted provider | `development` + `workspace-development` | Exact origins or reviewed public `*` |
 | Reviewed catalog | Any configured provider | `pinned` | Exact required origins |
-| Bounded test environment | Any configured provider | `allow_all` | Still exact and sandboxed |
+| Bounded test environment | Any configured provider | `allow_all` | Still sandboxed; wildcard remains HTTP(S)-only |
 
 `allow_all` changes built-in action decisions. It does not create filesystem roots,
 executables, origins, trusted extensions, credentials, or permits.
+
+The `workspace-development` sandbox preset is a separate resource decision. It derives
+workspace writes and a trusted non-interactive shell for users and agents outside
+workflow lineage; it does not change the `development` profile's approval-required
+execution decision.
 
 ## Headless environment-backed keys
 
@@ -128,8 +145,11 @@ The run should complete through the configured role and the audit chain should v
   [Configuration fields](../reference/configuration.md).
 - An exact tool include with a missing prerequisite is an error; inherited tools with
   missing prerequisites are hidden and explained by `config effective`.
-- Relative sandbox roots and executables are rejected; resolve and record absolute paths.
+- Relative explicit sandbox roots and executables are rejected; workspace-owned config,
+  state, workflow, skill, and pack paths resolve from the canonical `--workspace`.
 - A configured remote origin must also appear in `sandbox.networkDestinations`.
+- A public HTTP(S) origin may match `*`; loopback/private/metadata origins require an
+  exact entry.
 - `config init` intentionally refuses to overwrite. Back up or choose a new path.
 
 Do not weaken multiple controls at once to clear an error. Follow the first unmet

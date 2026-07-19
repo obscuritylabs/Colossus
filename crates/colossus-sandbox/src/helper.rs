@@ -58,6 +58,8 @@ pub(super) struct SandboxJobResult {
     pub(super) output_truncated: bool,
     pub(super) stdout_base64: String,
     pub(super) stderr_base64: String,
+    #[serde(default)]
+    pub(super) observed_origins: Vec<String>,
 }
 
 pub(super) fn execute_sandbox_job(
@@ -112,8 +114,11 @@ pub(super) fn execute_sandbox_job(
             )));
         }
     };
-    let result = supervise(&mut command, &job, backend.clone());
+    let mut result = supervise(&mut command, &job, backend.clone());
     if let Some(network) = oci_network.as_mut() {
+        if let Ok(result) = result.as_mut() {
+            result.observed_origins = network.observed_origins()?;
+        }
         network.cleanup();
     }
     if backend == "oci" && !ensure_oci_resources_absent(&job) {
@@ -192,6 +197,7 @@ pub(super) fn native_command(job: &SandboxJob) -> Result<Command, SandboxHelperE
         }
         .map_err(|error| SandboxHelperError::Setup(error.to_string()))?;
     }
+    apply_protected_filesystem(&mut capabilities, job)?;
     capabilities = if let Some(port) = job.proxy_port {
         capabilities.proxy_only(port)
     } else {
@@ -202,6 +208,92 @@ pub(super) fn native_command(job: &SandboxJob) -> Result<Command, SandboxHelperE
     let mut command = Command::new(&job.executable);
     configure_command(&mut command, job);
     Ok(command)
+}
+
+#[cfg(target_os = "macos")]
+fn apply_protected_filesystem(
+    capabilities: &mut CapabilitySet,
+    job: &SandboxJob,
+) -> Result<(), SandboxHelperError> {
+    for path in &job.obligations.protected_filesystem {
+        let canonical = fs::canonicalize(path)
+            .map_err(|error| SandboxHelperError::Setup(format!("protected path: {error}")))?;
+        let path = canonical
+            .to_str()
+            .ok_or_else(|| SandboxHelperError::Setup("protected path is not valid UTF-8".into()))?;
+        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+        capabilities
+            .add_platform_rule(format!("(deny file-read* (subpath \"{escaped}\"))"))
+            .map_err(|error| SandboxHelperError::Setup(format!("Seatbelt deny rule: {error}")))?;
+        capabilities
+            .add_platform_rule(format!("(deny file-write* (subpath \"{escaped}\"))"))
+            .map_err(|error| SandboxHelperError::Setup(format!("Seatbelt deny rule: {error}")))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn apply_protected_filesystem(
+    _capabilities: &mut CapabilitySet,
+    job: &SandboxJob,
+) -> Result<(), SandboxHelperError> {
+    use rustix::{
+        mount::{MountFlags, MountPropagationFlags, mount_bind, mount_change, mount_remount},
+        process::{getgid, getuid},
+        thread::{UnshareFlags, unshare},
+    };
+
+    if job.obligations.protected_filesystem.is_empty() {
+        return Ok(());
+    }
+    let uid = getuid().as_raw();
+    let gid = getgid().as_raw();
+    unshare(UnshareFlags::NEWUSER | UnshareFlags::NEWNS)
+        .map_err(|error| SandboxHelperError::Setup(format!("unshare mount namespace: {error}")))?;
+    if Path::new("/proc/self/setgroups").exists() {
+        fs::write("/proc/self/setgroups", "deny")
+            .map_err(|error| SandboxHelperError::Setup(format!("deny setgroups: {error}")))?;
+    }
+    fs::write("/proc/self/uid_map", format!("0 {uid} 1\n"))
+        .map_err(|error| SandboxHelperError::Setup(format!("map sandbox uid: {error}")))?;
+    fs::write("/proc/self/gid_map", format!("0 {gid} 1\n"))
+        .map_err(|error| SandboxHelperError::Setup(format!("map sandbox gid: {error}")))?;
+    mount_change(
+        "/",
+        MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
+    )
+    .map_err(|error| SandboxHelperError::Setup(format!("isolate mount propagation: {error}")))?;
+
+    let mask = std::env::temp_dir().join(format!("colossus-mask-{}", job.job_id));
+    fs::create_dir(&mask)
+        .map_err(|error| SandboxHelperError::Setup(format!("create path mask: {error}")))?;
+    for protected in &job.obligations.protected_filesystem {
+        let protected = fs::canonicalize(protected)
+            .map_err(|error| SandboxHelperError::Setup(format!("protected path: {error}")))?;
+        if !protected.is_dir() {
+            return Err(SandboxHelperError::Setup(
+                "Linux protected path masking currently requires directories".into(),
+            ));
+        }
+        mount_bind(&mask, &protected).map_err(|error| {
+            SandboxHelperError::Setup(format!("bind protected path mask: {error}"))
+        })?;
+        mount_remount(
+            &protected,
+            MountFlags::BIND
+                | MountFlags::RDONLY
+                | MountFlags::NODEV
+                | MountFlags::NOEXEC
+                | MountFlags::NOSUID,
+            "",
+        )
+        .map_err(|error| {
+            SandboxHelperError::Setup(format!("make protected path mask read-only: {error}"))
+        })?;
+    }
+    fs::remove_dir(&mask)
+        .map_err(|error| SandboxHelperError::Setup(format!("remove path mask source: {error}")))?;
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -216,6 +308,13 @@ pub(super) struct WindowsProfileGuard(Option<AppContainerProfile>);
 
 #[cfg(target_os = "windows")]
 pub(super) struct WindowsTemporaryGuard(Option<PathBuf>);
+
+#[cfg(target_os = "windows")]
+pub(super) struct WindowsProtectedAclGuard {
+    icacls: PathBuf,
+    sid: String,
+    paths: Vec<PathBuf>,
+}
 
 #[cfg(target_os = "windows")]
 impl WindowsProfileGuard {
@@ -284,6 +383,78 @@ impl WindowsTemporaryGuard {
                 );
                 self.0 = Some(path);
                 return Err(SandboxHelperError::Execution(message));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsProtectedAclGuard {
+    fn create(
+        system_root: &Path,
+        package: &AppContainerSid,
+        paths: &[String],
+    ) -> Result<Self, SandboxHelperError> {
+        let icacls = fs::canonicalize(system_root.join("System32").join("icacls.exe"))
+            .map_err(|error| SandboxHelperError::Setup(format!("Windows icacls: {error}")))?;
+        let sid = package.as_string();
+        let mut protected = paths
+            .iter()
+            .map(fs::canonicalize)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| SandboxHelperError::Setup(format!("protected path: {error}")))?;
+        protected.sort();
+        protected.dedup();
+        let mut guard = Self {
+            icacls,
+            sid,
+            paths: Vec::new(),
+        };
+        for path in protected {
+            let inheritance = if path.is_dir() { "(OI)(CI)F" } else { "F" };
+            let trustee = format!("*{}:{inheritance}", guard.sid);
+            let output = Command::new(&guard.icacls)
+                .env_clear()
+                .arg(&path)
+                .arg("/deny")
+                .arg(trustee)
+                .arg("/Q")
+                .output()
+                .map_err(|error| {
+                    SandboxHelperError::Setup(format!("protect AppContainer path: {error}"))
+                })?;
+            if !output.status.success() {
+                return Err(SandboxHelperError::Setup(format!(
+                    "protect AppContainer path {} failed",
+                    path.display()
+                )));
+            }
+            guard.paths.push(path);
+        }
+        Ok(guard)
+    }
+
+    fn remove(&mut self) -> Result<(), SandboxHelperError> {
+        while let Some(path) = self.paths.pop() {
+            let output = Command::new(&self.icacls)
+                .env_clear()
+                .arg(&path)
+                .arg("/remove:d")
+                .arg(format!("*{}", self.sid))
+                .arg("/Q")
+                .output()
+                .map_err(|error| {
+                    SandboxHelperError::Execution(format!(
+                        "remove protected AppContainer ACL: {error}"
+                    ))
+                })?;
+            if !output.status.success() {
+                self.paths.push(path.clone());
+                return Err(SandboxHelperError::Execution(format!(
+                    "remove protected AppContainer ACL {} failed",
+                    path.display()
+                )));
             }
         }
         Ok(())
@@ -369,6 +540,21 @@ impl Drop for WindowsTemporaryGuard {
 }
 
 #[cfg(target_os = "windows")]
+impl Drop for WindowsProtectedAclGuard {
+    fn drop(&mut self) {
+        while let Some(path) = self.paths.pop() {
+            let _ = Command::new(&self.icacls)
+                .env_clear()
+                .arg(path)
+                .arg("/remove:d")
+                .arg(format!("*{}", self.sid))
+                .arg("/Q")
+                .output();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub(super) fn supervise_windows_job(
     job: &SandboxJob,
     backend: String,
@@ -446,6 +632,11 @@ pub(super) fn supervise_windows_job(
             SandboxHelperError::Setup(format!("AppContainer ACL {}: {error}", path.display()))
         })?;
     }
+    let mut protected_acl = WindowsProtectedAclGuard::create(
+        &canonical_system_root,
+        package,
+        &job.obligations.protected_filesystem,
+    )?;
 
     let mut temporary = WindowsTemporaryGuard::create(job, package)?;
     let mut environment = job
@@ -614,11 +805,13 @@ pub(super) fn supervise_windows_job(
         output_truncated: state.truncated,
         stdout_base64: BASE64.encode(stdout),
         stderr_base64: BASE64.encode(stderr),
+        observed_origins: Vec::new(),
     };
     drop(state);
     drop(child);
     drop(loopback);
     temporary.remove()?;
+    protected_acl.remove()?;
     profile.remove()?;
     Ok(result)
 }

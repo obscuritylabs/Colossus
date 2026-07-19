@@ -31,6 +31,9 @@ uuid.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 nono.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 rappct = { workspace = true, features = ["net"] }
 

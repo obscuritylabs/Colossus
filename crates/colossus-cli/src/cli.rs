@@ -7,6 +7,9 @@ use super::*;
     about = "Auditable Colossus workflow runtime"
 )]
 pub(super) struct Cli {
+    /// Repository workspace used by tools and relative configuration paths.
+    #[arg(short = 'w', long, default_value = ".")]
+    pub(super) workspace: PathBuf,
     /// Fresh Rust YAML configuration path.
     #[arg(long, default_value = ".colossus/config.yaml")]
     pub(super) config: PathBuf,

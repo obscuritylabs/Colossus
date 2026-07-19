@@ -733,6 +733,21 @@ impl RuntimeConfig {
                 "sandbox environment entries must be POSIX-style variable names".into(),
             ));
         }
+        let mut destinations = BTreeSet::new();
+        for destination in &config.sandbox.network_destinations {
+            if !destinations.insert(destination)
+                || (destination != "*"
+                    && !matches!(
+                        canonical_network_origin(destination),
+                        Ok(origin) if origin == *destination
+                    ))
+            {
+                return Err(RuntimeError::Config(
+                    "sandbox networkDestinations must contain unique canonical HTTP(S) origins or one * public wildcard"
+                        .into(),
+                ));
+            }
+        }
         if config
             .sandbox
             .oci_image
@@ -823,6 +838,11 @@ impl RuntimeConfig {
         self.access.profile = profile;
     }
 
+    /// Select the sandbox profile used by a newly generated configuration.
+    pub fn set_sandbox_profile(&mut self, profile: impl Into<String>) {
+        self.sandbox.profile = profile.into();
+    }
+
     /// Safe offline configuration template using the platform credential store.
     pub fn offline_template(state_path: impl Into<PathBuf>) -> Self {
         let instance_id = Uuid::now_v7();
@@ -894,7 +914,12 @@ impl RuntimeConfig {
 
     /// Platform-specific local worker endpoint derived from the canonical state identity.
     pub fn worker_ipc_endpoint(&self) -> Result<String, RuntimeError> {
-        let state_path = absolute_path(&self.storage.path)?;
+        self.worker_ipc_endpoint_at(&std::env::current_dir()?)
+    }
+
+    /// Worker endpoint with relative state resolved against an explicit workspace.
+    pub fn worker_ipc_endpoint_at(&self, workspace: &Path) -> Result<String, RuntimeError> {
+        let state_path = workspace_absolute_path(workspace, &self.storage.path);
         #[cfg(unix)]
         {
             let mut endpoint = state_path.as_os_str().to_os_string();
@@ -914,6 +939,11 @@ impl RuntimeConfig {
 
     /// Derive a domain-separated worker authentication key from checkpoint key material.
     pub fn worker_ipc_auth_key(&self) -> Result<[u8; 32], RuntimeError> {
+        self.worker_ipc_auth_key_at(&std::env::current_dir()?)
+    }
+
+    /// Derive the worker key for an endpoint resolved against an explicit workspace.
+    pub fn worker_ipc_auth_key_at(&self, workspace: &Path) -> Result<[u8; 32], RuntimeError> {
         let secret = match &self.storage.keys {
             KeyConfig::Platform {
                 service,
@@ -924,7 +954,7 @@ impl RuntimeConfig {
                 signing_variable, ..
             } => explicit_secret(signing_variable)?,
         };
-        let endpoint = self.worker_ipc_endpoint()?;
+        let endpoint = self.worker_ipc_endpoint_at(workspace)?;
         let mut digest = Sha256::new();
         digest.update(b"colossus-worker-ipc-v1\0");
         digest.update(secret);
@@ -960,7 +990,7 @@ pub(super) fn validate_audit_config(
         ));
     }
     let origin = url.origin().ascii_serialization();
-    if !sandbox.network_destinations.contains(&origin) {
+    if !sandbox_allows_network(sandbox, &origin)? {
         return Err(RuntimeError::Config(format!(
             "WORM audit endpoint origin {origin} requires an exact sandbox network destination"
         )));
@@ -1013,7 +1043,7 @@ pub(super) fn validate_research_search_config(
         ));
     }
     let origin = url.origin().ascii_serialization();
-    if !sandbox.network_destinations.contains(&origin) {
+    if !sandbox_allows_network(sandbox, &origin)? {
         return Err(RuntimeError::Config(format!(
             "research search origin {origin} is absent from sandbox.networkDestinations"
         )));
@@ -1119,7 +1149,7 @@ pub(super) fn validate_search_config(config: &RuntimeConfig) -> Result<(), Runti
     for (name, profile) in &effective.profiles {
         let profile = configured_search_profile(name, profile)?;
         let origin = profile.network_origin()?;
-        if !config.sandbox.network_destinations.contains(&origin) {
+        if !sandbox_allows_network(&config.sandbox, &origin)? {
             return Err(RuntimeError::Config(format!(
                 "search profile {name} origin {origin} is absent from sandbox.networkDestinations"
             )));
@@ -1159,7 +1189,7 @@ pub(super) fn validate_memory_config(
         *timeout_ms,
     )?;
     let chroma_origin = chroma.network_origin()?;
-    if !sandbox.network_destinations.contains(&chroma_origin) {
+    if !sandbox_allows_network(sandbox, &chroma_origin)? {
         return Err(RuntimeError::Config(format!(
             "Chroma origin {chroma_origin} is absent from sandbox.networkDestinations"
         )));
@@ -1185,7 +1215,7 @@ pub(super) fn validate_memory_config(
                 *dimensions,
             )?;
             let embedding_origin = profile.network_origin()?;
-            if !sandbox.network_destinations.contains(&embedding_origin) {
+            if !sandbox_allows_network(sandbox, &embedding_origin)? {
                 return Err(RuntimeError::Config(format!(
                     "embedding origin {embedding_origin} is absent from sandbox.networkDestinations"
                 )));
@@ -1377,7 +1407,7 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
     for (name, profile) in &config.providers.profiles {
         let profile = provider_profile(name, profile)?;
         if let Some(origin) = profile.network_origin()?
-            && !config.sandbox.network_destinations.contains(&origin)
+            && !sandbox_allows_network(&config.sandbox, &origin)?
         {
             return Err(RuntimeError::Config(format!(
                 "provider profile {name} origin {origin} is absent from sandbox.networkDestinations"
@@ -1385,4 +1415,13 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
         }
     }
     Ok(())
+}
+
+pub(super) fn sandbox_allows_network(
+    sandbox: &SandboxConfig,
+    resource: &str,
+) -> Result<bool, RuntimeError> {
+    network_destination_match(&sandbox.network_destinations, resource)
+        .map(|matched| matched.is_some())
+        .map_err(|error| RuntimeError::Config(error.to_string()))
 }

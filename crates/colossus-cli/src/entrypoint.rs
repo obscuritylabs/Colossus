@@ -16,18 +16,32 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         colossus_sandbox::run_helper_stdio()?;
         return Ok(());
     }
+    let runtime_options = RuntimeOpenOptions::for_workspace(&cli.workspace)?;
+    let config_path = if cli.config.is_absolute() {
+        cli.config.clone()
+    } else {
+        runtime_options.workspace.join(&cli.config)
+    };
+    std::env::set_current_dir(&runtime_options.workspace)?;
     if let Command::Config(ConfigCommand {
         command:
             ConfigAction::Init {
                 development,
                 from,
                 access_profile,
+                sandbox_profile,
             },
     }) = &cli.command
     {
-        return init_config(&cli.config, *development, from.as_deref(), *access_profile);
+        return init_config(
+            &config_path,
+            *development,
+            from.as_deref(),
+            *access_profile,
+            *sandbox_profile,
+        );
     }
-    let config = RuntimeConfig::from_path(&cli.config)?;
+    let config = RuntimeConfig::from_path(&config_path)?;
     if matches!(
         cli.command,
         Command::Config(ConfigCommand {
@@ -49,26 +63,31 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 ApprovalMode::RiskAuto => WorkerApprovalMode::RiskAuto,
                 ApprovalMode::FullAccess => WorkerApprovalMode::FullAccess,
             };
-            let server = WorkerServer::open_with_mode(&config, mode)?;
+            let server =
+                WorkerServer::open_with_mode_at_workspace(&config, mode, runtime_options.clone())?;
             eprintln!("worker listening on {}", server.endpoint());
             server.serve().await?;
             return Ok(());
         }
         Command::Worker { shutdown: true, .. } => {
             let client = WorkerClient::from_config(&config)?;
+            validate_worker_workspace(&client.ping().await?, &runtime_options.workspace)?;
             print_json(&client.call(WorkerOperation::Shutdown).await?)?;
             return Ok(());
         }
         Command::Worker { status: true, .. } => {
             let client = WorkerClient::from_config(&config)?;
-            print_json(&client.ping().await?)?;
+            let status = client.ping().await?;
+            validate_worker_workspace(&status, &runtime_options.workspace)?;
+            print_json(&status)?;
             return Ok(());
         }
         _ => {}
     }
     if dispatch_to_worker_if_active(
         &config,
-        &cli.config,
+        &config_path,
+        &runtime_options.workspace,
         &cli.command,
         cli.approval_mode,
         cli.no_alt_screen,
@@ -112,15 +131,16 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         } else {
             None
         };
-    let runtime = Arc::new(Runtime::open_with_interfaces(
+    let runtime = Arc::new(Runtime::open_with_options(
         &config,
         approvals,
         user_prompts,
+        runtime_options,
     )?);
     match cli.command {
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
-        }) => print_json(runtime.effective_access())?,
+        }) => print_json(&runtime.effective_access())?,
         Command::Config(_) => unreachable!("handled before runtime construction"),
         Command::Preferences(command) => match command.command {
             PreferencesAction::Show => print_json(&runtime.presentation_preferences()?)?,

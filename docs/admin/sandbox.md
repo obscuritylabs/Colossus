@@ -13,28 +13,27 @@ Permit only named resources and bounded effects for repository work.
 
 ## Prerequisites
 
-- Canonical absolute paths for the workspace and each executable.
-- Exact network origins, if network access is required.
+- A canonical workspace selected with global `-w, --workspace`.
+- Canonical absolute paths for explicit roots and executables.
+- Exact private origins, if private or loopback network access is required.
 - A supported native backend or a preloaded immutable OCI image.
 
 ## Steps
 
-1. Start with a narrow grant:
+1. For interactive repository development, select the workspace and use the development
+   preset:
 
     ```yaml
     sandbox:
       backend: native
-      profile: repository-development
+      profile: workspace-development
       allowBrokerFallback: false
       helperPath: null
       ociRuntime: null
       ociImage: null
       ociProxyImage: null
-      filesystem:
-        - root: /absolute/path/to/repository
-          mode: write
-      executables:
-        - /usr/bin/git
+      filesystem: []
+      executables: []
       environment: []
       networkDestinations: []
       timeoutMs: 120000
@@ -44,10 +43,33 @@ Permit only named resources and bounded effects for repository work.
       maxConcurrency: 1
     ```
 
-2. Add environment variable *names*, not values.
+   Then run from any directory:
+
+    ```bash
+    colossus -w /absolute/path/to/repository \
+      --config .colossus/config.yaml \
+      --approval-mode ask tui
+    ```
+
+   Relative config, state, workflow, skill, pack, and tool paths resolve against the
+   canonical selected workspace.
+
+2. Keep explicit `filesystem`, `executables`, and environment variable *names* as
+   additive grants. Never put environment values in YAML.
 
 3. Add network destinations as canonical origins such as
-   `https://api.example.com`. Wildcards and URL paths are not grants.
+   `https://api.example.com`. `*` means public HTTP(S) egress only:
+
+    ```yaml
+    sandbox:
+      networkDestinations:
+        - "*"
+        - http://127.0.0.1:8888
+    ```
+
+   Loopback, private, link-local, and metadata destinations never match `*`; list each
+   required origin exactly. The wildcard does not grant raw TCP/UDP, SSH, other
+   protocols, credentials, actions, or a sandbox bypass.
 
 4. Run:
 
@@ -58,10 +80,20 @@ Permit only named resources and bounded effects for repository work.
 
 5. Exercise each effect in a disposable repository before granting it in production.
 
-Process execution never invokes an implicit shell. A process request names one exact
-executable, literal arguments, a working directory, environment names, and resource
-limits. Filesystem paths are rechecked against canonical roots; writes reject symlink
-leaves and use atomic replacement.
+`shell.run` accepts exactly one of `command` or `argv`. `command` runs a bounded
+non-interactive script through the resolved platform shell without startup profiles;
+`argv` retains exact execution semantics. Both use a workspace-relative `cwd`, isolated
+`HOME`/temp directory, sanitized absolute `PATH`, bounded environment, timeout, process
+tree, and output. Persistent PTYs, background sessions, and interactive stdin are not
+provided.
+
+The development grant applies only to terminal users, main agents, and child agents
+without workflow lineage. The selected workspace is writable, but `.colossus` control
+state is created and hidden from the shell before the first command can run. macOS uses
+Seatbelt deny rules, Linux masks the path in a rootless mount namespace before Landlock,
+Windows uses protected AppContainer ACL targets, and OCI masks it with a read-only
+inaccessible mount. Runtime construction fails when the selected backend cannot enforce
+the exclusion.
 
 ## Backend choices
 
@@ -72,9 +104,10 @@ leaves and use atomic replacement.
 | `windows_job` | AppContainer and Job Object isolation on Windows |
 | `broker` | Explicitly acknowledged downgrade only |
 
-Broker mode requires `allowBrokerFallback: true` and is not represented as sandbox
-isolation. OCI uses no pull, a read-only root, dropped capabilities, bounded resources,
-and exact bind mounts. Networked OCI work also requires the immutable proxy image.
+Broker mode requires `allowBrokerFallback: true`, is not represented as sandbox
+isolation, and cannot supply `workspace-development`. OCI uses no pull, a read-only
+root, dropped capabilities, bounded resources, and exact bind mounts. Networked OCI work
+also requires the immutable proxy image.
 
 ## Expected result
 
@@ -83,9 +116,11 @@ shows only tools whose static obligations are met.
 
 ## Verification
 
-Confirm that one permitted path succeeds and an undeclared sibling path fails. If
-network is enabled, confirm the exact approved origin succeeds and another origin fails.
-Retain the bounded diagnostic and audit evidence.
+Confirm that a workspace write succeeds, an outside-workspace write fails, and
+`.colossus` remains unchanged. If wildcard network is enabled, confirm a public HTTPS
+origin succeeds, metadata/private origins fail, and an explicitly listed loopback origin
+succeeds. Process results include a bounded `observed_origins` list for allowed proxy
+connections. Retain the diagnostic and audit evidence.
 
 ## Failure path
 

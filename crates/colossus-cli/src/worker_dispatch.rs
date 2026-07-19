@@ -3,6 +3,7 @@ use super::*;
 pub(super) async fn dispatch_to_worker_if_active(
     config: &RuntimeConfig,
     config_path: &Path,
+    workspace: &Path,
     command: &Command,
     approval_mode: Option<ApprovalMode>,
     no_alt_screen: bool,
@@ -11,7 +12,7 @@ pub(super) async fn dispatch_to_worker_if_active(
         return Ok(false);
     };
     match client.ping().await {
-        Ok(_) => {}
+        Ok(status) => validate_worker_workspace(&status, workspace)?,
         Err(error) if worker_probe_allows_embedded_fallback(&error) => return Ok(false),
         Err(error) => return Err(error.into()),
     }
@@ -1242,4 +1243,25 @@ pub(super) async fn dispatch_to_worker_if_active(
         }
         Command::Worker { .. } | Command::Config(_) | Command::SandboxHelper => Ok(false),
     }
+}
+
+pub(super) fn validate_worker_workspace(
+    status: &Value,
+    workspace: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let worker_workspace = status
+        .get("workspace")
+        .and_then(Value::as_str)
+        .ok_or_else(|| cli_error("active worker did not report its workspace"))?;
+    let worker_workspace = fs::canonicalize(worker_workspace)?;
+    let selected_workspace = fs::canonicalize(workspace)?;
+    if worker_workspace != selected_workspace {
+        return Err(cli_error(format!(
+            "active worker workspace {} does not match selected workspace {}; restart the worker with the same -w/--workspace",
+            worker_workspace.display(),
+            selected_workspace.display()
+        ))
+        .into());
+    }
+    Ok(())
 }

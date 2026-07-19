@@ -15,6 +15,7 @@ colossus [OPTIONS] <COMMAND>
 
 | Option | Values | Default | Meaning |
 | --- | --- | --- | --- |
+| `-w`, `--workspace PATH` | Existing directory | Current directory | Select and canonicalize the repository workspace |
 | `--config PATH` | YAML path | `.colossus/config.yaml` | Select configuration |
 | `--approval-mode MODE` | `deny`, `ask`, `risk-auto`, `full-access` | See below | Satisfy existing approval obligations |
 | `--output FORMAT` | `auto`, `human`, `json` | `auto` | Select structured output rendering |
@@ -25,13 +26,24 @@ colossus [OPTIONS] <COMMAND>
 Global options appear before the command:
 
 ```bash
-colossus --config .colossus/config.yaml --approval-mode ask workflow list
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml \
+  --approval-mode ask workflow list
 ```
+
+Relative `--config` paths resolve against `--workspace`. Embedded runtime callers retain
+current-directory behavior unless they opt into the explicit workspace-aware open API.
+An active worker publishes its canonical workspace and rejects a client selecting a
+different one.
 
 Interactive TUI and the long-running bare `worker` default to `ask`. Other commands
 executed in-process default to `deny`; when an active worker handles a command, that
 worker's configured approval mode applies. Approval mode satisfies an existing approval
 obligation—it never changes an access or policy decision.
+
+`risk-auto` is eligible only for model and child-agent `shell.run` outside workflows. A
+low-risk `allow` recommendation produces a request-bound proof; every other assessment
+falls back to explicit approval or denial.
 
 ## Command groups
 
@@ -81,7 +93,7 @@ positional:
 
 | Group | Leaf routes |
 | --- | --- |
-| `config` | `init`, `show`, `effective` |
+| `config` | `init [--access-profile PROFILE] [--sandbox-profile PROFILE]`, `show`, `effective` |
 | `audit` | `verify`, `show`, `export`, `anchor-status`, `exporter-status`, `exporter-drain`, `exporter-reset` |
 | `policy` | `doctor` |
 | `projection` | `status`, `drain`, `rebuild [NAME]` |
@@ -126,7 +138,8 @@ positional:
 | --- | --- |
 | `audit show` | `--from 1`, `--limit 100` |
 | `audit export` | `--from 1`, `--limit 1000` |
-| `process run` | `--cwd .`; `--env KEY=VALUE` repeats; arguments after `--` are literal |
+| `config init` | `--access-profile development`; sandbox defaults to `workspace-development` for development and `offline-default` otherwise |
+| `process run` | Exact executable; `--cwd .`; `--env KEY=VALUE` repeats; arguments after `--` are literal |
 | `workflow run` | `--inputs {}`; foreground unless `--queued` |
 | `workflow schedule create` | cadence required in `60..=2678400`; `--misfire fire-once`; enabled by default |
 | Schedule, webhook, subscription `list` | `--limit 100` |
@@ -169,7 +182,8 @@ or status contract. Important roots are:
 | `sessions show` | `id`, nullable `title`, timestamps, `message_count`, nullable `last_run_id`, nullable `last_user_preview` |
 | `research show` | `id`, `session_id`, question/depth/source lanes, `status`, queries, progress, limitations, report/error, timestamps |
 | `telemetry metrics` | Aggregated run/tool/provider/context counters and duration totals |
-| `tools list`, `config effective` | Resolved tool/action records including exact names, source, class, decision, prerequisites, and bounds |
+| `tools list` | Active schemas plus source/risk metadata, canonical workspace, sandbox profile, action decision, and bounds |
+| `config effective` | Active/hidden tools and actions plus explicit/derived grants, resolved shell, protected paths, wildcard meaning, and unmet prerequisites |
 
 Optional values are JSON `null`; enums and tagged states use documented lowercase
 snake-case strings. `config show` is the deliberate exception: it emits strict YAML so
@@ -179,10 +193,10 @@ line. Do not parse human or TUI rendering.
 ## Common routes
 
 ```bash
-colossus config init
-colossus config effective
-colossus run "Summarize this repository"
-colossus tui
+colossus -w /path/to/repository config init
+colossus -w /path/to/repository config effective
+colossus -w /path/to/repository run "Summarize this repository"
+colossus -w /path/to/repository --approval-mode risk-auto tui
 colossus sessions list
 colossus workflow list
 colossus audit verify

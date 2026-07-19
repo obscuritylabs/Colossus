@@ -287,7 +287,6 @@ impl EffectExecutor for SandboxProcessExecutor {
                 return Err(adapter_failure(error));
             }
         };
-        drop(proxy);
         if !output.status.success() {
             if is_oci
                 && !ensure_oci_resources_absent_async(
@@ -306,7 +305,7 @@ impl EffectExecutor for SandboxProcessExecutor {
                 String::from_utf8_lossy(&output.stderr)
             )));
         }
-        let result: SandboxJobResult = match serde_json::from_slice(&output.stdout) {
+        let mut result: SandboxJobResult = match serde_json::from_slice(&output.stdout) {
             Ok(result) => result,
             Err(error) => {
                 if is_oci
@@ -324,6 +323,10 @@ impl EffectExecutor for SandboxProcessExecutor {
                 return Err(adapter_failure(error));
             }
         };
+        if let Some(proxy) = proxy.as_ref() {
+            result.observed_origins = proxy.observed_origins();
+        }
+        drop(proxy);
         cleanup_guard.disarm();
         if result.timed_out {
             return Err(adapter_failure("sandboxed process exceeded its timeout"));

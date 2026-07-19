@@ -186,7 +186,15 @@ impl EffectGateway {
         request: &mut EffectRequest,
         decision: &PolicyDecision,
     ) -> Result<bool, GatewayError> {
-        if request.action != "shell.run" || !self.approvals.risk_auto_enabled() {
+        if request.action != "shell.run"
+            || !self.approvals.risk_auto_enabled()
+            || !matches!(
+                request.actor.actor_type,
+                ActorType::Model | ActorType::Subagent
+            )
+            || request.context.workflow_id.is_some()
+            || request.context.workflow_hash.is_some()
+        {
             return Ok(false);
         }
         self.event(

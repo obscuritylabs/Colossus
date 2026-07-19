@@ -336,21 +336,53 @@ impl ToolExecutor for GatewayToolExecutor {
                 self.execute_patch_tool(&call, context).await?
             }
             "shell.run" => {
-                let argv = required_tool_string_array(&call, "argv")?;
-                let requested = argv.first().ok_or_else(|| ToolError::InvalidArguments {
-                    tool: call.name.clone(),
-                    message: "argv must not be empty".into(),
-                })?;
-                if is_shell_wrapper(requested) {
-                    return Err(ToolError::Denied(format!(
-                        "shell wrapper execution is denied: {requested}"
-                    )));
+                let command = optional_tool_string(&call, "command")?;
+                let argv = optional_tool_string_array(&call, "argv")?;
+                if command.is_some() == argv.is_some() {
+                    return Err(ToolError::InvalidArguments {
+                        tool: call.name.clone(),
+                        message: "exactly one of command or argv is required".into(),
+                    });
                 }
-                let executable = self.resolve_executable(requested)?;
+                let (executable, args, invocation) = if let Some(command) = command {
+                    let executable = self.shell_executable()?;
+                    let args = shell_command_arguments(&executable, command)?;
+                    (executable, args, json!({"command": command}))
+                } else {
+                    let argv = argv.expect("validated argv presence");
+                    let requested = argv.first().ok_or_else(|| ToolError::InvalidArguments {
+                        tool: call.name.clone(),
+                        message: "argv must not be empty".into(),
+                    })?;
+                    if is_shell_wrapper(requested) {
+                        reject_shell_startup_profiles(&call, &argv[1..])?;
+                    }
+                    let executable = self.resolve_executable(requested)?;
+                    (
+                        executable,
+                        argv.iter().skip(1).cloned().collect(),
+                        json!({"argv": argv}),
+                    )
+                };
                 let cwd = model_workspace_path(
                     &self.workspace,
                     optional_tool_string(&call, "cwd")?.unwrap_or("."),
                 )?;
+                let mut environment = optional_tool_environment(&call, "env")?;
+                reject_reserved_shell_environment(&call, &environment)?;
+                let isolated = tempfile::Builder::new()
+                    .prefix(".colossus-shell-")
+                    .tempdir_in(&self.workspace)
+                    .map_err(|error| {
+                        ToolError::Failed(format!(
+                            "cannot create isolated shell directory: {error}"
+                        ))
+                    })?;
+                configure_shell_environment(
+                    &mut environment,
+                    isolated.path(),
+                    &self.sanitized_command_path()?,
+                );
                 let process = self
                     .execute_process_tool(
                         &call,
@@ -359,8 +391,8 @@ impl ToolExecutor for GatewayToolExecutor {
                         executable,
                         tool_process_spec(
                             cwd,
-                            argv.into_iter().skip(1).collect(),
-                            optional_tool_environment(&call, "env")?,
+                            args,
+                            environment,
                             optional_tool_u64(&call, "timeout_ms")?,
                             optional_tool_u64(&call, "max_output_bytes")?,
                         ),
@@ -370,12 +402,14 @@ impl ToolExecutor for GatewayToolExecutor {
                 let mut command = vec![process.executable.display().to_string()];
                 command.extend(process.args.clone());
                 serde_json::to_string(&json!({
-                    "command": command,
+                    "invocation": invocation,
+                    "resolved_argv": command,
                     "exit_code": process.exit_code,
                     "stdout": process.stdout,
                     "stderr": process.stderr,
                     "cwd": workspace_relative(&self.workspace, &process.cwd)?,
                     "truncated": process.truncated,
+                    "observed_origins": process.observed_origins,
                 }))
                 .map_err(|error| ToolError::Failed(error.to_string()))?
             }

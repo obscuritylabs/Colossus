@@ -16,7 +16,7 @@ use colossus_ports::{
     ApprovalProvider, ModelProviderError, PolicyError, RunControl, RunEventObserver, ToolError,
     UserPromptProvider,
 };
-use colossus_runtime::{Runtime, RuntimeConfig, RuntimeError};
+use colossus_runtime::{Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions};
 use hmac::{Hmac, Mac as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

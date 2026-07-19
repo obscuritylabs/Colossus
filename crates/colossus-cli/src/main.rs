@@ -22,7 +22,7 @@ use colossus_presentation::{
     StreamDisplayMode, TerminalDocumentRenderer, TerminalPalette, TerminalPreferences,
     ThemeLibrary, ThemeName, TranscriptDensity, document_from_json,
 };
-use colossus_runtime::{Runtime, RuntimeConfig};
+use colossus_runtime::{Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_tui::{BootstrapRequest, ScreenMode, TuiOptions, run_tui};
 use colossus_worker::{WorkerApprovalMode, WorkerClient, WorkerOperation, WorkerServer};
 use serde_json::{Value, json};

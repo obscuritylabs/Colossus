@@ -8,6 +8,14 @@ pub(super) fn absolute_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     }
 }
 
+pub(super) fn workspace_absolute_path(workspace: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_owned()
+    } else {
+        workspace.join(path)
+    }
+}
+
 pub(super) fn recover_unknown_effects(journal: &dyn EventJournal) -> Result<u64, StoreError> {
     let mut last_by_stream = std::collections::BTreeMap::new();
     for event in journal.read_global(1, usize::MAX)? {

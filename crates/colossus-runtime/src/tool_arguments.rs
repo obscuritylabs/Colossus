@@ -138,16 +138,6 @@ pub(super) fn tool_limit(call: &ToolCall, default: usize) -> Result<usize, ToolE
     })
 }
 
-pub(super) fn required_tool_string_array(
-    call: &ToolCall,
-    field: &str,
-) -> Result<Vec<String>, ToolError> {
-    optional_tool_string_array(call, field)?.ok_or_else(|| ToolError::InvalidArguments {
-        tool: call.name.clone(),
-        message: format!("{field} must be an array of strings"),
-    })
-}
-
 pub(super) fn optional_tool_string_array(
     call: &ToolCall,
     field: &str,
@@ -272,6 +262,98 @@ pub(super) fn is_shell_wrapper(value: &str) -> bool {
                     | "cscript"
             )
         })
+}
+
+pub(super) fn shell_command_arguments(
+    executable: &Path,
+    command: &str,
+) -> Result<Vec<String>, ToolError> {
+    let shell = executable
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match shell.as_str() {
+        "powershell" | "pwsh" => Ok(vec![
+            "-NoLogo".into(),
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-Command".into(),
+            command.into(),
+        ]),
+        "cmd" => Ok(vec!["/D".into(), "/S".into(), "/C".into(), command.into()]),
+        "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh" => Ok(vec!["-c".into(), command.into()]),
+        _ => Err(ToolError::Denied(
+            "configured command interpreter is not a supported platform shell".into(),
+        )),
+    }
+}
+
+pub(super) fn reject_shell_startup_profiles(
+    call: &ToolCall,
+    arguments: &[String],
+) -> Result<(), ToolError> {
+    if arguments.iter().any(|argument| {
+        matches!(
+            argument.as_str(),
+            "-l" | "--login" | "-i" | "--interactive" | "--noprofile" | "--rcfile" | "--init-file"
+        ) || argument.starts_with("--rcfile=")
+            || argument.starts_with("--init-file=")
+    }) {
+        return Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: "shell wrappers must be non-interactive and may not load startup profiles"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn reject_reserved_shell_environment(
+    call: &ToolCall,
+    environment: &BTreeMap<String, String>,
+) -> Result<(), ToolError> {
+    const RESERVED: [&str; 10] = [
+        "HOME",
+        "PATH",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "USERPROFILE",
+    ];
+    if let Some(name) = environment.keys().find(|name| {
+        RESERVED
+            .iter()
+            .any(|reserved| name.eq_ignore_ascii_case(reserved))
+    }) {
+        return Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("shell environment variable {name} is reserved by the sandbox"),
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn configure_shell_environment(
+    environment: &mut BTreeMap<String, String>,
+    isolated: &Path,
+    sanitized_path: &str,
+) {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let isolated = isolated.display().to_string();
+        environment.insert("HOME".into(), isolated.clone());
+        environment.insert("TMPDIR".into(), isolated);
+        environment.insert("PATH".into(), sanitized_path.into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (environment, isolated, sanitized_path);
+    }
 }
 
 pub(super) fn model_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf, ToolError> {

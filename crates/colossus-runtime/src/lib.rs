@@ -60,7 +60,8 @@ use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
     GatewayError, MIN_OCI_EFFECT_TIMEOUT_MS, MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS,
     MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, OpaConfig, OpaPolicy, ReleasedEffectObserver,
-    ReleasedEffectResult, SafetyKernel, effect_request, system_actor,
+    ReleasedEffectResult, SafetyKernel, canonical_network_origin, effect_request,
+    network_destination_match, system_actor,
 };
 use colossus_ports::{
     ApprovalProvider, AuditExporter, ContextError, ContextPreparer, ContextRepository,
@@ -129,6 +130,7 @@ mod agent_tools;
 mod composition;
 mod config;
 mod context_tools;
+mod development_sandbox;
 mod diagnostics;
 mod direct_effects;
 mod error;
@@ -154,6 +156,7 @@ mod tool_arguments;
 mod trace_tools;
 mod work;
 mod workflows_research;
+mod workspace;
 
 pub use composition::Runtime;
 pub use config::{
@@ -164,10 +167,12 @@ pub use config::{
     WorkflowLibraryConfig,
 };
 pub use error::RuntimeError;
+pub use workspace::RuntimeOpenOptions;
 
 use agent_tools::*;
 use config::*;
 use context_tools::*;
+use development_sandbox::*;
 use error::{explicit_secret, read_optional};
 use gateway_tool_helpers::*;
 use generic_effects::*;

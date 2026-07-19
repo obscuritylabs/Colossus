@@ -81,17 +81,12 @@ impl IntegrationRequest {
 /// Permit-bound connection management and HTTP operation adapter.
 pub struct IntegrationExecutor {
     repository: Arc<dyn ExtensionRepository>,
-    client: reqwest::Client,
 }
 
 impl IntegrationExecutor {
     /// Construct an adapter. Every effectful method still requires an opaque permit.
     pub fn new(repository: Arc<dyn ExtensionRepository>) -> Result<Self, StoreError> {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(adapter)?;
-        Ok(Self { repository, client })
+        Ok(Self { repository })
     }
 
     /// Connected tool specs in deterministic connection/operation order.
@@ -301,12 +296,27 @@ impl IntegrationExecutor {
                     .flatten(),
             }
         };
-        require_origin(&prepared.url, permit)?;
+        let matched = require_origin(&prepared.url, permit)?;
         let PreparedHttpRequest { method, url, body } = prepared;
-        let mut request = self
-            .client
-            .request(method.clone(), url)
+        let host = url
+            .host_str()
+            .ok_or_else(|| execution("integration URL has no host"))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| execution("integration URL has no port"))?;
+        let allow_non_public = matched == NetworkDestinationMatch::Exact
+            && (host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+        let addresses = resolve_integration_addresses(host, port, allow_non_public).await?;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve_to_addrs(host, &addresses)
             .timeout(Duration::from_millis(permit.obligations().timeout_ms))
+            .build()
+            .map_err(execution)?;
+        let mut request = client
+            .request(method.clone(), url)
             .header("accept", "application/json")
             .header("user-agent", "colossus/0.6");
         let credential_value = connection

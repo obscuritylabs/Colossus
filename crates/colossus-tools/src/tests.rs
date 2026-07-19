@@ -395,14 +395,29 @@ fn process_tools_keep_distinct_policy_identities_and_structured_argv() {
             })
             .is_ok()
     );
-    assert!(matches!(
-        registry.validate(&ToolCall {
-            call_id: "shell".into(),
-            name: "shell.run".into(),
-            arguments: json!({"argv": []}),
-        }),
-        Err(ToolError::InvalidArguments { .. })
-    ));
+    assert!(
+        registry
+            .validate(&ToolCall {
+                call_id: "shell-command".into(),
+                name: "shell.run".into(),
+                arguments: json!({"command": "cargo test --workspace", "cwd": "."}),
+            })
+            .is_ok()
+    );
+    for arguments in [
+        json!({"argv": []}),
+        json!({}),
+        json!({"command": "pwd", "argv": ["pwd"]}),
+    ] {
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "shell-invalid".into(),
+                name: "shell.run".into(),
+                arguments,
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+    }
 }
 
 #[test]

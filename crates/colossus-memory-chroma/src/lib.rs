@@ -7,7 +7,8 @@ use colossus_contracts::{
     Actor, ActorType, CredentialReference, EffectRequest, QuarantinedEffectResult,
 };
 use colossus_policy::{
-    EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit, GatewayError, effect_request,
+    EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit, GatewayError,
+    NetworkDestinationMatch, effect_request, network_destination_match, non_public_network_address,
 };
 use colossus_ports::{EmbeddingProvider, MemoryIndex, StoreError};
 use futures::StreamExt as _;
@@ -19,7 +20,7 @@ use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
     io::Write as _,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,

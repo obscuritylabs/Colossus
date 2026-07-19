@@ -23,7 +23,8 @@ one-use prompts safely, and leave without losing durable work.
 ### 1. Start the interface
 
 ```bash
-colossus --config .colossus/config.yaml
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml
 ```
 
 The explicit form is `colossus --config .colossus/config.yaml tui`. Resume the most
@@ -36,6 +37,17 @@ colossus --config .colossus/config.yaml tui --resume
 Use `--session SESSION_ID` for an exact session. The alternate screen is the default;
 global `--no-alt-screen` selects an inline viewport, and Zellij selects inline mode
 automatically.
+
+For a development session with eligible low-risk shell review:
+
+```bash
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml \
+  --approval-mode risk-auto tui
+```
+
+The canonical workspace is also the worker compatibility identity. A TUI client refuses
+to attach to a worker serving another workspace.
 
 ### 2. Inspect the session before acting
 

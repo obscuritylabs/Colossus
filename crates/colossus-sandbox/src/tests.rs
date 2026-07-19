@@ -22,6 +22,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 use tempfile::tempdir;
 use tokio::{
@@ -981,6 +982,37 @@ async fn allowlist_proxy_rejects_an_unlisted_origin_without_connecting_upstream(
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.expect("response");
     assert!(response.starts_with(b"HTTP/1.1 403"));
+    assert!(proxy.observed_origins().is_empty());
+}
+
+#[tokio::test]
+async fn public_wildcard_proxy_rejects_loopback_without_an_exact_origin() {
+    let upstream = TcpListener::bind(("127.0.0.1", 0)).await.expect("listen");
+    let address = upstream.local_addr().expect("address");
+    let proxy = AllowlistProxy::start(vec!["*".into()])
+        .await
+        .expect("proxy");
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy.port()))
+        .await
+        .expect("connect");
+    stream
+        .write_all(
+            format!(
+                "GET http://{address}/metadata HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.expect("response");
+    assert!(response.starts_with(b"HTTP/1.1 403"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), upstream.accept())
+            .await
+            .is_err(),
+        "wildcard request reached a loopback upstream"
+    );
 }
 
 #[tokio::test]
@@ -1086,6 +1118,7 @@ async fn allowlist_proxy_forwards_an_exact_http_origin() {
     assert!(response.starts_with(b"HTTP/1.1 200 OK"));
     assert!(response.ends_with(b"ok"));
     server.await.expect("server");
+    assert_eq!(proxy.observed_origins(), [origin]);
 }
 
 #[tokio::test]

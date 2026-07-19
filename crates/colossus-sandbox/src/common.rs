@@ -11,6 +11,8 @@ pub(super) const OCI_PROXY_CONFIG_VARIABLE: &str = "COLOSSUS_OCI_PROXY_CONFIG";
 pub(super) const OCI_PROXY_PORT: u16 = 18_080;
 pub(super) const MAX_JOB_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_PROXY_HEADER_BYTES: usize = 16 * 1024;
+pub(super) const MAX_OBSERVED_ORIGINS: usize = 64;
+pub(super) const OBSERVED_ORIGIN_PREFIX: &str = "colossus-observed-origin:";
 pub(super) const MAX_TLS_RECORD_BYTES: usize = 18 * 1024;
 pub(super) const MAX_TLS_CLIENT_HELLO_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "windows")]
@@ -87,6 +89,45 @@ pub struct SandboxDoctorReport {
     pub oci_runtime: Option<PathBuf>,
     /// Whether an OCI image was configured.
     pub oci_image_configured: bool,
+    /// Canonical workspace selected by the runtime, when supplied by the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_workspace: Option<PathBuf>,
+    /// Configured resource profile.
+    #[serde(default)]
+    pub sandbox_profile: String,
+    /// Whether the selected backend can hide protected control-state paths.
+    #[serde(default)]
+    pub protected_path_exclusions_supported: bool,
+    /// Canonical control-state paths hidden from development shells.
+    #[serde(default)]
+    pub protected_paths: Vec<String>,
+    /// Trusted shell resolved by the development preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_shell: Option<PathBuf>,
+    /// Scope that receives automatic development grants.
+    #[serde(default)]
+    pub development_actor_scope: String,
+    /// Read-only command roots used to construct the shell PATH.
+    #[serde(default)]
+    pub sanitized_command_roots: Vec<PathBuf>,
+    /// Filesystem grants written explicitly in configuration.
+    #[serde(default)]
+    pub explicit_filesystem: Vec<FilesystemGrant>,
+    /// Filesystem grants derived from the selected sandbox profile.
+    #[serde(default)]
+    pub derived_filesystem: Vec<FilesystemGrant>,
+    /// Executables written explicitly in configuration.
+    #[serde(default)]
+    pub explicit_executables: Vec<PathBuf>,
+    /// Executables derived from the selected sandbox profile.
+    #[serde(default)]
+    pub derived_executables: Vec<PathBuf>,
+    /// Configured network destinations after validation.
+    #[serde(default)]
+    pub network_destinations: Vec<String>,
+    /// Meaning of the public network wildcard, when configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_network_wildcard: Option<String>,
 }
 
 /// Return bounded local sandbox readiness.
@@ -114,5 +155,22 @@ pub fn sandbox_doctor(config: &SandboxExecutorConfig) -> SandboxDoctorReport {
         helper_executable: config.helper_executable.clone(),
         oci_runtime: config.oci_runtime.clone(),
         oci_image_configured: config.oci_image.is_some(),
+        canonical_workspace: None,
+        sandbox_profile: String::new(),
+        protected_path_exclusions_supported: cfg!(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows"
+        )),
+        protected_paths: Vec::new(),
+        resolved_shell: None,
+        development_actor_scope: String::new(),
+        sanitized_command_roots: Vec::new(),
+        explicit_filesystem: Vec::new(),
+        derived_filesystem: Vec::new(),
+        explicit_executables: Vec::new(),
+        derived_executables: Vec::new(),
+        network_destinations: Vec::new(),
+        public_network_wildcard: None,
     }
 }

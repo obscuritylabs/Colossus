@@ -32,6 +32,140 @@ fn run(binary: &Path, config: &Path, arguments: &[&str]) -> Output {
         .expect("run colossus")
 }
 
+fn run_in_workspace(binary: &Path, workspace: &Path, config: &Path, arguments: &[&str]) -> Output {
+    Command::new(binary)
+        .arg("--workspace")
+        .arg(workspace)
+        .arg("--config")
+        .arg(config)
+        .args(arguments)
+        .env("COLOSSUS_TEST_JOURNAL_KEY", JOURNAL_KEY)
+        .env("COLOSSUS_TEST_SIGNING_KEY", SIGNING_KEY)
+        .output()
+        .expect("run colossus in workspace")
+}
+
+#[test]
+fn workspace_development_shell_writes_workspace_but_not_colossus_control_state() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let workspace = tempdir().expect("workspace");
+    let control = workspace.path().join(".colossus");
+    fs::create_dir(&control).expect("control directory");
+    let marker = control.join("marker.txt");
+    fs::write(&marker, "protected").expect("marker");
+    let config = control.join("config.yaml");
+    let anchor = control.join("anchor.json");
+    fs::write(
+        &config,
+        format!(
+            r#"schemaVersion: 1
+access:
+  profile: development
+  tools:
+    include: []
+    exclude: []
+  actions:
+    allow: []
+    requireApproval: []
+    deny: []
+storage:
+  path: .colossus/state.redb
+  keys:
+    kind: environment
+    journal_variable: COLOSSUS_TEST_JOURNAL_KEY
+    journal_key_id: workspace-development-test
+    signing_variable: COLOSSUS_TEST_SIGNING_KEY
+    anchor_path: {anchor}
+policy:
+  kind: built_in
+  require_post_effect: false
+workflows:
+  repository: .colossus/workflows
+  user: workflows
+sandbox:
+  backend: native
+  profile: workspace-development
+  allowBrokerFallback: false
+  helperPath: null
+  ociRuntime: null
+  ociImage: null
+  ociProxyImage: null
+  filesystem: []
+  executables: []
+  environment: []
+  networkDestinations: []
+  timeoutMs: 30000
+  maxOutputBytes: 1048576
+  maxProcesses: 16
+  maxMemoryBytes: 268435456
+  maxConcurrency: 1
+"#,
+            anchor = anchor.display(),
+        ),
+    )
+    .expect("config");
+
+    let doctor = run_in_workspace(
+        binary,
+        workspace.path(),
+        Path::new(".colossus/config.yaml"),
+        &["sandbox", "doctor"],
+    );
+    assert!(
+        doctor.status.success(),
+        "{}",
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    let doctor: Value = serde_json::from_slice(&doctor.stdout).expect("doctor JSON");
+    let shell = doctor["resolved_shell"]
+        .as_str()
+        .expect("resolved development shell");
+    assert_eq!(
+        doctor["canonical_workspace"].as_str(),
+        workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace")
+            .to_str()
+    );
+    assert_eq!(doctor["sandbox_profile"], "workspace-development");
+    assert!(
+        doctor["protected_paths"]
+            .as_array()
+            .is_some_and(|paths| !paths.is_empty())
+    );
+
+    let execution = run_in_workspace(
+        binary,
+        workspace.path(),
+        Path::new(".colossus/config.yaml"),
+        &[
+            "--approval-mode",
+            "full-access",
+            "process",
+            "run",
+            shell,
+            "--cwd",
+            ".",
+            "--",
+            "-c",
+            "pwd > workspace-pwd.txt; echo escaped > .colossus/marker.txt",
+        ],
+    );
+    assert!(
+        execution.status.success(),
+        "{}",
+        String::from_utf8_lossy(&execution.stderr)
+    );
+    let outcome: Value = serde_json::from_slice(&execution.stdout).expect("process outcome");
+    assert_eq!(outcome["success"], false);
+    assert!(workspace.path().join("workspace-pwd.txt").exists());
+    assert_eq!(
+        fs::read_to_string(marker).expect("protected marker"),
+        "protected"
+    );
+}
+
 #[test]
 fn native_helper_enforces_filesystem_environment_and_process_tree_boundaries() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));

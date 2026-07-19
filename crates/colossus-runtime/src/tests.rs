@@ -6,8 +6,9 @@ use super::{
     PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig, ResearchSearchConfig,
     RuntimeConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor,
     SkillOperation, SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
-    goal_objective_from_plan, recover_interrupted_subagents, recover_unknown_effects,
-    terminal_actor,
+    configure_shell_environment, goal_objective_from_plan, recover_interrupted_subagents,
+    recover_unknown_effects, reject_reserved_shell_environment, reject_shell_startup_profiles,
+    shell_command_arguments, terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
@@ -580,6 +581,92 @@ fn worm_audit_config_requires_https_origin_and_credential_grants() {
     };
     config.sandbox.network_destinations = vec!["http://worm.example".into()];
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+}
+
+#[test]
+fn public_wildcard_config_allows_public_origins_but_not_loopback_routes() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.providers.profiles.insert(
+        "public".into(),
+        ProviderProfileConfig {
+            kind: ProviderKind::OpenAiCompatible,
+            model: "test".into(),
+            base_url: Some("https://api.example.com/v1".into()),
+            credential_reference: None,
+            timeout_ms: 30_000,
+        },
+    );
+    config
+        .providers
+        .roles
+        .insert("primary".into(), "public".into());
+    config.sandbox.network_destinations = vec!["*".into()];
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+
+    config.search = SearchConfig {
+        profiles: BTreeMap::from([(
+            "local".into(),
+            SearchProfileConfig::Searxng {
+                endpoint: "http://127.0.0.1:8888/search".into(),
+                credential_reference: None,
+                auth_header: "X-Searxng-Key".into(),
+                user_agent: "colossus-test".into(),
+                timeout_ms: 30_000,
+            },
+        )]),
+        roles: BTreeMap::from([("agent".into(), "local".into())]),
+    };
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+    config
+        .sandbox
+        .network_destinations
+        .push("http://127.0.0.1:8888".into());
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
+
+    config.sandbox.network_destinations.push("*".into());
+    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
+}
+
+#[test]
+fn shell_helpers_enforce_noninteractive_isolated_execution() {
+    let shell = if cfg!(target_os = "windows") {
+        std::path::Path::new("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    } else {
+        std::path::Path::new("/bin/sh")
+    };
+    let arguments = shell_command_arguments(shell, "pwd").expect("shell command arguments");
+    if cfg!(target_os = "windows") {
+        assert!(arguments.contains(&"-NoProfile".into()));
+        assert!(arguments.contains(&"-NonInteractive".into()));
+    } else {
+        assert_eq!(arguments, ["-c", "pwd"]);
+    }
+
+    let call = ToolCall {
+        call_id: "shell".into(),
+        name: "shell.run".into(),
+        arguments: json!({}),
+    };
+    assert!(
+        reject_shell_startup_profiles(&call, &["--login".into()]).is_err(),
+        "login shell was accepted"
+    );
+    assert!(
+        reject_reserved_shell_environment(
+            &call,
+            &BTreeMap::from([("PATH".into(), "/untrusted".into())]),
+        )
+        .is_err()
+    );
+    let isolated = tempdir().expect("isolated directory");
+    let mut environment = BTreeMap::new();
+    configure_shell_environment(&mut environment, isolated.path(), "/bin:/usr/bin");
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert_eq!(environment["HOME"], isolated.path().display().to_string());
+        assert_eq!(environment["TMPDIR"], isolated.path().display().to_string());
+        assert_eq!(environment["PATH"], "/bin:/usr/bin");
+    }
 }
 
 #[tokio::test]

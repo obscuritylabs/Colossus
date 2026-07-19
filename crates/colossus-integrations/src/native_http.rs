@@ -608,22 +608,39 @@ pub(super) fn canonical_origin(url: &Url) -> Result<String, ExecutionError> {
     ))
 }
 
-pub(super) fn require_origin(url: &Url, permit: &ExecutionPermit) -> Result<(), ExecutionError> {
-    let requested = canonical_origin(url)?;
-    let allowed = permit
-        .obligations()
-        .network_destinations
-        .iter()
-        .filter_map(|value| Url::parse(value).ok())
-        .filter_map(|value| canonical_origin(&value).ok())
-        .any(|value| value == requested);
-    if allowed {
-        Ok(())
-    } else {
-        Err(execution(format!(
-            "integration origin {requested} is not permitted"
-        )))
+pub(super) fn require_origin(
+    url: &Url,
+    permit: &ExecutionPermit,
+) -> Result<NetworkDestinationMatch, ExecutionError> {
+    network_destination_match(&permit.obligations().network_destinations, url.as_str())
+        .map_err(execution)?
+        .ok_or_else(|| {
+            execution(format!(
+                "integration origin {} is not permitted",
+                canonical_origin(url).unwrap_or_else(|_| "<invalid>".into())
+            ))
+        })
+}
+
+pub(super) async fn resolve_integration_addresses(
+    host: &str,
+    port: u16,
+    allow_non_public: bool,
+) -> Result<Vec<SocketAddr>, ExecutionError> {
+    let mut addresses = lookup_host((host, port))
+        .await
+        .map_err(execution)?
+        .filter(|address| allow_non_public || !non_public_network_address(address.ip()))
+        .collect::<Vec<_>>();
+    addresses.sort_by_key(|address| usize::from(address.is_ipv6()));
+    addresses.dedup();
+    addresses.truncate(16);
+    if addresses.is_empty() {
+        return Err(execution(
+            "integration origin resolved to no permitted address",
+        ));
     }
+    Ok(addresses)
 }
 
 pub(super) async fn bounded_response(

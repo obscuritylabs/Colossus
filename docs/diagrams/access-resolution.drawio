@@ -1,0 +1,86 @@
+<mxfile host="app.diagrams.net" modified="2026-07-18T00:00:00.000Z" agent="Colossus" version="26.0.16">
+  <diagram id="access-resolution" name="Access resolution">
+    <mxGraphModel dx="1640" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1720" pageHeight="820" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="boundary" value="Runtime trust boundary" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;dashPattern=8 4;strokeWidth=2;strokeColor=#64748B;fillColor=#F8FAFC;opacity=70;verticalAlign=top;align=left;spacingTop=12;spacingLeft=14;fontStyle=1;fontColor=#334155;" vertex="1" parent="1">
+          <mxGeometry x="300" y="45" width="1070" height="720" as="geometry"/>
+        </mxCell>
+        <mxCell id="registry" value="Capability metadata&#xa;tools + actions" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#2563EB;fillColor=#DBEAFE;fontColor=#1E3A8A;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="90" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="access-config" value="Access config&#xa;profile + overrides" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#2563EB;fillColor=#EFF6FF;fontColor=#1E3A8A;" vertex="1" parent="1">
+          <mxGeometry x="30" y="210" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="sandbox-config" value="Workspace + sandbox&#xa;explicit grants" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#7C3AED;fillColor=#F3E8FF;fontColor=#581C87;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="440" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="run-context" value="Workflow scope&#xa;no dev inheritance" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#7C3AED;fillColor=#FAF5FF;fontColor=#581C87;" vertex="1" parent="1">
+          <mxGeometry x="30" y="590" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="access-resolver" value="Access resolver" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#2563EB;fillColor=#BFDBFE;fontColor=#1E3A8A;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="140" width="190" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="tool-catalog" value="Model-visible&#xa;tool catalog" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#0F766E;fillColor=#CCFBF1;fontColor=#134E4A;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="610" y="70" width="190" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="builtin-decision" value="Built-in action&#xa;decision" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#0F766E;fillColor=#D1FAE5;fontColor=#064E3B;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="610" y="200" width="190" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="resource-resolver" value="Resource resolver" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#7C3AED;fillColor=#E9D5FF;fontColor=#581C87;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="520" width="190" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="obligations" value="Resource grants&#xa;explicit + derived" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#7C3AED;fillColor=#F3E8FF;fontColor=#581C87;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="610" y="530" width="190" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="agent" value="Agent / terminal" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#0F766E;fillColor=#ECFDF5;fontColor=#064E3B;" vertex="1" parent="1">
+          <mxGeometry x="900" y="70" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="opa" value="OPA decision&#xa;replaces built-in" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#EA580C;fillColor=#FFEDD5;fontColor=#7C2D12;" vertex="1" parent="1">
+          <mxGeometry x="610" y="310" width="190" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="authorization" value="Authorization decision" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#B45309;fillColor=#FEF3C7;fontColor=#78350F;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="900" y="245" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="risk-review" value="Risk review&#xa;shell.run only" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#EA580C;fillColor=#FFF7ED;fontColor=#7C2D12;" vertex="1" parent="1">
+          <mxGeometry x="610" y="410" width="190" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="approval" value="Approval / request proof" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#B45309;fillColor=#FEF3C7;fontColor=#78350F;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="900" y="380" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="kernel" value="Safety Kernel&#xa;+ one-use permit" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#DC2626;fillColor=#FEE2E2;fontColor=#7F1D1D;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="900" y="530" width="220" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="sandbox" value="Sandboxed adapter" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#DC2626;fillColor=#FECACA;fontColor=#7F1D1D;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="535" width="210" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="protected-workspace" value="Protected workspace&#xa;.colossus masked" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#475569;fillColor=#E2E8F0;fontColor=#0F172A;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1450" y="450" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="egress-proxy" value="Egress proxy&#xa;public HTTP(S) only" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;strokeColor=#475569;fillColor=#E2E8F0;fontColor=#0F172A;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1450" y="640" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#2563EB;" edge="1" parent="1" source="registry" target="access-resolver"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#2563EB;" edge="1" parent="1" source="access-config" target="access-resolver"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" value="visibility" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#0F766E;fontColor=#134E4A;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="access-resolver" target="tool-catalog"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" value="built-in policy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#0F766E;fontColor=#134E4A;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="access-resolver" target="builtin-decision"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#0F766E;" edge="1" parent="1" source="tool-catalog" target="agent"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#7C3AED;" edge="1" parent="1" source="sandbox-config" target="resource-resolver"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#7C3AED;" edge="1" parent="1" source="run-context" target="resource-resolver"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#7C3AED;" edge="1" parent="1" source="resource-resolver" target="obligations"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#B45309;" edge="1" parent="1" source="builtin-decision" target="authorization"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" value="external policy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#EA580C;fontColor=#7C2D12;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="opa" target="authorization"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#B45309;" edge="1" parent="1" source="authorization" target="approval"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" value="low risk + allow" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#EA580C;fontColor=#7C2D12;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="risk-review" target="approval"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#DC2626;" edge="1" parent="1" source="approval" target="kernel"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#7C3AED;" edge="1" parent="1" source="obligations" target="kernel"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#DC2626;" edge="1" parent="1" source="kernel" target="sandbox"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;" edge="1" parent="1" source="sandbox" target="protected-workspace"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;" edge="1" parent="1" source="sandbox" target="egress-proxy"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e18" value="tool call" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#0F766E;fontColor=#134E4A;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="agent" target="authorization"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="boundary-membership" style="edgeStyle=none;html=1;strokeColor=none;endArrow=none;" edge="1" parent="1" source="boundary" target="access-resolver"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

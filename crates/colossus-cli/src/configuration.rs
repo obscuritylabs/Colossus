@@ -34,6 +34,7 @@ pub(super) fn init_config(
     development: bool,
     from: Option<&Path>,
     access_profile: AccessProfile,
+    sandbox_profile: Option<SandboxProfile>,
 ) -> Result<(), Box<dyn Error>> {
     if path.exists() {
         return Err(format!("refusing to overwrite {}", path.display()).into());
@@ -69,6 +70,17 @@ pub(super) fn init_config(
         RuntimeConfig::offline_template(&state)
     };
     config.set_access_profile(access_profile);
+    config.set_sandbox_profile(
+        sandbox_profile
+            .unwrap_or_else(|| {
+                if access_profile == AccessProfile::Development {
+                    SandboxProfile::WorkspaceDevelopment
+                } else {
+                    SandboxProfile::OfflineDefault
+                }
+            })
+            .as_str(),
+    );
     let config = if development {
         config.with_isolated_development_storage(state, anchor)
     } else {

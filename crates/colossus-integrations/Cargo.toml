@@ -15,6 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 time.workspace = true
+tokio.workspace = true
 url.workspace = true
 colossus-contracts.workspace = true
 colossus-policy.workspace = true
@@ -23,7 +24,6 @@ colossus-ports.workspace = true
 [dev-dependencies]
 colossus-testkit.workspace = true
 tempfile.workspace = true
-tokio.workspace = true
 
 [lints]
 workspace = true

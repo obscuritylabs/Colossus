@@ -7,7 +7,10 @@ use colossus_contracts::{
     CredentialReference, EffectRequest, QuarantinedEffectResult, SearchProfileSummary,
     SearchRequest, SearchResponse, SearchResult,
 };
-use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
+use colossus_policy::{
+    EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
+    network_destination_match, non_public_network_address,
+};
 use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
@@ -35,8 +38,8 @@ mod normalization;
 pub use normalization::default_search_limit;
 use normalization::{
     normalize_endpoint, normalize_response, redact_exact_secret, resolve_search_addresses,
-    search_execution_error, valid_credential_reference, valid_header_name, valid_name,
-    validate_credential_disclosure, validate_request,
+    search_execution_error, url_host_is_non_public_literal, valid_credential_reference,
+    valid_header_name, valid_name, validate_credential_disclosure, validate_request,
 };
 
 mod profile;

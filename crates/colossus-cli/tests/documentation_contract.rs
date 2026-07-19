@@ -17,7 +17,6 @@ const LEGACY_PUBLIC_SIGNATURES: &[&str] = &[
     "`config.json`",
     "local_openai_chat",
     "sqlite_fts",
-    "`--workspace`",
     "--credential-ref ",
     "Typer CLI",
     "prompt-toolkit",
@@ -262,8 +261,21 @@ fn zensical_site_is_pinned_searchable_and_complete() {
             );
         }
     }
+    let access_diagram_source = docs.join("diagrams/access-resolution.drawio");
+    let access_diagram_export = docs.join("diagrams/access-resolution.svg");
+    assert!(
+        access_diagram_source.is_file() && access_diagram_export.is_file(),
+        "the editable and exported access-resolution diagrams must ship together"
+    );
+    let access_page = read("docs/admin/access-and-approvals.md");
+    assert!(
+        access_page.contains("../diagrams/access-resolution.svg")
+            && access_page.contains("../diagrams/access-resolution.drawio"),
+        "the access guide must embed the SVG and link the editable Draw.io source"
+    );
     assert_eq!(
-        mermaid_diagrams, 6,
+        mermaid_diagrams + 1,
+        6,
         "the maintained product and architecture diagram set changed unexpectedly"
     );
 }

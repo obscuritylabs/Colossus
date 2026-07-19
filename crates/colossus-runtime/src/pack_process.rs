@@ -185,4 +185,5 @@ pub(super) struct ProcessToolOutput {
     pub(super) stderr: String,
     pub(super) exit_code: i32,
     pub(super) truncated: bool,
+    pub(super) observed_origins: Vec<String>,
 }

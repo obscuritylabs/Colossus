@@ -10,6 +10,7 @@ pub(super) struct StorageComposition {
 
 /// Fully composed auditable runtime.
 pub struct Runtime {
+    pub(super) workspace: PathBuf,
     pub(super) writer_lease: Option<RedbWriterLease>,
     pub(super) storage_diagnostic: Value,
     pub(super) journal: Arc<dyn EventJournal>,
@@ -53,6 +54,11 @@ pub struct Runtime {
     pub(super) http_executor: Arc<HttpExecutor>,
     pub(super) sandbox_executor_config: SandboxExecutorConfig,
     pub(super) sandbox_backend: String,
+    pub(super) sandbox_profile: String,
+    pub(super) development_sandbox: DevelopmentSandbox,
+    pub(super) sandbox_filesystem: Vec<FilesystemGrant>,
+    pub(super) sandbox_executables: Vec<PathBuf>,
+    pub(super) sandbox_network_destinations: Vec<String>,
     pub(super) workflow_repository: Arc<dyn WorkflowRepository>,
     pub(super) workflows: Arc<WorkflowService>,
 }
@@ -77,9 +83,32 @@ impl Runtime {
         approvals: Arc<dyn ApprovalProvider>,
         user_prompts: Option<Arc<dyn UserPromptProvider>>,
     ) -> Result<Self, RuntimeError> {
-        let workspace = fs::canonicalize(std::env::current_dir()?)?;
+        Self::open_with_options(
+            config,
+            approvals,
+            user_prompts,
+            RuntimeOpenOptions::current()?,
+        )
+    }
+
+    /// Compose the runtime for one explicit canonical workspace.
+    pub fn open_with_options(
+        config: &RuntimeConfig,
+        approvals: Arc<dyn ApprovalProvider>,
+        user_prompts: Option<Arc<dyn UserPromptProvider>>,
+        options: RuntimeOpenOptions,
+    ) -> Result<Self, RuntimeError> {
+        let workspace = fs::canonicalize(&options.workspace)?;
+        if !workspace.is_dir() {
+            return Err(RuntimeError::Config(format!(
+                "workspace is not a directory: {}",
+                workspace.display()
+            )));
+        }
+        let development_sandbox = derive_development_sandbox(config, &workspace)?;
+        let storage_path = workspace_absolute_path(&workspace, &config.storage.path);
         let repository_id = repository_identity(&workspace);
-        if let Some(parent) = config.storage.path.parent() {
+        if let Some(parent) = storage_path.parent() {
             fs::create_dir_all(parent)?;
         }
         let (keys, signing_key_id, signing_key): (Arc<dyn KeyProvider>, String, [u8; 32]) =
@@ -117,9 +146,9 @@ impl Runtime {
             diagnostic: storage_diagnostic,
         } = match config.storage.adapter {
             StorageAdapter::Redb => {
-                let lease = RedbWriterLease::acquire(&config.storage.path)?;
+                let lease = RedbWriterLease::acquire(&storage_path)?;
                 let redb = Arc::new(RedbEventJournal::open(
-                    &config.storage.path,
+                    &storage_path,
                     Arc::clone(&keys),
                     signer.clone(),
                 )?);
@@ -129,7 +158,7 @@ impl Runtime {
                     journal: redb.clone(),
                     projections: redb,
                     recovery_reason,
-                    diagnostic: json!({"adapter": "redb", "path": config.storage.path}),
+                    diagnostic: json!({"adapter": "redb", "path": storage_path}),
                 }
             }
             StorageAdapter::Postgres => {
@@ -162,8 +191,8 @@ impl Runtime {
         let telemetry = Arc::new(TelemetryService::new(Arc::clone(&journal)));
         let extensions: Arc<dyn ExtensionRepository> =
             Arc::new(EventSourcedExtensionRepository::new(Arc::clone(&journal)));
-        let pack_install_root = absolute_path(&config.packs.install_root)?;
-        let user_skill_root = absolute_path(&config.skills.user)?;
+        let pack_install_root = workspace_absolute_path(&workspace, &config.packs.install_root);
+        let user_skill_root = workspace_absolute_path(&workspace, &config.skills.user);
         let packs = Arc::new(
             PackService::new(Arc::clone(&extensions), pack_install_root)
                 .with_skill_install_root(user_skill_root.clone()),
@@ -173,11 +202,11 @@ impl Runtime {
         let integration_specs = integration_executor.tool_specs()?;
         let mut skill_roots = vec![
             SkillRoot {
-                path: absolute_path(&config.skills.bundled)?,
+                path: workspace_absolute_path(&workspace, &config.skills.bundled),
                 label: "bundled".into(),
             },
             SkillRoot {
-                path: absolute_path(&config.skills.repository)?,
+                path: workspace_absolute_path(&workspace, &config.skills.repository),
                 label: "repository".into(),
             },
             SkillRoot {
@@ -296,9 +325,11 @@ impl Runtime {
                 ));
             }
         }
-        let configured_git_executables = config
-            .sandbox
-            .executables
+        let mut access_executables = config.sandbox.executables.clone();
+        access_executables.extend(development_sandbox.executables.iter().cloned());
+        let mut access_filesystem = config.sandbox.filesystem.clone();
+        access_filesystem.extend(development_sandbox.filesystem.iter().cloned());
+        let configured_git_executables = access_executables
             .iter()
             .filter(|path| {
                 path.file_stem()
@@ -306,18 +337,12 @@ impl Runtime {
             })
             .count();
         let access_context = AccessContext {
-            filesystem_read: config
-                .sandbox
-                .filesystem
+            filesystem_read: access_filesystem
                 .iter()
                 .any(|grant| matches!(grant.mode.as_str(), "read" | "write" | "metadata")),
-            filesystem_write: config
-                .sandbox
-                .filesystem
-                .iter()
-                .any(|grant| grant.mode == "write"),
+            filesystem_write: access_filesystem.iter().any(|grant| grant.mode == "write"),
             git_executable: configured_git_executables == 1,
-            any_executable: !config.sandbox.executables.is_empty(),
+            any_executable: !access_executables.is_empty(),
             network_destination: !config.sandbox.network_destinations.is_empty(),
             agent_search_route: searches.resolve("agent").is_ok(),
             interactive: user_prompts.is_some(),
@@ -381,7 +406,7 @@ impl Runtime {
                     policy = policy.with_action("web.search", legacy_outcome);
                 }
                 for root in [&config.workflows.repository, &config.workflows.user] {
-                    if let Ok(root) = absolute_path(root).and_then(fs::canonicalize) {
+                    if let Ok(root) = fs::canonicalize(workspace_absolute_path(&workspace, root)) {
                         policy = policy.with_filesystem_read_root(root.display().to_string());
                     }
                 }
@@ -406,6 +431,13 @@ impl Runtime {
                 }
                 for destination in &config.sandbox.network_destinations {
                     policy = policy.with_network_destination(destination);
+                }
+                if config.sandbox.profile == WORKSPACE_DEVELOPMENT_PROFILE {
+                    policy = policy.with_workspace_development(
+                        development_sandbox.filesystem.clone(),
+                        development_sandbox.protected_filesystem.clone(),
+                        development_environment_names(),
+                    );
                 }
                 for restriction in &active_pack_extensions.restrictions {
                     policy = policy.with_action_restrictions(
@@ -474,9 +506,9 @@ impl Runtime {
             sandbox_executor_config.clone(),
             sandbox_job_key,
         ));
-        let mut effective_executables = config.sandbox.executables.clone();
+        let mut effective_executables = access_executables.clone();
         effective_executables.extend(active_pack_extensions.executables.iter().cloned());
-        let mut effective_filesystem = config.sandbox.filesystem.clone();
+        let mut effective_filesystem = access_filesystem.clone();
         effective_filesystem.extend(active_pack_extensions.filesystem.iter().cloned());
         validate_mcp_config(
             &active_pack_extensions.mcp,
@@ -519,7 +551,7 @@ impl Runtime {
             AuditExporterConfig::Disabled => None,
             AuditExporterConfig::Directory { path } => {
                 Some(Arc::new(GatewayDirectoryAuditExporter::new(
-                    absolute_path(path)?,
+                    workspace_absolute_path(&workspace, path),
                     Arc::clone(&gateway),
                     Arc::clone(&filesystem_executor) as Arc<dyn EffectExecutor>,
                 )?))
@@ -645,9 +677,7 @@ impl Runtime {
             search: Some(Arc::clone(&search_provider)),
             workspace: workspace.clone(),
             repository_id: repository_id.clone(),
-            executables: config
-                .sandbox
-                .executables
+            executables: access_executables
                 .iter()
                 .map(|path| {
                     if config.sandbox.backend == "oci" {
@@ -662,7 +692,7 @@ impl Runtime {
             journal: Arc::clone(&journal),
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
-            workspace,
+            workspace: workspace.clone(),
             inner: gateway_tool_executor,
         });
         let context_tool_executor: Arc<dyn ToolExecutor> = Arc::new(ContextToolExecutor {
@@ -713,6 +743,7 @@ impl Runtime {
             projections.drain(256, 16_384)?;
         }
         Ok(Self {
+            workspace,
             writer_lease,
             storage_diagnostic,
             journal,
@@ -756,6 +787,11 @@ impl Runtime {
             http_executor,
             sandbox_executor_config,
             sandbox_backend: config.sandbox.backend.clone(),
+            sandbox_profile: config.sandbox.profile.clone(),
+            development_sandbox,
+            sandbox_filesystem: config.sandbox.filesystem.clone(),
+            sandbox_executables: config.sandbox.executables.clone(),
+            sandbox_network_destinations: config.sandbox.network_destinations.clone(),
             workflow_repository,
             workflows,
         })

@@ -42,18 +42,20 @@ encrypted audit journal. No model credential or network connection is required.
 ### 2. Initialize strict configuration
 
 ```bash
-colossus --config .colossus/config.yaml config init
-colossus --config .colossus/config.yaml config show
-colossus --config .colossus/config.yaml config effective
+colossus -w . --config .colossus/config.yaml config init
+colossus -w . --config .colossus/config.yaml config show
+colossus -w . --config .colossus/config.yaml config effective
 ```
 
 `config init` refuses to overwrite an existing file. The generated configuration uses
-the local deterministic `echo` provider and the `development` access profile.
+the local deterministic `echo` provider, the `development` access profile, and the
+`workspace-development` sandbox preset. The selected workspace is canonicalized once;
+relative configuration and runtime paths resolve from it.
 
 ### 3. Run the offline smoke
 
 ```bash
-colossus --config .colossus/config.yaml run "hello from Colossus"
+colossus -w . --config .colossus/config.yaml run "hello from Colossus"
 ```
 
 On an interactive terminal, Colossus renders a human response card. When output is
@@ -62,7 +64,7 @@ redirected, it emits a stable JSON result.
 ### 4. Verify the journal
 
 ```bash
-colossus --config .colossus/config.yaml audit verify
+colossus -w . --config .colossus/config.yaml audit verify
 ```
 
 ## Expected result
@@ -75,7 +77,7 @@ session ID. Audit verification completes successfully.
 Prove the machine-readable contract without changing configuration:
 
 ```bash
-colossus --config .colossus/config.yaml --output json \
+colossus -w . --config .colossus/config.yaml --output json \
   run "verified" > result.json
 ```
 
@@ -93,6 +95,10 @@ Open `result.json` and confirm that it contains `"profile": "echo"` and
   into read-only recovery mode.
 - **JSON appears in the terminal:** automatic output selection detected a redirected
   stream; add `--output human` when a human renderer is required.
+- **Development sandbox is unsupported:** initialize with
+  `--sandbox-profile offline-default` for the network-free echo smoke, then review the
+  platform-specific [Sandbox](../admin/sandbox.md) requirements before enabling shell
+  work.
 
 ## Next step
 

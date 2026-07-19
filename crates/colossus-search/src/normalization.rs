@@ -164,19 +164,12 @@ pub(super) fn normalize_endpoint(
 pub(super) async fn resolve_search_addresses(
     host: &str,
     port: u16,
+    allow_non_public: bool,
 ) -> Result<Vec<SocketAddr>, SearchAdapterError> {
-    let host_ip = host.parse::<IpAddr>().ok();
-    let loopback_name = host.eq_ignore_ascii_case("localhost");
     let mut addresses = lookup_host((host, port))
         .await
         .map_err(|_| SearchAdapterError::PreDispatch("DNS resolution failed".into()))?
-        .filter(|address| {
-            if loopback_name {
-                address.ip().is_loopback()
-            } else {
-                host_ip.is_some() || !non_public_ip(address.ip())
-            }
-        })
+        .filter(|address| allow_non_public || !non_public_network_address(address.ip()))
         .collect::<Vec<_>>();
     addresses.sort_by_key(|address| usize::from(address.is_ipv6()));
     addresses.dedup();
@@ -189,23 +182,12 @@ pub(super) async fn resolve_search_addresses(
     Ok(addresses)
 }
 
-pub(super) fn non_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.is_unspecified()
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-        }
-    }
+pub(super) fn url_host_is_non_public_literal(value: &str) -> Result<bool, SearchAdapterError> {
+    let url = Url::parse(value)?;
+    Ok(url
+        .host_str()
+        .and_then(|host| host.parse::<IpAddr>().ok())
+        .is_some_and(non_public_network_address))
 }
 
 pub(super) fn redact_exact_secret(bytes: &[u8], secret: Option<&str>) -> Vec<u8> {

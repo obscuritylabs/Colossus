@@ -17,7 +17,7 @@ impl Runtime {
 
     /// Read bounded UTF-8 text through the universal filesystem effect boundary.
     pub async fn read_text_file(&self, path: impl AsRef<Path>) -> Result<String, RuntimeError> {
-        let path = absolute_path(path.as_ref())?;
+        let path = workspace_absolute_path(&self.workspace, path.as_ref());
         let mut request = effect_request(
             Actor {
                 actor_type: ActorType::User,
@@ -42,7 +42,7 @@ impl Runtime {
         path: impl AsRef<Path>,
         text: &str,
     ) -> Result<Value, RuntimeError> {
-        let path = absolute_path(path.as_ref())?;
+        let path = workspace_absolute_path(&self.workspace, path.as_ref());
         let mut request = effect_request(
             Actor {
                 actor_type: ActorType::User,
@@ -81,9 +81,10 @@ impl Runtime {
             }
             executable.to_owned()
         } else {
+            let executable = workspace_absolute_path(&self.workspace, executable.as_ref());
             fs::canonicalize(executable)?
         };
-        let cwd = fs::canonicalize(cwd)?;
+        let cwd = fs::canonicalize(workspace_absolute_path(&self.workspace, cwd.as_ref()))?;
         let spec = ProcessSpec {
             cwd,
             args,
@@ -142,7 +143,7 @@ impl Runtime {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<ValidatedWorkflow, RuntimeError> {
-        let path = absolute_path(path.as_ref())?;
+        let path = workspace_absolute_path(&self.workspace, path.as_ref());
         let yaml = self.read_text_file(&path).await?;
         self.workflows
             .register_definition(&yaml, &format!("repo:{}", path.display()))

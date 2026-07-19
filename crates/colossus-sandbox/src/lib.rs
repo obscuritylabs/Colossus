@@ -9,7 +9,8 @@ use colossus_contracts::{
 };
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, MIN_OCI_EFFECT_TIMEOUT_MS,
-    MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS,
+    MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, NetworkDestinationMatch,
+    network_destination_match, non_public_network_address,
 };
 use command_group::CommandGroup as _;
 use futures::{StreamExt as _, stream::FuturesUnordered};
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::{Read, Write},
     net::{IpAddr, SocketAddr, ToSocketAddrs},

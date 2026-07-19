@@ -60,11 +60,9 @@ pub(super) fn validate_destination(
     permit: &ExecutionPermit,
     expected_origin: &str,
 ) -> Result<(), ExecutionError> {
-    if permit
-        .obligations()
-        .network_destinations
-        .iter()
-        .any(|destination| destination == expected_origin)
+    if network_destination_match(&permit.obligations().network_destinations, expected_origin)
+        .map_err(execution)?
+        .is_some()
     {
         Ok(())
     } else {
@@ -90,7 +88,13 @@ pub(super) async fn send_http(
     let port = url
         .port_or_known_default()
         .ok_or_else(|| adapter("semantic endpoint has no port"))?;
-    let addresses = resolve_addresses(host, port).await?;
+    let matched = network_destination_match(&permit.obligations().network_destinations, endpoint)
+        .map_err(adapter)?
+        .ok_or_else(|| adapter("semantic endpoint origin is absent from permit obligations"))?;
+    let allow_non_public = matched == NetworkDestinationMatch::Exact
+        && (host.eq_ignore_ascii_case("localhost")
+            || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
+    let addresses = resolve_addresses(host, port, allow_non_public).await?;
     let timeout_ms = configured_timeout_ms.min(permit.obligations().timeout_ms);
     let client = Client::builder()
         .no_proxy()
@@ -143,10 +147,14 @@ pub(super) async fn send_http(
 pub(super) async fn resolve_addresses(
     host: &str,
     port: u16,
+    allow_non_public: bool,
 ) -> Result<Vec<SocketAddr>, StoreError> {
     let addresses = lookup_host((host, port)).await.map_err(adapter)?;
     let mut unique = BTreeSet::new();
     for address in addresses {
+        if !allow_non_public && non_public_network_address(address.ip()) {
+            continue;
+        }
         unique.insert(address);
         if unique.len() > MAX_RESOLVED_ADDRESSES {
             return Err(adapter("semantic endpoint resolved to too many addresses"));

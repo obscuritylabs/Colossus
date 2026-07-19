@@ -74,10 +74,25 @@ A denial cannot leak private bytes through output, errors, audit payloads, or ob
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and
 writes reject symlink leaves and use same-directory atomic replacement. Processes run
-without an implicit shell through authenticated helpers, cleared environments, exact
-executables and arguments, bounded process trees, and selected native or OCI isolation.
-HTTP effects match exact origins, pin DNS results, reject ambient proxies and redirects,
-and quarantine responses.
+through authenticated helpers with cleared environments, exact or trusted-profile
+executables, bounded arguments, isolated shell homes/temp directories, sanitized
+command paths, bounded process trees, and selected native, Windows, or OCI isolation.
+The `workspace-development` profile derives workspace authority only for users and
+agents without workflow lineage; control-state paths are denied or masked before the
+command starts.
+
+HTTP effects match either an exact canonical origin or the public HTTP(S)-only `*`
+grant. The wildcard excludes loopback, private, link-local, and metadata destinations;
+exact private origins remain possible. Provider, search, integration, brokered HTTP,
+semantic memory, native/Windows process proxy, and OCI proxy paths share this matcher,
+pin DNS results, validate TLS authority, reject ambient proxies and redirects, bound
+connections, and quarantine responses. Process proxy results record a bounded list of
+allowed observed origins.
+
+`risk-auto` is deliberately narrow: only model or child-agent `shell.run` without
+workflow lineage can use a low-risk `allow` recommendation to mint a request-bound
+approval proof. The evaluator has no tools and receives environment names, not values.
+All other cases preserve explicit approval or denial.
 
 ## Evidence and uncertainty
 

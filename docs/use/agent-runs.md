@@ -24,7 +24,8 @@ or stable JSON without mixing streamed events into stdout.
 ### 1. Run one prompt
 
 ```bash
-colossus --config .colossus/config.yaml run \
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml run \
   "Summarize this repository"
 ```
 
@@ -40,6 +41,21 @@ colossus --config .colossus/config.yaml run --max-turns 12 \
 
 Use `--role ROLE` to select an operator-configured model role. The role chooses a route;
 the model cannot choose an endpoint or credential.
+
+For development work that may execute shell commands, keep `access.profile:
+development`, select `sandbox.profile: workspace-development`, and satisfy each
+execution approval interactively or with a reviewed mode:
+
+```bash
+colossus -w /absolute/path/to/repository \
+  --config .colossus/config.yaml \
+  --approval-mode risk-auto run \
+  "Inspect the failing tests, implement the smallest fix, and verify it"
+```
+
+`risk-auto` can produce a request-bound proof only for a low-risk `shell.run` outside
+workflow lineage. It does not apply to workspace mutations as a general class, other
+actions, workflows, or system actors.
 
 ### 3. Stream released progress
 
@@ -85,6 +101,8 @@ Confirm that the session and run appear and the journal verifies.
 - **Tool is missing:** run `config effective` and resolve its selection or prerequisite.
 - **Request needs approval:** noninteractive runs default to `deny`; use the terminal UI
   for human approval or an explicitly reviewed approval mode.
+- **Shell tool is missing:** inspect `config effective` for the selected workspace,
+  sandbox profile, resolved shell, and actor scope.
 - **Policy denies the action:** changing approval mode cannot reverse a deny.
 - **Provider request is unknown:** inspect provider-side state before retrying.
 - **Output format is wrong:** place global `--output human|json` before `run`.
