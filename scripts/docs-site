@@ -43,7 +43,7 @@ verify_site() {
   fi
   if ! grep -Fq 'assets/vendor/mermaid-11.15.0.min.js' \
     "${site_dir}/index.html"; then
-    echo "homepage does not load the pinned local Mermaid runtime" >&2
+    echo "homepage does not preload the pinned local Mermaid runtime" >&2
     exit 1
   fi
   if grep -Fq '"location":"internal/documentation' "${site_dir}/search.json" ||

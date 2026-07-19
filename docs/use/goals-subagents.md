@@ -95,4 +95,4 @@ lost become `interrupted` and are never replayed automatically.
 ## Next step
 
 Preserve reusable constraints with [Memories](memories.md), or gather citations with
-[Research and web search](research-search.md).
+[Deep research](deep-research.md).

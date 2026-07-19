@@ -189,6 +189,43 @@ fn zensical_site_is_pinned_searchable_and_complete() {
         !configuration.contains("internal/documentation"),
         "repository-only documentation entered the public configuration"
     );
+    for (label, page) in [
+        ("Research overview", "docs/use/research-search.md"),
+        ("Deep research", "docs/use/deep-research.md"),
+        ("Web search", "docs/use/web-search.md"),
+    ] {
+        let nav_page = page
+            .strip_prefix("docs/")
+            .expect("public documentation page");
+        assert!(
+            configuration.contains(&format!("{{ \"{label}\" = \"{nav_page}\" }}")),
+            "Zensical navigation is missing the {label} page"
+        );
+        assert!(
+            repository_root().join(page).is_file(),
+            "{label} source page is missing"
+        );
+    }
+    let research_overview = read("docs/use/research-search.md");
+    for legacy_anchor in [
+        "goal",
+        "prerequisites",
+        "steps",
+        "1-run-repository-only-research",
+        "2-inspect-evidence-and-claims",
+        "3-diagnose-a-web-route-directly",
+        "4-run-research-with-selected-lanes",
+        "search-routing",
+        "expected-result",
+        "verification",
+        "failure-path",
+        "next-step",
+    ] {
+        assert!(
+            research_overview.contains(&format!("id=\"{legacy_anchor}\"")),
+            "research overview is missing legacy anchor #{legacy_anchor}"
+        );
+    }
     let mermaid_runtime = repository_root().join("docs/assets/vendor/mermaid-11.15.0.min.js");
     assert!(
         mermaid_runtime.is_file(),
@@ -207,7 +244,6 @@ fn zensical_site_is_pinned_searchable_and_complete() {
             .is_file(),
         "the vendored Mermaid license is missing"
     );
-
     let docs = repository_root().join("docs");
     let pages = markdown_pages(&docs);
     assert!(
@@ -360,7 +396,13 @@ fn internal_archives_and_legacy_routes_are_explicitly_accounted_for() {
             "legacy route manifest does not cover {route}"
         );
     }
-    for required in ["FEATURE_INVENTORY.html", "22-delivery-status=", "fragment"] {
+    for required in [
+        "FEATURE_INVENTORY.html",
+        "22-delivery-status=",
+        "SEARCH.html",
+        "search-contract=4-read-the-normalized-response",
+        "fragment",
+    ] {
         assert!(
             redirects.contains(required),
             "legacy route manifest is missing {required:?} compatibility metadata"

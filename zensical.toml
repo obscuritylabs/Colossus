@@ -32,7 +32,9 @@ nav = [
     { "Tasks, decisions, and plans" = "use/tasks-decisions-plans.md" },
     { "Goals and subagents" = "use/goals-subagents.md" },
     { "Memories" = "use/memories.md" },
-    { "Research and web search" = "use/research-search.md" },
+    { "Research overview" = "use/research-search.md" },
+    { "Deep research" = "use/deep-research.md" },
+    { "Web search" = "use/web-search.md" },
   ] },
   { "Automate & extend" = [
     { "Overview" = "extend/index.md" },
