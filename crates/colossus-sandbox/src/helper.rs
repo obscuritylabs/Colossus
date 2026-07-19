@@ -251,9 +251,9 @@ fn apply_protected_filesystem(
     unshare(CloneFlags::CLONE_NEWUSER)
         .map_err(|error| SandboxHelperError::Setup(format!("unshare user namespace: {error}")))?;
     deny_linux_setgroups(Path::new("/proc/self/setgroups"))?;
-    fs::write("/proc/self/uid_map", format!("0 {uid} 1\n"))
+    write_linux_proc_file(Path::new("/proc/self/uid_map"), &format!("0 {uid} 1\n"))
         .map_err(|error| SandboxHelperError::Setup(format!("map sandbox uid: {error}")))?;
-    fs::write("/proc/self/gid_map", format!("0 {gid} 1\n"))
+    write_linux_proc_file(Path::new("/proc/self/gid_map"), &format!("0 {gid} 1\n"))
         .map_err(|error| SandboxHelperError::Setup(format!("map sandbox gid: {error}")))?;
     unshare(CloneFlags::CLONE_NEWNS)
         .map_err(|error| SandboxHelperError::Setup(format!("unshare mount namespace: {error}")))?;
@@ -306,7 +306,7 @@ fn deny_linux_setgroups(path: &Path) -> Result<(), SandboxHelperError> {
     if !setgroups_write_required(&state)? {
         return Ok(());
     }
-    if let Err(error) = fs::write(path, "deny") {
+    if let Err(error) = write_linux_proc_file(path, "deny") {
         let state = fs::read_to_string(path).map_err(|read_error| {
             SandboxHelperError::Setup(format!(
                 "deny setgroups: {error}; read resulting state: {read_error}"
@@ -328,6 +328,12 @@ fn deny_linux_setgroups(path: &Path) -> Result<(), SandboxHelperError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn write_linux_proc_file(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().write(true).open(path)?;
+    file.write_all(content.as_bytes())
 }
 
 #[cfg(target_os = "linux")]
@@ -972,12 +978,28 @@ pub(super) fn native_runtime_paths() -> Vec<&'static Path> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
-    use super::setgroups_write_required;
+    use super::{setgroups_write_required, write_linux_proc_file};
 
     #[test]
     fn setgroups_mapping_only_writes_for_allow_state() {
         assert!(setgroups_write_required("allow\n").expect("allow state"));
         assert!(!setgroups_write_required("deny\n").expect("deny state"));
         assert!(setgroups_write_required("unexpected\n").is_err());
+    }
+
+    #[test]
+    fn proc_mapping_writer_opens_existing_files_without_creating_them() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let existing = directory.path().join("existing");
+        std::fs::File::create(&existing).expect("existing file");
+        write_linux_proc_file(&existing, "deny").expect("write existing file");
+        assert_eq!(
+            std::fs::read_to_string(&existing).expect("contents"),
+            "deny"
+        );
+
+        let missing = directory.path().join("missing");
+        assert!(write_linux_proc_file(&missing, "deny").is_err());
+        assert!(!missing.exists());
     }
 }
