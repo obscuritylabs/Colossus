@@ -61,6 +61,9 @@ arguments in the current runtime.
 Use `/resume` or `/session resume` without an ID for the picker; exact session IDs are
 accepted when deterministic selection matters.
 
+`/research QUESTION` uses `standard` depth with the `repo`, `web`, and `mcp` lanes.
+Use the CLI `research run` route when depth or lane selection must be explicit.
+
 ## Interaction contract
 
 - Input stays available during a run; up to eight future turns may queue.

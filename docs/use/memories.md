@@ -88,5 +88,5 @@ active record is released and that `memories show` preserves lineage.
 
 ## Next step
 
-Use [Research and web search](research-search.md) for source-backed evidence that should
+Use [Deep research](deep-research.md) for source-backed evidence that should
 remain attached to a research run instead of general memory.

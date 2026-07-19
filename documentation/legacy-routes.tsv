@@ -12,7 +12,7 @@
 /TERMINAL_UX.html	/use/terminal-ui/
 /CONTEXT.html	/use/sessions-context/
 /TOOLS.html	/reference/tools-actions/
-/SEARCH.html	/use/research-search/
+/SEARCH.html	/use/web-search/	configuration=prerequisites,search-contract=4-read-the-normalized-response,local-searxng=prerequisites,serpapi=prerequisites,security-and-failure-semantics=failure-path,compatibility=next-step,future-http-or-grpc-gateway=search-routing,troubleshooting=failure-path
 /WORKFLOWS.html	/extend/workflows/authoring/
 /INTEGRATIONS.html	/extend/integrations/
 /SKILLS.html	/extend/skills/

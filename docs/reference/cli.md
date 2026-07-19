@@ -137,7 +137,7 @@ positional:
 | Most record lists | `--limit 100` |
 | `goals run` | `--role primary`; `--max-iterations 5` in `1..=50` |
 | `agents queue` | `--role subagent_default` |
-| `research run` | `--depth standard`; `--source repo,web,mcp` |
+| `research run` | `--depth standard`; planned-query budgets are `quick=1`, `standard=3`, `deep=6`; `--source repo,web,mcp` |
 | `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume` |
 | `tui` | fresh session unless `--session` or `--resume` |
 | `worker` | serves authenticated local IPC; `--once`, `--status`, and `--shutdown` are mutually exclusive |
@@ -164,7 +164,7 @@ or status contract. Important roots are:
 | --- | --- |
 | `run` | `run_id`, nullable `session_id`, `role`, `profile`, `model`, `output`, `event_count`, `elapsed_seconds` |
 | `provider doctor` | `profile`, `provider`, `ready`, `tool_calls`, `streaming`, `checks` |
-| `search query` | Array of `rank`, `title`, `url`, `snippet`, nullable `source` |
+| `search query` | `query`, `count`, `results`; each result has `rank`, `title`, `url`, `snippet`, nullable `source` |
 | `workflow status` | `run_id`, workflow identity/hash, parent/trigger linkage, `call_depth`, `status`, `inputs`, nullable `outputs`, completion/wait fields |
 | `sessions show` | `id`, nullable `title`, timestamps, `message_count`, nullable `last_run_id`, nullable `last_user_preview` |
 | `research show` | `id`, `session_id`, question/depth/source lanes, `status`, queries, progress, limitations, report/error, timestamps |

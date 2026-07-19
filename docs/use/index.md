@@ -20,7 +20,8 @@ the same model routing, tools, authorization, encrypted journal, and recovery se
 | Capture commitments and approve execution | [Tasks, decisions, and plans](tasks-decisions-plans.md) |
 | Iterate on an objective or delegate bounded work | [Goals and subagents](goals-subagents.md) |
 | Preserve reusable non-secret context | [Memories](memories.md) |
-| Gather source-backed repository or web evidence | [Research and web search](research-search.md) |
+| Produce a durable report from repository, web, or MCP evidence | [Deep research](deep-research.md) |
+| Query an operator-configured provider-neutral search route | [Web search](web-search.md) |
 
 ## What stays durable
 

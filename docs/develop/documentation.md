@@ -59,11 +59,12 @@ Zensical route.
     - release history in the root changelog.
 
 7. Use Mermaid only when relationships are clearer than prose. Add adjacent prose that
-   explains the same sequence or structure without relying on color. The pinned,
-   repository-local Mermaid runtime is a third-party build artifact; update its version,
-   license, and documentation contract together. Wrap each diagram in a labeled,
-   keyboard-focusable `diagram-scroll` region so dense diagrams remain readable on
-   narrow screens. Do not replace the local runtime with a CDN import.
+   explains the same sequence or structure without relying on color. Zensical's native
+   renderer consumes the pinned, repository-local Mermaid runtime instead of its network
+   fallback; update the local runtime, license, and documentation contract together.
+   Wrap each diagram in a labeled, keyboard-focusable `diagram-scroll` region so dense
+   diagrams remain readable on narrow screens. Do not replace the local preload with a
+   CDN import.
 
 8. Add the page to explicit `zensical.toml` navigation and use lowercase directory
    routes. If replacing a historical URL, update the checked-in redirect manifest.
