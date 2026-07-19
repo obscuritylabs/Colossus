@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+capture="$repository_root/documentation/tui-offline-session.txt"
+output="${1:-$repository_root/docs/assets/screenshots/tui-offline-session.png}"
+
+if ! command -v pango-view >/dev/null 2>&1; then
+  echo "pango-view is required to render the documentation TUI capture" >&2
+  exit 1
+fi
+
+markup="$(mktemp "${TMPDIR:-/tmp}/colossus-doc-capture.XXXXXX.pango")"
+trap 'rm -f "$markup"' EXIT
+
+awk '
+function escape_xml(line) {
+  gsub(/&/, "\\&amp;", line)
+  gsub(/</, "\\&lt;", line)
+  gsub(/>/, "\\&gt;", line)
+  return line
+}
+{
+  rows[NR] = $0
+}
+END {
+  for (row = 1; row <= NR; row++) {
+    line = escape_xml(rows[row])
+    if (row == 1) {
+      print "<span foreground=\"#7dd3fc\" weight=\"bold\">" line "</span>"
+    } else if (row == 4) {
+      print "<span foreground=\"#e6f3ff\" weight=\"bold\">" line "</span>"
+    } else if (row == 9) {
+      print "<span foreground=\"#c2d6e8\">" line
+    } else if (row == 11) {
+      print line "</span>"
+    } else if (row == 12) {
+      print "<span foreground=\"#aec8dc\">" line "</span>"
+    } else {
+      print line
+    }
+  }
+}
+' "$capture" >"$markup"
+
+pango-view \
+  --no-display \
+  --markup \
+  --pixels \
+  --font="Menlo 17" \
+  --foreground="#dceeff" \
+  --background="#06182a" \
+  --margin="28 32" \
+  --antialias=gray \
+  --hinting=full \
+  --output="$output" \
+  "$markup"
