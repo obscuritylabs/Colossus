@@ -63,6 +63,7 @@ impl AgentService {
             max_turns,
             requested_session_id,
             RunScope::default(),
+            terminal_actor(),
             None,
             None,
         )
@@ -90,6 +91,7 @@ impl AgentService {
                 active_skills,
                 ..RunScope::default()
             },
+            terminal_actor(),
             None,
             None,
         )
@@ -118,6 +120,7 @@ impl AgentService {
                 active_skills,
                 ..RunScope::default()
             },
+            terminal_actor(),
             Some(observer),
             None,
         )
@@ -137,6 +140,38 @@ impl AgentService {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
+        self.run_in_session_with_skills_stream_controlled_as(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            active_skills,
+            terminal_actor(),
+            observer,
+            control,
+        )
+        .await
+    }
+
+    /// Execute a skilled run for one immutable authenticated initiator.
+    ///
+    /// Interfaces must construct the actor from authenticated caller context. The actor
+    /// is used for session creation, the user message, and request-preparation audit
+    /// events; model and tool activity retain their own provenance.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_in_session_with_skills_stream_controlled_as(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        initiator: Actor,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
         match self
             .run_with_lineage(
                 role,
@@ -148,6 +183,7 @@ impl AgentService {
                     active_skills,
                     ..RunScope::default()
                 },
+                initiator,
                 Some(observer),
                 Some(control),
             )
@@ -159,7 +195,56 @@ impl AgentService {
         }
     }
 
-    /// Execute a structurally read-only planning run with only planning tools exposed.
+    /// Execute a public application run with server-assigned durable lineage.
+    ///
+    /// The caller must allocate and persist the public run before invoking this method.
+    /// A server-assigned session may be created exactly once when `create_session` is
+    /// true; an explicitly requested session must already exist.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_public_with_skills_stream_controlled(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        run_id: &str,
+        session_id: &str,
+        create_session: bool,
+        active_skills: &[String],
+        allowed_tools: &[String],
+        plan_mode: bool,
+        initiator: Actor,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
+        match self
+            .run_with_lineage(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                Some(session_id),
+                RunScope {
+                    requested_run_id: Some(run_id),
+                    active_skills,
+                    allowed_tools: Some(allowed_tools),
+                    plan_mode,
+                    create_requested_session: create_session,
+                    ..RunScope::default()
+                },
+                initiator,
+                Some(observer),
+                Some(control),
+            )
+            .await
+        {
+            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
+            Err(AgentError::Cancelled { result }) => Ok(AgentRunOutcome::Cancelled { result }),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Execute without implementation/external mutation; local planning writes remain available.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_plan_in_session_with_skills(
         &self,
@@ -181,6 +266,7 @@ impl AgentService {
                 plan_mode: true,
                 ..RunScope::default()
             },
+            terminal_actor(),
             None,
             None,
         )
@@ -210,6 +296,7 @@ impl AgentService {
                 plan_mode: true,
                 ..RunScope::default()
             },
+            terminal_actor(),
             Some(observer),
             None,
         )
@@ -239,6 +326,7 @@ impl AgentService {
                 plan_id: Some(plan_id),
                 ..RunScope::default()
             },
+            terminal_actor(),
             None,
             None,
         )
@@ -268,6 +356,7 @@ impl AgentService {
                 plan_id,
                 ..RunScope::default()
             },
+            terminal_actor(),
             None,
             None,
         )
@@ -295,9 +384,17 @@ impl AgentService {
                 subagent_id: Some(subagent_id),
                 ..RunScope::default()
             },
+            terminal_actor(),
             None,
             None,
         )
         .await
+    }
+}
+
+fn terminal_actor() -> Actor {
+    Actor {
+        actor_type: ActorType::User,
+        id: "terminal-user".into(),
     }
 }

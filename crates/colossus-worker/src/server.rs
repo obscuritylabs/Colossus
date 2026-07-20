@@ -1,5 +1,8 @@
 use super::*;
 
+const PUBLIC_RUN_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+const PUBLIC_TRANSPORT_FORCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Long-running single-writer runtime owner and authenticated IPC server.
 pub struct WorkerServer {
     endpoint: String,
@@ -7,6 +10,8 @@ pub struct WorkerServer {
     runtime: Arc<Runtime>,
     replay: Arc<Mutex<ReplayGuard>>,
     maintenance: Arc<tokio::sync::Mutex<()>>,
+    public_interactions: Arc<colossus_api_runtime::PublicInteractionRouter>,
+    public_api: Option<public_api::PreparedPublicApi>,
 }
 
 impl WorkerServer {
@@ -30,14 +35,24 @@ impl WorkerServer {
     ) -> Result<Self, WorkerError> {
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
         let authentication_key = config.worker_ipc_auth_key_at(&options.workspace)?;
+        let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
+            approvals, None,
+        ));
+        let approval_interface: Arc<dyn ApprovalProvider> = interactions.clone();
+        let prompt_interface: Arc<dyn UserPromptProvider> = interactions.clone();
         Ok(Self {
             endpoint,
             authentication_key,
             runtime: Arc::new(Runtime::open_with_options(
-                config, approvals, None, options,
+                config,
+                approval_interface,
+                Some(prompt_interface),
+                options,
             )?),
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
+            public_interactions: interactions,
+            public_api: None,
         })
     }
 
@@ -65,18 +80,71 @@ impl WorkerServer {
         let user_prompts: Arc<dyn UserPromptProvider> = Arc::new(WorkerInteractiveUserPrompt);
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
         let authentication_key = config.worker_ipc_auth_key_at(&options.workspace)?;
+        let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
+            approvals,
+            Some(user_prompts),
+        ));
+        let approval_interface: Arc<dyn ApprovalProvider> = interactions.clone();
+        let prompt_interface: Arc<dyn UserPromptProvider> = interactions.clone();
         Ok(Self {
             endpoint,
             authentication_key,
             runtime: Arc::new(Runtime::open_with_options(
                 config,
-                approvals,
-                Some(user_prompts),
+                approval_interface,
+                Some(prompt_interface),
                 options,
             )?),
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
+            public_interactions: interactions,
+            public_api: None,
         })
+    }
+
+    /// Bind a credential manager to this worker's authoritative journal.
+    ///
+    /// The key must come from a stable, API-specific platform secret and must not be
+    /// derived from or reused as any worker IPC, journal, signing, TLS, or provider
+    /// secret. The returned manager issues bearer material exactly once and journals
+    /// only a verifier plus the bounded application grant. Trusted composition code
+    /// must deliver the bearer directly to an inherited bootstrap channel or OS
+    /// credential store; it must never use files, descriptors, argv, environment
+    /// variables, logs, error messages, or renderer state.
+    ///
+    /// Use the same manager when constructing [`PublicApiHostOptions`]. The worker
+    /// rejects options bound to any other journal.
+    pub fn public_api_credential_manager(
+        &self,
+        authentication_key: PublicApiAuthenticationKey,
+    ) -> PublicApiCredentialManager {
+        PublicApiCredentialManager::bind(self.runtime.journal(), authentication_key)
+    }
+
+    /// Bind and securely publish the independently keyed public application API.
+    pub async fn enable_public_api(
+        mut self,
+        options: PublicApiHostOptions,
+    ) -> Result<Self, WorkerError> {
+        if self.public_api.is_some() {
+            return Err(WorkerError::PublicApi(
+                "public API is already enabled".into(),
+            ));
+        }
+        if !options.is_bound_to(&self.runtime.journal()) {
+            return Err(WorkerError::PublicApi(
+                "public API credentials are bound to another worker journal".into(),
+            ));
+        }
+        self.public_api = Some(
+            public_api::PreparedPublicApi::prepare(
+                options,
+                Arc::clone(&self.runtime),
+                Arc::clone(&self.public_interactions),
+            )
+            .await?,
+        );
+        Ok(self)
     }
 
     /// Exact bound endpoint.
@@ -85,7 +153,7 @@ impl WorkerServer {
     }
 
     /// Serve until Ctrl-C or an authenticated shutdown request, then checkpoint cleanly.
-    pub async fn serve(self) -> Result<(), WorkerError> {
+    pub async fn serve(mut self) -> Result<(), WorkerError> {
         let mut listener = platform::Listener::bind(&self.endpoint).await?;
         let runtime = Arc::clone(&self.runtime);
         let replay = Arc::clone(&self.replay);
@@ -97,7 +165,54 @@ impl WorkerServer {
         let draining = Arc::new(AtomicBool::new(false));
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
         let mut tasks = tokio::task::JoinSet::new();
+        let mut public_api = self.public_api.take();
+        let (public_error_tx, mut public_error_rx) = tokio::sync::mpsc::channel::<String>(1);
+        let mut public_error_open = false;
+        let mut public_shutdown = None;
+        let mut public_force_shutdown = None;
+        let mut public_completion = None;
+        let mut public_abort = None;
+        if let Some(api) = public_api.as_mut() {
+            let server = api
+                .server
+                .take()
+                .ok_or_else(|| WorkerError::PublicApi("public API server is absent".into()))?;
+            let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+            let (force_shutdown, force_shutdown_rx) = tokio::sync::oneshot::channel();
+            let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+            public_shutdown = Some(shutdown);
+            public_force_shutdown = Some(force_shutdown);
+            public_completion = Some(completion_rx);
+            public_error_open = true;
+            let errors = public_error_tx.clone();
+            let server_task = tokio::spawn(async move {
+                server
+                    .serve_with_force_shutdown(
+                        async move {
+                            let _ = shutdown_rx.await;
+                        },
+                        async move {
+                            let _ = force_shutdown_rx.await;
+                        },
+                    )
+                    .await
+            });
+            public_abort = Some(server_task.abort_handle());
+            tasks.spawn(async move {
+                let result = match server_task.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(error)) => Err(error.to_string()),
+                    Err(error) => Err(format!("public API server task failed: {error}")),
+                };
+                if let Err(error) = &result {
+                    let _ = errors.send(error.clone()).await;
+                }
+                let _ = completion_tx.send(result);
+            });
+        }
+        drop(public_error_tx);
         let mut stop = false;
+        let mut public_failure = None;
         while !stop {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -144,7 +259,39 @@ impl WorkerServer {
                         result.map_err(|error| WorkerError::Protocol(error.to_string()))?;
                     }
                 }
+                failure = public_error_rx.recv(), if public_error_open => {
+                    match failure {
+                        Some(error) => {
+                            public_failure = Some(error);
+                            stop = true;
+                        }
+                        None => public_error_open = false,
+                    }
+                }
             }
+        }
+        if let Some(shutdown) = public_shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(api) = public_api.as_ref()
+            && !api.runs.shutdown_and_wait(PUBLIC_RUN_SHUTDOWN_GRACE).await
+        {
+            public_failure.get_or_insert_with(|| {
+                "public runs did not reach a durable terminal state before shutdown".into()
+            });
+        }
+        if let Some(force_shutdown) = public_force_shutdown.take() {
+            let _ = force_shutdown.send(());
+        }
+        if let (Some(completion), Some(abort)) = (public_completion.take(), public_abort.take())
+            && let Err(error) = await_public_server_shutdown(
+                completion,
+                abort,
+                PUBLIC_TRANSPORT_FORCE_CLOSE_TIMEOUT,
+            )
+            .await
+        {
+            public_failure.get_or_insert(error);
         }
         drop(shutdown_tx);
         while let Some(result) = tasks.join_next().await {
@@ -152,7 +299,26 @@ impl WorkerServer {
         }
         runtime.checkpoint()?;
         listener.cleanup();
-        Ok(())
+        drop(public_api);
+        match public_failure {
+            Some(error) => Err(WorkerError::PublicApi(error)),
+            None => Ok(()),
+        }
+    }
+}
+
+async fn await_public_server_shutdown(
+    completion: tokio::sync::oneshot::Receiver<Result<(), String>>,
+    abort: tokio::task::AbortHandle,
+    timeout: Duration,
+) -> Result<(), String> {
+    match tokio::time::timeout(timeout, completion).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("public API server completion monitor disappeared".into()),
+        Err(_) => {
+            abort.abort();
+            Err("public API transport did not force-close within its shutdown timeout".into())
+        }
     }
 }
 
@@ -412,5 +578,52 @@ where
             write_signed_frame(&mut stream, key, &request_id, 1, content).await?;
             Ok(shutdown && succeeded)
         }
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn public_server_shutdown_aborts_after_the_force_close_timeout() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let abort = server_task.abort_handle();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let monitor = tokio::spawn(async move {
+            let _ = server_task.await;
+            let _ = completion_tx.send(Ok(()));
+        });
+        started_rx.await.expect("server task started");
+
+        let error = await_public_server_shutdown(completion_rx, abort, Duration::from_millis(10))
+            .await
+            .expect_err("pending public server must time out");
+        assert!(error.contains("did not force-close"));
+        tokio::time::timeout(Duration::from_secs(1), monitor)
+            .await
+            .expect("aborted public server monitor must finish")
+            .expect("monitor task");
+    }
+
+    #[tokio::test]
+    async fn public_server_shutdown_preserves_transport_failure() {
+        let server_task = tokio::spawn(std::future::pending::<()>());
+        let abort = server_task.abort_handle();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        completion_tx
+            .send(Err("transport failed".into()))
+            .expect("completion receiver");
+
+        let error =
+            await_public_server_shutdown(completion_rx, abort.clone(), Duration::from_secs(1))
+                .await
+                .expect_err("transport failure");
+        assert_eq!(error, "transport failed");
+        abort.abort();
     }
 }

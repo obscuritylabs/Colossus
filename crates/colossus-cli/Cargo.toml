@@ -14,7 +14,9 @@ async-trait.workspace = true
 base64.workspace = true
 clap.workspace = true
 colossus-access.workspace = true
+colossus-api.workspace = true
 colossus-contracts.workspace = true
+colossus-grpc.workspace = true
 colossus-policy.workspace = true
 colossus-presentation.workspace = true
 colossus-ports.workspace = true
@@ -24,9 +26,16 @@ colossus-tui.workspace = true
 colossus-worker.workspace = true
 colossus-workflow.workspace = true
 crossterm.workspace = true
+fs4.workspace = true
+getrandom.workspace = true
+keyring.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true

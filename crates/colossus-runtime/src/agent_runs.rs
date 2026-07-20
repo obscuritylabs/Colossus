@@ -152,6 +152,42 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, RuntimeError> {
+        self.run_model_with_skills_stream_controlled_as(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            session_id,
+            explicit_skills,
+            sticky_skills,
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            observer,
+            control,
+        )
+        .await
+    }
+
+    /// Execute a normal run for one immutable authenticated caller.
+    ///
+    /// Public transports must derive `initiator` from authenticated caller context and
+    /// must not accept it from request payloads.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_model_with_skills_stream_controlled_as(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+        initiator: Actor,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, RuntimeError> {
         let composition = self.skill_composer.compose(
             instructions,
             prompt,
@@ -166,13 +202,75 @@ impl Runtime {
             .map(|skill| skill.name.clone())
             .collect::<Vec<_>>();
 
-        let run = self.agent.run_in_session_with_skills_stream_controlled(
+        let run = self.agent.run_in_session_with_skills_stream_controlled_as(
             role,
             &composition.instructions,
             prompt,
             max_turns.unwrap_or(self.agent_max_turns),
             session_id,
             &active,
+            initiator,
+            observer,
+            control,
+        );
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.subagent_notify.notified() => {
+                    self.drain_subagents().await?;
+                }
+                result = &mut run => return result.map_err(Into::into),
+            }
+        }
+    }
+
+    /// Execute an already-durable public application run with fixed run/session identity.
+    ///
+    /// The public run resource must be committed before this method is called. The
+    /// authenticated application actor is propagated into canonical session and request
+    /// evidence, while model and tool actors retain their own provenance.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_public_model_with_skills_stream_controlled(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        run_id: &str,
+        session_id: &str,
+        create_session: bool,
+        explicit_skills: &[String],
+        allowed_tools: &[String],
+        plan_mode: bool,
+        initiator: Actor,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, RuntimeError> {
+        if !explicit_skills.is_empty() {
+            return Err(RuntimeError::Config(
+                "public application runs cannot activate skills".into(),
+            ));
+        }
+        let instructions = if plan_mode {
+            format!(
+                "{instructions}\n\nYou are Colossus operating in Plan Mode. Inspect context and create durable tasks or a structured draft with plan.create when useful. Do not write files, apply patches, run commands, delegate work, alter decisions or memories, approve plans, or claim implementation is complete."
+            )
+        } else {
+            instructions.into()
+        };
+        let run = self.agent.run_public_with_skills_stream_controlled(
+            role,
+            &instructions,
+            prompt,
+            max_turns.unwrap_or(self.agent_max_turns),
+            run_id,
+            session_id,
+            create_session,
+            &[],
+            allowed_tools,
+            plan_mode,
+            initiator,
             observer,
             control,
         );

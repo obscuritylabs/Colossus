@@ -13,8 +13,8 @@ use colossus_contracts::{
     WorkflowScheduleMisfirePolicy, WorkflowStep, WorkflowSubscription, WorkflowWebhook,
 };
 use colossus_ports::{
-    AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, MemoryIndex,
-    MemoryRepository, PresentationRepository, ProjectionStore, ResearchRepository,
+    AuditExporter, EventJournal, ExtensionRepository, ExternalWorkQueue, MAX_STREAM_READ_BATCH,
+    MemoryIndex, MemoryRepository, PresentationRepository, ProjectionStore, ResearchRepository,
     SessionRepository, StoreError, VerificationReport, WorkRepository, WorkflowRepository,
 };
 use serde_json::Value;

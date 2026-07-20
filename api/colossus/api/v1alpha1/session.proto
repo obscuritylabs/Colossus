@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package colossus.api.v1alpha1;
+
+import "colossus/api/v1alpha1/artifact.proto";
+import "colossus/api/v1alpha1/common.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
+option java_multiple_files = true;
+option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
+
+// SessionService manages durable conversation containers and released messages.
+service SessionService {
+  // CreateSession creates an empty durable session.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+
+  // GetSession reconstructs one session.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+
+  // ListSessions returns a stable newest-first page.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // UpdateSession changes mutable session metadata with optimistic concurrency.
+  rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
+
+  // ArchiveSession hides a session from ordinary lists without deleting evidence.
+  rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse);
+
+  // RestoreSession restores an archived session.
+  rpc RestoreSession(RestoreSessionRequest) returns (RestoreSessionResponse);
+
+  // ListSessionMessages returns one stable page in chronological sequence order.
+  rpc ListSessionMessages(ListSessionMessagesRequest) returns (ListSessionMessagesResponse);
+}
+
+// MessageRole identifies public conversation-message provenance.
+enum MessageRole {
+  // MESSAGE_ROLE_UNSPECIFIED is never emitted by a conforming server.
+  MESSAGE_ROLE_UNSPECIFIED = 0;
+
+  // MESSAGE_ROLE_USER is human or application input.
+  MESSAGE_ROLE_USER = 1;
+
+  // MESSAGE_ROLE_ASSISTANT is released model output.
+  MESSAGE_ROLE_ASSISTANT = 2;
+
+  // MESSAGE_ROLE_TOOL is a released, explicitly authorized tool result.
+  MESSAGE_ROLE_TOOL = 3;
+
+  // MESSAGE_ROLE_SYSTEM is a bounded public system notice, not hidden instructions.
+  MESSAGE_ROLE_SYSTEM = 4;
+}
+
+// TextContent contains bounded visible text.
+message TextContent {
+  // text is visible released text.
+  string text = 1;
+}
+
+// ContentPart is a forward-compatible public message part.
+//
+// CreateRun accepts only text in v1alpha1. Artifact references are reserved for
+// capability-negotiated follow-on support and never represent server paths.
+message ContentPart {
+  // content contains exactly one part representation.
+  oneof content {
+    // text is bounded visible text.
+    TextContent text = 1;
+
+    // artifact is an opaque, authorized artifact reference.
+    ArtifactReference artifact = 2;
+  }
+}
+
+// Session is a durable reconstructed conversation summary.
+message Session {
+  // session_id is the opaque stable identifier.
+  string session_id = 1;
+
+  // title is the optional bounded human-readable title.
+  optional string title = 2;
+
+  // created_at is the canonical creation time.
+  google.protobuf.Timestamp created_at = 3;
+
+  // updated_at is the time of the last canonical session event.
+  google.protobuf.Timestamp updated_at = 4;
+
+  // message_count is the number of durable conversation messages.
+  uint64 message_count = 5;
+
+  // last_run_id is the most recently attached run, when one exists.
+  optional string last_run_id = 6;
+
+  // last_user_preview is bounded released text, when one exists.
+  optional string last_user_preview = 7;
+
+  // archived_at is present when this session is archived.
+  google.protobuf.Timestamp archived_at = 8;
+
+  // etag is an opaque optimistic-concurrency token.
+  string etag = 9;
+}
+
+// SessionMessage is one append-only public conversation record.
+message SessionMessage {
+  // session_id is the owning session.
+  string session_id = 1;
+
+  // run_id is the run that produced or consumed this message.
+  string run_id = 2;
+
+  // sequence is the one-based stable order within the session.
+  uint64 sequence = 3;
+
+  // role identifies message provenance.
+  MessageRole role = 4;
+
+  // content contains bounded released parts.
+  repeated ContentPart content = 5;
+
+  // created_at is the canonical event time.
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// CreateSessionRequest creates one empty session.
+message CreateSessionRequest {
+  // title is an optional bounded display title.
+  optional string title = 1;
+
+  // idempotency_key makes retries safe for this authenticated caller.
+  string idempotency_key = 2;
+}
+
+// CreateSessionResponse returns the created or idempotently replayed session.
+message CreateSessionResponse {
+  // session is the durable session.
+  Session session = 1;
+}
+
+// GetSessionRequest selects one session.
+message GetSessionRequest {
+  // session_id is the exact opaque identifier.
+  string session_id = 1;
+}
+
+// GetSessionResponse returns one session.
+message GetSessionResponse {
+  // session is the durable reconstructed summary.
+  Session session = 1;
+}
+
+// ListSessionsRequest selects a stable page of sessions.
+message ListSessionsRequest {
+  // include_archived includes archived sessions when true.
+  bool include_archived = 1;
+
+  // page contains the bounded size and opaque continuation token.
+  PageRequest page = 2;
+}
+
+// ListSessionsResponse returns sessions ordered by updated time then identifier.
+message ListSessionsResponse {
+  // sessions contains the current page.
+  repeated Session sessions = 1;
+
+  // page identifies the next page.
+  PageResponse page = 2;
+}
+
+// UpdateSessionRequest changes fields selected by update_mask.
+message UpdateSessionRequest {
+  // session_id is the exact opaque identifier.
+  string session_id = 1;
+
+  // title is the replacement title; presence permits explicit clearing.
+  optional string title = 2;
+
+  // update_mask currently accepts only "title".
+  google.protobuf.FieldMask update_mask = 3;
+
+  // etag must match the current session version.
+  string etag = 4;
+
+  // idempotency_key makes retries safe for this authenticated caller.
+  string idempotency_key = 5;
+}
+
+// UpdateSessionResponse returns the updated session.
+message UpdateSessionResponse {
+  // session is the new durable state.
+  Session session = 1;
+}
+
+// ArchiveSessionRequest archives one active session.
+message ArchiveSessionRequest {
+  // session_id is the exact opaque identifier.
+  string session_id = 1;
+
+  // etag must match the current session version.
+  string etag = 2;
+
+  // idempotency_key makes retries safe for this authenticated caller.
+  string idempotency_key = 3;
+}
+
+// ArchiveSessionResponse returns the archived session.
+message ArchiveSessionResponse {
+  // session is the new durable state.
+  Session session = 1;
+}
+
+// RestoreSessionRequest restores one archived session.
+message RestoreSessionRequest {
+  // session_id is the exact opaque identifier.
+  string session_id = 1;
+
+  // etag must match the current session version.
+  string etag = 2;
+
+  // idempotency_key makes retries safe for this authenticated caller.
+  string idempotency_key = 3;
+}
+
+// RestoreSessionResponse returns the restored session.
+message RestoreSessionResponse {
+  // session is the new durable state.
+  Session session = 1;
+}
+
+// ListSessionMessagesRequest selects one stable message page.
+message ListSessionMessagesRequest {
+  // session_id is the exact opaque identifier.
+  string session_id = 1;
+
+  // page contains a bounded size and opaque continuation token.
+  PageRequest page = 2;
+}
+
+// ListSessionMessagesResponse returns a chronological page of messages.
+message ListSessionMessagesResponse {
+  // messages are in increasing sequence order within this page.
+  repeated SessionMessage messages = 1;
+
+  // page identifies the next older or newer page according to the issued token.
+  PageResponse page = 2;
+}

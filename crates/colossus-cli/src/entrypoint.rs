@@ -52,11 +52,13 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     match &cli.command {
-        Command::Worker {
-            once: false,
-            shutdown: false,
-            status: false,
-        } => {
+        Command::Worker(worker)
+            if !worker.once
+                && !worker.shutdown
+                && !worker.status
+                && worker.enroll_application.is_none()
+                && worker.revoke_credential.is_none() =>
+        {
             let mode = match cli.approval_mode.unwrap_or(ApprovalMode::Ask) {
                 ApprovalMode::Deny => WorkerApprovalMode::Deny,
                 ApprovalMode::Ask => WorkerApprovalMode::Ask,
@@ -65,21 +67,85 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             };
             let server =
                 WorkerServer::open_with_mode_at_workspace(&config, mode, runtime_options.clone())?;
+            let (server, public_environment) =
+                if let Some(directory) = worker.public_api_dir.as_deref() {
+                    let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;
+                    let credentials = environment.credential_manager(&server);
+                    let options = environment.host_options(&credentials)?;
+                    let server = server.enable_public_api(options).await?;
+                    eprintln!(
+                        "public API discovery published in {}",
+                        environment.directory().display()
+                    );
+                    (server, Some(environment))
+                } else {
+                    (server, None)
+                };
             eprintln!("worker listening on {}", server.endpoint());
-            server.serve().await?;
+            let result = server.serve().await;
+            drop(public_environment);
+            result?;
             return Ok(());
         }
-        Command::Worker { shutdown: true, .. } => {
+        Command::Worker(WorkerCommand { shutdown: true, .. }) => {
             let client = WorkerClient::from_config(&config)?;
             validate_worker_workspace(&client.ping().await?, &runtime_options.workspace)?;
             print_json(&client.call(WorkerOperation::Shutdown).await?)?;
             return Ok(());
         }
-        Command::Worker { status: true, .. } => {
+        Command::Worker(WorkerCommand { status: true, .. }) => {
             let client = WorkerClient::from_config(&config)?;
             let status = client.ping().await?;
             validate_worker_workspace(&status, &runtime_options.workspace)?;
             print_json(&status)?;
+            return Ok(());
+        }
+        Command::Worker(worker)
+            if worker.enroll_application.is_some() || worker.revoke_credential.is_some() =>
+        {
+            if WorkerClient::discover(&config)?.is_some() {
+                return Err(
+                    "offline public API administration refused because a worker endpoint exists"
+                        .into(),
+                );
+            }
+            let server = WorkerServer::open_with_mode_at_workspace(
+                &config,
+                WorkerApprovalMode::Deny,
+                runtime_options.clone(),
+            )?;
+            let directory = worker
+                .public_api_dir
+                .as_deref()
+                .ok_or(PublicApiAdminError::InvalidDirectory)?;
+            let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;
+            if let Some(application_id) = worker.enroll_application.as_deref() {
+                let destination_service = worker
+                    .credential_keyring_service
+                    .as_deref()
+                    .ok_or(PublicApiAdminError::InvalidKeyringIdentifier)?;
+                let destination_account = worker
+                    .credential_keyring_account
+                    .as_deref()
+                    .ok_or(PublicApiAdminError::InvalidKeyringIdentifier)?;
+                let metadata = enroll_application(
+                    &environment,
+                    &server,
+                    &OsCredentialStore,
+                    EnrollmentRequest {
+                        application_id,
+                        scopes: &worker.scope,
+                        roles: &worker.role,
+                        tools: &worker.tool,
+                        destination_service,
+                        destination_account,
+                        replace_destination: worker.replace_credential,
+                    },
+                )?;
+                print_json(&metadata)?;
+            } else if let Some(credential_id) = worker.revoke_credential.as_deref() {
+                print_json(&revoke_credential(&environment, &server, credential_id)?)?;
+            }
             return Ok(());
         }
         _ => {}
@@ -1056,11 +1122,12 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             let themes = ThemeLibrary::load_for_config(&cli.config)?;
             line_runner(&runtime, session, resume, configured_approval, &themes).await?
         }
-        Command::Worker {
+        Command::Worker(WorkerCommand {
             once,
             shutdown: false,
             status: false,
-        } => {
+            ..
+        }) => {
             let recovered = runtime.workflows().recover_interrupted()?;
             let drained = runtime.workflows().drain().await?;
             let projections = runtime.drain_projections()?;
@@ -1073,10 +1140,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 "subagents": subagents,
             }))?;
         }
-        Command::Worker { shutdown: true, .. } => {
+        Command::Worker(WorkerCommand { shutdown: true, .. }) => {
             unreachable!("handled before runtime construction")
         }
-        Command::Worker { status: true, .. } => {
+        Command::Worker(WorkerCommand { status: true, .. }) => {
             unreachable!("handled before runtime construction")
         }
         Command::SandboxHelper => unreachable!("handled before runtime construction"),

@@ -66,11 +66,18 @@ mod observers;
 mod operation_names;
 mod operations;
 mod platform;
+mod public_api;
+mod public_credentials;
 mod server;
 
 pub use client::{WorkerClient, WorkerPromptHandler};
 pub use frames::{WorkerApprovalMode, WorkerPrompt, WorkerPromptKind};
 pub use operations::{WorkerError, WorkerOperation};
+pub use public_api::{PublicApiDeploymentMode, PublicApiHostOptions};
+pub use public_credentials::{
+    ApplicationGrant, IssuedCredential, PublicApiAuthenticationKey, PublicApiCredentialError,
+    PublicApiCredentialManager, PublicApiRotationSourceError,
+};
 pub use server::WorkerServer;
 
 use authentication::*;

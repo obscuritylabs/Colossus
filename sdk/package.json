@@ -1,0 +1,12 @@
+{
+  "name": "colossus-sdk-codegen",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "scripts": {
+    "generate": "./scripts/generate"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "1.72.0"
+  }
+}

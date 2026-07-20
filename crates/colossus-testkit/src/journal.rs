@@ -22,6 +22,42 @@ pub fn assert_journal_conformance(journal: &dyn EventJournal, first: NewEvent, s
         journal.append(stale),
         Err(StoreError::Conflict { .. })
     ));
+    assert_eq!(
+        journal
+            .read_stream_from(&stored.stream_id, 0, MAX_STREAM_READ_BATCH + 1)
+            .expect("conformance ranged stream"),
+        vec![stored.clone()]
+    );
+    assert!(
+        journal
+            .read_stream_from(&stored.stream_id, stored.stream_version, 1)
+            .expect("conformance exclusive cursor")
+            .is_empty()
+    );
+    assert!(
+        journal
+            .read_stream_from(&stored.stream_id, 0, 0)
+            .expect("conformance zero limit")
+            .is_empty()
+    );
+    assert_eq!(
+        journal
+            .read_stream_backwards(&stored.stream_id, None, MAX_STREAM_READ_BATCH + 1)
+            .expect("conformance backwards stream"),
+        vec![stored.clone()]
+    );
+    assert!(
+        journal
+            .read_stream_backwards(&stored.stream_id, Some(1), 1)
+            .expect("conformance backwards exclusive cursor")
+            .is_empty()
+    );
+    assert!(
+        journal
+            .read_stream_backwards(&stored.stream_id, None, 0)
+            .expect("conformance backwards zero limit")
+            .is_empty()
+    );
     assert_eq!(journal.verify().expect("conformance verify").event_count, 1);
 }
 

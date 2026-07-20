@@ -1,0 +1,106 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+sdk_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+language=${1:-all}
+
+require_file() {
+  if [ ! -f "$sdk_dir/$1" ]; then
+    echo "error: generated SDK file is missing: sdk/$1" >&2
+    echo "run ./sdk/scripts/install-codegen-tools and ./sdk/scripts/generate" >&2
+    exit 1
+  fi
+}
+
+reject_path() {
+  if [ -e "$sdk_dir/$1" ]; then
+    echo "error: conflicting generated SDK path must be absent: sdk/$1" >&2
+    exit 1
+  fi
+}
+
+require_file generated-inputs.sha256
+expected_digest=$(sed -n '1p' "$sdk_dir/generated-inputs.sha256")
+if [ "${#expected_digest}" -ne 64 ]; then
+  echo "error: sdk/generated-inputs.sha256 is invalid" >&2
+  exit 1
+fi
+case "$expected_digest" in
+  *[!0-9a-f]*)
+    echo "error: sdk/generated-inputs.sha256 is invalid" >&2
+    exit 1
+    ;;
+esac
+if [ "$(wc -l <"$sdk_dir/generated-inputs.sha256" | tr -d ' ')" -ne 1 ]; then
+  echo "error: sdk/generated-inputs.sha256 is invalid" >&2
+  exit 1
+fi
+actual_digest=$(sh "$sdk_dir/scripts/generated-input-digest")
+if [ "$actual_digest" != "$expected_digest" ]; then
+  echo "error: generated SDK bindings do not match the committed schema/tool inputs" >&2
+  echo "run ./sdk/scripts/install-codegen-tools and ./sdk/scripts/generate" >&2
+  exit 1
+fi
+
+check_output_digest() {
+  output_language=$1
+  output_manifest="$sdk_dir/$output_language/generated-output.sha256"
+  require_file "$output_language/generated-output.sha256"
+  expected_output_digest=$(sed -n '1p' "$output_manifest")
+  if [ "${#expected_output_digest}" -ne 64 ]; then
+    echo "error: sdk/$output_language/generated-output.sha256 is invalid" >&2
+    exit 1
+  fi
+  case "$expected_output_digest" in
+    *[!0-9a-f]*)
+      echo "error: sdk/$output_language/generated-output.sha256 is invalid" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$(wc -l <"$output_manifest" | tr -d ' ')" -ne 1 ]; then
+    echo "error: sdk/$output_language/generated-output.sha256 is invalid" >&2
+    exit 1
+  fi
+  actual_output_digest=$(sh "$sdk_dir/scripts/generated-output-digest" "$output_language")
+  if [ "$actual_output_digest" != "$expected_output_digest" ]; then
+    echo "error: generated $output_language SDK files do not match their release manifest" >&2
+    echo "run ./sdk/scripts/install-codegen-tools and ./sdk/scripts/generate" >&2
+    exit 1
+  fi
+}
+
+case "$language" in
+  all | typescript)
+    require_file typescript/src/gen/colossus/api/v1alpha1/agent_run.ts
+    require_file typescript/src/gen/colossus/api/v1alpha1/system.ts
+    require_file typescript/src/gen/google/rpc/status.ts
+    check_output_digest typescript
+    ;;
+esac
+case "$language" in
+  all | python)
+    require_file python/generated/colossus/api/v1alpha1/agent_run_pb2.py
+    require_file python/generated/colossus/api/v1alpha1/agent_run_pb2_grpc.py
+    require_file python/generated/colossus/api/v1alpha1/py.typed
+    reject_path python/generated/google
+    check_output_digest python
+    ;;
+esac
+case "$language" in
+  all | go)
+    require_file go/gen/colossus/api/v1alpha1/agent_run.pb.go
+    require_file go/gen/colossus/api/v1alpha1/agent_run_grpc.pb.go
+    reject_path go/gen/google
+    check_output_digest go
+    ;;
+esac
+case "$language" in
+  all | typescript | python | go) ;;
+  *)
+    echo "error: expected language to be all, typescript, python, or go" >&2
+    exit 1
+    ;;
+esac
+
+echo "generated $language SDK bindings are present" >&2

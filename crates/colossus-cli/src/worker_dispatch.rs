@@ -1241,7 +1241,7 @@ pub(super) async fn dispatch_to_worker_if_active(
             print_json(&client.call(WorkerOperation::AccessEffective).await?)?;
             Ok(true)
         }
-        Command::Worker { .. } | Command::Config(_) | Command::SandboxHelper => Ok(false),
+        Command::Worker(_) | Command::Config(_) | Command::SandboxHelper => Ok(false),
     }
 }
 

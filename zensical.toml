@@ -78,6 +78,7 @@ nav = [
     { "Architecture overview" = "develop/architecture.md" },
     { "Rust crate structure" = "develop/crate-structure.md" },
     { "Runtime and ports" = "develop/runtime-ports.md" },
+    { "Public API and application SDKs" = "develop/application-sdk.md" },
     { "State and recovery" = "develop/state-recovery.md" },
     { "Security architecture" = "develop/security-architecture.md" },
     { "Extensions and presentation" = "develop/extensions-presentation.md" },

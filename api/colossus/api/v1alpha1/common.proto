@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package colossus.api.v1alpha1;
+
+import "google/protobuf/duration.proto";
+
+option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
+option java_multiple_files = true;
+option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
+
+// PageRequest carries an opaque continuation cursor and a bounded requested size.
+message PageRequest {
+  // page_size is clamped to the method's advertised maximum; zero selects its default.
+  uint32 page_size = 1;
+
+  // page_token is an opaque server-issued token and must not be parsed or synthesized.
+  string page_token = 2;
+}
+
+// PageResponse identifies the next stable page, when one exists.
+message PageResponse {
+  // next_page_token is empty when no further page exists.
+  string next_page_token = 1;
+}
+
+// FieldViolation describes one user-safe request validation failure.
+message FieldViolation {
+  // field is the Protobuf field path associated with the violation.
+  string field = 1;
+
+  // description is bounded and must not contain private or quarantined data.
+  string description = 2;
+}
+
+// OutcomeCertainty states whether an effect's external outcome is known.
+enum OutcomeCertainty {
+  // OUTCOME_CERTAINTY_UNSPECIFIED is never emitted by a conforming server.
+  OUTCOME_CERTAINTY_UNSPECIFIED = 0;
+
+  // OUTCOME_CERTAINTY_KNOWN means durable evidence establishes the outcome.
+  OUTCOME_CERTAINTY_KNOWN = 1;
+
+  // OUTCOME_CERTAINTY_UNKNOWN means an effect started without trustworthy terminal evidence.
+  OUTCOME_CERTAINTY_UNKNOWN = 2;
+}
+
+// ColossusErrorDetail is the typed, user-safe detail attached to a standard gRPC status.
+//
+// Implementations serialize this message as a status detail. They must never include
+// credentials, hidden reasoning, quarantined bytes, raw adapter errors, or server paths.
+message ColossusErrorDetail {
+  // reason is a stable machine-readable Colossus error reason.
+  string reason = 1;
+
+  // request_id is the server-assigned request correlation identifier.
+  string request_id = 2;
+
+  // retryable reports whether retry is safe after the described condition changes.
+  bool retryable = 3;
+
+  // retry_after is present only when the server can provide a useful lower bound.
+  google.protobuf.Duration retry_after = 4;
+
+  // outcome_certainty prevents clients from retrying uncertain effectful operations.
+  OutcomeCertainty outcome_certainty = 5;
+
+  // violations contains bounded user-correctable input failures.
+  repeated FieldViolation violations = 6;
+}
+
+// ResourceReference identifies a public resource without exposing storage internals.
+message ResourceReference {
+  // resource_type is a stable public type such as "session" or "run".
+  string resource_type = 1;
+
+  // resource_id is an opaque resource identifier.
+  string resource_id = 2;
+}

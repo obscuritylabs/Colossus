@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package colossus.api.v1alpha1;
+
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
+option java_multiple_files = true;
+option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
+
+// SystemService exposes bounded compatibility and readiness metadata.
+service SystemService {
+  // GetServerInfo returns compatibility metadata after transport authentication.
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
+
+  // GetReadiness returns caller-visible readiness without sensitive diagnostics.
+  rpc GetReadiness(GetReadinessRequest) returns (GetReadinessResponse);
+}
+
+// DeploymentMode identifies how the public API is hosted.
+enum DeploymentMode {
+  // DEPLOYMENT_MODE_UNSPECIFIED is never emitted by a conforming server.
+  DEPLOYMENT_MODE_UNSPECIFIED = 0;
+
+  // DEPLOYMENT_MODE_SHARED_DAEMON is an independently running local instance.
+  DEPLOYMENT_MODE_SHARED_DAEMON = 1;
+
+  // DEPLOYMENT_MODE_SIDECAR is an application-owned isolated child process.
+  DEPLOYMENT_MODE_SIDECAR = 2;
+
+  // DEPLOYMENT_MODE_EMBEDDED is an in-process Rust runtime.
+  DEPLOYMENT_MODE_EMBEDDED = 3;
+}
+
+// Capability advertises one public API behavior supported by this server.
+message Capability {
+  // name is a stable dotted capability identifier.
+  string name = 1;
+
+  // enabled states whether the authenticated caller can use this capability.
+  bool enabled = 2;
+
+  // detail is a bounded, credential-free explanation.
+  string detail = 3;
+}
+
+// ApiLimit advertises one public server-enforced bound.
+message ApiLimit {
+  // name is a stable dotted limit identifier.
+  string name = 1;
+
+  // value is the non-negative bound in the unit described by unit.
+  uint64 value = 2;
+
+  // unit names the unit, such as "bytes", "items", or "seconds".
+  string unit = 3;
+}
+
+// ApiDeprecation advertises a behavior scheduled for removal.
+message ApiDeprecation {
+  // capability is the affected package, RPC, field, or capability identifier.
+  string capability = 1;
+
+  // message is bounded migration guidance.
+  string message = 2;
+
+  // removal_not_before is the earliest advertised removal time.
+  google.protobuf.Timestamp removal_not_before = 3;
+}
+
+// ServerInfo contains credential-free compatibility information.
+message ServerInfo {
+  // instance_id is the stable non-secret identity of this Colossus instance.
+  string instance_id = 1;
+
+  // server_version is the Colossus semantic version.
+  string server_version = 2;
+
+  // api_packages lists supported Protobuf package versions.
+  repeated string api_packages = 3;
+
+  // deployment_mode identifies the active execution backend.
+  DeploymentMode deployment_mode = 4;
+
+  // capabilities lists stable public features visible to the authenticated caller.
+  repeated Capability capabilities = 5;
+
+  // limits lists public request and stream bounds.
+  repeated ApiLimit limits = 6;
+
+  // deprecations lists announced compatibility changes.
+  repeated ApiDeprecation deprecations = 7;
+
+  // server_time supports diagnostics without being an authentication primitive.
+  google.protobuf.Timestamp server_time = 8;
+}
+
+// GetServerInfoRequest requests compatibility metadata.
+message GetServerInfoRequest {}
+
+// GetServerInfoResponse returns compatibility metadata.
+message GetServerInfoResponse {
+  // server_info is the authenticated server's public metadata.
+  ServerInfo server_info = 1;
+}
+
+// ReadinessStatus is a coarse, non-sensitive server readiness state.
+enum ReadinessStatus {
+  // READINESS_STATUS_UNSPECIFIED is never emitted by a conforming server.
+  READINESS_STATUS_UNSPECIFIED = 0;
+
+  // READINESS_STATUS_READY means the caller's ordinary API can accept work.
+  READINESS_STATUS_READY = 1;
+
+  // READINESS_STATUS_DEGRADED means bounded operation remains possible with limitations.
+  READINESS_STATUS_DEGRADED = 2;
+
+  // READINESS_STATUS_NOT_READY means the caller should not start new work.
+  READINESS_STATUS_NOT_READY = 3;
+}
+
+// ReadinessCheck is one bounded, caller-visible readiness result.
+message ReadinessCheck {
+  // name is a stable check identifier.
+  string name = 1;
+
+  // status is the check's coarse state.
+  ReadinessStatus status = 2;
+
+  // detail is credential-free and contains no raw adapter response.
+  string detail = 3;
+}
+
+// GetReadinessRequest requests caller-visible readiness.
+message GetReadinessRequest {}
+
+// GetReadinessResponse returns caller-visible readiness.
+message GetReadinessResponse {
+  // status is the aggregate readiness state.
+  ReadinessStatus status = 1;
+
+  // checks contains bounded checks authorized for the caller.
+  repeated ReadinessCheck checks = 2;
+}

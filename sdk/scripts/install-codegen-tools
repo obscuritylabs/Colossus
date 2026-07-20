@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+sdk_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+
+(
+  cd "$sdk_dir"
+  npm ci --ignore-scripts --no-audit --no-fund
+)
+(
+  cd "$sdk_dir/typescript"
+  npm ci --ignore-scripts --no-audit --no-fund
+)
+
+python3 -m venv --clear "$sdk_dir/python/.codegen"
+"$sdk_dir/python/.codegen/bin/python" -m pip install \
+  --disable-pip-version-check \
+  --no-deps \
+  --requirement "$sdk_dir/python/requirements-codegen.txt"
+
+if ! command -v go >/dev/null 2>&1; then
+  echo "error: Go 1.25 or newer is required to build the pinned local Go generators" >&2
+  exit 1
+fi
+mkdir -p "$sdk_dir/.tools/bin"
+GOBIN="$sdk_dir/.tools/bin" go install \
+  google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+GOBIN="$sdk_dir/.tools/bin" go install \
+  google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+
+echo "installed pinned local SDK code-generation tools"

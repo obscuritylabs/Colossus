@@ -122,21 +122,94 @@ pub(super) enum Command {
         #[arg(long, conflicts_with = "session")]
         resume: bool,
     },
-    /// Recover abandoned runs and drain queued resumable work.
-    Worker {
-        /// Recover and drain once instead of serving local IPC.
-        #[arg(long, conflicts_with_all = ["shutdown", "status"])]
-        once: bool,
-        /// Ask the authenticated local worker to checkpoint and stop.
-        #[arg(long, conflicts_with_all = ["once", "status"])]
-        shutdown: bool,
-        /// Authenticate the configured worker and show readiness.
-        #[arg(long, conflicts_with_all = ["once", "shutdown"])]
-        status: bool,
-    },
+    /// Recover work, serve IPC, or administer the owner-only public API.
+    Worker(WorkerCommand),
     /// Internal authenticated one-shot sandbox helper.
     #[command(name = "__sandbox-helper", hide = true)]
     SandboxHelper,
+}
+
+#[derive(Args)]
+pub(super) struct WorkerCommand {
+    /// Recover and drain once instead of serving local IPC.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "shutdown",
+            "status",
+            "public_api_dir",
+            "enroll_application",
+            "revoke_credential"
+        ]
+    )]
+    pub(super) once: bool,
+    /// Ask the authenticated local worker to checkpoint and stop.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "once",
+            "status",
+            "public_api_dir",
+            "enroll_application",
+            "revoke_credential"
+        ]
+    )]
+    pub(super) shutdown: bool,
+    /// Authenticate the configured worker and show readiness.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "once",
+            "shutdown",
+            "public_api_dir",
+            "enroll_application",
+            "revoke_credential"
+        ]
+    )]
+    pub(super) status: bool,
+    /// Absolute current-user 0700 directory for public API discovery.
+    #[arg(long, value_name = "ABS_OWNER_PRIVATE_DIR")]
+    pub(super) public_api_dir: Option<PathBuf>,
+    /// Enroll an application offline and write its bearer directly to a keyring.
+    #[arg(
+        long,
+        value_name = "APPLICATION_ID",
+        requires_all = [
+            "public_api_dir",
+            "scope",
+            "role",
+            "credential_keyring_service",
+            "credential_keyring_account"
+        ],
+        conflicts_with = "revoke_credential"
+    )]
+    pub(super) enroll_application: Option<String>,
+    /// Exact public API scope to grant; repeat for additional scopes.
+    #[arg(long, requires = "enroll_application")]
+    pub(super) scope: Vec<String>,
+    /// Exact model role ceiling; repeat for additional roles.
+    #[arg(long, requires = "enroll_application")]
+    pub(super) role: Vec<String>,
+    /// Exact tool-name ceiling; repeat as needed. Omission denies every tool.
+    #[arg(long, requires = "enroll_application")]
+    pub(super) tool: Vec<String>,
+    /// Destination OS-keyring service for the one-time bearer.
+    #[arg(long, value_name = "SERVICE", requires = "enroll_application")]
+    pub(super) credential_keyring_service: Option<String>,
+    /// Destination OS-keyring account for the one-time bearer.
+    #[arg(long, value_name = "ACCOUNT", requires = "enroll_application")]
+    pub(super) credential_keyring_account: Option<String>,
+    /// Explicitly replace an existing destination keyring entry.
+    #[arg(long, requires = "enroll_application")]
+    pub(super) replace_credential: bool,
+    /// Revoke one public API credential by its non-secret canonical UUID.
+    #[arg(
+        long,
+        value_name = "CREDENTIAL_ID",
+        requires = "public_api_dir",
+        conflicts_with = "enroll_application"
+    )]
+    pub(super) revoke_credential: Option<String>,
 }
 
 #[derive(Args)]

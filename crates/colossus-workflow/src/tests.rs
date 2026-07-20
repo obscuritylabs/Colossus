@@ -1275,6 +1275,25 @@ impl EventJournal for CrashAfterEventJournal {
         self.inner.read_stream(stream_id)
     }
 
+    fn read_stream_from(
+        &self,
+        stream_id: &str,
+        after_version: u64,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.inner.read_stream_from(stream_id, after_version, limit)
+    }
+
+    fn read_stream_backwards(
+        &self,
+        stream_id: &str,
+        before_version: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.inner
+            .read_stream_backwards(stream_id, before_version, limit)
+    }
+
     fn read_global(
         &self,
         from_sequence: u64,

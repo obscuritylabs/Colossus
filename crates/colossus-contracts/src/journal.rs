@@ -6,6 +6,8 @@ use super::*;
 pub enum ActorType {
     /// A human operator.
     User,
+    /// An authenticated external application or SDK client.
+    Application,
     /// A model-controlled agent.
     Model,
     /// A durable workflow.

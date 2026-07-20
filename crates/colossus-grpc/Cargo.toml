@@ -1,0 +1,47 @@
+[package]
+name = "colossus-grpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Authenticated loopback gRPC transport for the Colossus public API"
+
+[dependencies]
+base64.workspace = true
+colossus-api.workspace = true
+colossus-api-proto.workspace = true
+colossus-contracts.workspace = true
+colossus-ports.workspace = true
+getrandom.workspace = true
+futures.workspace = true
+hmac.workspace = true
+http-body = "1.0.1"
+prost.workspace = true
+prost-types.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-stream.workspace = true
+tonic = { workspace = true, features = ["router", "transport", "tls-ring"] }
+tower.workspace = true
+url.workspace = true
+uuid.workspace = true
+x509-parser.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+colossus-testkit.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

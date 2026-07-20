@@ -1,0 +1,14 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  ignore_only:
+    PACKAGE_VERSION_SUFFIX:
+      - google/rpc/status.proto
+  disallow_comment_ignores: true
+breaking:
+  use:
+    - FILE
+  ignore_unstable_packages: false

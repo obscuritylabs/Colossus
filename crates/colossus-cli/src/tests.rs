@@ -562,6 +562,153 @@ fn tui_parses_with_the_global_inline_flag_and_repl_is_rejected() {
 }
 
 #[test]
+fn worker_public_api_cli_preserves_legacy_modes_and_requires_explicit_enrollment_bounds() {
+    let legacy = Cli::try_parse_from(["colossus", "worker", "--once"]).expect("legacy once");
+    assert!(matches!(
+        legacy.command,
+        Command::Worker(WorkerCommand {
+            once: true,
+            public_api_dir: None,
+            ..
+        })
+    ));
+
+    let hosted = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/tmp/colossus-public-api",
+    ])
+    .expect("public API host");
+    assert!(matches!(
+        hosted.command,
+        Command::Worker(WorkerCommand {
+            public_api_dir: Some(path),
+            enroll_application: None,
+            revoke_credential: None,
+            ..
+        }) if path == Path::new("/tmp/colossus-public-api")
+    ));
+
+    let enrolled = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/tmp/colossus-public-api",
+        "--enroll-application",
+        "app:desktop",
+        "--scope",
+        "runs:execute",
+        "--scope",
+        "runs:read",
+        "--role",
+        "primary",
+        "--tool",
+        "session.list",
+        "--credential-keyring-service",
+        "com.example.desktop",
+        "--credential-keyring-account",
+        "colossus-bearer",
+    ])
+    .expect("bounded enrollment");
+    assert!(matches!(
+        enrolled.command,
+        Command::Worker(WorkerCommand {
+            enroll_application: Some(application_id),
+            scope,
+            role,
+            tool,
+            replace_credential: false,
+            ..
+        }) if application_id == "app:desktop"
+            && scope == ["runs:execute", "runs:read"]
+            && role == ["primary"]
+            && tool == ["session.list"]
+    ));
+
+    let missing_role = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/tmp/colossus-public-api",
+        "--enroll-application",
+        "app:desktop",
+        "--scope",
+        "runs:read",
+        "--credential-keyring-service",
+        "com.example.desktop",
+        "--credential-keyring-account",
+        "colossus-bearer",
+    ])
+    .err()
+    .expect("role ceiling is mandatory");
+    assert_eq!(
+        missing_role.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+}
+
+#[test]
+fn worker_public_api_modes_conflict_and_never_accept_bearer_material() {
+    for arguments in [
+        vec![
+            "colossus",
+            "worker",
+            "--status",
+            "--public-api-dir",
+            "/tmp/colossus-public-api",
+        ],
+        vec![
+            "colossus",
+            "worker",
+            "--public-api-dir",
+            "/tmp/colossus-public-api",
+            "--revoke-credential",
+            "018f0000-0000-7000-8000-000000000001",
+            "--enroll-application",
+            "app:desktop",
+            "--scope",
+            "runs:read",
+            "--role",
+            "primary",
+            "--credential-keyring-service",
+            "com.example.desktop",
+            "--credential-keyring-account",
+            "colossus-bearer",
+        ],
+    ] {
+        assert_eq!(
+            Cli::try_parse_from(arguments)
+                .err()
+                .expect("conflicting worker mode")
+                .kind(),
+            clap::error::ErrorKind::ArgumentConflict
+        );
+    }
+
+    let bearer = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/tmp/colossus-public-api",
+        "--bearer",
+        "must-never-enter-argv",
+    ])
+    .err()
+    .expect("bearer input must not exist");
+    assert_eq!(bearer.kind(), clap::error::ErrorKind::UnknownArgument);
+
+    let replace_without_enrollment =
+        Cli::try_parse_from(["colossus", "worker", "--replace-credential"])
+            .err()
+            .expect("replacement requires explicit enrollment");
+    assert_eq!(
+        replace_without_enrollment.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+}
+
+#[test]
 fn registry_cli_and_tui_arguments_preserve_credential_references() {
     let cli = Cli::try_parse_from([
         "colossus",

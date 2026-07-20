@@ -1,0 +1,3 @@
+include build_support.py
+include generated-output.sha256
+recursive-include generated *.py *.pyi py.typed

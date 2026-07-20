@@ -1,4 +1,16 @@
-use super::{PolicyDecision, RunEvent, ThemeName, ThemeSpinner};
+use super::{Actor, ActorType, PolicyDecision, RunEvent, ThemeName, ThemeSpinner};
+
+#[test]
+fn application_actor_has_stable_journal_provenance() {
+    let actor = Actor {
+        actor_type: ActorType::Application,
+        id: "app:019f7d38-649a-7580-a30f-01157b719c2a".into(),
+    };
+    assert_eq!(
+        serde_json::to_string(&actor).expect("application actor"),
+        r#"{"actor_type":"application","id":"app:019f7d38-649a-7580-a30f-01157b719c2a"}"#
+    );
+}
 
 #[test]
 fn policy_decision_rejects_unknown_fields() {

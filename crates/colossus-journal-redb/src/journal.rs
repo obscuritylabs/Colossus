@@ -21,6 +21,7 @@ impl RedbEventJournal {
         let database = Database::create(path).map_err(adapter_error)?;
         let write = database.begin_write().map_err(adapter_error)?;
         write.open_table(EVENTS).map_err(adapter_error)?;
+        write.open_table(STREAM_EVENTS).map_err(adapter_error)?;
         write.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
         write.open_table(METADATA).map_err(adapter_error)?;
         write.open_table(OUTBOX).map_err(adapter_error)?;
@@ -40,16 +41,20 @@ impl RedbEventJournal {
             recovery_mode: AtomicBool::new(false),
             recovery_reason: Mutex::new(None),
         };
-        let startup = journal.verify_inner().and_then(|report| {
-            let checkpoint_sequence = report
-                .checkpoint
-                .as_ref()
-                .map_or(0, |checkpoint| checkpoint.global_sequence);
-            if report.last_sequence.saturating_sub(checkpoint_sequence) >= CHECKPOINT_INTERVAL {
-                journal.checkpoint()?;
-            }
-            Ok(())
-        });
+        let startup = journal
+            .verify_inner()
+            .and_then(|_| journal.ensure_stream_events_index())
+            .and_then(|_| journal.verify_inner())
+            .and_then(|report| {
+                let checkpoint_sequence = report
+                    .checkpoint
+                    .as_ref()
+                    .map_or(0, |checkpoint| checkpoint.global_sequence);
+                if report.last_sequence.saturating_sub(checkpoint_sequence) >= CHECKPOINT_INTERVAL {
+                    journal.checkpoint()?;
+                }
+                Ok(())
+            });
         if let Err(error) = startup {
             journal.recovery_mode.store(true, Ordering::Release);
             *journal.recovery_reason.lock().map_err(adapter_error)? = Some(error.to_string());
@@ -60,6 +65,185 @@ impl RedbEventJournal {
     /// Bounded reason startup entered recovery mode.
     pub fn recovery_reason(&self) -> Result<Option<String>, StoreError> {
         Ok(self.recovery_reason.lock().map_err(adapter_error)?.clone())
+    }
+
+    fn ensure_stream_events_index(&self) -> Result<(), StoreError> {
+        let _guard = self.writer.lock().map_err(adapter_error)?;
+        let write = self.database.begin_write().map_err(adapter_error)?;
+        let index_version = {
+            let metadata = write.open_table(METADATA).map_err(adapter_error)?;
+            metadata
+                .get(STREAM_EVENTS_INDEX_KEY)
+                .map_err(adapter_error)?
+                .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
+                .transpose()?
+        };
+        if index_version == Some(STREAM_EVENTS_INDEX_VERSION) {
+            return Ok(());
+        }
+        if index_version.is_some() {
+            return Err(StoreError::Verification(
+                "stream event index version is unsupported".into(),
+            ));
+        }
+        {
+            let event_table = write.open_table(EVENTS).map_err(adapter_error)?;
+            let mut stream_events = write.open_table(STREAM_EVENTS).map_err(adapter_error)?;
+            if !stream_events.is_empty().map_err(adapter_error)? {
+                return Err(StoreError::Verification(
+                    "unversioned stream event index is not empty".into(),
+                ));
+            }
+            for entry in event_table.iter().map_err(adapter_error)? {
+                let (sequence, value) = entry.map_err(adapter_error)?;
+                let sequence = sequence.value();
+                let event: EventEnvelope =
+                    serde_json::from_slice(value.value()).map_err(adapter_error)?;
+                if event.global_sequence != sequence {
+                    return Err(StoreError::Verification(format!(
+                        "event {} global sequence does not match its key",
+                        event.event_id
+                    )));
+                }
+                if stream_events
+                    .insert(&(event.stream_id.as_str(), event.stream_version), &sequence)
+                    .map_err(adapter_error)?
+                    .is_some()
+                {
+                    return Err(StoreError::Verification(format!(
+                        "stream {} has duplicate version {}",
+                        event.stream_id, event.stream_version
+                    )));
+                }
+            }
+        }
+        {
+            let mut metadata = write.open_table(METADATA).map_err(adapter_error)?;
+            let version =
+                serde_json::to_vec(&STREAM_EVENTS_INDEX_VERSION).map_err(adapter_error)?;
+            metadata
+                .insert(STREAM_EVENTS_INDEX_KEY, version.as_slice())
+                .map_err(adapter_error)?;
+        }
+        write.commit().map_err(adapter_error)
+    }
+
+    fn read_indexed_stream(
+        &self,
+        stream_id: &str,
+        after_version: u64,
+        limit: Option<usize>,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        if limit == Some(0) || after_version == u64::MAX {
+            return Ok(Vec::new());
+        }
+        let start_version = after_version.saturating_add(1);
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+        let index_version = metadata
+            .get(STREAM_EVENTS_INDEX_KEY)
+            .map_err(adapter_error)?
+            .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
+            .transpose()?;
+        if index_version != Some(STREAM_EVENTS_INDEX_VERSION) {
+            return Err(StoreError::Verification(
+                "stream event index is unavailable".into(),
+            ));
+        }
+        let stream_events = read.open_table(STREAM_EVENTS).map_err(adapter_error)?;
+        let event_table = read.open_table(EVENTS).map_err(adapter_error)?;
+        let mut events = Vec::with_capacity(limit.unwrap_or(0).min(MAX_STREAM_READ_BATCH));
+        for entry in stream_events
+            .range((stream_id, start_version)..=(stream_id, u64::MAX))
+            .map_err(adapter_error)?
+        {
+            if limit.is_some_and(|limit| events.len() >= limit) {
+                break;
+            }
+            let (key, sequence) = entry.map_err(adapter_error)?;
+            let (indexed_stream, indexed_version) = key.value();
+            let sequence = sequence.value();
+            let persisted = event_table
+                .get(sequence)
+                .map_err(adapter_error)?
+                .ok_or_else(|| {
+                    StoreError::Verification(format!(
+                        "stream event index references absent event {sequence}"
+                    ))
+                })?;
+            let event: EventEnvelope =
+                serde_json::from_slice(persisted.value()).map_err(adapter_error)?;
+            if event.global_sequence != sequence
+                || event.stream_id != indexed_stream
+                || event.stream_version != indexed_version
+            {
+                return Err(StoreError::Verification(format!(
+                    "stream event index entry {indexed_stream}/{indexed_version} is invalid"
+                )));
+            }
+            events.push(event);
+        }
+        Ok(events)
+    }
+
+    fn read_indexed_stream_backwards(
+        &self,
+        stream_id: &str,
+        before_version: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        let limit = limit.min(MAX_STREAM_READ_BATCH);
+        if limit == 0 || before_version.is_some_and(|version| version <= 1) {
+            return Ok(Vec::new());
+        }
+        let last_version = before_version.map_or(u64::MAX, |version| version.saturating_sub(1));
+        let read = self.database.begin_read().map_err(adapter_error)?;
+        let metadata = read.open_table(METADATA).map_err(adapter_error)?;
+        let index_version = metadata
+            .get(STREAM_EVENTS_INDEX_KEY)
+            .map_err(adapter_error)?
+            .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
+            .transpose()?;
+        if index_version != Some(STREAM_EVENTS_INDEX_VERSION) {
+            return Err(StoreError::Verification(
+                "stream event index is unavailable".into(),
+            ));
+        }
+        let stream_events = read.open_table(STREAM_EVENTS).map_err(adapter_error)?;
+        let event_table = read.open_table(EVENTS).map_err(adapter_error)?;
+        let mut events = Vec::with_capacity(limit);
+        for entry in stream_events
+            .range((stream_id, 1)..=(stream_id, last_version))
+            .map_err(adapter_error)?
+            .rev()
+        {
+            if events.len() >= limit {
+                break;
+            }
+            let (key, sequence) = entry.map_err(adapter_error)?;
+            let (indexed_stream, indexed_version) = key.value();
+            let sequence = sequence.value();
+            let persisted = event_table
+                .get(sequence)
+                .map_err(adapter_error)?
+                .ok_or_else(|| {
+                    StoreError::Verification(format!(
+                        "stream event index references absent event {sequence}"
+                    ))
+                })?;
+            let event: EventEnvelope =
+                serde_json::from_slice(persisted.value()).map_err(adapter_error)?;
+            if event.global_sequence != sequence
+                || event.stream_id != indexed_stream
+                || event.stream_version != indexed_version
+            {
+                return Err(StoreError::Verification(format!(
+                    "stream event index entry {indexed_stream}/{indexed_version} is invalid"
+                )));
+            }
+            events.push(event);
+        }
+        Ok(events)
     }
 
     fn encrypt_payload(
@@ -101,6 +285,7 @@ impl RedbEventJournal {
         let mut persisted = Vec::with_capacity(events.len());
         {
             let mut event_table = write.open_table(EVENTS).map_err(adapter_error)?;
+            let mut stream_events = write.open_table(STREAM_EVENTS).map_err(adapter_error)?;
             let mut stream_table = write.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
             let mut metadata = write.open_table(METADATA).map_err(adapter_error)?;
             let mut outbox = write.open_table(OUTBOX).map_err(adapter_error)?;
@@ -168,6 +353,16 @@ impl RedbEventJournal {
                 event_table
                     .insert(sequence, encoded.as_slice())
                     .map_err(adapter_error)?;
+                if stream_events
+                    .insert(&(envelope.stream_id.as_str(), stream_version), &sequence)
+                    .map_err(adapter_error)?
+                    .is_some()
+                {
+                    return Err(StoreError::Verification(format!(
+                        "stream {} version {stream_version} is already indexed",
+                        envelope.stream_id
+                    )));
+                }
                 stream_table
                     .insert(envelope.stream_id.as_str(), stream_version)
                     .map_err(adapter_error)?;
@@ -299,6 +494,7 @@ impl RedbEventJournal {
     fn verify_inner(&self) -> Result<VerificationReport, StoreError> {
         let read = self.database.begin_read().map_err(adapter_error)?;
         let event_table = read.open_table(EVENTS).map_err(adapter_error)?;
+        let stream_event_table = read.open_table(STREAM_EVENTS).map_err(adapter_error)?;
         let durable_stream_table = read.open_table(STREAM_VERSIONS).map_err(adapter_error)?;
         let metadata = read.open_table(METADATA).map_err(adapter_error)?;
         let outbox = read.open_table(OUTBOX).map_err(adapter_error)?;
@@ -310,6 +506,27 @@ impl RedbEventJournal {
         let mut previous_hash = ZERO_HASH.to_owned();
         let mut stream_versions = BTreeMap::<String, u64>::new();
         let mut event_hashes = BTreeMap::<u64, String>::new();
+        let stream_index_version = metadata
+            .get(STREAM_EVENTS_INDEX_KEY)
+            .map_err(adapter_error)?
+            .map(|value| serde_json::from_slice(value.value()).map_err(adapter_error))
+            .transpose()?;
+        let verify_stream_index = match stream_index_version {
+            None => {
+                if !stream_event_table.is_empty().map_err(adapter_error)? {
+                    return Err(StoreError::Verification(
+                        "unversioned stream event index is not empty".into(),
+                    ));
+                }
+                false
+            }
+            Some(STREAM_EVENTS_INDEX_VERSION) => true,
+            Some(_) => {
+                return Err(StoreError::Verification(
+                    "stream event index version is unsupported".into(),
+                ));
+            }
+        };
 
         for entry in event_table.iter().map_err(adapter_error)? {
             let (key, value) = entry.map_err(adapter_error)?;
@@ -338,6 +555,18 @@ impl RedbEventJournal {
                 return Err(StoreError::Verification(format!(
                     "stream {} version mismatch",
                     envelope.stream_id
+                )));
+            }
+            if verify_stream_index
+                && stream_event_table
+                    .get(&(envelope.stream_id.as_str(), envelope.stream_version))
+                    .map_err(adapter_error)?
+                    .map(|indexed| indexed.value())
+                    != Some(sequence)
+            {
+                return Err(StoreError::Verification(format!(
+                    "stream {} version {} index mismatch",
+                    envelope.stream_id, envelope.stream_version
                 )));
             }
             let computed_hash = persisted_record_hash(&persisted)?;
@@ -453,6 +682,12 @@ impl RedbEventJournal {
                 "secure anchor is missing or differs from journal".into(),
             ));
         }
+        if verify_stream_index && stream_event_table.len().map_err(adapter_error)? != last_sequence
+        {
+            return Err(StoreError::Verification(
+                "stream event index position does not match journal head".into(),
+            ));
+        }
         Ok(VerificationReport {
             event_count: last_sequence,
             last_sequence,
@@ -496,18 +731,29 @@ impl EventJournal for RedbEventJournal {
     }
 
     fn read_stream(&self, stream_id: &str) -> Result<Vec<EventEnvelope>, StoreError> {
-        let read = self.database.begin_read().map_err(adapter_error)?;
-        let table = read.open_table(EVENTS).map_err(adapter_error)?;
-        let mut events = Vec::new();
-        for entry in table.iter().map_err(adapter_error)? {
-            let (_, value) = entry.map_err(adapter_error)?;
-            let event: EventEnvelope =
-                serde_json::from_slice(value.value()).map_err(adapter_error)?;
-            if event.stream_id == stream_id {
-                events.push(event);
-            }
-        }
-        Ok(events)
+        self.read_indexed_stream(stream_id, 0, None)
+    }
+
+    fn read_stream_from(
+        &self,
+        stream_id: &str,
+        after_version: u64,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.read_indexed_stream(
+            stream_id,
+            after_version,
+            Some(limit.min(MAX_STREAM_READ_BATCH)),
+        )
+    }
+
+    fn read_stream_backwards(
+        &self,
+        stream_id: &str,
+        before_version: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.read_indexed_stream_backwards(stream_id, before_version, limit)
     }
 
     fn read_global(

@@ -84,7 +84,7 @@ falls back to explicit approval or denial.
 | `run` | Execute one audited model turn through a configured role |
 | `echo` | Run the credential-free, network-free smoke provider |
 | `tui` | Start the interactive terminal interface |
-| `worker` | Own the writer lease and drain queued resumable work |
+| `worker` | Own the writer lease, host the public API, and administer application credentials offline |
 
 ## Complete route index
 
@@ -153,7 +153,74 @@ positional:
 | `research run` | `--depth standard`; planned-query budgets are `quick=1`, `standard=3`, `deep=6`; `--source repo,web,mcp` |
 | `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume` |
 | `tui` | fresh session unless `--session` or `--resume` |
-| `worker` | serves authenticated local IPC; `--once`, `--status`, and `--shutdown` are mutually exclusive |
+| `worker` | serves authenticated local IPC; add `--public-api-dir ABS_OWNER_PRIVATE_DIR` to host authenticated loopback gRPC; `--once`, `--status`, `--shutdown`, enrollment, and revocation modes conflict |
+
+## Worker public API flags
+
+The installed worker can publish `colossus.api.v1alpha1` on an ephemeral
+`127.0.0.1` port:
+
+```bash
+colossus --config .colossus/config.yaml worker \
+  --public-api-dir "$HOME/.colossus-public-api"
+```
+
+The directory must be absolute. The Unix-native implementation creates only the final
+directory component when needed and requires the canonical directory to be owned by
+the current user with mode `0700`. It publishes fixed owner-only files
+`endpoint.json` and `certificate.pem`; `.public-api.lock` prevents a second CLI worker
+from claiming the same discovery directory. These files contain public discovery and
+certificate material only.
+
+Application enrollment is an explicit offline worker action:
+
+```bash
+colossus --config .colossus/config.yaml worker \
+  --public-api-dir "$HOME/.colossus-public-api" \
+  --enroll-application app:example-desktop \
+  --scope runs:execute \
+  --scope runs:read \
+  --scope runs:control \
+  --scope prompts:respond \
+  --role primary \
+  --credential-keyring-service com.example.desktop \
+  --credential-keyring-account colossus-public-api
+```
+
+`--scope` and `--role` must each appear at least once. Scope values are exact and must
+be one of `runs:execute`, `runs:read`, `runs:control`, `prompts:respond`, or
+`approvals:respond`. Repeat `--tool EXACT_TOOL_NAME` to grant tool ceilings; omitting
+it denies every tool. `agent.delegate` is rejected until public application authority
+can be propagated safely to child runs. Enrollment refuses to run while a private
+worker endpoint or journal writer exists.
+
+The bearer is written directly to the named OS-keyring entry. It is never printed and
+there is no flag for bearer input. The non-secret enrollment result includes the
+stable instance ID and certificate SHA-256; provision those values independently into
+the application and never trust a pin obtained only from the discovery directory. An
+existing destination is rejected unless
+`--replace-credential` is supplied. Before any mutation, replacement authenticates the
+stored credential under this public API root and requires the same application ID.
+Malformed, revoked, foreign-root, or other-application entries fail closed.
+Replacement then issues the new credential as pending, stores it, durably activates
+it, and durably revokes the prior credential in that order. Pending credentials cannot
+authenticate. The result includes both non-secret credential IDs. Use explicit
+revocation for credentials stored under other keyring entries:
+
+```bash
+colossus --config .colossus/config.yaml worker \
+  --public-api-dir "$HOME/.colossus-public-api" \
+  --revoke-credential 018f0000-0000-7000-8000-000000000001
+```
+
+Revocation is durable and idempotent. If a newly issued bearer cannot be written or
+durably activated, the CLI immediately revokes it and restores the prior destination
+when applicable before returning an error. If prior-credential revocation cannot be
+confirmed after replacement activation, the CLI preserves the active new credential
+at the destination rather than risk restoring an already-revoked token. The sanitized
+error includes both non-secret credential IDs and instructs the administrator to
+reconcile and explicitly revoke the prior credential, never either bearer.
+Native public API directory enforcement currently fails closed on non-Unix platforms.
 
 `run --role` accepts any configured model role, not only `primary`. `--session` and
 `--resume` conflict. Plan creation and execution also conflict:
@@ -184,6 +251,8 @@ or status contract. Important roots are:
 | `telemetry metrics` | Aggregated run/tool/provider/context counters and duration totals |
 | `tools list` | Active schemas plus source/risk metadata, canonical workspace, sandbox profile, action decision, and bounds |
 | `config effective` | Active/hidden tools and actions plus explicit/derived grants, resolved shell, protected paths, wildcard meaning, and unmet prerequisites |
+| `worker --enroll-application` | Non-secret application ID, new credential ID, stable instance ID and certificate SHA-256 trust anchor, exact scopes/role/tool ceilings, destination keyring identifiers, replacement flag, and nullable revoked prior credential ID |
+| `worker --revoke-credential` | Non-secret credential ID and durable revocation result |
 
 Optional values are JSON `null`; enums and tagged states use documented lowercase
 snake-case strings. `config show` is the deliberate exception: it emits strict YAML so

@@ -18,6 +18,11 @@ flowchart LR
     subgraph Interfaces
       CLI["CLI"]
       TUI["TUI"]
+      SDK["Application SDKs"]
+    end
+    subgraph Transport
+      GRPC["Authenticated loopback gRPC"]
+      Worker["Worker host"]
     end
     subgraph Composition
       Runtime["Runtime composition"]
@@ -37,6 +42,9 @@ flowchart LR
 
     CLI --> Runtime
     TUI --> Runtime
+    SDK --> GRPC
+    GRPC --> Worker
+    Worker --> Runtime
     Runtime --> Agent
     Agent --> Ports
     Ports --> Contracts
@@ -66,6 +74,7 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Application services | `colossus-agent`, `colossus-session`, `colossus-context`, `colossus-work`, `colossus-memory`, `colossus-workflow`, `colossus-research`, `colossus-telemetry` | Use cases and durable behavior |
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
 | Infrastructure | `colossus-provider`, journal/projection crates, `colossus-sandbox`, `colossus-integrations`, `colossus-mcp`, `colossus-packs`, `colossus-search` | External systems and storage adapters |
+| Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Wire services, host application contracts, and render released data |
 
 ## Boundary rules
@@ -78,11 +87,17 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - Access resolution produces visibility and action decisions; sandbox-profile
   resolution independently produces explicit and derived resource obligations.
 - CLI and TUI construct requests, invoke application services, and render typed results.
+- External applications enter through the authenticated public worker API or a
+  caller-bound embedded SDK backend; they never depend on agent internals.
 - Crate roots expose a focused API or composition surface; nontrivial logic belongs in
   named modules.
 - Canonical writes append journal events. Read models and indexes are replaceable.
+- Public run creation atomically appends its per-application owner-index entry;
+  `ListRuns` traverses that index newest-first instead of scanning the shared journal.
 - The complete effect path is centralized; an adapter cannot mint its own authority.
 
 See [Rust crate structure](crate-structure.md) for module and public-surface conventions,
 [Runtime and ports](runtime-ports.md) for service ownership, and
-[Security architecture](security-architecture.md) for the effect boundary.
+[Public API and application SDKs](application-sdk.md) for external application
+integration. See [Security architecture](security-architecture.md) for the effect
+boundary.

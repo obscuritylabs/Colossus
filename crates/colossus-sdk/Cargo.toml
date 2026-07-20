@@ -1,0 +1,55 @@
+[package]
+name = "colossus-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stable Rust SDK and secure lifecycle abstractions for Colossus applications"
+
+[features]
+default = ["daemon"]
+daemon = [
+    "dep:colossus-api-proto",
+    "dep:colossus-grpc",
+    "dep:prost",
+    "dep:prost-types",
+    "dep:rustls",
+    "dep:sha2",
+    "dep:tonic",
+    "dep:tokio",
+    "dep:url",
+    "dep:sysinfo",
+    "keyring",
+]
+keyring = ["dep:keyring"]
+sidecar = ["daemon"]
+embedded = []
+
+[dependencies]
+async-trait.workspace = true
+colossus-api.workspace = true
+colossus-api-proto = { workspace = true, optional = true }
+colossus-grpc = { workspace = true, optional = true }
+futures.workspace = true
+hex.workspace = true
+keyring = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+prost-types = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+sysinfo = { workspace = true, optional = true }
+thiserror.workspace = true
+tonic = { workspace = true, features = ["transport", "tls-ring"], optional = true }
+tokio = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tokio-rustls.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

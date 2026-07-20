@@ -1,0 +1,615 @@
+syntax = "proto3";
+
+package colossus.api.v1alpha1;
+
+import "colossus/api/v1alpha1/artifact.proto";
+import "colossus/api/v1alpha1/common.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
+option java_multiple_files = true;
+option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
+
+// WorkService exposes typed, caller-visible tasks, decisions, plans, and goals.
+service WorkService {
+  // GetWorkItem returns one authorized work item.
+  rpc GetWorkItem(GetWorkItemRequest) returns (GetWorkItemResponse);
+
+  // ListWorkItems returns a stable filtered page.
+  rpc ListWorkItems(ListWorkItemsRequest) returns (ListWorkItemsResponse);
+}
+
+// KnowledgeService exposes typed memory summaries and released search results.
+service KnowledgeService {
+  // GetMemory returns one authorized memory summary.
+  rpc GetMemory(GetMemoryRequest) returns (GetMemoryResponse);
+
+  // ListMemories returns a stable filtered page.
+  rpc ListMemories(ListMemoriesRequest) returns (ListMemoriesResponse);
+
+  // SearchKnowledge searches authorized released knowledge.
+  rpc SearchKnowledge(SearchKnowledgeRequest) returns (SearchKnowledgeResponse);
+}
+
+// AutomationService exposes workflow definitions and durable workflow runs.
+service AutomationService {
+  // GetWorkflow returns one authorized workflow summary.
+  rpc GetWorkflow(GetWorkflowRequest) returns (GetWorkflowResponse);
+
+  // ListWorkflows returns a stable page of workflow summaries.
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
+
+  // StartWorkflowRun starts one idempotent durable workflow run.
+  rpc StartWorkflowRun(StartWorkflowRunRequest) returns (StartWorkflowRunResponse);
+
+  // GetWorkflowRun returns one durable workflow run.
+  rpc GetWorkflowRun(GetWorkflowRunRequest) returns (GetWorkflowRunResponse);
+
+  // WatchWorkflowRun replays snapshots after an exclusive sequence and tails updates.
+  rpc WatchWorkflowRun(WatchWorkflowRunRequest) returns (stream WatchWorkflowRunResponse);
+}
+
+// ExtensionService exposes credential-free extension catalogs.
+service ExtensionService {
+  // GetExtension returns one authorized extension summary.
+  rpc GetExtension(GetExtensionRequest) returns (GetExtensionResponse);
+
+  // ListExtensions returns a stable filtered page.
+  rpc ListExtensions(ListExtensionsRequest) returns (ListExtensionsResponse);
+}
+
+// OperationsService exposes separately scoped, bounded diagnostic summaries.
+service OperationsService {
+  // ListDiagnostics returns only diagnostic areas authorized for the caller.
+  rpc ListDiagnostics(ListDiagnosticsRequest) returns (ListDiagnosticsResponse);
+}
+
+// DistributionService inspects verified artifacts without accepting server-local paths.
+service DistributionService {
+  // InspectDistributionArtifact validates an opaque uploaded artifact.
+  rpc InspectDistributionArtifact(InspectDistributionArtifactRequest) returns (InspectDistributionArtifactResponse);
+}
+
+// WorkItemKind identifies a public work-resource family.
+enum WorkItemKind {
+  // WORK_ITEM_KIND_UNSPECIFIED does not filter by kind.
+  WORK_ITEM_KIND_UNSPECIFIED = 0;
+
+  // WORK_ITEM_KIND_TASK is an actionable task.
+  WORK_ITEM_KIND_TASK = 1;
+
+  // WORK_ITEM_KIND_DECISION is a durable decision.
+  WORK_ITEM_KIND_DECISION = 2;
+
+  // WORK_ITEM_KIND_PLAN is a durable plan.
+  WORK_ITEM_KIND_PLAN = 3;
+
+  // WORK_ITEM_KIND_GOAL is a durable goal.
+  WORK_ITEM_KIND_GOAL = 4;
+}
+
+// WorkItemStatus is a normalized public work state.
+enum WorkItemStatus {
+  // WORK_ITEM_STATUS_UNSPECIFIED does not filter by state.
+  WORK_ITEM_STATUS_UNSPECIFIED = 0;
+
+  // WORK_ITEM_STATUS_OPEN requires further work.
+  WORK_ITEM_STATUS_OPEN = 1;
+
+  // WORK_ITEM_STATUS_IN_PROGRESS is actively being handled.
+  WORK_ITEM_STATUS_IN_PROGRESS = 2;
+
+  // WORK_ITEM_STATUS_BLOCKED cannot progress without a dependency.
+  WORK_ITEM_STATUS_BLOCKED = 3;
+
+  // WORK_ITEM_STATUS_COMPLETED is terminal and successful.
+  WORK_ITEM_STATUS_COMPLETED = 4;
+
+  // WORK_ITEM_STATUS_CANCELLED is terminal without completion.
+  WORK_ITEM_STATUS_CANCELLED = 5;
+}
+
+// WorkItem is a typed bounded work summary.
+message WorkItem {
+  // work_item_id is the opaque stable identifier.
+  string work_item_id = 1;
+
+  // kind identifies the resource family.
+  WorkItemKind kind = 2;
+
+  // status is the normalized lifecycle state.
+  WorkItemStatus status = 3;
+
+  // title is the bounded user-visible title.
+  string title = 4;
+
+  // summary is bounded released content.
+  string summary = 5;
+
+  // session_id is the associated session when present.
+  optional string session_id = 6;
+
+  // created_at is the canonical creation time.
+  google.protobuf.Timestamp created_at = 7;
+
+  // updated_at is the latest canonical update time.
+  google.protobuf.Timestamp updated_at = 8;
+
+  // etag is an opaque optimistic-concurrency token.
+  string etag = 9;
+}
+
+// GetWorkItemRequest selects one work item.
+message GetWorkItemRequest {
+  // work_item_id is the exact opaque identifier.
+  string work_item_id = 1;
+}
+
+// GetWorkItemResponse returns one work item.
+message GetWorkItemResponse {
+  // work_item is the authorized bounded resource.
+  WorkItem work_item = 1;
+}
+
+// ListWorkItemsRequest selects a stable page.
+message ListWorkItemsRequest {
+  // kinds limits results to specified resource families.
+  repeated WorkItemKind kinds = 1;
+
+  // statuses limits results to specified lifecycle states.
+  repeated WorkItemStatus statuses = 2;
+
+  // session_id limits results to one session when present.
+  optional string session_id = 3;
+
+  // page contains the bounded size and opaque continuation token.
+  PageRequest page = 4;
+}
+
+// ListWorkItemsResponse returns a page of work items.
+message ListWorkItemsResponse {
+  // work_items contains the current page.
+  repeated WorkItem work_items = 1;
+
+  // page identifies the next page.
+  PageResponse page = 2;
+}
+
+// MemoryScopeKind identifies public memory scope without exposing storage keys.
+enum MemoryScopeKind {
+  // MEMORY_SCOPE_KIND_UNSPECIFIED does not filter by scope.
+  MEMORY_SCOPE_KIND_UNSPECIFIED = 0;
+
+  // MEMORY_SCOPE_KIND_INSTANCE applies across the local instance.
+  MEMORY_SCOPE_KIND_INSTANCE = 1;
+
+  // MEMORY_SCOPE_KIND_SESSION applies to one session.
+  MEMORY_SCOPE_KIND_SESSION = 2;
+
+  // MEMORY_SCOPE_KIND_PROJECT applies to one configured project.
+  MEMORY_SCOPE_KIND_PROJECT = 3;
+}
+
+// MemorySummary is bounded released durable knowledge.
+message MemorySummary {
+  // memory_id is the opaque stable identifier.
+  string memory_id = 1;
+
+  // scope_kind is the normalized scope family.
+  MemoryScopeKind scope_kind = 2;
+
+  // scope_id is the opaque scope identifier when applicable.
+  optional string scope_id = 3;
+
+  // title is a bounded user-visible label.
+  string title = 4;
+
+  // summary is released bounded knowledge, not raw private source content.
+  string summary = 5;
+
+  // created_at is the canonical creation time.
+  google.protobuf.Timestamp created_at = 6;
+
+  // updated_at is the latest canonical update time.
+  google.protobuf.Timestamp updated_at = 7;
+
+  // etag is an opaque optimistic-concurrency token.
+  string etag = 8;
+}
+
+// GetMemoryRequest selects one memory.
+message GetMemoryRequest {
+  // memory_id is the exact opaque identifier.
+  string memory_id = 1;
+}
+
+// GetMemoryResponse returns one memory summary.
+message GetMemoryResponse {
+  // memory is bounded released knowledge.
+  MemorySummary memory = 1;
+}
+
+// ListMemoriesRequest selects a stable memory page.
+message ListMemoriesRequest {
+  // scope_kind limits results by normalized scope.
+  MemoryScopeKind scope_kind = 1;
+
+  // scope_id limits results to one exact scope when present.
+  optional string scope_id = 2;
+
+  // page contains the bounded size and opaque continuation token.
+  PageRequest page = 3;
+}
+
+// ListMemoriesResponse returns a page of memory summaries.
+message ListMemoriesResponse {
+  // memories contains the current page.
+  repeated MemorySummary memories = 1;
+
+  // page identifies the next page.
+  PageResponse page = 2;
+}
+
+// SearchKnowledgeRequest searches authorized released knowledge.
+message SearchKnowledgeRequest {
+  // query is bounded untrusted caller input.
+  string query = 1;
+
+  // scope_kind limits search by normalized scope.
+  MemoryScopeKind scope_kind = 2;
+
+  // scope_id limits search to one exact scope when present.
+  optional string scope_id = 3;
+
+  // page contains the bounded result size and opaque continuation token.
+  PageRequest page = 4;
+}
+
+// KnowledgeSearchResult is one ranked, released search match.
+message KnowledgeSearchResult {
+  // memory is the matched bounded resource.
+  MemorySummary memory = 1;
+
+  // snippet is bounded released context around the match.
+  string snippet = 2;
+
+  // score is a normalized rank score and is not stable across implementations.
+  double score = 3;
+}
+
+// SearchKnowledgeResponse returns ranked authorized results.
+message SearchKnowledgeResponse {
+  // results contains the current ranked page.
+  repeated KnowledgeSearchResult results = 1;
+
+  // page identifies the next page.
+  PageResponse page = 2;
+}
+
+// WorkflowSummary is a bounded public workflow definition.
+message WorkflowSummary {
+  // workflow_id is the opaque stable identifier.
+  string workflow_id = 1;
+
+  // name is the bounded user-visible name.
+  string name = 2;
+
+  // description is bounded released text.
+  string description = 3;
+
+  // enabled states whether new runs may be started.
+  bool enabled = 4;
+
+  // created_at is the canonical creation time.
+  google.protobuf.Timestamp created_at = 5;
+
+  // updated_at is the latest canonical update time.
+  google.protobuf.Timestamp updated_at = 6;
+
+  // etag is an opaque optimistic-concurrency token.
+  string etag = 7;
+}
+
+// WorkflowRunStatus is the durable automation lifecycle state.
+enum WorkflowRunStatus {
+  // WORKFLOW_RUN_STATUS_UNSPECIFIED does not filter by state.
+  WORKFLOW_RUN_STATUS_UNSPECIFIED = 0;
+
+  // WORKFLOW_RUN_STATUS_QUEUED is durable but has not started.
+  WORKFLOW_RUN_STATUS_QUEUED = 1;
+
+  // WORKFLOW_RUN_STATUS_RUNNING is actively progressing.
+  WORKFLOW_RUN_STATUS_RUNNING = 2;
+
+  // WORKFLOW_RUN_STATUS_WAITING requires a durable interaction or dependency.
+  WORKFLOW_RUN_STATUS_WAITING = 3;
+
+  // WORKFLOW_RUN_STATUS_COMPLETED is terminal and successful.
+  WORKFLOW_RUN_STATUS_COMPLETED = 4;
+
+  // WORKFLOW_RUN_STATUS_FAILED is terminal with a known outcome.
+  WORKFLOW_RUN_STATUS_FAILED = 5;
+
+  // WORKFLOW_RUN_STATUS_CANCELLED is terminal without completion.
+  WORKFLOW_RUN_STATUS_CANCELLED = 6;
+
+  // WORKFLOW_RUN_STATUS_INTERRUPTED stopped before completion.
+  WORKFLOW_RUN_STATUS_INTERRUPTED = 7;
+
+  // WORKFLOW_RUN_STATUS_OUTCOME_UNKNOWN lacks trustworthy terminal effect evidence.
+  WORKFLOW_RUN_STATUS_OUTCOME_UNKNOWN = 8;
+}
+
+// WorkflowRun is one durable automation execution.
+message WorkflowRun {
+  // workflow_run_id is the opaque stable identifier.
+  string workflow_run_id = 1;
+
+  // workflow_id is the owning definition.
+  string workflow_id = 2;
+
+  // status is the durable lifecycle state.
+  WorkflowRunStatus status = 3;
+
+  // created_at is the durable allocation time.
+  google.protobuf.Timestamp created_at = 4;
+
+  // updated_at is the latest durable state-change time.
+  google.protobuf.Timestamp updated_at = 5;
+
+  // last_sequence is the highest durable public update sequence.
+  uint64 last_sequence = 6;
+
+  // failure_reason is a stable safe reason for terminal failures.
+  optional string failure_reason = 7;
+}
+
+// GetWorkflowRequest selects one workflow.
+message GetWorkflowRequest {
+  // workflow_id is the exact opaque identifier.
+  string workflow_id = 1;
+}
+
+// GetWorkflowResponse returns one workflow.
+message GetWorkflowResponse {
+  // workflow is the bounded definition summary.
+  WorkflowSummary workflow = 1;
+}
+
+// ListWorkflowsRequest selects a stable workflow page.
+message ListWorkflowsRequest {
+  // include_disabled includes definitions that cannot start new runs.
+  bool include_disabled = 1;
+
+  // page contains the bounded size and opaque continuation token.
+  PageRequest page = 2;
+}
+
+// ListWorkflowsResponse returns a page of workflows.
+message ListWorkflowsResponse {
+  // workflows contains the current page.
+  repeated WorkflowSummary workflows = 1;
+
+  // page identifies the next page.
+  PageResponse page = 2;
+}
+
+// StartWorkflowRunRequest starts one workflow with inherently dynamic typed input.
+message StartWorkflowRunRequest {
+  // workflow_id is the exact opaque identifier.
+  string workflow_id = 1;
+
+  // input is validated against the workflow's declared strict schema.
+  google.protobuf.Struct input = 2;
+
+  // idempotency_key is required and scoped to the authenticated caller.
+  string idempotency_key = 3;
+}
+
+// StartWorkflowRunResponse returns the durable allocated run.
+message StartWorkflowRunResponse {
+  // workflow_run is durable before execution begins.
+  WorkflowRun workflow_run = 1;
+}
+
+// GetWorkflowRunRequest selects one workflow run.
+message GetWorkflowRunRequest {
+  // workflow_run_id is the exact opaque identifier.
+  string workflow_run_id = 1;
+}
+
+// GetWorkflowRunResponse returns one workflow run.
+message GetWorkflowRunResponse {
+  // workflow_run is the durable projection.
+  WorkflowRun workflow_run = 1;
+}
+
+// WatchWorkflowRunRequest selects replay and tail behavior.
+message WatchWorkflowRunRequest {
+  // workflow_run_id is the exact opaque identifier.
+  string workflow_run_id = 1;
+
+  // after_sequence is an exclusive cursor; zero replays from the beginning.
+  uint64 after_sequence = 2;
+}
+
+// WatchWorkflowRunResponse carries one durable snapshot.
+message WatchWorkflowRunResponse {
+  // sequence is monotonic and supports at-least-once deduplication.
+  uint64 sequence = 1;
+
+  // created_at is the durable update time.
+  google.protobuf.Timestamp created_at = 2;
+
+  // workflow_run is the current durable projection.
+  WorkflowRun workflow_run = 3;
+}
+
+// ExtensionKind identifies a catalog resource family.
+enum ExtensionKind {
+  // EXTENSION_KIND_UNSPECIFIED does not filter by kind.
+  EXTENSION_KIND_UNSPECIFIED = 0;
+
+  // EXTENSION_KIND_TOOL is a model-visible strict tool.
+  EXTENSION_KIND_TOOL = 1;
+
+  // EXTENSION_KIND_SKILL is a declarative skill.
+  EXTENSION_KIND_SKILL = 2;
+
+  // EXTENSION_KIND_MCP_SERVER is a configured MCP server.
+  EXTENSION_KIND_MCP_SERVER = 3;
+
+  // EXTENSION_KIND_PACK is a verified extension pack.
+  EXTENSION_KIND_PACK = 4;
+
+  // EXTENSION_KIND_INTEGRATION is a native integration.
+  EXTENSION_KIND_INTEGRATION = 5;
+}
+
+// ExtensionSummary is credential-free catalog metadata.
+message ExtensionSummary {
+  // extension_id is the opaque stable identifier.
+  string extension_id = 1;
+
+  // kind identifies the catalog family.
+  ExtensionKind kind = 2;
+
+  // name is the bounded user-visible name.
+  string name = 3;
+
+  // version is the declared semantic or implementation version.
+  string version = 4;
+
+  // enabled states whether the caller can select the extension.
+  bool enabled = 5;
+
+  // trusted states whether configured trust verification succeeded.
+  bool trusted = 6;
+
+  // required_scopes lists public API scopes required to use the extension.
+  repeated string required_scopes = 7;
+}
+
+// GetExtensionRequest selects one extension.
+message GetExtensionRequest {
+  // extension_id is the exact opaque identifier.
+  string extension_id = 1;
+}
+
+// GetExtensionResponse returns one extension summary.
+message GetExtensionResponse {
+  // extension is credential-free catalog metadata.
+  ExtensionSummary extension = 1;
+}
+
+// ListExtensionsRequest selects a stable extension page.
+message ListExtensionsRequest {
+  // kinds limits results by catalog family.
+  repeated ExtensionKind kinds = 1;
+
+  // include_disabled includes unavailable extensions when true.
+  bool include_disabled = 2;
+
+  // page contains the bounded size and opaque continuation token.
+  PageRequest page = 3;
+}
+
+// ListExtensionsResponse returns a page of extension summaries.
+message ListExtensionsResponse {
+  // extensions contains the current page.
+  repeated ExtensionSummary extensions = 1;
+
+  // page identifies the next page.
+  PageResponse page = 2;
+}
+
+// DiagnosticStatus is a bounded non-sensitive diagnostic state.
+enum DiagnosticStatus {
+  // DIAGNOSTIC_STATUS_UNSPECIFIED is never emitted by a conforming server.
+  DIAGNOSTIC_STATUS_UNSPECIFIED = 0;
+
+  // DIAGNOSTIC_STATUS_PASS means the bounded check succeeded.
+  DIAGNOSTIC_STATUS_PASS = 1;
+
+  // DIAGNOSTIC_STATUS_WARN means operation is degraded.
+  DIAGNOSTIC_STATUS_WARN = 2;
+
+  // DIAGNOSTIC_STATUS_FAIL means operator action is required.
+  DIAGNOSTIC_STATUS_FAIL = 3;
+
+  // DIAGNOSTIC_STATUS_NOT_CHECKED means the caller lacks scope or the check was skipped.
+  DIAGNOSTIC_STATUS_NOT_CHECKED = 4;
+}
+
+// DiagnosticSummary is a credential-free scoped operational check.
+message DiagnosticSummary {
+  // area is a stable diagnostic area such as "policy" or "storage".
+  string area = 1;
+
+  // status is the coarse result.
+  DiagnosticStatus status = 2;
+
+  // detail is bounded and excludes paths, credentials, and raw adapter output.
+  string detail = 3;
+}
+
+// ListDiagnosticsRequest selects bounded authorized diagnostics.
+message ListDiagnosticsRequest {
+  // areas limits checks to exact advertised diagnostic areas.
+  repeated string areas = 1;
+}
+
+// ListDiagnosticsResponse returns scoped diagnostic summaries.
+message ListDiagnosticsResponse {
+  // diagnostics contains only areas authorized for the caller.
+  repeated DiagnosticSummary diagnostics = 1;
+}
+
+// DistributionArtifactKind identifies a verified distributable family.
+enum DistributionArtifactKind {
+  // DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED indicates an unrecognized artifact.
+  DISTRIBUTION_ARTIFACT_KIND_UNSPECIFIED = 0;
+
+  // DISTRIBUTION_ARTIFACT_KIND_PACK is a verified extension pack.
+  DISTRIBUTION_ARTIFACT_KIND_PACK = 1;
+
+  // DISTRIBUTION_ARTIFACT_KIND_WORKFLOW is a workflow bundle.
+  DISTRIBUTION_ARTIFACT_KIND_WORKFLOW = 2;
+
+  // DISTRIBUTION_ARTIFACT_KIND_COLLECTION is a signed artifact collection.
+  DISTRIBUTION_ARTIFACT_KIND_COLLECTION = 3;
+}
+
+// DistributionInspection is a bounded verification result.
+message DistributionInspection {
+  // artifact is the opaque inspected artifact.
+  ArtifactReference artifact = 1;
+
+  // kind is the recognized distributable family.
+  DistributionArtifactKind kind = 2;
+
+  // verified states whether integrity and signature checks succeeded.
+  bool verified = 3;
+
+  // trusted states whether the signer satisfies configured trust policy.
+  bool trusted = 4;
+
+  // signer is a bounded public signer identity or fingerprint.
+  optional string signer = 5;
+
+  // summary is bounded and excludes archive content not released by policy.
+  string summary = 6;
+}
+
+// InspectDistributionArtifactRequest selects one uploaded artifact by opaque ID.
+message InspectDistributionArtifactRequest {
+  // artifact_id is the exact opaque identifier.
+  string artifact_id = 1;
+}
+
+// InspectDistributionArtifactResponse returns a bounded verification result.
+message InspectDistributionArtifactResponse {
+  // inspection contains released verification metadata.
+  DistributionInspection inspection = 1;
+}
