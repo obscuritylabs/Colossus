@@ -72,6 +72,9 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         "cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace",
         "release/install-apparmor.sh",
+        "ACTIONLINT_VERSION: 1.7.12",
+        "ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+        "sha256sum --check --strict",
         "--diff-filter=ACDMRTUXB",
         "./scripts/ci/require-pr-results.sh",
     ] {
