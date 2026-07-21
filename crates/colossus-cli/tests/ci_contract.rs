@@ -86,6 +86,12 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
 fn premerge_requires_an_authorized_label_and_representative_platforms() {
     let workflow = workflow("premerge.yml");
     let root = mapping(&workflow, "pre-merge workflow");
+    let permissions = mapping(field(root, "permissions"), "pre-merge permissions");
+    assert_eq!(
+        field(permissions, "pull-requests").as_str(),
+        Some("read"),
+        "eligibility must be able to read the pull request without a broad write grant"
+    );
     let pull_request = mapping(
         field(
             mapping(field(root, "on"), "pre-merge triggers"),
