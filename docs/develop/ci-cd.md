@@ -53,7 +53,7 @@ flowchart LR
 
 | Tier | Trigger | Hosted coverage | Stable gate | Planning ceiling |
 |---|---|---|---|---:|
-| PR validation | Open, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
+| PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
 | Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
 | Release | Push annotated `vX.Y.Z` tag | macOS, Linux-musl, and Windows on x64 and ARM64 | `Colossus release gate` | $4 per release |
 

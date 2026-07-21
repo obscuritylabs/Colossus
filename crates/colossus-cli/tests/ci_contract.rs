@@ -29,10 +29,16 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     let pull_request = mapping(field(triggers, "pull_request"), "pull request trigger");
     assert_eq!(
         strings(field(pull_request, "types"), "PR event types"),
-        ["opened", "ready_for_review", "reopened", "synchronize"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
+        [
+            "edited",
+            "opened",
+            "ready_for_review",
+            "reopened",
+            "synchronize",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
     );
 
     let jobs = jobs(&workflow);
