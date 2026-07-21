@@ -89,9 +89,11 @@ jobs:
             | jq -r '.packages[] | select(.name == "colossus-cli") | .version')
           test "$version" = "$workspace_version"
           grep -F "## [$version]" CHANGELOG.md >/dev/null
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
-          printf 'publish_draft=%s\n' "$publish_draft" >> "$GITHUB_OUTPUT"
+          {
+            printf 'version=%s\n' "$version"
+            printf 'tag=%s\n' "$tag"
+            printf 'publish_draft=%s\n' "$publish_draft"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prepare exact-path AppArmor profile for readiness tests
         run: |

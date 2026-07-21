@@ -223,7 +223,7 @@ jobs:
         run: |
           docker run --detach --rm --name colossus-chroma \
             --publish 127.0.0.1:8000:8000 "${{ matrix.image }}"
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             curl --fail --silent http://127.0.0.1:8000/api/v2/heartbeat >/dev/null && exit 0
             sleep 1
           done
