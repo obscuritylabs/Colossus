@@ -1,0 +1,32 @@
+[package]
+name = "colossus-desktop"
+version = "0.1.0"
+description = "Security-first Tauri desktop interface for Colossus"
+edition = "2024"
+rust-version = "1.96"
+license = "Apache-2.0"
+repository = "https://github.com/obscuritylabs/Colossus"
+
+[workspace]
+
+[lib]
+name = "colossus_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+colossus-sdk = { version = "=0.9.0", path = "../../../crates/colossus-sdk", features = ["daemon", "keyring"] }
+directories = "6.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tauri = { version = "=2.11.5", features = [] }
+tokio = { version = "1.49.0", features = ["sync"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

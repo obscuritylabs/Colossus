@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-chat",
+  "description": "Only the main bundled WebView may use the narrow Colossus chat commands.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-connect-colossus",
+    "allow-connection-status",
+    "allow-create-run",
+    "allow-get-run",
+    "allow-list-runs",
+    "allow-watch-run",
+    "allow-cancel-run",
+    "allow-respond-interaction"
+  ]
+}
