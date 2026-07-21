@@ -41,6 +41,7 @@ jobs:
     steps:
       - name: Verify actor, PR state, and current PR gate
         env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
           LABEL_ACTOR: ${{ github.actor }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -48,7 +49,7 @@ jobs:
           set -euo pipefail
           pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
           test "$(jq -r .draft <<<"$pr")" = false
-          merge_sha=$(jq -r '.merge_commit_sha // empty' <<<"$pr")
+          head_sha=$(jq -r '.head.sha // empty' <<<"$pr")
           permission=$(gh api \
             "repos/$GITHUB_REPOSITORY/collaborators/$LABEL_ACTOR/permission" \
             --jq .permission)
@@ -56,9 +57,10 @@ jobs:
             admin|maintain|write) ;;
             *) echo "actor lacks permission to request full acceptance: $permission" >&2; exit 1 ;;
           esac
-          test -n "$merge_sha"
+          test -n "$head_sha"
+          test "$head_sha" = "$EXPECTED_HEAD_SHA"
           gh api -X GET \
-            "repos/$GITHUB_REPOSITORY/commits/$merge_sha/check-runs?per_page=100" \
+            "repos/$GITHUB_REPOSITORY/commits/$head_sha/check-runs?per_page=100" \
             --jq '[.check_runs[] | select(.name == "Colossus PR gate" and .conclusion == "success")] | length > 0' \
             | grep -Fx true
 
