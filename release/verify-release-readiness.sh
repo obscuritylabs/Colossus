@@ -57,7 +57,7 @@ case $(rustc --version) in
 esac
 
 if [ -e pyproject.toml ] || [ -n "$(git ls-files '*.py')" ]; then
-    printf 'the active cutover tree must not contain the Python package or tracked Python source\n' >&2
+    printf 'the active Rust tree must not contain the retired Python package or tracked Python source\n' >&2
     exit 1
 fi
 
@@ -74,4 +74,4 @@ run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
 run cargo audit -D warnings --file fuzz/Cargo.lock
 
-printf 'local Rust cutover verification passed\n'
+printf 'local release-readiness verification passed\n'

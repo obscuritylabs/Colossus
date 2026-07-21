@@ -1,0 +1,407 @@
+name: Pre-merge acceptance
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+concurrency:
+  group: premerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  invalidate-label:
+    name: Invalidate stale full acceptance
+    if: github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Remove stale ci:full label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api --method DELETE \
+            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/ci%3Afull" \
+            >/dev/null
+          printf 'A new commit invalidated the previous full-acceptance request.\n'
+
+  eligibility:
+    name: Authorize full acceptance
+    if: github.event.action == 'labeled' && github.event.label.name == 'ci:full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify actor, PR state, and current PR gate
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          LABEL_ACTOR: ${{ github.actor }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
+          test "$(jq -r .draft <<<"$pr")" = false
+          head_sha=$(jq -r '.head.sha // empty' <<<"$pr")
+          permission=$(gh api \
+            "repos/$GITHUB_REPOSITORY/collaborators/$LABEL_ACTOR/permission" \
+            --jq .permission)
+          case "$permission" in
+            admin|maintain|write) ;;
+            *) echo "actor lacks permission to request full acceptance: $permission" >&2; exit 1 ;;
+          esac
+          test -n "$head_sha"
+          test "$head_sha" = "$EXPECTED_HEAD_SHA"
+          gh api -X GET \
+            "repos/$GITHUB_REPOSITORY/commits/$head_sha/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "Colossus PR gate" and .conclusion == "success")] | length > 0' \
+            | grep -Fx true
+
+  macos-native:
+    name: Representative macOS native sandbox
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Cache native sandbox and desktop targets
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+          key: premerge-macos-arm
+          cache-targets: false
+      - name: Install locked desktop renderer dependencies
+        working-directory: apps/desktop
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+      - name: Check and build the desktop renderer
+        working-directory: apps/desktop
+        run: |
+          npm run check
+          npm run build
+      - name: Check desktop native formatting and lints
+        run: |
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Test the desktop native bridge
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Build the pruned Tauri application
+        working-directory: apps/desktop
+        run: npm run tauri:build
+      - name: Run native isolation and escape acceptance
+        run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
+
+  windows-runtime:
+    name: Representative Windows runtime and sandbox
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Cache Windows runtime target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          key: premerge-windows-x64
+          cache-targets: false
+      - name: Run authenticated named-pipe and AppContainer escape acceptance
+        run: >-
+          cargo test --locked -p colossus-cli
+          --test worker_smoke --test windows_sandbox -- --nocapture
+
+  fuzz:
+    name: Bounded security fuzzing
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned nightly Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: nightly-2026-07-10
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Cache fuzz target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fuzz -> target
+          cache-targets: false
+      - name: Install cargo-fuzz 0.13.2
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Run bounded security parser fuzzing
+        run: |
+          for target in contracts_json workflow_yaml workflow_condition; do
+            cargo +nightly-2026-07-10 fuzz run "$target" -- \
+              -runs=5000 -max_len=65536 -timeout=10 \
+              -rss_limit_mb=2048 -print_final_stats=1
+          done
+      - name: Upload minimized crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  supply-chain:
+    name: Complete supply-chain policy
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - name: Install checksum-verified pinned supply-chain tools
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
+          fallback: none
+      - name: Enforce production and fuzz dependency policy
+        run: |
+          cargo deny --locked check -A license-not-encountered licenses sources bans
+          cargo deny --locked check -D warnings advisories
+          cargo audit -D warnings --file Cargo.lock
+          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
+          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
+          cargo audit --no-fetch -D warnings --file fuzz/Cargo.lock
+      - name: Enforce standalone desktop dependency policy
+        run: cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --config deny.toml --locked check -A duplicate -A license-not-encountered licenses sources bans
+      - name: Audit standalone desktop vulnerabilities
+        # Tauri's lockfile contains target-specific GTK3 maintenance advisories even
+        # on macOS. cargo-audit still fails on vulnerabilities while reporting those
+        # informational warnings for review.
+        run: cargo audit --no-fetch --file apps/desktop/src-tauri/Cargo.lock
+
+  chroma:
+    name: Chroma ${{ matrix.chroma }} compatibility
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - chroma: "1.5.8"
+            image: chromadb/chroma:1.5.8@sha256:607103123fbd79794e3cd8029e16137031a464551e3a61df77191627a9d23c72
+          - chroma: "1.5.9"
+            image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - name: Start pinned Chroma release
+        run: |
+          docker run --detach --rm --name colossus-chroma \
+            --publish 127.0.0.1:8000:8000 "${{ matrix.image }}"
+          for _ in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:8000/api/v2/heartbeat >/dev/null && exit 0
+            sleep 1
+          done
+          docker logs colossus-chroma
+          exit 1
+      - name: Run live Chroma compatibility suite
+        env:
+          COLOSSUS_CHROMA_URL: http://127.0.0.1:8000
+        run: cargo test --locked -p colossus-memory-chroma --test chroma_live -- --ignored
+      - name: Stop Chroma
+        if: always()
+        run: docker stop colossus-chroma || true
+
+  storage:
+    name: PostgreSQL acceptance
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f
+        env:
+          POSTGRES_DB: colossus
+          POSTGRES_USER: colossus
+          POSTGRES_PASSWORD: colossus-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U colossus -d colossus"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - name: Run PostgreSQL repository and recovery suite
+        env:
+          COLOSSUS_TEST_POSTGRES_URL: postgresql://colossus:colossus-ci-only@127.0.0.1:5432/colossus?sslmode=disable
+          COLOSSUS_TEST_POSTGRES_OUTAGE_URL: postgresql://colossus:credential-must-not-appear@127.0.0.1:1/colossus?sslmode=disable
+        run: cargo test --locked -p colossus-journal-postgres -- --nocapture
+
+  live-security:
+    name: OCI and OPA security acceptance
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+      - name: Install static proxy and Podman prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools podman slirp4netns
+          rustup target add x86_64-unknown-linux-musl
+      - name: Build immutable OCI allowlist proxy
+        id: build-proxy
+        run: |
+          cargo build --locked --release --target x86_64-unknown-linux-musl \
+            --package colossus-sandbox --bin colossus-oci-proxy
+          docker build --file oci-proxy.Dockerfile \
+            --build-arg TARGET_TRIPLE=x86_64-unknown-linux-musl \
+            --tag colossus-oci-proxy:acceptance .
+          echo "image=$(docker image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')" >> "$GITHUB_OUTPUT"
+      - name: Run live Docker OCI escape and recovery suite
+        env:
+          COLOSSUS_OCI_RUNTIME: /usr/bin/docker
+          COLOSSUS_OCI_IMAGE: python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+          COLOSSUS_OCI_PROXY_IMAGE: ${{ steps.build-proxy.outputs.image }}
+        run: |
+          docker pull "$COLOSSUS_OCI_IMAGE"
+          cargo test --locked -p colossus-cli --test oci_sandbox -- --ignored
+      - name: Build immutable Podman acceptance images
+        id: podman-images
+        run: |
+          podman pull python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+          podman build --file oci-proxy.Dockerfile \
+            --build-arg TARGET_TRIPLE=x86_64-unknown-linux-musl \
+            --tag colossus-oci-proxy:acceptance .
+          proxy=$(podman image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')
+          case "$proxy" in sha256:*) ;; *) proxy="sha256:$proxy" ;; esac
+          echo "proxy=$proxy" >> "$GITHUB_OUTPUT"
+      - name: Run live Podman OCI escape and recovery suite
+        env:
+          COLOSSUS_OCI_RUNTIME: /usr/bin/podman
+          COLOSSUS_OCI_IMAGE: python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
+          COLOSSUS_OCI_PROXY_IMAGE: ${{ steps.podman-images.outputs.proxy }}
+        run: cargo test --locked -p colossus-cli --test oci_sandbox -- --ignored
+      - name: Install checksum-verified OPA 1.16.2
+        run: |
+          curl --fail --silent --show-error --location --output /tmp/opa \
+            https://github.com/open-policy-agent/opa/releases/download/v1.16.2/opa_linux_amd64_static
+          echo "4ab4b89c131e6df3fed28b0b164083b6641ad67c86ab4c12d417ecfb93838ef1  /tmp/opa" \
+            | sha256sum --check --strict
+          chmod 0755 /tmp/opa
+      - name: Run live OPA and mTLS suite
+        env:
+          COLOSSUS_OPA_BIN: /tmp/opa
+          COLOSSUS_OPENSSL_BIN: /usr/bin/openssl
+        run: cargo test --locked -p colossus-policy --test opa_live -- --ignored
+
+  gate:
+    name: Colossus pre-merge gate
+    if: always()
+    needs: [eligibility, macos-native, windows-runtime, fuzz, supply-chain, chroma, storage, live-security]
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Check out gate contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-trusted
+      - name: Require every pre-merge acceptance job
+        env:
+          RESULTS: >-
+            eligibility=${{ needs.eligibility.result }}
+            macos=${{ needs['macos-native'].result }}
+            windows=${{ needs['windows-runtime'].result }}
+            fuzz=${{ needs.fuzz.result }}
+            supply-chain=${{ needs['supply-chain'].result }}
+            chroma=${{ needs.chroma.result }}
+            storage=${{ needs.storage.result }}
+            live-security=${{ needs['live-security'].result }}
+        run: |
+          set -eu
+          trusted_gate=.ci-trusted/scripts/ci/require-success.sh
+          if test -f "$trusted_gate"; then
+            # Intentional field splitting passes each bounded name=result token.
+            # shellcheck disable=SC2086
+            sh "$trusted_gate" $RESULTS
+          else
+            for result in $RESULTS; do
+              test "${result#*=}" = success
+            done
+          fi

@@ -158,6 +158,7 @@ impl WorkerServer {
         let runtime = Arc::clone(&self.runtime);
         let replay = Arc::clone(&self.replay);
         let maintenance = Arc::clone(&self.maintenance);
+        let drain_notify = Arc::new(tokio::sync::Notify::new());
         let key = self.authentication_key;
         let mut drain_interval = tokio::time::interval(Duration::from_secs(1));
         drain_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -215,49 +216,13 @@ impl WorkerServer {
         let mut public_failure = None;
         while !stop {
             tokio::select! {
-                accepted = listener.accept() => {
-                    let stream = accepted?;
-                    let runtime = Arc::clone(&runtime);
-                    let replay = Arc::clone(&replay);
-                    let maintenance = Arc::clone(&maintenance);
-                    let shutdown = shutdown_tx.clone();
-                    tasks.spawn(async move {
-                        if handle_connection(
-                            stream,
-                            &key,
-                            runtime.as_ref(),
-                            replay.as_ref(),
-                            maintenance.as_ref(),
-                        )
-                            .await
-                            .is_ok_and(|stopping| stopping)
-                        {
-                            let _ = shutdown.send(()).await;
-                        }
-                    });
-                }
+                biased;
                 signal = tokio::signal::ctrl_c() => {
                     signal?;
                     stop = true;
                 }
                 requested = shutdown_rx.recv() => {
                     stop = requested.is_some();
-                }
-                _ = drain_interval.tick() => {
-                    if draining.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-                        let runtime = Arc::clone(&runtime);
-                        let draining = Arc::clone(&draining);
-                        let maintenance = Arc::clone(&maintenance);
-                        tasks.spawn(async move {
-                            let _ = drain_once(runtime.as_ref(), maintenance.as_ref()).await;
-                            draining.store(false, Ordering::Release);
-                        });
-                    }
-                }
-                completed = tasks.join_next(), if !tasks.is_empty() => {
-                    if let Some(result) = completed {
-                        result.map_err(|error| WorkerError::Protocol(error.to_string()))?;
-                    }
                 }
                 failure = public_error_rx.recv(), if public_error_open => {
                     match failure {
@@ -267,6 +232,40 @@ impl WorkerServer {
                         }
                         None => public_error_open = false,
                     }
+                }
+                _ = drain_notify.notified() => {
+                    spawn_drain_if_idle(&mut tasks, &runtime, &maintenance, &draining);
+                }
+                _ = drain_interval.tick() => {
+                    spawn_drain_if_idle(&mut tasks, &runtime, &maintenance, &draining);
+                }
+                completed = tasks.join_next(), if !tasks.is_empty() => {
+                    if let Some(result) = completed {
+                        result.map_err(|error| WorkerError::Protocol(error.to_string()))?;
+                    }
+                }
+                accepted = listener.accept() => {
+                    let stream = accepted?;
+                    let runtime = Arc::clone(&runtime);
+                    let replay = Arc::clone(&replay);
+                    let maintenance = Arc::clone(&maintenance);
+                    let drain_notify = Arc::clone(&drain_notify);
+                    let shutdown = shutdown_tx.clone();
+                    tasks.spawn(async move {
+                        if handle_connection(
+                            stream,
+                            &key,
+                            runtime.as_ref(),
+                            replay.as_ref(),
+                            maintenance.as_ref(),
+                            drain_notify.as_ref(),
+                        )
+                            .await
+                            .is_ok_and(|stopping| stopping)
+                        {
+                            let _ = shutdown.send(()).await;
+                        }
+                    });
                 }
             }
         }
@@ -322,12 +321,43 @@ async fn await_public_server_shutdown(
     }
 }
 
+fn spawn_drain_if_idle(
+    tasks: &mut tokio::task::JoinSet<()>,
+    runtime: &Arc<Runtime>,
+    maintenance: &Arc<tokio::sync::Mutex<()>>,
+    draining: &Arc<AtomicBool>,
+) {
+    if draining
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let runtime = Arc::clone(runtime);
+    let draining = Arc::clone(draining);
+    let maintenance = Arc::clone(maintenance);
+    tasks.spawn(async move {
+        let _ = drain_once(runtime.as_ref(), maintenance.as_ref()).await;
+        draining.store(false, Ordering::Release);
+    });
+}
+
+pub(super) fn operation_requests_drain(operation: &WorkerOperation) -> bool {
+    matches!(
+        operation,
+        WorkerOperation::AgentQueue { .. }
+            | WorkerOperation::AgentRequeue { .. }
+            | WorkerOperation::WorkflowStart { queued: true, .. }
+    )
+}
+
 async fn handle_connection<S>(
     mut stream: S,
     key: &[u8; 32],
     runtime: &Runtime,
     replay: &Mutex<ReplayGuard>,
     maintenance: &tokio::sync::Mutex<()>,
+    drain_notify: &tokio::sync::Notify,
 ) -> Result<bool, WorkerError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -374,6 +404,7 @@ where
         None,
     )?;
     let request_id = request.request_id.clone();
+    let requests_drain = operation_requests_drain(&request.operation);
     match request.operation {
         WorkerOperation::RunModelControlled {
             role,
@@ -576,6 +607,9 @@ where
                 },
             };
             write_signed_frame(&mut stream, key, &request_id, 1, content).await?;
+            if succeeded && requests_drain {
+                drain_notify.notify_one();
+            }
             Ok(shutdown && succeeded)
         }
     }

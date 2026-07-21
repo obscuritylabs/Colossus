@@ -61,6 +61,38 @@ fn workflow_schedule_operation_round_trips_the_worker_contract() {
 }
 
 #[test]
+fn durable_queue_operations_wake_the_background_drain() {
+    for operation in [
+        WorkerOperation::AgentQueue {
+            session_id: "session".into(),
+            task: "task".into(),
+            role: "primary".into(),
+        },
+        WorkerOperation::AgentRequeue {
+            job_id: "job".into(),
+        },
+        WorkerOperation::WorkflowStart {
+            name: "workflow".into(),
+            version: "1.0.0".into(),
+            inputs_source: "{}".into(),
+            queued: true,
+        },
+    ] {
+        assert!(server::operation_requests_drain(&operation));
+    }
+
+    assert!(!server::operation_requests_drain(
+        &WorkerOperation::WorkflowStart {
+            name: "workflow".into(),
+            version: "1.0.0".into(),
+            inputs_source: "{}".into(),
+            queued: false,
+        }
+    ));
+    assert!(!server::operation_requests_drain(&WorkerOperation::Ping));
+}
+
+#[test]
 fn workflow_webhook_operation_round_trips_without_secret_material() {
     let encoded = serde_json::to_value(WorkerOperation::WorkflowWebhookCreate {
         webhook_id: "github-main".into(),

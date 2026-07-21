@@ -311,8 +311,12 @@ fn zensical_site_is_pinned_searchable_and_complete() {
     );
     assert_eq!(
         mermaid_diagrams + 1,
-        7,
+        8,
         "the maintained product and architecture diagram set changed unexpectedly"
+    );
+    assert!(
+        read("docs/develop/ci-cd.md").contains("Tiered CI and release flow diagram"),
+        "the CI/CD guide must include its accessible tier-flow diagram"
     );
 }
 
@@ -337,17 +341,30 @@ fn pinned_container_wrapper_and_pages_workflow_share_one_build_interface() {
     let workflow = read(".github/workflows/docs.yml");
     for required in [
         "./scripts/docs-site build",
-        "actions/configure-pages@v5",
-        "actions/upload-artifact@v4",
-        "actions/upload-pages-artifact@v4",
-        "actions/deploy-pages@v4",
+        "actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0",
+        "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0",
+        "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0",
         "pages: write",
-        "pull_request:",
         "branches: [\"main\"]",
     ] {
         assert!(
             workflow.contains(required),
             "documentation workflow is missing {required:?}"
+        );
+    }
+    assert!(
+        !workflow.contains("pull_request:"),
+        "documentation deployment must not duplicate PR validation"
+    );
+    let pr = read(".github/workflows/pr.yml");
+    for required in [
+        "Documentation PR build",
+        "./scripts/docs-site build",
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+    ] {
+        assert!(
+            pr.contains(required),
+            "PR documentation is missing {required:?}"
         );
     }
     for forbidden in [
