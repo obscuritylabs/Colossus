@@ -75,6 +75,7 @@ nav = [
     { "Overview" = "develop/index.md" },
     { "Contributing" = "develop/contributing.md" },
     { "Source setup and test tiers" = "develop/setup-testing.md" },
+    { "Tiered CI/CD" = "develop/ci-cd.md" },
     { "Architecture overview" = "develop/architecture.md" },
     { "Rust crate structure" = "develop/crate-structure.md" },
     { "Runtime and ports" = "develop/runtime-ports.md" },

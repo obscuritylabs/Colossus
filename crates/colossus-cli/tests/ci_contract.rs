@@ -1,710 +1,398 @@
-//! Repository-level contract for the mandatory Rust cutover matrices.
+//! Repository contracts for cost-bounded PR and pre-merge validation.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, fs, path::Path};
+mod support;
 
-const REQUIRED_CUTOVER_JOBS: &[&str] = &[
-    "rust-preflight",
-    "rust",
-    "rust-native-sandbox",
-    "rust-windows-runtime",
-    "rust-fuzz",
-    "rust-supply-chain",
-    "rust-release-smoke",
-    "rust-live-chroma",
-    "rust-live-storage",
-    "rust-live-security",
-];
-
-const REQUIRED_PULL_REQUEST_JOBS: &[&str] = &[
-    "rust-preflight",
-    "rust",
-    "rust-native-sandbox",
-    "rust-windows-runtime",
-    "rust-fuzz",
-    "rust-supply-chain",
-    "rust-live-chroma",
-    "rust-live-storage",
-    "rust-live-security",
-];
-
-const FULL_VALIDATION_CONDITION: &str = "${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}";
-
-fn repository_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repository root")
-}
-
-fn workflow() -> Value {
-    let path = repository_root().join(".github/workflows/ci.yml");
-    let source = fs::read_to_string(&path).expect("read CI workflow");
-    serde_saphyr::from_str(&source).expect("CI workflow must be valid YAML")
-}
+use std::{collections::BTreeSet, fs, process::Command};
+use support::{field, job, jobs, mapping, named_step, repository_root, strings, workflow};
 
 #[test]
-fn canonical_source_and_release_binary_is_colossus() {
-    let manifest = fs::read_to_string(repository_root().join("crates/colossus-cli/Cargo.toml"))
-        .expect("read CLI manifest");
-    assert!(manifest.contains("name = \"colossus\""));
-    assert!(!manifest.contains("colossus-rs"));
-
-    let workflow = fs::read_to_string(repository_root().join(".github/workflows/ci.yml"))
-        .expect("read CI workflow");
-    assert!(workflow.contains("--package colossus-cli --bin colossus"));
-    assert!(!workflow.contains("colossus-rs"));
-}
-
-#[test]
-fn linux_user_namespace_profile_is_exact_hardened_and_accepted() {
-    let template = fs::read_to_string(repository_root().join("release/colossus.apparmor.in"))
-        .expect("read AppArmor template");
-    assert!(template.contains("profile colossus \"@COLOSSUS_BINARY@\""));
-    assert!(template.contains("  userns,"));
-    assert!(
-        !template.contains("/**/colossus"),
-        "the user-namespace grant must never attach by a replaceable basename glob"
-    );
-
-    let installer = fs::read_to_string(repository_root().join("release/install-apparmor.sh"))
-        .expect("read AppArmor installer");
-    for required in [
-        "[ ! -L \"$requested_binary\" ]",
-        "realpath -e",
-        "stat -c '%u'",
-        "stat -c '%g'",
-        "0$mode & 020",
-        "0$mode & 002",
-        "apparmor_parser -r",
-        "/etc/apparmor.d/colossus",
+fn workflows_are_split_and_the_catch_all_is_removed() {
+    let root = repository_root().join(".github/workflows");
+    assert!(!root.join("ci.yml").exists());
+    for name in [
+        "pr.yml",
+        "premerge.yml",
+        "release.yml",
+        "docs.yml",
+        "docs-external-links.yml",
     ] {
-        assert!(
-            installer.contains(required),
-            "AppArmor installer is missing hardening contract {required:?}"
-        );
-    }
-
-    let workflow = fs::read_to_string(repository_root().join(".github/workflows/ci.yml"))
-        .expect("read CI workflow");
-    for required in [
-        "Prepare exact-path AppArmor profile for workspace tests",
-        "Install exact-path AppArmor profile for Linux acceptance",
-        "/usr/local/libexec/colossus-ci/colossus",
-        "COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus",
-        "release/install-apparmor.sh \"$stage/install-apparmor.sh\"",
-        "release/colossus.apparmor.in \"$stage/colossus.apparmor.in\"",
-    ] {
-        assert!(
-            workflow.contains(required),
-            "CI/release workflow is missing AppArmor contract {required:?}"
-        );
+        workflow(name);
     }
 }
 
 #[test]
-fn release_bundle_publisher_identity_is_self_consistent() {
-    let source = fs::read_to_string(repository_root().join("release/bundle-publisher.json"))
-        .expect("read release bundle publisher identity");
-    let identity: Value = serde_json::from_str(&source).expect("publisher identity JSON");
-    let identity = mapping(&identity, "publisher identity");
-    assert_eq!(field(identity, "publisher").as_str(), Some("colossus"));
-    assert_eq!(field(identity, "algorithm").as_str(), Some("ed25519"));
+fn pr_workflow_selects_only_the_required_validation_tier() {
+    let workflow = workflow("pr.yml");
+    let root = mapping(&workflow, "PR workflow");
+    let triggers = mapping(field(root, "on"), "PR triggers");
+    assert_eq!(triggers.keys().collect::<Vec<_>>(), [&"pull_request"]);
+    let pull_request = mapping(field(triggers, "pull_request"), "pull request trigger");
     assert_eq!(
-        field(identity, "purpose").as_str(),
-        Some("offline-bundle-manifest-signing")
-    );
-    let public_key = BASE64
-        .decode(
-            field(identity, "public_key")
-                .as_str()
-                .expect("publisher public_key"),
-        )
-        .expect("publisher public_key must be base64");
-    assert_eq!(public_key.len(), 32, "Ed25519 public keys contain 32 bytes");
-    let key_id = hex::encode(Sha256::digest(public_key));
-    assert_eq!(
-        field(identity, "key_id").as_str(),
-        Some(key_id.as_str()),
-        "key_id must be the SHA-256 digest of the decoded public key"
-    );
-}
-
-#[test]
-fn oci_proxy_build_context_contains_only_the_static_proxy_artifact() {
-    let dockerignore = fs::read_to_string(repository_root().join(".dockerignore"))
-        .expect("read Docker ignore rules");
-    let rules = dockerignore.lines().collect::<BTreeSet<_>>();
-
-    assert!(
-        !rules.contains("target/"),
-        "target/ prevents negated children from being included"
-    );
-    for required in [
-        "target/*",
-        "!target/x86_64-unknown-linux-musl/",
-        "target/x86_64-unknown-linux-musl/*",
-        "!target/x86_64-unknown-linux-musl/release/",
-        "target/x86_64-unknown-linux-musl/release/*",
-        "!target/x86_64-unknown-linux-musl/release/colossus-oci-proxy",
-    ] {
-        assert!(
-            rules.contains(required),
-            "Docker context is missing exact proxy rule {required:?}"
-        );
-    }
-}
-
-#[test]
-fn local_cutover_verifier_is_complete_and_tool_version_pinned() {
-    let script = fs::read_to_string(repository_root().join("release/verify-local-cutover.sh"))
-        .expect("read local cutover verifier");
-    for required in [
-        "rustc 1.96.0",
-        "cargo-deny 0.20.2",
-        "cargo-audit 0.22.2",
-        "cargo fmt --all -- --check",
-        "cargo clippy --locked --workspace --all-targets -- -D warnings",
-        "cargo test --locked --workspace",
-        "cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets",
-        "cargo deny --locked check",
-        "cargo audit -D warnings",
-        "--file Cargo.lock",
-        "--file fuzz/Cargo.lock",
-        "git ls-files '*.py'",
-    ] {
-        assert!(
-            script.contains(required),
-            "local cutover verifier is missing {required:?}"
-        );
-    }
-}
-
-#[test]
-fn local_test_tiers_and_sccache_wrapper_are_explicit_and_optional() {
-    let cargo_config = fs::read_to_string(repository_root().join(".cargo/config.toml"))
-        .expect("read Cargo configuration");
-    assert!(cargo_config.contains("test-fast = \"test --workspace --lib\""));
-    assert!(cargo_config.contains("test-full = \"test --workspace\""));
-    assert!(
-        !cargo_config.contains("rustc-wrapper"),
-        "the local compiler cache must remain opt-in"
-    );
-
-    let wrapper = fs::read_to_string(repository_root().join("scripts/cargo-sccache"))
-        .expect("read local sccache wrapper");
-    for required in [
-        "#!/bin/sh",
-        "command -v sccache",
-        "RUSTC_WRAPPER",
-        "CARGO_INCREMENTAL",
-        "SCCACHE_BASEDIRS",
-        "SCCACHE_CACHE_SIZE",
-        "exec \"$cargo_bin\" \"$@\"",
-    ] {
-        assert!(
-            wrapper.contains(required),
-            "local sccache wrapper is missing {required:?}"
-        );
-    }
-
-    let agent_guide =
-        fs::read_to_string(repository_root().join("AGENTS.md")).expect("read AGENTS.md");
-    for required in [
-        "cargo test -p <changed-crate> --lib",
-        "cargo test-fast",
-        "cargo test-full",
-        "./scripts/cargo-sccache",
-        "never replace the full completion",
-    ] {
-        assert!(
-            agent_guide.contains(required),
-            "agent test-tier guidance is missing {required:?}"
-        );
-    }
-}
-
-fn mapping<'a>(value: &'a Value, context: &str) -> &'a Map<String, Value> {
-    value
-        .as_object()
-        .unwrap_or_else(|| panic!("{context} must be a mapping"))
-}
-
-fn field<'a>(mapping: &'a Map<String, Value>, name: &str) -> &'a Value {
-    mapping
-        .get(name)
-        .unwrap_or_else(|| panic!("missing field {name}"))
-}
-
-fn strings(value: &Value, context: &str) -> BTreeSet<String> {
-    value
-        .as_array()
-        .unwrap_or_else(|| panic!("{context} must be a sequence"))
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .unwrap_or_else(|| panic!("{context} entries must be strings"))
-                .to_owned()
-        })
-        .collect()
-}
-
-fn jobs(workflow: &Value) -> &Map<String, Value> {
-    mapping(field(mapping(workflow, "workflow"), "jobs"), "jobs")
-}
-
-fn job<'a>(jobs: &'a Map<String, Value>, name: &str) -> &'a Map<String, Value> {
-    mapping(field(jobs, name), name)
-}
-
-fn matrix_includes<'a>(jobs: &'a Map<String, Value>, name: &str) -> &'a Vec<Value> {
-    let strategy = mapping(field(job(jobs, name), "strategy"), "strategy");
-    let matrix = mapping(field(strategy, "matrix"), "matrix");
-    field(matrix, "include")
-        .as_array()
-        .expect("matrix include must be a sequence")
-}
-
-fn named_step<'a>(job: &'a Map<String, Value>, name: &str) -> &'a Map<String, Value> {
-    field(job, "steps")
-        .as_array()
-        .expect("job steps must be a sequence")
-        .iter()
-        .map(|step| mapping(step, "job step"))
-        .find(|step| field(step, "name").as_str() == Some(name))
-        .unwrap_or_else(|| panic!("missing job step {name}"))
-}
-
-fn has_named_step(job: &Map<String, Value>, name: &str) -> bool {
-    field(job, "steps")
-        .as_array()
-        .expect("job steps must be a sequence")
-        .iter()
-        .map(|step| mapping(step, "job step"))
-        .any(|step| field(step, "name").as_str() == Some(name))
-}
-
-#[test]
-fn actions_cost_policy_runs_full_validation_only_before_merge_or_on_manual_dispatch() {
-    let workflow = workflow();
-    let root = mapping(&workflow, "workflow");
-    let triggers = mapping(field(root, "on"), "workflow triggers");
-    assert_eq!(
-        triggers.keys().map(String::as_str).collect::<BTreeSet<_>>(),
-        ["merge_group", "pull_request", "push", "workflow_dispatch"]
-            .into_iter()
-            .collect()
-    );
-    let push = mapping(field(triggers, "push"), "push trigger");
-    assert_eq!(
-        strings(field(push, "branches"), "push branches"),
-        ["main"].into_iter().map(str::to_owned).collect()
-    );
-
-    let jobs = jobs(&workflow);
-    assert_eq!(
-        field(job(jobs, "rust-quick"), "if").as_str(),
-        Some("${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}")
-    );
-    assert_eq!(
-        field(job(jobs, "rust-preflight"), "if").as_str(),
-        Some(FULL_VALIDATION_CONDITION)
-    );
-    assert_eq!(
-        field(job(jobs, "rust"), "if").as_str(),
-        Some(FULL_VALIDATION_CONDITION)
-    );
-    assert!(
-        !jobs.contains_key("rust-portability"),
-        "standalone macOS/Windows portability duplicates native matrix runners"
-    );
-    assert!(
-        !has_named_step(
-            job(jobs, "rust-native-sandbox"),
-            "Compile every target on the native platform"
-        ),
-        "native acceptance must not compile the whole workspace before its focused test"
-    );
-    assert!(
-        !has_named_step(
-            job(jobs, "rust-windows-runtime"),
-            "Compile every target on the native platform"
-        ),
-        "Windows acceptance must not compile the whole workspace before its focused tests"
-    );
-    assert_eq!(
-        field(job(jobs, "rust-release-smoke"), "if").as_str(),
-        Some("${{ github.event_name == 'workflow_dispatch' }}"),
-        "six-target packaging must run only for explicit release validation"
-    );
-}
-
-#[test]
-fn full_matrix_fans_out_after_a_cached_fast_preflight() {
-    let workflow = workflow();
-    let root = mapping(&workflow, "workflow");
-    let jobs = jobs(&workflow);
-    let preflight = job(jobs, "rust-preflight");
-
-    assert_eq!(field(preflight, "timeout-minutes").as_u64(), Some(5));
-    for step in [
-        "Check formatting",
-        "Check independent fuzz harness formatting",
-        "Validate locked workspace metadata",
-        "Validate locked fuzz metadata",
-    ] {
-        assert!(
-            has_named_step(preflight, step),
-            "preflight is missing {step}"
-        );
-    }
-
-    for heavy_job in REQUIRED_CUTOVER_JOBS
-        .iter()
-        .copied()
-        .filter(|name| *name != "rust-preflight")
-    {
-        assert_eq!(
-            field(job(jobs, heavy_job), "needs").as_str(),
-            Some("rust-preflight"),
-            "{heavy_job} must start immediately after the fast preflight"
-        );
-    }
-
-    let workflow_wrapper = root
-        .get("env")
-        .and_then(Value::as_object)
-        .and_then(|environment| environment.get("RUSTC_WRAPPER"))
-        .and_then(Value::as_str);
-    assert_ne!(
-        workflow_wrapper,
-        Some("sccache"),
-        "the compiler wrapper must not leak into jobs that do not install it"
-    );
-    for compile_job_name in [
-        "rust-quick",
-        "rust",
-        "rust-native-sandbox",
-        "rust-windows-runtime",
-        "rust-fuzz",
-        "rust-release-smoke",
-        "rust-live-chroma",
-        "rust-live-storage",
-        "rust-live-security",
-    ] {
-        let compile_job = job(jobs, compile_job_name);
-        let environment = mapping(field(compile_job, "env"), "compile job environment");
-        assert_eq!(
-            field(environment, "SCCACHE_GHA_ENABLED").as_str(),
-            Some("true")
-        );
-        assert_eq!(
-            environment.get("RUSTC_WRAPPER").and_then(Value::as_str),
-            None,
-            "{compile_job_name} must not require sccache before its optional setup succeeds"
-        );
-        let cache = named_step(compile_job, "Enable shared compiler cache");
-        assert_eq!(
-            field(cache, "uses").as_str(),
-            Some("mozilla-actions/sccache-action@v0.0.10"),
-            "{compile_job_name} must use the pinned shared compiler cache action"
-        );
-        assert_eq!(field(cache, "id").as_str(), Some("sccache"));
-        assert_eq!(field(cache, "continue-on-error").as_bool(), Some(true));
-        let activation = named_step(compile_job, "Activate shared compiler cache");
-        assert_eq!(
-            field(activation, "if").as_str(),
-            Some("steps.sccache.outcome == 'success'")
-        );
-        assert!(
-            field(activation, "run")
-                .as_str()
-                .is_some_and(|run| run.contains("RUSTC_WRAPPER=sccache")),
-            "{compile_job_name} must activate sccache only after successful setup"
-        );
-    }
-    for (job_name, job_definition) in jobs {
-        let job = mapping(job_definition, job_name);
-        let wrapper = job
-            .get("env")
-            .and_then(Value::as_object)
-            .and_then(|environment| environment.get("RUSTC_WRAPPER"))
-            .and_then(Value::as_str);
-        assert_ne!(
-            wrapper,
-            Some("sccache"),
-            "{job_name} must not make the optional compiler cache a job prerequisite"
-        );
-    }
-
-    let install = named_step(
-        job(jobs, "rust-supply-chain"),
-        "Install checksum-verified pinned supply-chain tools",
-    );
-    assert_eq!(
-        field(install, "uses").as_str(),
-        Some("taiki-e/install-action@v2.83.2")
-    );
-    let inputs = mapping(field(install, "with"), "supply-chain installer inputs");
-    assert_eq!(
-        field(inputs, "tool").as_str(),
-        Some("cargo-deny@0.20.2,cargo-audit@0.22.2")
-    );
-    assert_eq!(field(inputs, "fallback").as_str(), Some("none"));
-
-    let fuzz_policy = named_step(
-        job(jobs, "rust-supply-chain"),
-        "Enforce fuzz dependency policy",
-    );
-    let fuzz_policy_commands = field(fuzz_policy, "run")
-        .as_str()
-        .expect("fuzz dependency policy must be a script");
-    assert!(
-        fuzz_policy_commands.contains("cargo audit --no-fetch -D warnings --file fuzz/Cargo.lock"),
-        "the fuzz audit must reuse the database fetched by the production audit"
-    );
-}
-
-#[test]
-fn pull_request_gate_fails_closed_without_scheduling_release_artifacts() {
-    let workflow = workflow();
-    let jobs = jobs(&workflow);
-    let gate = job(jobs, "rust-pr-gate");
-    assert_eq!(
-        field(gate, "if").as_str(),
-        Some(
-            "${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}"
-        )
-    );
-    assert_eq!(
-        strings(field(gate, "needs"), "pull request needs"),
-        REQUIRED_PULL_REQUEST_JOBS
-            .iter()
-            .map(|job| (*job).to_owned())
-            .collect()
-    );
-    assert!(!REQUIRED_PULL_REQUEST_JOBS.contains(&"rust-release-smoke"));
-    let script = field(
-        mapping(
-            &field(gate, "steps").as_array().expect("gate steps")[0],
-            "pull request gate step",
-        ),
-        "run",
-    )
-    .as_str()
-    .expect("pull request gate script");
-    assert!(script.contains("details.get(\"result\") != \"success\""));
-    assert!(script.contains("raise SystemExit(bool(failed))"));
-}
-
-#[test]
-fn cutover_gate_fails_closed_over_every_required_rust_job() {
-    let workflow = workflow();
-    let jobs = jobs(&workflow);
-    let gate = job(jobs, "rust-cutover-gate");
-    assert_eq!(
-        field(gate, "if").as_str(),
-        Some("${{ always() && github.event_name == 'workflow_dispatch' }}"),
-        "the release gate must run after every dependency on explicit validation"
-    );
-    assert_eq!(
-        strings(field(gate, "needs"), "cutover needs"),
-        REQUIRED_CUTOVER_JOBS
-            .iter()
-            .map(|job| (*job).to_owned())
-            .collect(),
-        "the cutover gate must aggregate exactly the mandatory Rust jobs"
-    );
-
-    let steps = field(gate, "steps")
-        .as_array()
-        .expect("cutover steps must be a sequence");
-    let environment = mapping(
-        field(mapping(&steps[0], "cutover step"), "env"),
-        "cutover environment",
-    );
-    assert_eq!(
-        environment.len(),
-        1,
-        "the complete needs object must be checked as one immutable result set"
-    );
-    assert_eq!(
-        field(environment, "RUST_ACCEPTANCE_RESULTS").as_str(),
-        Some("${{ toJSON(needs) }}"),
-        "the gate must inspect every declared dependency result"
-    );
-    let script = field(mapping(&steps[0], "cutover step"), "run")
-        .as_str()
-        .expect("cutover script");
-    assert!(script.contains("details.get(\"result\") != \"success\""));
-    assert!(script.contains("raise SystemExit(bool(failed))"));
-}
-
-#[test]
-fn hosted_platform_and_release_matrices_cover_every_supported_architecture() {
-    let workflow = workflow();
-    let jobs = jobs(&workflow);
-
-    let native = job(jobs, "rust-native-sandbox");
-    let native_matrix = mapping(
-        field(
-            mapping(field(native, "strategy"), "native strategy"),
-            "matrix",
-        ),
-        "native matrix",
-    );
-    assert_eq!(
-        strings(field(native_matrix, "runner"), "native runners"),
-        [
-            "macos-15-intel",
-            "macos-14",
-            "ubuntu-24.04",
-            "ubuntu-24.04-arm"
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect()
-    );
-
-    let windows = job(jobs, "rust-windows-runtime");
-    let windows_matrix = mapping(
-        field(
-            mapping(field(windows, "strategy"), "Windows strategy"),
-            "matrix",
-        ),
-        "Windows matrix",
-    );
-    assert_eq!(
-        strings(field(windows_matrix, "runner"), "Windows runners"),
-        ["windows-2025", "windows-11-arm"]
+        strings(field(pull_request, "types"), "PR event types"),
+        ["opened", "ready_for_review", "reopened", "synchronize"]
             .into_iter()
             .map(str::to_owned)
             .collect()
     );
 
-    let releases: BTreeSet<(String, String, String)> = matrix_includes(jobs, "rust-release-smoke")
-        .iter()
-        .map(|entry| {
-            let entry = mapping(entry, "release matrix entry");
-            (
-                field(entry, "runner")
-                    .as_str()
-                    .expect("release runner")
-                    .into(),
-                field(entry, "target")
-                    .as_str()
-                    .expect("release target")
-                    .into(),
-                field(entry, "archive")
-                    .as_str()
-                    .expect("release archive")
-                    .into(),
-            )
-        })
-        .collect();
+    let jobs = jobs(&workflow);
     assert_eq!(
-        releases,
+        jobs.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         [
-            ("macos-15-intel", "x86_64-apple-darwin", "tar.gz"),
-            ("macos-14", "aarch64-apple-darwin", "tar.gz"),
-            ("ubuntu-24.04", "x86_64-unknown-linux-musl", "tar.gz"),
-            ("ubuntu-24.04-arm", "aarch64-unknown-linux-musl", "tar.gz"),
-            ("windows-2025", "x86_64-pc-windows-msvc", "zip"),
-            ("windows-11-arm", "aarch64-pc-windows-msvc", "zip"),
+            "classify",
+            "dependency-policy",
+            "documentation",
+            "gate",
+            "rust"
         ]
         .into_iter()
-        .map(|(runner, target, archive)| (runner.into(), target.into(), archive.into()))
         .collect()
     );
-}
-
-#[test]
-fn bounded_fuzzing_executes_with_the_pinned_nightly_toolchain() {
-    let workflow = workflow();
-    let jobs = jobs(&workflow);
-    let fuzz = job(jobs, "rust-fuzz");
-    let install = named_step(fuzz, "Install pinned nightly Rust");
-    let toolchain = mapping(field(install, "with"), "nightly install inputs");
     assert_eq!(
-        field(toolchain, "toolchain").as_str(),
-        Some("nightly-2026-07-10")
+        field(job(jobs, "rust"), "runs-on").as_str(),
+        Some("ubuntu-latest")
     );
+    assert_eq!(
+        field(job(jobs, "documentation"), "if").as_str(),
+        Some("needs.classify.outputs.docs_required == 'true'")
+    );
+    assert_eq!(
+        field(job(jobs, "gate"), "name").as_str(),
+        Some("Colossus PR gate")
+    );
+    assert_eq!(field(job(jobs, "gate"), "if").as_str(), Some("always()"));
 
-    let run = field(
-        named_step(fuzz, "Run bounded security parser fuzzing"),
-        "run",
-    )
-    .as_str()
-    .expect("fuzz run script");
-    assert!(run.contains("cargo +nightly-2026-07-10 fuzz run"));
-    for bound in [
-        "-runs=5000",
-        "-max_len=65536",
-        "-timeout=10",
-        "-rss_limit_mb=2048",
+    let source = fs::read_to_string(repository_root().join(".github/workflows/pr.yml"))
+        .expect("read PR workflow");
+    for forbidden in ["macos-", "windows-", "ubuntu-24.04-arm", "merge_group"] {
+        assert!(!source.contains(forbidden), "PR tier contains {forbidden}");
+    }
+    for required in [
+        "./scripts/check_crate_roots.sh",
+        "cargo clippy --locked --workspace --all-targets -- -D warnings",
+        "cargo test --locked --workspace",
+        "release/install-apparmor.sh",
+        "--diff-filter=ACDMRTUXB",
+        "./scripts/ci/require-pr-results.sh",
     ] {
-        assert!(run.contains(bound), "fuzz run must retain {bound}");
+        assert!(source.contains(required), "PR tier is missing {required}");
     }
 }
 
 #[test]
-fn unix_release_install_smoke_is_compatible_with_macos_bash() {
-    let workflow = workflow();
+fn premerge_requires_an_authorized_label_and_representative_platforms() {
+    let workflow = workflow("premerge.yml");
+    let root = mapping(&workflow, "pre-merge workflow");
+    let pull_request = mapping(
+        field(
+            mapping(field(root, "on"), "pre-merge triggers"),
+            "pull_request",
+        ),
+        "pre-merge pull request trigger",
+    );
+    assert_eq!(
+        strings(field(pull_request, "types"), "pre-merge event types"),
+        ["labeled", "synchronize"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+
     let jobs = jobs(&workflow);
-    let release = job(jobs, "rust-release-smoke");
-    let run = field(
-        named_step(release, "Install packaged Unix artifact offline"),
-        "run",
-    )
-    .as_str()
-    .expect("Unix install smoke script");
-    assert!(run.contains("packages=(\"$extract\"/colossus-*)"));
-    assert!(run.contains("test -d \"$package\""));
-    assert!(
-        !run.contains("mapfile"),
-        "macOS ships Bash 3.2 without mapfile"
+    assert_eq!(
+        field(job(jobs, "macos-native"), "runs-on").as_str(),
+        Some("macos-14")
+    );
+    assert_eq!(
+        field(job(jobs, "windows-runtime"), "runs-on").as_str(),
+        Some("windows-2025")
+    );
+    assert_eq!(
+        field(job(jobs, "gate"), "name").as_str(),
+        Some("Colossus pre-merge gate")
+    );
+    for name in [
+        "macos-native",
+        "windows-runtime",
+        "fuzz",
+        "supply-chain",
+        "chroma",
+        "storage",
+        "live-security",
+    ] {
+        assert_eq!(
+            field(job(jobs, name), "needs").as_str(),
+            Some("eligibility"),
+            "{name} must not allocate a runner before eligibility"
+        );
+    }
+
+    let source = fs::read_to_string(repository_root().join(".github/workflows/premerge.yml"))
+        .expect("read pre-merge workflow");
+    for required in [
+        "github.event.label.name == 'ci:full'",
+        "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER",
+        "jq -r .draft",
+        "merge_sha=$(jq",
+        "collaborators/$LABEL_ACTOR/permission",
+        "Colossus PR gate",
+        "pull-requests: write",
+        "github.event.action == 'synchronize'",
+        "--method DELETE",
+        "./scripts/ci/require-success.sh",
+    ] {
+        assert!(
+            source.contains(required),
+            "pre-merge tier is missing {required}"
+        );
+    }
+    for forbidden in ["macos-15-intel", "windows-11-arm", "ubuntu-24.04-arm"] {
+        assert!(
+            !source.contains(forbidden),
+            "pre-merge tier contains {forbidden}"
+        );
+    }
+    assert!(!source.contains(">/dev/null 2>&1 || true"));
+
+    let concurrency = mapping(field(root, "concurrency"), "pre-merge concurrency");
+    assert_eq!(
+        field(concurrency, "cancel-in-progress").as_bool(),
+        Some(true)
     );
 }
 
 #[test]
-fn conventional_commit_checker_is_python_free_and_preserves_the_contract() {
+fn change_classifier_and_gates_fail_closed() {
+    let status = Command::new(repository_root().join("scripts/ci/test-contracts.sh"))
+        .status()
+        .expect("run CI shell contract tests");
+    assert!(status.success());
+}
+
+#[test]
+fn every_workflow_action_is_immutably_pinned() {
+    let workflows = repository_root().join(".github/workflows");
+    for entry in fs::read_dir(workflows).expect("read workflows") {
+        let path = entry.expect("workflow entry").path();
+        if path.extension().and_then(|value| value.to_str()) != Some("yml") {
+            continue;
+        }
+        let source = fs::read_to_string(&path).expect("read workflow");
+        for line in source.lines() {
+            let Some(action) = line.trim().strip_prefix("uses: ") else {
+                continue;
+            };
+            let reference = action
+                .split_once('@')
+                .unwrap_or_else(|| panic!("action is missing a reference in {path:?}: {action}"))
+                .1
+                .split_whitespace()
+                .next()
+                .expect("action reference");
+            assert_eq!(reference.len(), 40, "action is not SHA-pinned: {action}");
+            assert!(
+                reference.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "action is not SHA-pinned: {action}"
+            );
+            assert!(
+                action.contains(" # "),
+                "action pin is missing its audited release comment: {action}"
+            );
+        }
+    }
+}
+
+#[test]
+fn workflows_have_bounded_jobs_and_deterministic_concurrency() {
+    for name in [
+        "docs-external-links.yml",
+        "docs.yml",
+        "pr.yml",
+        "premerge.yml",
+        "release.yml",
+    ] {
+        let workflow = workflow(name);
+        let root = mapping(&workflow, name);
+        let concurrency = mapping(field(root, "concurrency"), "workflow concurrency");
+        assert!(field(concurrency, "group").as_str().is_some());
+        assert!(field(concurrency, "cancel-in-progress").is_boolean());
+        for (job_name, value) in jobs(&workflow) {
+            let job = mapping(value, job_name);
+            assert!(
+                field(job, "timeout-minutes").as_u64().is_some(),
+                "{name}:{job_name} is missing a timeout"
+            );
+        }
+    }
+}
+
+#[test]
+fn tracked_ruleset_starts_in_evaluation_and_has_no_bypass() {
+    let path = repository_root().join(".github/rulesets/main.json");
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(path).expect("read ruleset"))
+            .expect("parse ruleset");
+    let ruleset = mapping(&value, "main ruleset");
+    assert_eq!(field(ruleset, "enforcement").as_str(), Some("evaluate"));
+    assert_eq!(
+        field(ruleset, "bypass_actors").as_array().map(Vec::len),
+        Some(0)
+    );
+    let source = value.to_string();
+    for required in [
+        "refs/heads/main",
+        "required_review_thread_resolution",
+        "strict_required_status_checks_policy",
+        "Colossus PR gate",
+        "Colossus pre-merge gate",
+        "non_fast_forward",
+        "deletion",
+    ] {
+        assert!(source.contains(required), "ruleset is missing {required}");
+    }
+
+    let bootstrap =
+        fs::read_to_string(repository_root().join("scripts/ci/configure-repository.sh"))
+            .expect("read ruleset bootstrap");
+    for required in [
+        "ci:full",
+        "evaluate",
+        "enforcement=active",
+        "gh label create",
+    ] {
+        assert!(
+            bootstrap.contains(required),
+            "bootstrap is missing {required}"
+        );
+    }
+}
+
+#[test]
+fn documentation_deployment_no_longer_duplicates_pr_validation() {
+    let workflow = workflow("docs.yml");
+    let triggers = mapping(
+        field(mapping(&workflow, "docs workflow"), "on"),
+        "docs triggers",
+    );
+    assert!(!triggers.contains_key("pull_request"));
+    assert!(triggers.contains_key("push"));
+    assert_eq!(triggers.len(), 1, "documentation deploys only from main");
+}
+
+#[test]
+fn local_test_tiers_and_sccache_wrapper_remain_optional() {
+    let cargo_config = fs::read_to_string(repository_root().join(".cargo/config.toml"))
+        .expect("read Cargo configuration");
+    assert!(cargo_config.contains("test-fast = \"test --workspace --lib\""));
+    assert!(cargo_config.contains("test-full = \"test --workspace\""));
+    assert!(!cargo_config.contains("rustc-wrapper"));
+
+    let wrapper = fs::read_to_string(repository_root().join("scripts/cargo-sccache"))
+        .expect("read local sccache wrapper");
+    for required in [
+        "RUSTC_WRAPPER",
+        "SCCACHE_BASEDIRS",
+        "exec \"$cargo_bin\" \"$@\"",
+    ] {
+        assert!(wrapper.contains(required));
+    }
+}
+
+#[test]
+fn conventional_commit_checker_remains_python_free() {
     let checker = repository_root().join("scripts/check_conventional_commit.sh");
     for valid in [
-        "feat: add tui themes",
-        "fix(tui): clear approved prompt",
-        "security!: tighten approval policy",
+        "ci: split validation tiers",
+        "fix(ci): fail closed on stale labels",
+        "security!: tighten release policy",
         "Merge branch 'main' into feature",
     ] {
-        let mut child = std::process::Command::new(&checker)
+        let mut child = Command::new(&checker)
             .arg("--stdin")
             .stdin(std::process::Stdio::piped())
             .spawn()
-            .expect("start Conventional Commit checker");
+            .expect("start commit checker");
         use std::io::Write as _;
         child
             .stdin
             .as_mut()
             .expect("checker stdin")
             .write_all(valid.as_bytes())
-            .expect("write valid subject");
+            .expect("write valid title");
         assert!(child.wait().expect("wait for checker").success(), "{valid}");
     }
 
-    let mut child = std::process::Command::new(&checker)
+    let mut invalid = Command::new(&checker)
         .arg("--stdin")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .expect("start Conventional Commit checker");
+        .expect("start commit checker");
     use std::io::Write as _;
-    child
+    invalid
         .stdin
         .as_mut()
         .expect("checker stdin")
-        .write_all(b"Update docs")
-        .expect("write invalid subject");
-    assert!(!child.wait().expect("wait for checker").success());
+        .write_all(b"Update CI")
+        .expect("write invalid title");
+    assert!(!invalid.wait().expect("wait for checker").success());
+}
+
+#[test]
+fn bounded_fuzzing_uses_the_pinned_nightly_and_limits() {
+    let workflow = workflow("premerge.yml");
+    let fuzz = job(jobs(&workflow), "fuzz");
+    let install = named_step(fuzz, "Install pinned nightly Rust");
+    assert_eq!(
+        field(
+            mapping(field(install, "with"), "nightly inputs"),
+            "toolchain"
+        )
+        .as_str(),
+        Some("nightly-2026-07-10")
+    );
+    let run = field(
+        named_step(fuzz, "Run bounded security parser fuzzing"),
+        "run",
+    )
+    .as_str()
+    .expect("fuzz command");
+    for required in [
+        "cargo +nightly-2026-07-10 fuzz run",
+        "-runs=5000",
+        "-max_len=65536",
+        "-timeout=10",
+        "-rss_limit_mb=2048",
+    ] {
+        assert!(run.contains(required), "fuzz command is missing {required}");
+    }
+}
+
+#[test]
+fn gate_steps_call_the_tracked_fail_closed_scripts() {
+    let pr = workflow("pr.yml");
+    let premerge = workflow("premerge.yml");
+    assert!(
+        field(
+            named_step(
+                job(jobs(&pr), "gate"),
+                "Require every selected PR validation"
+            ),
+            "run"
+        )
+        .as_str()
+        .is_some_and(|run| run.contains("require-pr-results.sh"))
+    );
+    assert!(
+        field(
+            named_step(
+                job(jobs(&premerge), "gate"),
+                "Require every pre-merge acceptance job"
+            ),
+            "run"
+        )
+        .as_str()
+        .is_some_and(|run| run.contains("require-success.sh"))
+    );
 }
