@@ -66,3 +66,8 @@ if $script_dir/require-success.sh rust=success windows=cancelled >/dev/null 2>&1
     printf 'cancelled result unexpectedly satisfied the aggregate gate\n' >&2
     exit 1
 fi
+
+if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
+    printf 'skipped eligibility unexpectedly satisfied the pre-merge gate\n' >&2
+    exit 1
+fi

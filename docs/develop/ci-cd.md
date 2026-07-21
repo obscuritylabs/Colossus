@@ -101,6 +101,11 @@ Do not push a new commit while acceptance is running. A `synchronize` event canc
 old run and removes `ci:full`; the old result cannot authorize the new head. After the new
 PR gate passes, resolve any new review and apply the label again.
 
+The `Colossus pre-merge gate` sentinel runs on every pre-merge workflow event. A new
+commit or a label event other than `ci:full` therefore leaves a failing gate without
+allocating the acceptance runners. Only a successful `ci:full` run on the current head
+replaces that sentinel result; a skipped gate can never satisfy the ruleset.
+
 ## Failure path
 
 - If classification is wrong or empty, fix the classifier or path contract; do not force

@@ -114,6 +114,11 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         field(job(jobs, "gate"), "name").as_str(),
         Some("Colossus pre-merge gate")
     );
+    assert_eq!(
+        field(job(jobs, "gate"), "if").as_str(),
+        Some("always()"),
+        "the required gate must fail closed on synchronize and non-ci:full label events"
+    );
     for name in [
         "macos-native",
         "windows-runtime",

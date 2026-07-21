@@ -334,7 +334,7 @@ jobs:
 
   gate:
     name: Colossus pre-merge gate
-    if: always() && github.event.action == 'labeled' && github.event.label.name == 'ci:full'
+    if: always()
     needs: [eligibility, macos-native, windows-runtime, fuzz, supply-chain, chroma, storage, live-security]
     runs-on: ubuntu-slim
     timeout-minutes: 5
