@@ -1,0 +1,292 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to validate without publishing, for example v0.9.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release request
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    outputs:
+      version: ${{ steps.request.outputs.version }}
+      tag: ${{ steps.request.outputs.tag }}
+      publish_draft: ${{ steps.request.outputs.publish_draft }}
+    steps:
+      - name: Check out complete release history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          key: release-readiness
+          cache-targets: false
+
+      - name: Install checksum-verified release tools
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
+          fallback: none
+
+      - name: Validate tag, version, changelog, and ancestry
+        id: request
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = push ]; then
+            tag=$REF_NAME
+            test "$(git cat-file -t "$tag")" = tag
+            git fetch origin main
+            tag_commit=$(git rev-list -n 1 "$tag")
+            git merge-base --is-ancestor "$tag_commit" origin/main
+            publish_draft=true
+          else
+            tag=$DISPATCH_VERSION
+            publish_draft=false
+          fi
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          version=${tag#v}
+          workspace_version=$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "colossus-cli") | .version')
+          test "$version" = "$workspace_version"
+          grep -F "## [$version]" CHANGELOG.md >/dev/null
+          {
+            printf 'version=%s\n' "$version"
+            printf 'tag=%s\n' "$tag"
+            printf 'publish_draft=%s\n' "$publish_draft"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prepare exact-path AppArmor profile for readiness tests
+        run: |
+          cargo build --locked -p colossus-cli --bin colossus
+          sudo install -d -o root -g root -m 0755 /usr/local/libexec/colossus-ci
+          sudo install -o root -g root -m 0755 \
+            target/debug/colossus /usr/local/libexec/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/local/libexec/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus' >> "$GITHUB_ENV"
+
+      - name: Run local release-readiness verifier
+        run: ./release/verify-release-readiness.sh
+
+  artifacts:
+    name: Release ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      COLOSSUS_RELEASE_JOURNAL_KEY: "5555555555555555555555555555555555555555555555555555555555555555"
+      COLOSSUS_RELEASE_SIGNING_KEY: "6666666666666666666666666666666666666666666666666666666666666666"
+      COLOSSUS_BUNDLE_JOURNAL_KEY: "9999999999999999999999999999999999999999999999999999999999999999"
+      COLOSSUS_BUNDLE_CHECKPOINT_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      COLOSSUS_BUNDLE_SIGNING_SEED: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: zip
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust 1.96 and release target
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.target }}
+
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+
+      - name: Cache release target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          key: release-${{ matrix.target }}
+          cache-targets: false
+
+      - name: Install Linux release and sandbox prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools file
+          cargo build --locked -p colossus-cli --bin colossus
+          sudo install -d -o root -g root -m 0755 /usr/local/libexec/colossus-ci
+          sudo install -o root -g root -m 0755 \
+            target/debug/colossus /usr/local/libexec/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/local/libexec/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus' >> "$GITHUB_ENV"
+
+      - name: Run Unix native sandbox acceptance
+        if: runner.os != 'Windows'
+        run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
+
+      - name: Run Windows runtime and sandbox acceptance
+        if: runner.os == 'Windows'
+        run: >-
+          cargo test --locked -p colossus-cli
+          --test worker_smoke --test windows_sandbox -- --nocapture
+
+      - name: Build locked release binary
+        run: >-
+          cargo build --locked --release --target ${{ matrix.target }}
+          --package colossus-cli --bin colossus
+
+      - name: Prove static Linux linkage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          file target/${{ matrix.target }}/release/colossus | tee binary-file.txt
+          grep -Eq 'static(-pie)? linked|statically linked' binary-file.txt
+
+      - name: Package and verify Unix release
+        if: runner.os != 'Windows'
+        run: ./scripts/ci/release-unix.sh "${{ matrix.target }}"
+
+      - name: Package and verify Windows release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/release-windows.ps1 -Target "${{ matrix.target }}"
+
+      - name: Upload release archive and checksum
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-${{ matrix.target }}
+          path: dist/colossus-*-${{ matrix.target }}.${{ matrix.archive }}*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  gate:
+    name: Colossus release gate
+    if: always()
+    needs: [validate, artifacts]
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Check out gate contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require release readiness and all six artifacts
+        run: >-
+          ./scripts/ci/require-success.sh
+          validate=${{ needs.validate.result }}
+          artifacts=${{ needs.artifacts.result }}
+
+  draft-release:
+    name: Create draft GitHub Release
+    if: needs.validate.outputs.publish_draft == 'true' && needs.gate.result == 'success'
+    needs: [validate, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: colossus-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify complete release asset set
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 12
+          for checksum in dist/*.sha256; do
+            (cd dist && sha256sum --check --strict "$(basename "$checksum")")
+          done
+
+      - name: Create or update human-approved draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          existing=$RUNNER_TEMP/existing-release.json
+          api_error=$RUNNER_TEMP/existing-release.error
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            >"$existing" 2>"$api_error"; then
+            jq -e '.draft == true' "$existing" >/dev/null || {
+              echo "refusing to modify an already published release" >&2
+              exit 1
+            }
+            while IFS= read -r existing_asset; do
+              test -f "dist/$existing_asset" || {
+                echo "refusing to retain unexpected draft asset: $existing_asset" >&2
+                exit 1
+              }
+            done < <(jq -r '.assets[].name' "$existing")
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          elif grep -F '(HTTP 404)' "$api_error" >/dev/null; then
+            gh release create "$RELEASE_TAG" dist/* \
+              --draft --verify-tag --generate-notes \
+              --title "Colossus $RELEASE_TAG"
+          else
+            cat "$api_error" >&2
+            exit 1
+          fi

@@ -60,6 +60,12 @@ test loop.
     cargo test --workspace
     ```
 
+These local completion gates are distinct from hosted CI tiers. Every pull-request update
+receives selected Linux/documentation validation, while reviewed final heads receive the
+representative macOS, Windows, and live-security tier only when a writer applies
+`ci:full`. Complete x64/ARM64 coverage is reserved for release tags. See
+[Tiered CI/CD](ci-cd.md).
+
 For cold builds or work across multiple worktrees, opt into the local compilation cache:
 
 ```bash
@@ -82,8 +88,9 @@ and then executes the binary directly.
 
 ## Expected result
 
-The workspace builds, focused tests provide a short feedback loop, and the full gates
-complete without formatting drift, warnings, or test failures.
+The workspace builds, focused tests provide a short feedback loop, and the local
+completion gates finish without formatting drift, warnings, or test failures. Hosted
+pre-merge acceptance remains a separate final-PR requirement.
 
 ## Verification
 

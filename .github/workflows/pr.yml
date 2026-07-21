@@ -1,0 +1,236 @@
+name: PR validation
+
+on:
+  pull_request:
+    types: [edited, opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: Classify PR changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust_required: ${{ steps.changes.outputs.rust_required }}
+      docs_required: ${{ steps.changes.outputs.docs_required }}
+      dependency_required: ${{ steps.changes.outputs.dependency_required }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check out trusted CI contracts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-trusted
+
+      - name: Validate Conventional Commit title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | sh .ci-trusted/scripts/check_conventional_commit.sh --stdin
+
+      - name: Test proposed CI classification and gate contracts
+        run: ./scripts/ci/test-contracts.sh
+
+      - name: Classify changed paths
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t changed_paths < <(git diff --name-only --diff-filter=ACDMRTUXB "$BASE_SHA" "$HEAD_SHA")
+          trusted_classifier=.ci-trusted/scripts/ci/classify-changes.sh
+          if test -f "$trusted_classifier"; then
+            classification=$(sh "$trusted_classifier" "${changed_paths[@]}")
+          else
+            # Bootstrap safely while this tier first lands. Future pull requests use
+            # the immutable classifier from their base revision.
+            classification='rust_required=true
+          docs_required=true
+          dependency_required=true'
+          fi
+          printf '%s\n' "$classification"
+          printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
+
+      - name: Install checksum-verified workflow linter
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          install_dir="$RUNNER_TEMP/actionlint"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir" actionlint
+          printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Lint GitHub Actions workflows
+        run: actionlint
+
+  rust:
+    name: Rust PR validation
+    if: needs.classify.outputs.rust_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          cache-targets: false
+
+      - name: Check formatting and repository structure
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+          ./scripts/check_crate_roots.sh
+
+      - name: Validate locked metadata
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo metadata --locked --manifest-path fuzz/Cargo.toml --no-deps --format-version 1 >/dev/null
+
+      - name: Run Clippy with warnings denied
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Prepare exact-path AppArmor profile for workspace tests
+        run: |
+          cargo build --locked -p colossus-cli --bin colossus
+          sudo install -d -o root -g root -m 0755 /usr/local/libexec/colossus-ci
+          sudo install -o root -g root -m 0755 \
+            target/debug/colossus /usr/local/libexec/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/local/libexec/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus' >> "$GITHUB_ENV"
+
+      - name: Run complete workspace tests
+        run: cargo test --locked --workspace
+
+      - name: Lint locked fuzz harnesses on stable
+        run: cargo clippy --locked --manifest-path fuzz/Cargo.toml --bins -- -D warnings
+
+  documentation:
+    name: Documentation PR build
+    if: needs.classify.outputs.docs_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build and verify documentation
+        run: ./scripts/docs-site build
+
+      - name: Upload bounded documentation preview
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: documentation-preview-pr-${{ github.event.pull_request.number }}
+          path: site
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  dependency-policy:
+    name: Dependency policy
+    if: needs.classify.outputs.dependency_required == 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+
+      - name: Install checksum-verified pinned supply-chain tools
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
+          fallback: none
+
+      - name: Enforce production and fuzz dependency policy
+        run: |
+          cargo deny --locked check -A license-not-encountered licenses sources bans
+          cargo deny --locked check -D warnings advisories
+          cargo audit -D warnings --file Cargo.lock
+          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
+          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
+          cargo audit --no-fetch -D warnings --file fuzz/Cargo.lock
+
+  gate:
+    name: Colossus PR gate
+    if: always()
+    needs: [classify, rust, documentation, dependency-policy]
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Check out gate contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-trusted
+
+      - name: Require every selected PR validation
+        env:
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          RUST_REQUIRED: ${{ needs.classify.outputs.rust_required }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          DOCS_REQUIRED: ${{ needs.classify.outputs.docs_required }}
+          DOCS_RESULT: ${{ needs.documentation.result }}
+          DEPENDENCY_REQUIRED: ${{ needs.classify.outputs.dependency_required }}
+          DEPENDENCY_RESULT: ${{ needs['dependency-policy'].result }}
+        run: |
+          set -eu
+          trusted_gate=.ci-trusted/scripts/ci/require-pr-results.sh
+          if test -f "$trusted_gate"; then
+            sh "$trusted_gate" \
+              "$CLASSIFY_RESULT" \
+              "$RUST_REQUIRED" "$RUST_RESULT" \
+              "$DOCS_REQUIRED" "$DOCS_RESULT" \
+              "$DEPENDENCY_REQUIRED" "$DEPENDENCY_RESULT"
+          else
+            # The base predates the contract, so the classifier selected every
+            # validation tier. Require each one explicitly for this bootstrap run.
+            test "$CLASSIFY_RESULT" = success
+            test "$RUST_REQUIRED:$RUST_RESULT" = true:success
+            test "$DOCS_REQUIRED:$DOCS_RESULT" = true:success
+            test "$DEPENDENCY_REQUIRED:$DEPENDENCY_RESULT" = true:success
+          fi
