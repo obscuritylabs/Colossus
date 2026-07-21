@@ -82,7 +82,14 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         "ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
         "sha256sum --check --strict",
         "--diff-filter=ACDMRTUXB",
-        "./scripts/ci/require-pr-results.sh",
+        "ref: ${{ github.event.pull_request.base.sha }}",
+        "path: .ci-trusted",
+        ".ci-trusted/scripts/ci/classify-changes.sh",
+        ".ci-trusted/scripts/ci/require-pr-results.sh",
+        "rust_required=true",
+        "docs_required=true",
+        "dependency_required=true",
+        "true:success",
     ] {
         assert!(source.contains(required), "PR tier is missing {required}");
     }
@@ -162,7 +169,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "pull-requests: write",
         "github.event.action == 'synchronize'",
         "--method DELETE",
-        "./scripts/ci/require-success.sh",
+        ".ci-trusted/scripts/ci/require-success.sh",
     ] {
         assert!(
             source.contains(required),
@@ -393,9 +400,24 @@ fn bounded_fuzzing_uses_the_pinned_nightly_and_limits() {
 }
 
 #[test]
-fn gate_steps_call_the_tracked_fail_closed_scripts() {
+fn pull_request_decisions_use_base_revision_contracts() {
     let pr = workflow("pr.yml");
     let premerge = workflow("premerge.yml");
+
+    for (workflow, job_name, step_name) in [
+        (&pr, "classify", "Check out trusted CI contracts"),
+        (&pr, "gate", "Check out gate contract"),
+        (&premerge, "gate", "Check out gate contract"),
+    ] {
+        let checkout = named_step(job(jobs(workflow), job_name), step_name);
+        let inputs = mapping(field(checkout, "with"), "trusted checkout inputs");
+        assert_eq!(
+            field(inputs, "ref").as_str(),
+            Some("${{ github.event.pull_request.base.sha }}")
+        );
+        assert_eq!(field(inputs, "path").as_str(), Some(".ci-trusted"));
+    }
+
     assert!(
         field(
             named_step(
@@ -405,7 +427,7 @@ fn gate_steps_call_the_tracked_fail_closed_scripts() {
             "run"
         )
         .as_str()
-        .is_some_and(|run| run.contains("require-pr-results.sh"))
+        .is_some_and(|run| run.contains(".ci-trusted/scripts/ci/require-pr-results.sh"))
     );
     assert!(
         field(
@@ -416,6 +438,15 @@ fn gate_steps_call_the_tracked_fail_closed_scripts() {
             "run"
         )
         .as_str()
-        .is_some_and(|run| run.contains("require-success.sh"))
+        .is_some_and(|run| run.contains(".ci-trusted/scripts/ci/require-success.sh"))
     );
+
+    let classify = field(
+        named_step(job(jobs(&pr), "classify"), "Classify changed paths"),
+        "run",
+    )
+    .as_str()
+    .expect("classification command");
+    assert!(classify.contains(".ci-trusted/scripts/ci/classify-changes.sh"));
+    assert!(!classify.contains("./scripts/ci/classify-changes.sh"));
 }

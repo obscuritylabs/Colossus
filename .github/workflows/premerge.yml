@@ -344,14 +344,29 @@ jobs:
     steps:
       - name: Check out gate contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-trusted
       - name: Require every pre-merge acceptance job
-        run: >-
-          ./scripts/ci/require-success.sh
-          eligibility=${{ needs.eligibility.result }}
-          macos=${{ needs['macos-native'].result }}
-          windows=${{ needs['windows-runtime'].result }}
-          fuzz=${{ needs.fuzz.result }}
-          supply-chain=${{ needs['supply-chain'].result }}
-          chroma=${{ needs.chroma.result }}
-          storage=${{ needs.storage.result }}
-          live-security=${{ needs['live-security'].result }}
+        env:
+          RESULTS: >-
+            eligibility=${{ needs.eligibility.result }}
+            macos=${{ needs['macos-native'].result }}
+            windows=${{ needs['windows-runtime'].result }}
+            fuzz=${{ needs.fuzz.result }}
+            supply-chain=${{ needs['supply-chain'].result }}
+            chroma=${{ needs.chroma.result }}
+            storage=${{ needs.storage.result }}
+            live-security=${{ needs['live-security'].result }}
+        run: |
+          set -eu
+          trusted_gate=.ci-trusted/scripts/ci/require-success.sh
+          if test -f "$trusted_gate"; then
+            # Intentional field splitting passes each bounded name=result token.
+            # shellcheck disable=SC2086
+            sh "$trusted_gate" $RESULTS
+          else
+            for result in $RESULTS; do
+              test "${result#*=}" = success
+            done
+          fi

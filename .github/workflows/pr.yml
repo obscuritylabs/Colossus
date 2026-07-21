@@ -26,12 +26,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check out trusted CI contracts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-trusted
+
       - name: Validate Conventional Commit title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: printf '%s\n' "$PR_TITLE" | ./scripts/check_conventional_commit.sh --stdin
+        run: printf '%s\n' "$PR_TITLE" | sh .ci-trusted/scripts/check_conventional_commit.sh --stdin
 
-      - name: Test CI classification and gate contracts
+      - name: Test proposed CI classification and gate contracts
         run: ./scripts/ci/test-contracts.sh
 
       - name: Classify changed paths
@@ -43,7 +49,16 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t changed_paths < <(git diff --name-only --diff-filter=ACDMRTUXB "$BASE_SHA" "$HEAD_SHA")
-          classification=$(./scripts/ci/classify-changes.sh "${changed_paths[@]}")
+          trusted_classifier=.ci-trusted/scripts/ci/classify-changes.sh
+          if test -f "$trusted_classifier"; then
+            classification=$(sh "$trusted_classifier" "${changed_paths[@]}")
+          else
+            # Bootstrap safely while this tier first lands. Future pull requests use
+            # the immutable classifier from their base revision.
+            classification='rust_required=true
+          docs_required=true
+          dependency_required=true'
+          fi
           printf '%s\n' "$classification"
           printf '%s\n' "$classification" >> "$GITHUB_OUTPUT"
 
@@ -189,6 +204,9 @@ jobs:
     steps:
       - name: Check out gate contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-trusted
 
       - name: Require every selected PR validation
         env:
@@ -199,9 +217,20 @@ jobs:
           DOCS_RESULT: ${{ needs.documentation.result }}
           DEPENDENCY_REQUIRED: ${{ needs.classify.outputs.dependency_required }}
           DEPENDENCY_RESULT: ${{ needs['dependency-policy'].result }}
-        run: >-
-          ./scripts/ci/require-pr-results.sh
-          "$CLASSIFY_RESULT"
-          "$RUST_REQUIRED" "$RUST_RESULT"
-          "$DOCS_REQUIRED" "$DOCS_RESULT"
-          "$DEPENDENCY_REQUIRED" "$DEPENDENCY_RESULT"
+        run: |
+          set -eu
+          trusted_gate=.ci-trusted/scripts/ci/require-pr-results.sh
+          if test -f "$trusted_gate"; then
+            sh "$trusted_gate" \
+              "$CLASSIFY_RESULT" \
+              "$RUST_REQUIRED" "$RUST_RESULT" \
+              "$DOCS_REQUIRED" "$DOCS_RESULT" \
+              "$DEPENDENCY_REQUIRED" "$DEPENDENCY_RESULT"
+          else
+            # The base predates the contract, so the classifier selected every
+            # validation tier. Require each one explicitly for this bootstrap run.
+            test "$CLASSIFY_RESULT" = success
+            test "$RUST_REQUIRED:$RUST_RESULT" = true:success
+            test "$DOCS_REQUIRED:$DOCS_RESULT" = true:success
+            test "$DEPENDENCY_REQUIRED:$DEPENDENCY_RESULT" = true:success
+          fi

@@ -69,6 +69,12 @@ skip Rust. Code, configuration, build, release, CI, renamed unknown paths, and u
 new paths run the complete Linux Rust gate. Dependency manifests and lockfiles also run
 license, source, ban, and advisory policy.
 
+Pull-request classification, title validation, and aggregate gate decisions execute
+the contract checked out from the PR base revision, never the proposed replacement
+from the PR head. While these contracts first land, their one-time bootstrap fallback
+selects every PR tier and requires every result to succeed. This prevents a CI-changing
+PR from suppressing validation by weakening its own classifier or gate scripts.
+
 The Rust job combines Conventional Commit validation, formatting, crate-root structure,
 locked metadata, Clippy, exact AppArmor installation, the complete workspace suite, and
 fuzz-harness linting. It does not allocate macOS or Windows runners. The aggregate gate
