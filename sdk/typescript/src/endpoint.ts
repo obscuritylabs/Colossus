@@ -4,7 +4,8 @@ const PIN_PATTERN = /^[0-9a-f]{64}$/u;
 const INSTANCE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const ENDPOINT_PATTERN =
-  /^https:\/\/(?:127\.0\.0\.1|\[::1\]):[1-9][0-9]{0,4}\/?$/u;
+  /^https:\/\/(?:127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})\/?$/u;
+const TARGET_PATTERN = /^(?:127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})$/u;
 const CERTIFICATE_PEM_PATTERN =
   /^\s*-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----\s*$/u;
 const ALLOWED_KEYS = new Set([
@@ -137,7 +138,8 @@ function normalizeLoopbackUrl(value: string): {
   endpoint: URL;
   target: string;
 } {
-  if (!ENDPOINT_PATTERN.test(value)) {
+  const endpointMatch = ENDPOINT_PATTERN.exec(value);
+  if (endpointMatch === null) {
     throw new TypeError(
       "endpoint must be a canonical credential-free https literal-loopback URL",
     );
@@ -166,10 +168,7 @@ function normalizeLoopbackUrl(value: string): {
   if (hostname !== "127.0.0.1" && hostname !== "::1") {
     throw new TypeError("endpoint host must be a literal loopback address");
   }
-  if (endpoint.port === "") {
-    throw new TypeError("endpoint must contain an explicit port");
-  }
-  const port = Number(endpoint.port);
+  const port = Number(endpointMatch[1]);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new TypeError("endpoint port is outside the valid range");
   }
@@ -254,11 +253,18 @@ export function validateEndpointDescriptor(
   if (!(descriptor.endpoint instanceof URL)) {
     throw new TypeError("endpoint descriptor is inconsistent");
   }
+  const targetMatch = TARGET_PATTERN.exec(descriptor.target);
+  if (targetMatch === null) {
+    throw new TypeError("endpoint descriptor is inconsistent");
+  }
   const validated = parseEndpointDescriptor({
     schema_version: descriptor.schemaVersion,
     api_version: descriptor.apiVersion,
     instance_id: descriptor.instanceId,
-    endpoint: descriptor.endpoint.href,
+    // URL intentionally normalizes an explicit default HTTPS port away. Rebuild
+    // the already-bounded wire value from the canonical connection target so a
+    // parsed :443 descriptor remains revalidatable.
+    endpoint: `https://${descriptor.target}`,
     pid: descriptor.pid,
     certificate_sha256: descriptor.certificateSha256,
   });

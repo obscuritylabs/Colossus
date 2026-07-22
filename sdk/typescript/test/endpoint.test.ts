@@ -39,6 +39,20 @@ test("descriptor accepts only a pinned literal loopback endpoint", () => {
   assert.equal(descriptor.pid, 4242);
 });
 
+test("descriptor preserves an explicit default HTTPS port in its target", () => {
+  for (const endpoint of ["https://127.0.0.1:443", "https://[::1]:443/"]) {
+    const descriptor = parseEndpointDescriptor({
+      ...validDescriptor,
+      endpoint,
+    });
+    assert.equal(
+      descriptor.target,
+      endpoint.includes("[::1]") ? "[::1]:443" : "127.0.0.1:443",
+    );
+    assert.doesNotThrow(() => validateEndpointDescriptor(descriptor));
+  }
+});
+
 test("descriptor rejects remote, plaintext, and credential-bearing endpoints", () => {
   for (const endpoint of [
     "https://example.com:43119",
