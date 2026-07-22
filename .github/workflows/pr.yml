@@ -332,7 +332,14 @@ jobs:
           assert contains("/generated/colossus/api/v1alpha1/py.typed"), names
           assert not any("/generated/google/" in name for name in names), names
           PY
-          PYTHONPATH="$wheel" .codegen/bin/python - <<'PY'
+          smoke_root=$(mktemp -d "${RUNNER_TEMP}/colossus-python-wheel.XXXXXX")
+          .codegen/bin/python -m pip install \
+            --disable-pip-version-check \
+            --no-deps \
+            --no-index \
+            --target "$smoke_root" \
+            "$wheel"
+          PYTHONPATH="$smoke_root" .codegen/bin/python - <<'PY'
           from colossus.api.v1alpha1.agent_run_pb2 import RunResult, RunStateChanged, RunUpdate
           from colossus_sdk import decode_colossus_rpc_error, is_terminal_run_update
           from google.rpc.status_pb2 import Status
