@@ -12,6 +12,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    if cli.worker_required && !matches!(cli.command, Command::Tui { .. }) {
+        return Err("--worker-required is only valid with the TUI".into());
+    }
     if matches!(cli.command, Command::SandboxHelper) {
         colossus_sandbox::run_helper_stdio()?;
         return Ok(());
@@ -157,6 +160,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         &cli.command,
         cli.approval_mode,
         cli.no_alt_screen,
+        cli.worker_required,
     )
     .await?
     {

@@ -22,6 +22,9 @@ pub(super) struct Cli {
     /// Preserve terminal scrollback by using Ratatui's inline viewport.
     #[arg(long, global = true)]
     pub(super) no_alt_screen: bool,
+    /// Require the TUI to attach to an existing authenticated worker.
+    #[arg(long, global = true, hide = true)]
+    pub(super) worker_required: bool,
     #[command(subcommand)]
     pub(super) command: Command,
 }

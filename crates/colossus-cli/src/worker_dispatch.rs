@@ -7,13 +7,22 @@ pub(super) async fn dispatch_to_worker_if_active(
     command: &Command,
     approval_mode: Option<ApprovalMode>,
     no_alt_screen: bool,
+    worker_required: bool,
 ) -> Result<bool, Box<dyn Error>> {
     let Some(client) = WorkerClient::discover(config)? else {
+        if worker_required {
+            return Err(
+                "the desktop TUI requires an existing authenticated worker for this workspace"
+                    .into(),
+            );
+        }
         return Ok(false);
     };
     match client.ping().await {
         Ok(status) => validate_worker_workspace(&status, workspace)?,
-        Err(error) if worker_probe_allows_embedded_fallback(&error) => return Ok(false),
+        Err(error) if worker_probe_allows_embedded_fallback(&error, worker_required) => {
+            return Ok(false);
+        }
         Err(error) => return Err(error.into()),
     }
     if approval_mode.is_some() {

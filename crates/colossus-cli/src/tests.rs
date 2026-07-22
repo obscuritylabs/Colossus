@@ -27,10 +27,16 @@ fn sandbox_helper_is_detected_before_the_async_runtime_starts() {
 #[test]
 fn embedded_fallback_requires_an_absent_worker_not_a_busy_worker() {
     assert!(worker_probe_allows_embedded_fallback(
-        &colossus_worker::WorkerError::Unavailable("worker-endpoint".into())
+        &colossus_worker::WorkerError::Unavailable("worker-endpoint".into()),
+        false,
     ));
     assert!(!worker_probe_allows_embedded_fallback(
-        &colossus_worker::WorkerError::Busy("worker-endpoint".into())
+        &colossus_worker::WorkerError::Busy("worker-endpoint".into()),
+        false,
+    ));
+    assert!(!worker_probe_allows_embedded_fallback(
+        &colossus_worker::WorkerError::Unavailable("worker-endpoint".into()),
+        true,
     ));
 }
 
@@ -559,6 +565,20 @@ fn tui_parses_with_the_global_inline_flag_and_repl_is_rejected() {
         .err()
         .expect("removed REPL command");
     assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+}
+
+#[test]
+fn desktop_worker_required_flag_is_hidden_and_tui_only() {
+    let tui = Cli::try_parse_from(["colossus", "tui", "--worker-required"])
+        .expect("desktop worker-required TUI");
+    assert!(tui.worker_required);
+    assert!(matches!(tui.command, Command::Tui { .. }));
+
+    let help = Cli::try_parse_from(["colossus", "--help"])
+        .err()
+        .expect("help exits through clap")
+        .to_string();
+    assert!(!help.contains("worker-required"));
 }
 
 #[test]
