@@ -179,15 +179,14 @@ mod tests {
             ("openai_responses", ProviderKindSetting::OpenAiResponses),
             ("openai_compatible", ProviderKindSetting::OpenAiCompatible),
         ] {
-            let input: ConfigureManagedRuntimeInput =
-                serde_json::from_value(serde_json::json!({
-                    "workspaceId": uuid::Uuid::now_v7().to_string(),
-                    "providerKind": wire,
-                    "model": "test-model",
-                    "accessProfile": "development",
-                    "replaceCredential": false
-                }))
-                .expect("renderer request");
+            let input: ConfigureManagedRuntimeInput = serde_json::from_value(serde_json::json!({
+                "workspaceId": uuid::Uuid::now_v7().to_string(),
+                "providerKind": wire,
+                "model": "test-model",
+                "accessProfile": "development",
+                "replaceCredential": false
+            }))
+            .expect("renderer request");
 
             assert_eq!(input.provider_kind, expected);
             assert!(input.validate().is_ok());

@@ -8,6 +8,73 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-22
+
+### Added
+
+- Added a versioned public gRPC API with scoped application credentials, pinned TLS
+  identity, durable run and prompt operations, compatibility fixtures, and generated
+  TypeScript, Python, and Go SDKs alongside the native Rust SDK.
+- Added Colossus Operations Studio, a dark blue Tauri workspace for individual work,
+  multi-target fleet health, released artifacts, activity, settings, and sanitized
+  Markdown run transcripts.
+- Added Managed Local as the folder-first Desktop path: a supervised macOS sidecar,
+  native provider enrollment into the system keychain, workspace-scoped lifecycle,
+  bounded restart recovery, and authenticated parity with external daemon targets.
+- Added opt-in local shell tabs and a one-click Colossus TUI that attaches to the existing
+  managed worker, plus a unified access-profile model for consistent CLI, TUI, worker,
+  public API, and Desktop authority.
+- Added the workspace development shell with explicit filesystem and network policy,
+  native sandbox initialization, and protected-shell handling on Linux and macOS.
+
+### Changed
+
+- Split hosted validation into fail-closed, path-classified PR and pre-merge tiers while
+  retaining stable aggregate gates; release automation now builds six native CLI targets
+  and a separately signed and notarized Apple-silicon Desktop artifact.
+- Refactored runtime, worker, CLI, TUI, workflow, presentation, sandbox, pack, and service
+  crate roots into focused composition modules, and migrated the documentation site to
+  Zensical with redesigned product and architecture guidance.
+- Made durable queue insertion wake workers immediately so newly queued and resumed work
+  does not wait for the polling interval.
+
+### Fixed
+
+- Shortened overlong macOS worker socket paths through an owner-private, deterministic
+  lease endpoint while preserving direct legacy endpoints wherever the operating system
+  accepts them.
+- Bound workspace ownership to platform process identity, capped aggregate skill and pack
+  discovery resources, and preserved graceful run draining, transport force-close, and
+  checkpoint shutdown across managed-runtime exits.
+
+### Security
+
+- Managed Local verifies the bundle manifest and macOS code identity immediately before
+  no-shell process creation, transfers one-use credentials and provider secrets only over
+  a bounded inherited channel, and fails closed on identity, TLS, API, grant, workspace,
+  or writer-lease mismatch.
+- Provider secrets are resolved from native memory only after policy authorization,
+  zeroized after use, and excluded from renderer DTOs, configuration, environment,
+  command arguments, logs, terminal sessions, telemetry, and run context.
+- Desktop terminals accept only native-selected shell or TUI sessions for opaque
+  workspace handles, isolate capabilities in a dedicated local WebView, bound all I/O,
+  disable escape-sequence clipboard writes and automatic navigation, and guarantee
+  process-tree cleanup.
+- Public API and SDK clients authenticate every connection with a certificate pin,
+  instance identity, API compatibility check, scoped bearer, exact role/tool grants, and
+  bounded watch limits; administrative and delegated authority remain excluded.
+
+### Upgrade Notes
+
+- Existing daemon installations and external Desktop targets remain supported without
+  migration. New Desktop installations default to Managed Local and keep app-owned state
+  outside the selected repository.
+- Managed Local and signed Desktop distribution are macOS-first in this release. Other
+  platforms continue to use the CLI, TUI, daemon, and public SDK surfaces until their
+  native terminal and packaging backends land.
+- The public API is still `v1alpha1`, and the TypeScript and Python SDK packages remain
+  alpha packages; package publication is separate from this source and binary release.
+
 ## [0.9.0] - 2026-07-17
 
 ### Added

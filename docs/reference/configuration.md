@@ -303,7 +303,7 @@ search:
 Kinds are `searxng` and `serp_api`. SerpAPI requires
 `credentialReference: env:VARIABLE`; SearXNG may use one and defaults `authHeader` to
 `X-Searxng-Key`. Both profiles accept `userAgent` and `timeoutMs`, which default to
-`colossus/0.9` and `30000`. The only route names are `agent` and `research`. Every
+`colossus/0.10` and `30000`. The only route names are `agent` and `research`. Every
 profile origin must be in `sandbox.networkDestinations`. Routes never silently fall
 back.
 

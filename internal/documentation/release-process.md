@@ -27,8 +27,9 @@ decision.
     ```
 
 The verifier requires the pinned Rust, `cargo-deny`, and `cargo-audit` versions. It rejects
-a reintroduced Python package or tracked Python source and runs formatting, Clippy, the
-complete workspace suite, fuzz compilation, and production/fuzz supply-chain policy.
+a reintroduced root Python runtime or tracked Python source outside the maintained public
+SDK, and runs formatting, Clippy, the complete workspace suite, fuzz compilation, and
+production/fuzz supply-chain policy.
 
 ## Dry-run artifacts
 
@@ -39,8 +40,8 @@ gh workflow run release.yml --ref main -f version=vX.Y.Z
 ```
 
 Manual dispatch is artifact-only. It cannot create or update a GitHub Release. Inspect
-the `Colossus release gate` result and download all six archives plus sidecars before
-continuing.
+the `Colossus release gate` result and download all six CLI archives plus sidecars and the
+validation-only Desktop archive plus checksum before continuing.
 
 ## Tag and validate
 
@@ -57,6 +58,8 @@ version mismatches, failed readiness verification, and incomplete artifact sets.
 - macOS x64 and ARM64 native sandbox acceptance and packaging;
 - static Linux-musl x64 and ARM64 native sandbox acceptance and packaging;
 - Windows x64 and ARM64 named-pipe, AppContainer, worker, and packaging acceptance.
+- macOS ARM64 standalone Desktop packaging followed by isolated identity validation,
+  signing, notarization, stapling, and assessment for tag-triggered releases.
 
 Each job builds with `--locked --release`, produces one archive and SHA-256 sidecar,
 installs into a clean prefix, verifies offline echo and audit behavior, and exercises a
@@ -65,12 +68,14 @@ signed bundle. Linux jobs also prove static linkage and package the AppArmor ins
 ## Review and publish the draft
 
 Only after `Colossus release gate` succeeds does the final job receive `contents: write`.
-It verifies exactly twelve files and their checksums, then creates or idempotently updates
-a draft release. It never publishes automatically.
+It verifies exactly fourteen files—six CLI archives, six checksum sidecars, the signed
+Desktop archive, and its checksum—then creates or idempotently updates a draft release.
+It never publishes automatically.
 
 Before publishing the draft:
 
-1. Confirm all six targets and checksum sidecars are present.
+1. Confirm all six CLI targets, the signed Desktop archive, and every checksum sidecar are
+   present.
 2. Test installation on a clean representative host where practical.
 3. Review generated notes, the changelog excerpt, known limitations, and security notes.
 4. Attach any required SBOM or independently generated signature material.

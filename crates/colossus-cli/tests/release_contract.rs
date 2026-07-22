@@ -85,6 +85,27 @@ fn tag_validation_and_draft_publication_fail_closed() {
 }
 
 #[test]
+fn release_readiness_allows_only_the_public_python_sdk() {
+    let source = fs::read_to_string(repository_root().join("release/verify-release-readiness.sh"))
+        .expect("read release readiness script");
+    for required in [
+        "legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**')",
+        "[ -e pyproject.toml ]",
+        "[ -n \"$legacy_python_sources\" ]",
+        "tracked Python source outside sdk/python",
+    ] {
+        assert!(
+            source.contains(required),
+            "release readiness is missing {required}"
+        );
+    }
+    assert!(
+        !source.contains("[ -n \"$(git ls-files '*.py')\" ]"),
+        "release readiness must not reject the intentional public Python SDK"
+    );
+}
+
+#[test]
 fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
     let workflow = workflow("release.yml");
     let artifacts = job(jobs(&workflow), "artifacts");
@@ -137,7 +158,7 @@ fn release_readiness_verifier_is_evergreen_and_pinned() {
         "cargo fmt --all -- --check",
         "cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace",
-        "git ls-files '*.py'",
+        "git ls-files -- '*.py' ':(exclude)sdk/python/**'",
         "release-readiness verification passed",
     ] {
         assert!(

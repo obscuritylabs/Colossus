@@ -287,7 +287,7 @@ pub(super) fn default_searxng_auth_header() -> String {
 }
 
 pub(super) fn default_search_user_agent() -> String {
-    "colossus/0.9".into()
+    "colossus/0.10".into()
 }
 
 const fn default_search_timeout_ms() -> u64 {

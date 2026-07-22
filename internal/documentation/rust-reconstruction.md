@@ -8,7 +8,7 @@ replacement:
 
 # Rust Runtime Status
 
-Rust 0.9.0 is the active repository-root implementation. It uses Rust 1.96, edition
+Rust 0.10.0 is the active repository-root implementation. It uses Rust 1.96, edition
 2024, strict YAML configuration, and encrypted redb state. It never imports Python
 configuration or SQLite state. Python 0.5 remains frozen at `python-v0.5.0` and on the
 `python-legacy` branch.
@@ -80,10 +80,11 @@ configuration surface.
 
 ## Release And Remaining Scope
 
-The repository-root cutover is complete. Version 0.9.0 adds provider-neutral search and
-signed collection/registry distribution to the previously published baseline. Ordinary
-`main` pushes run the inexpensive validation path; the full platform, security, and
-artifact matrix must pass through explicit release validation before `v0.9.0` is tagged.
+The repository-root cutover is complete. Version 0.10.0 adds the authenticated public
+API and language SDKs, the Operations Studio Desktop, and its supervised Managed Local
+runtime to the previously published baseline. Ordinary pull requests use classified
+validation; the full platform, security, CLI, and signed Desktop artifact matrix must
+pass the explicit release gates before `v0.10.0` is tagged.
 
 The latest published release evidence remains the
 [v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1),

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to validate without publishing, for example v0.9.0
+        description: Version to validate without publishing, for example v0.10.0
         required: true
         type: string
 
