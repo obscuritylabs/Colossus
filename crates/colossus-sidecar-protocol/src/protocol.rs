@@ -324,14 +324,14 @@ impl ManagedProviderConfig {
                 }
             }
             ManagedProviderKind::OpenAiResponses | ManagedProviderKind::OpenAiCompatible => {
-                if !self
+                if self
                     .base_url
                     .as_deref()
-                    .is_some_and(|url| validate_managed_provider_base_url(url).is_ok())
-                    || !self
+                    .is_none_or(|url| validate_managed_provider_base_url(url).is_err())
+                    || self
                         .credential_id
                         .as_deref()
-                        .is_some_and(valid_host_identifier)
+                        .is_none_or(|credential_id| !valid_host_identifier(credential_id))
                 {
                     return Err(ProtocolError::InvalidFrame);
                 }
