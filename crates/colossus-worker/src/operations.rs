@@ -28,6 +28,9 @@ pub(super) struct ServerHello {
 /// Local worker transport or strict-contract failure.
 #[derive(Debug, Error)]
 pub enum WorkerError {
+    /// Public application API configuration or transport failed safely.
+    #[error("public API failed: {0}")]
+    PublicApi(String),
     /// Local transport failed.
     #[error("worker transport failed: {0}")]
     Io(#[from] std::io::Error),

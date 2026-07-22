@@ -3,6 +3,14 @@ resolver = "3"
 members = [
     "crates/colossus-domain",
     "crates/colossus-contracts",
+    "crates/colossus-api-proto",
+    "crates/colossus-api",
+    "crates/colossus-api-runtime",
+    "crates/colossus-grpc",
+    "crates/colossus-sdk",
+    "crates/colossus-darwin-process",
+    "crates/colossus-sidecar-protocol",
+    "crates/colossus-sidecar",
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
     "crates/colossus-journal-postgres",
@@ -38,7 +46,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.96"
 license = "Apache-2.0"
@@ -68,15 +76,21 @@ keyring = "4.1.4"
 nono = { version = "=0.67.1", default-features = false }
 nix = { version = "0.31.3", features = ["sched"] }
 postgres = { version = "0.19.14", features = ["with-serde_json-1"] }
+prost = "0.14.4"
+prost-types = "0.14.4"
+protoc-bin-vendored = "=3.2.0"
 rappct = "=0.13.3"
 redb = "4.1.0"
 regex = "1.13.0"
 rmcp = { version = "=2.2.0", default-features = false }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "macros"] }
+rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.4", features = ["mount", "process"] }
+security-framework = "3.7.0"
 sysinfo = { version = "=0.39.5", default-features = false, features = ["system"] }
+subtle = "2.6.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }
 serde-saphyr = "0.0.29"
@@ -87,9 +101,15 @@ tantivy = "0.26.1"
 thiserror = "2.0.18"
 time = { version = "0.3.53", features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["io"] }
 tokio-postgres-rustls = { version = "0.14.0", default-features = false, features = ["ring"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
+tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
+tonic-prost = "0.14.6"
+tonic-prost-build = "0.14.6"
 toml = "1.1.2"
+tower = { version = "0.5.3", features = ["limit"] }
 uuid = { version = "1.23.4", features = ["serde", "v7"] }
 url = "2.5.8"
 unicode-width = "0.2.2"
@@ -97,40 +117,49 @@ portable-pty = "0.9.0"
 vt100 = "0.16.2"
 windows-sys = "=0.61.2"
 webpki-roots = "1.0.8"
+x509-parser = "0.18.1"
+zeroize = "1.8.2"
 
-colossus-contracts = { version = "=0.9.0", path = "crates/colossus-contracts" }
-colossus-access = { version = "=0.9.0", path = "crates/colossus-access" }
-colossus-audit = { version = "=0.9.0", path = "crates/colossus-audit" }
-colossus-context = { version = "=0.9.0", path = "crates/colossus-context" }
-colossus-work = { version = "=0.9.0", path = "crates/colossus-work" }
-colossus-domain = { version = "=0.9.0", path = "crates/colossus-domain" }
-colossus-journal-redb = { version = "=0.9.0", path = "crates/colossus-journal-redb" }
-colossus-journal-postgres = { version = "=0.9.0", path = "crates/colossus-journal-postgres" }
-colossus-memory = { version = "=0.9.0", path = "crates/colossus-memory" }
-colossus-memory-chroma = { version = "=0.9.0", path = "crates/colossus-memory-chroma" }
-colossus-research = { version = "=0.9.0", path = "crates/colossus-research" }
-colossus-telemetry = { version = "=0.9.0", path = "crates/colossus-telemetry" }
-colossus-testkit = { version = "=0.9.0", path = "crates/colossus-testkit" }
-colossus-fuzzing = { version = "=0.9.0", path = "crates/colossus-fuzzing" }
-colossus-skills = { version = "=0.9.0", path = "crates/colossus-skills" }
-colossus-integrations = { version = "=0.9.0", path = "crates/colossus-integrations" }
-colossus-mcp = { version = "=0.9.0", path = "crates/colossus-mcp" }
-colossus-packs = { version = "=0.9.0", path = "crates/colossus-packs" }
-colossus-policy = { version = "=0.9.0", path = "crates/colossus-policy" }
-colossus-provider = { version = "=0.9.0", path = "crates/colossus-provider" }
-colossus-search = { version = "=0.9.0", path = "crates/colossus-search" }
-colossus-tools = { version = "=0.9.0", path = "crates/colossus-tools" }
-colossus-agent = { version = "=0.9.0", path = "crates/colossus-agent" }
-colossus-session = { version = "=0.9.0", path = "crates/colossus-session" }
-colossus-ports = { version = "=0.9.0", path = "crates/colossus-ports" }
-colossus-projection = { version = "=0.9.0", path = "crates/colossus-projection" }
-colossus-sandbox = { version = "=0.9.0", path = "crates/colossus-sandbox" }
-colossus-windows-process = { version = "=0.9.0", path = "crates/colossus-windows-process" }
-colossus-runtime = { version = "=0.9.0", path = "crates/colossus-runtime" }
-colossus-worker = { version = "=0.9.0", path = "crates/colossus-worker" }
-colossus-workflow = { version = "=0.9.0", path = "crates/colossus-workflow" }
-colossus-presentation = { version = "=0.9.0", path = "crates/colossus-presentation" }
-colossus-tui = { version = "=0.9.0", path = "crates/colossus-tui" }
+colossus-contracts = { version = "=0.10.0", path = "crates/colossus-contracts" }
+colossus-api-proto = { version = "=0.10.0", path = "crates/colossus-api-proto" }
+colossus-api = { version = "=0.10.0", path = "crates/colossus-api" }
+colossus-api-runtime = { version = "=0.10.0", path = "crates/colossus-api-runtime" }
+colossus-grpc = { version = "=0.10.0", path = "crates/colossus-grpc" }
+colossus-sdk = { version = "=0.10.0", path = "crates/colossus-sdk" }
+colossus-darwin-process = { version = "=0.10.0", path = "crates/colossus-darwin-process" }
+colossus-sidecar-protocol = { version = "=0.10.0", path = "crates/colossus-sidecar-protocol" }
+colossus-access = { version = "=0.10.0", path = "crates/colossus-access" }
+colossus-audit = { version = "=0.10.0", path = "crates/colossus-audit" }
+colossus-context = { version = "=0.10.0", path = "crates/colossus-context" }
+colossus-work = { version = "=0.10.0", path = "crates/colossus-work" }
+colossus-domain = { version = "=0.10.0", path = "crates/colossus-domain" }
+colossus-journal-redb = { version = "=0.10.0", path = "crates/colossus-journal-redb" }
+colossus-journal-postgres = { version = "=0.10.0", path = "crates/colossus-journal-postgres" }
+colossus-memory = { version = "=0.10.0", path = "crates/colossus-memory" }
+colossus-memory-chroma = { version = "=0.10.0", path = "crates/colossus-memory-chroma" }
+colossus-research = { version = "=0.10.0", path = "crates/colossus-research" }
+colossus-telemetry = { version = "=0.10.0", path = "crates/colossus-telemetry" }
+colossus-testkit = { version = "=0.10.0", path = "crates/colossus-testkit" }
+colossus-fuzzing = { version = "=0.10.0", path = "crates/colossus-fuzzing" }
+colossus-skills = { version = "=0.10.0", path = "crates/colossus-skills" }
+colossus-integrations = { version = "=0.10.0", path = "crates/colossus-integrations" }
+colossus-mcp = { version = "=0.10.0", path = "crates/colossus-mcp" }
+colossus-packs = { version = "=0.10.0", path = "crates/colossus-packs" }
+colossus-policy = { version = "=0.10.0", path = "crates/colossus-policy" }
+colossus-provider = { version = "=0.10.0", path = "crates/colossus-provider" }
+colossus-search = { version = "=0.10.0", path = "crates/colossus-search" }
+colossus-tools = { version = "=0.10.0", path = "crates/colossus-tools" }
+colossus-agent = { version = "=0.10.0", path = "crates/colossus-agent" }
+colossus-session = { version = "=0.10.0", path = "crates/colossus-session" }
+colossus-ports = { version = "=0.10.0", path = "crates/colossus-ports" }
+colossus-projection = { version = "=0.10.0", path = "crates/colossus-projection" }
+colossus-sandbox = { version = "=0.10.0", path = "crates/colossus-sandbox" }
+colossus-windows-process = { version = "=0.10.0", path = "crates/colossus-windows-process" }
+colossus-runtime = { version = "=0.10.0", path = "crates/colossus-runtime" }
+colossus-worker = { version = "=0.10.0", path = "crates/colossus-worker" }
+colossus-workflow = { version = "=0.10.0", path = "crates/colossus-workflow" }
+colossus-presentation = { version = "=0.10.0", path = "crates/colossus-presentation" }
+colossus-tui = { version = "=0.10.0", path = "crates/colossus-tui" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,0 +1,817 @@
+import type { RunView } from "./state";
+import type {
+  ArtifactReference,
+  MessageRole,
+  Run,
+  RunMode,
+  RunStatus,
+  RunUpdate,
+  ToolActivityState,
+} from "./types";
+
+export const MAX_PRESENTED_WORK_ITEMS = 200;
+export const MAX_PRESENTED_ARTIFACTS = 64;
+export const MAX_PRESENTED_ACTIVITY_ITEMS = 200;
+
+const MAX_PRESENTED_VIEWS = 12;
+const MAX_LABEL_CHARACTERS = 72;
+const MAX_DETAIL_CHARACTERS = 280;
+const MAX_FILE_NAME_CHARACTERS = 120;
+const ACTIVE_STATUSES: ReadonlySet<RunStatus> = new Set([
+  "queued",
+  "running",
+  "waiting",
+  "cancelling",
+]);
+
+export type PresentationTone =
+  "neutral" | "progress" | "attention" | "success" | "danger";
+
+export interface StatusPresentation {
+  label: string;
+  copy: string;
+  tone: PresentationTone;
+}
+
+export type WorkGroupKey = "active" | "today" | "yesterday" | "earlier";
+
+export interface RecentWorkItem {
+  /** Opaque routing value. It is never used as display copy. */
+  runId: string;
+  title: string;
+  mode: RunMode;
+  modeLabel: string;
+  status: RunStatus;
+  statusLabel: string;
+  statusCopy: string;
+  statusTone: PresentationTone;
+  updatedAt: string;
+  updatedLabel: string;
+  isActive: boolean;
+  needsAttention: boolean;
+}
+
+export interface RecentWorkGroup {
+  key: WorkGroupKey;
+  label: string;
+  items: RecentWorkItem[];
+}
+
+export interface RecentWorkOptions {
+  query?: string;
+  now?: Date;
+  limit?: number;
+}
+
+export interface PresentedArtifact {
+  /** Opaque routing value for a future authorized artifact action. */
+  artifactId: string;
+  key: string;
+  fileName: string;
+  mediaType: string;
+  typeLabel: string;
+  sizeBytes: number;
+  sizeLabel: string;
+  purpose: ArtifactReference["purpose"];
+  purposeLabel: string;
+  state: ArtifactReference["state"];
+  stateLabel: string;
+  canOpen: boolean;
+  createdAt: string;
+  createdLabel: string;
+  /** Opaque routing value. It is never used as display copy. */
+  runId: string;
+}
+
+export type ActivityKind =
+  | "state"
+  | "reasoning"
+  | "tool"
+  | "interaction"
+  | "message"
+  | "notice"
+  | "usage"
+  | "result"
+  | "failure"
+  | "cancellation";
+
+export interface OperationalActivityItem {
+  key: string;
+  /** Opaque routing value. It is never used as display copy. */
+  runId: string;
+  sequence: number;
+  createdAt: string;
+  createdLabel: string;
+  agentLabel: string;
+  kind: ActivityKind;
+  title: string;
+  detail: string | null;
+  stateLabel: string | null;
+  tone: PresentationTone;
+}
+
+type RunViewSource = RunView | Iterable<RunView> | null | undefined;
+
+const STATUS_PRESENTATIONS: Readonly<Record<RunStatus, StatusPresentation>> = {
+  queued: {
+    label: "Queued",
+    copy: "Waiting to start",
+    tone: "neutral",
+  },
+  running: {
+    label: "In progress",
+    copy: "Work is in progress",
+    tone: "progress",
+  },
+  waiting: {
+    label: "Needs input",
+    copy: "Waiting for your input",
+    tone: "attention",
+  },
+  cancelling: {
+    label: "Stopping",
+    copy: "Stopping safely",
+    tone: "attention",
+  },
+  completed: {
+    label: "Completed",
+    copy: "Work completed",
+    tone: "success",
+  },
+  failed: {
+    label: "Failed",
+    copy: "Work failed",
+    tone: "danger",
+  },
+  cancelled: {
+    label: "Cancelled",
+    copy: "Work cancelled",
+    tone: "neutral",
+  },
+  interrupted: {
+    label: "Interrupted",
+    copy: "Work was interrupted",
+    tone: "attention",
+  },
+  outcome_unknown: {
+    label: "Outcome unknown",
+    copy: "Verify the external outcome before retrying",
+    tone: "danger",
+  },
+};
+
+const TOOL_STATE_PRESENTATIONS: Readonly<
+  Record<ToolActivityState, StatusPresentation>
+> = {
+  requested: {
+    label: "Requested",
+    copy: "Tool requested",
+    tone: "neutral",
+  },
+  waiting_approval: {
+    label: "Needs approval",
+    copy: "Tool is waiting for approval",
+    tone: "attention",
+  },
+  started: {
+    label: "Running",
+    copy: "Tool is running",
+    tone: "progress",
+  },
+  completed: {
+    label: "Completed",
+    copy: "Tool completed",
+    tone: "success",
+  },
+  failed: {
+    label: "Failed",
+    copy: "Tool failed",
+    tone: "danger",
+  },
+  outcome_unknown: {
+    label: "Outcome unknown",
+    copy: "Verify the tool outcome before retrying",
+    tone: "danger",
+  },
+};
+
+const GROUP_LABELS: Readonly<Record<WorkGroupKey, string>> = {
+  active: "Active",
+  today: "Today",
+  yesterday: "Yesterday",
+  earlier: "Earlier",
+};
+
+const GROUP_ORDER: readonly WorkGroupKey[] = [
+  "active",
+  "today",
+  "yesterday",
+  "earlier",
+];
+
+function boundedLimit(
+  requested: number | undefined,
+  fallback: number,
+  maximum: number,
+): number {
+  if (requested === undefined || !Number.isFinite(requested)) {
+    return fallback;
+  }
+  return Math.min(maximum, Math.max(0, Math.trunc(requested)));
+}
+
+/**
+ * Produces one-line renderer copy that cannot inject control/format characters or
+ * unbounded labels into dense navigation and activity surfaces.
+ */
+export function safeDisplayLabel(
+  value: string,
+  fallback: string,
+  maxCharacters = MAX_LABEL_CHARACTERS,
+): string {
+  const safeMaximum = Number.isFinite(maxCharacters)
+    ? Math.max(1, Math.min(MAX_DETAIL_CHARACTERS, Math.trunc(maxCharacters)))
+    : MAX_LABEL_CHARACTERS;
+  const clean = (input: string) =>
+    input
+      .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+      .replace(/\s+/gu, " ")
+      .trim();
+  const candidate = clean(value) || clean(fallback);
+  if (candidate.length <= safeMaximum) {
+    return candidate;
+  }
+
+  const suffix = "…";
+  let end = Math.max(0, safeMaximum - suffix.length);
+  if (
+    end > 0 &&
+    /[\uD800-\uDBFF]/u.test(candidate.charAt(end - 1)) &&
+    /[\uDC00-\uDFFF]/u.test(candidate.charAt(end))
+  ) {
+    end -= 1;
+  }
+  return candidate.slice(0, end).trimEnd() + suffix;
+}
+
+function humanizeIdentifier(
+  value: string,
+  fallback: string,
+  maxCharacters = MAX_LABEL_CHARACTERS,
+): string {
+  const readable = value.replace(/[_-]+/gu, " ");
+  const label = safeDisplayLabel(readable, fallback, maxCharacters);
+  if (!/^[a-z\d ]+$/u.test(label)) {
+    return label;
+  }
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+export function presentRunStatus(status: RunStatus): StatusPresentation {
+  return STATUS_PRESENTATIONS[status];
+}
+
+export function presentToolState(state: ToolActivityState): StatusPresentation {
+  return TOOL_STATE_PRESENTATIONS[state];
+}
+
+export function runModeLabel(mode: RunMode): string {
+  return mode === "plan" ? "Plan" : "Execute";
+}
+
+export function agentRoleLabel(role: string): string {
+  return humanizeIdentifier(role, "Default agent", 56);
+}
+
+export function shortDateLabel(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "Recent";
+  }
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function timestampValue(timestamp: string): number {
+  const value = new Date(timestamp).getTime();
+  return Number.isNaN(value) ? 0 : value;
+}
+
+function localDayStart(value: Date): number {
+  if (Number.isNaN(value.getTime())) {
+    return Number.NaN;
+  }
+  return new Date(
+    value.getFullYear(),
+    value.getMonth(),
+    value.getDate(),
+  ).getTime();
+}
+
+function workGroupFor(run: Run, now: Date): WorkGroupKey {
+  if (ACTIVE_STATUSES.has(run.status)) {
+    return "active";
+  }
+
+  const updatedAt = timestampValue(run.updatedAt);
+  const today = localDayStart(now);
+  if (!Number.isFinite(today) || updatedAt === 0) {
+    return "earlier";
+  }
+  if (updatedAt >= today) {
+    return "today";
+  }
+
+  const yesterdayDate = new Date(today);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  return updatedAt >= yesterdayDate.getTime() ? "yesterday" : "earlier";
+}
+
+function toRecentWorkItem(run: Run): RecentWorkItem {
+  const status = presentRunStatus(run.status);
+  const isActive = ACTIVE_STATUSES.has(run.status);
+  return {
+    runId: run.runId,
+    title: agentRoleLabel(run.role),
+    mode: run.mode,
+    modeLabel: runModeLabel(run.mode),
+    status: run.status,
+    statusLabel: status.label,
+    statusCopy: status.copy,
+    statusTone: status.tone,
+    updatedAt: run.updatedAt,
+    updatedLabel: shortDateLabel(run.updatedAt),
+    isActive,
+    needsAttention:
+      run.status === "waiting" ||
+      run.status === "outcome_unknown" ||
+      run.pendingInteractionCount > 0,
+  };
+}
+
+/**
+ * Groups durable runs as work without treating opaque session identities as a
+ * user-facing session or manufacturing titles that the API does not provide.
+ */
+export function selectRecentWork(
+  runs: readonly Run[],
+  options: RecentWorkOptions = {},
+): RecentWorkGroup[] {
+  const now = options.now ?? new Date();
+  const limit = boundedLimit(
+    options.limit,
+    MAX_PRESENTED_WORK_ITEMS,
+    MAX_PRESENTED_WORK_ITEMS,
+  );
+  const query = safeDisplayLabel(
+    options.query ?? "",
+    "",
+    128,
+  ).toLocaleLowerCase();
+  const seen = new Set<string>();
+  const groups = new Map<WorkGroupKey, RecentWorkItem[]>();
+  const sorted = runs
+    .slice(0, MAX_PRESENTED_WORK_ITEMS)
+    .map((run, index) => ({ run, index }))
+    .sort(
+      (left, right) =>
+        timestampValue(right.run.updatedAt) -
+          timestampValue(left.run.updatedAt) || left.index - right.index,
+    );
+
+  let count = 0;
+  for (const { run } of sorted) {
+    if (count >= limit || seen.has(run.runId)) {
+      continue;
+    }
+    seen.add(run.runId);
+    const item = toRecentWorkItem(run);
+    const searchable = [
+      item.title,
+      item.modeLabel,
+      item.statusLabel,
+      item.statusCopy,
+    ]
+      .join(" ")
+      .toLocaleLowerCase();
+    if (query !== "" && !searchable.includes(query)) {
+      continue;
+    }
+
+    const key = workGroupFor(run, now);
+    const items = groups.get(key) ?? [];
+    items.push(item);
+    groups.set(key, items);
+    count += 1;
+  }
+
+  return GROUP_ORDER.flatMap((key) => {
+    const items = groups.get(key);
+    return items === undefined
+      ? []
+      : [{ key, label: GROUP_LABELS[key], items }];
+  });
+}
+
+function isRunView(
+  source: Exclude<RunViewSource, null | undefined>,
+): source is RunView {
+  return "run" in source && "updates" in source;
+}
+
+function collectViews(source: RunViewSource): RunView[] {
+  if (source === null || source === undefined) {
+    return [];
+  }
+  if (isRunView(source)) {
+    return [source];
+  }
+
+  const views: RunView[] = [];
+  for (const view of source) {
+    views.push(view);
+    if (views.length >= MAX_PRESENTED_VIEWS) {
+      break;
+    }
+  }
+  return views;
+}
+
+interface PresentedUpdate {
+  view: RunView;
+  update: RunUpdate;
+  sourceIndex: number;
+}
+
+function presentedUpdates(source: RunViewSource): PresentedUpdate[] {
+  return collectViews(source)
+    .flatMap((view) =>
+      view.updates
+        .slice(-MAX_PRESENTED_ACTIVITY_ITEMS)
+        .map((update, sourceIndex) => ({
+          view,
+          update,
+          sourceIndex,
+        })),
+    )
+    .sort(
+      (left, right) =>
+        timestampValue(right.update.createdAt) -
+          timestampValue(left.update.createdAt) ||
+        right.update.sequence - left.update.sequence ||
+        left.sourceIndex - right.sourceIndex,
+    );
+}
+
+export function formatByteSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+    return "Size unavailable";
+  }
+  if (sizeBytes < 1024) {
+    return `${Math.trunc(sizeBytes)} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+  if (sizeBytes < 1024 * 1024 * 1024) {
+    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function artifactTypeLabel(mediaType: string): string {
+  const normalized = mediaType.toLocaleLowerCase();
+  if (normalized === "application/pdf") {
+    return "PDF";
+  }
+  if (normalized === "application/json") {
+    return "JSON";
+  }
+  if (normalized.startsWith("image/")) {
+    return "Image";
+  }
+  if (normalized.startsWith("audio/")) {
+    return "Audio";
+  }
+  if (normalized.startsWith("video/")) {
+    return "Video";
+  }
+  if (normalized.startsWith("text/")) {
+    return "Text";
+  }
+  return "File";
+}
+
+function artifactStateLabel(state: ArtifactReference["state"]): string {
+  switch (state) {
+    case "uploading":
+      return "Uploading";
+    case "quarantined":
+      return "Pending review";
+    case "available":
+      return "Available";
+    case "rejected":
+      return "Rejected";
+    case "expired":
+      return "Expired";
+  }
+}
+
+function artifactPurposeLabel(purpose: ArtifactReference["purpose"]): string {
+  switch (purpose) {
+    case "run_input":
+      return "Input";
+    case "run_output":
+      return "Output";
+    case "workflow":
+      return "Workflow";
+    case "extension":
+      return "Extension";
+    case "archive":
+      return "Archive";
+  }
+}
+
+/**
+ * Selects only authorized artifact metadata carried by released messages. The
+ * digest and message text are intentionally absent from the presentation object.
+ */
+export function selectReleasedArtifacts(
+  source: RunViewSource,
+  requestedLimit = MAX_PRESENTED_ARTIFACTS,
+): PresentedArtifact[] {
+  const limit = boundedLimit(
+    requestedLimit,
+    MAX_PRESENTED_ARTIFACTS,
+    MAX_PRESENTED_ARTIFACTS,
+  );
+  const artifacts: PresentedArtifact[] = [];
+  const seen = new Set<string>();
+
+  for (const { view, update } of presentedUpdates(source)) {
+    if (artifacts.length >= limit) {
+      break;
+    }
+    if (update.update.type !== "message") {
+      continue;
+    }
+    for (
+      let index = update.update.message.content.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      if (artifacts.length >= limit) {
+        break;
+      }
+      const part = update.update.message.content[index];
+      if (part?.type !== "artifact") {
+        continue;
+      }
+      const artifact = part.artifact;
+      const identity =
+        artifact.artifactId || `${view.run.runId}:${update.sequence}:${index}`;
+      if (seen.has(identity)) {
+        continue;
+      }
+      seen.add(identity);
+      const sizeBytes =
+        Number.isFinite(artifact.sizeBytes) && artifact.sizeBytes >= 0
+          ? artifact.sizeBytes
+          : 0;
+      artifacts.push({
+        artifactId: artifact.artifactId,
+        key: identity,
+        fileName: safeDisplayLabel(
+          artifact.fileName,
+          "Untitled artifact",
+          MAX_FILE_NAME_CHARACTERS,
+        ),
+        mediaType: safeDisplayLabel(artifact.mediaType, "", 96),
+        typeLabel: artifactTypeLabel(artifact.mediaType),
+        sizeBytes,
+        sizeLabel: formatByteSize(artifact.sizeBytes),
+        purpose: artifact.purpose,
+        purposeLabel: artifactPurposeLabel(artifact.purpose),
+        state: artifact.state,
+        stateLabel: artifactStateLabel(artifact.state),
+        canOpen: artifact.state === "available",
+        createdAt: artifact.createdAt,
+        createdLabel: shortDateLabel(artifact.createdAt),
+        runId: view.run.runId,
+      });
+    }
+  }
+
+  return artifacts;
+}
+
+function messageTitle(role: MessageRole): string {
+  switch (role) {
+    case "user":
+      return "You sent a message";
+    case "assistant":
+      return "Colossus responded";
+    case "tool":
+      return "Tool shared an update";
+    case "system":
+      return "System update";
+  }
+}
+
+function messageDetail(
+  update: Extract<RunUpdate["update"], { type: "message" }>,
+): string | null {
+  const parts = update.message.content.map((part) =>
+    part.type === "text" ? part.text : `Artifact: ${part.artifact.fileName}`,
+  );
+  const value = safeDisplayLabel(parts.join(" · "), "", MAX_DETAIL_CHARACTERS);
+  return value || null;
+}
+
+function toActivityItem(
+  view: RunView,
+  update: RunUpdate,
+): OperationalActivityItem | null {
+  const common = {
+    key: `${view.run.runId}:${update.sequence}`,
+    runId: view.run.runId,
+    sequence: update.sequence,
+    createdAt: update.createdAt,
+    createdLabel: shortDateLabel(update.createdAt),
+    agentLabel: agentRoleLabel(view.run.role),
+  };
+
+  switch (update.update.type) {
+    case "output_delta":
+      // Streaming output belongs in the conversation surface, not operational copy.
+      return null;
+    case "state": {
+      const status = presentRunStatus(update.update.status);
+      return {
+        ...common,
+        kind: "state",
+        title: status.copy,
+        detail: null,
+        stateLabel: status.label,
+        tone: status.tone,
+      };
+    }
+    case "reasoning_summary":
+      return {
+        ...common,
+        kind: "reasoning",
+        title: "Reasoning summary",
+        detail: safeDisplayLabel(
+          update.update.summary,
+          "Summary available",
+          MAX_DETAIL_CHARACTERS,
+        ),
+        stateLabel: null,
+        tone: "neutral",
+      };
+    case "tool_activity": {
+      const toolState = presentToolState(update.update.activity.state);
+      return {
+        ...common,
+        kind: "tool",
+        title: safeDisplayLabel(
+          update.update.activity.toolName,
+          "Tool activity",
+        ),
+        detail: safeDisplayLabel(
+          update.update.activity.summary,
+          toolState.copy,
+          MAX_DETAIL_CHARACTERS,
+        ),
+        stateLabel: toolState.label,
+        tone: toolState.tone,
+      };
+    }
+    case "usage":
+      return {
+        ...common,
+        kind: "usage",
+        title: "Usage updated",
+        detail: `${Math.max(0, update.update.usage.totalTokens).toLocaleString()} tokens`,
+        stateLabel: null,
+        tone: "neutral",
+      };
+    case "interaction": {
+      const interaction = update.update.interaction;
+      const content = interaction.content;
+      const isApproval = content.type === "approval";
+      const detail =
+        content.type === "approval" ? content.reason : content.question;
+      return {
+        ...common,
+        kind: "interaction",
+        title: isApproval ? "Approval requested" : "Input requested",
+        detail: safeDisplayLabel(
+          detail,
+          "Your attention is needed",
+          MAX_DETAIL_CHARACTERS,
+        ),
+        stateLabel:
+          interaction.status === "pending"
+            ? "Needs attention"
+            : humanizeIdentifier(interaction.status, "Resolved"),
+        tone: interaction.status === "pending" ? "attention" : "neutral",
+      };
+    }
+    case "message":
+      return {
+        ...common,
+        kind: "message",
+        title: messageTitle(update.update.message.role),
+        detail: messageDetail(update.update),
+        stateLabel: null,
+        tone: "neutral",
+      };
+    case "notice":
+      return {
+        ...common,
+        kind: "notice",
+        title: humanizeIdentifier(update.update.reason, "Run update"),
+        detail: safeDisplayLabel(
+          update.update.message,
+          "Run update",
+          MAX_DETAIL_CHARACTERS,
+        ),
+        stateLabel: null,
+        tone: "neutral",
+      };
+    case "result": {
+      const elapsed = Number.isFinite(update.update.result.elapsedSeconds)
+        ? `${Math.max(0, update.update.result.elapsedSeconds).toFixed(1)} seconds`
+        : null;
+      return {
+        ...common,
+        kind: "result",
+        title: "Work completed",
+        detail: elapsed,
+        stateLabel: "Completed",
+        tone: "success",
+      };
+    }
+    case "failure":
+      return {
+        ...common,
+        kind: "failure",
+        title: "Work failed",
+        detail: safeDisplayLabel(
+          update.update.failure.message,
+          "The run failed",
+          MAX_DETAIL_CHARACTERS,
+        ),
+        stateLabel:
+          update.update.failure.outcomeCertainty === "unknown"
+            ? "Outcome unknown"
+            : "Failed",
+        tone: "danger",
+      };
+    case "cancellation":
+      return {
+        ...common,
+        kind: "cancellation",
+        title: "Work cancelled",
+        detail: safeDisplayLabel(
+          update.update.cancellation.message,
+          "The run was cancelled",
+          MAX_DETAIL_CHARACTERS,
+        ),
+        stateLabel: "Cancelled",
+        tone: "neutral",
+      };
+  }
+}
+
+/**
+ * Flattens bounded released updates across one or more cached run views. Results
+ * are newest-first and never include output deltas, raw tool arguments, hashes,
+ * hidden reasoning, or terminal result output.
+ */
+export function selectOperationalActivity(
+  source: RunViewSource,
+  requestedLimit = MAX_PRESENTED_ACTIVITY_ITEMS,
+): OperationalActivityItem[] {
+  const limit = boundedLimit(
+    requestedLimit,
+    MAX_PRESENTED_ACTIVITY_ITEMS,
+    MAX_PRESENTED_ACTIVITY_ITEMS,
+  );
+  const items: OperationalActivityItem[] = [];
+  for (const { view, update } of presentedUpdates(source)) {
+    if (items.length >= limit) {
+      break;
+    }
+    const item = toActivityItem(view, update);
+    if (item !== null) {
+      items.push(item);
+    }
+  }
+  return items;
+}

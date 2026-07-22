@@ -5,6 +5,7 @@ use super::*;
 pub struct RuntimeOpenOptions {
     /// Canonical repository workspace used by tools and repository identity.
     pub workspace: PathBuf,
+    pub(super) expected_workspace_identity: Option<WorkspaceIdentityToken>,
 }
 
 impl RuntimeOpenOptions {
@@ -17,7 +18,18 @@ impl RuntimeOpenOptions {
                 workspace.display()
             )));
         }
-        Ok(Self { workspace })
+        Ok(Self {
+            workspace,
+            expected_workspace_identity: None,
+        })
+    }
+
+    /// Require runtime lease acquisition to retain the exact directory identity
+    /// captured by a trusted host before private bootstrap.
+    #[must_use]
+    pub fn with_expected_workspace_identity(mut self, identity: WorkspaceIdentityToken) -> Self {
+        self.expected_workspace_identity = Some(identity);
+        self
     }
 
     pub(super) fn current() -> Result<Self, RuntimeError> {

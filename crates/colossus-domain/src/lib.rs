@@ -7,6 +7,8 @@ use std::{fmt, str::FromStr};
 pub enum ActorType {
     /// A human operator.
     User,
+    /// An authenticated external application or SDK client.
+    Application,
     /// A model-controlled agent.
     Model,
     /// A durable workflow.
@@ -106,6 +108,7 @@ macro_rules! string_enum {
 
 string_enum!(ActorType {
     User => "user",
+    Application => "application",
     Model => "model",
     Workflow => "workflow",
     Subagent => "subagent",

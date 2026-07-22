@@ -21,12 +21,14 @@ pub struct Runtime {
     pub(super) skills_enabled: bool,
     pub(super) skills: Arc<dyn SkillRepository>,
     pub(super) skill_composer: Arc<SkillComposer>,
-    pub(super) skill_executor: Arc<SkillEffectExecutor>,
+    pub(super) skill_executor: Arc<dyn EffectExecutor>,
     pub(super) extensions: Arc<dyn ExtensionRepository>,
     pub(super) packs: Arc<PackService>,
-    pub(super) pack_executor: Arc<PackExecutor>,
+    pub(super) pack_executor: Arc<dyn EffectExecutor>,
     pub(super) pack_process_executor: Arc<PackProcessExecutor>,
+    pub(super) pack_process_effect_executor: Arc<dyn EffectExecutor>,
     pub(super) integration_executor: Arc<IntegrationExecutor>,
+    pub(super) integration_effect_executor: Arc<dyn EffectExecutor>,
     pub(super) sessions: Arc<dyn SessionRepository>,
     pub(super) context_executor: Arc<ContextEffectExecutor>,
     pub(super) presentation: Arc<dyn PresentationRepository>,
@@ -35,6 +37,7 @@ pub struct Runtime {
     pub(super) work_executor: Arc<WorkEffectExecutor>,
     pub(super) memory_executor: Arc<MemoryEffectExecutor>,
     pub(super) mcp_executor: Arc<McpExecutor>,
+    pub(super) mcp_effect_executor: Arc<dyn EffectExecutor>,
     pub(super) research: Arc<dyn ResearchRepository>,
     pub(super) research_executor: Arc<ResearchEffectExecutor>,
     pub(super) policy: Arc<dyn PolicyDecisionPoint>,
@@ -49,8 +52,8 @@ pub struct Runtime {
     pub(super) subagent_drain_lock: TokioMutex<()>,
     pub(super) tools: Arc<dyn ToolRegistry>,
     pub(super) access: AccessResolution,
-    pub(super) filesystem_executor: Arc<FilesystemExecutor>,
-    pub(super) process_executor: Arc<SandboxProcessExecutor>,
+    pub(super) filesystem_executor: Arc<dyn EffectExecutor>,
+    pub(super) process_executor: Arc<dyn EffectExecutor>,
     pub(super) http_executor: Arc<HttpExecutor>,
     pub(super) sandbox_executor_config: SandboxExecutorConfig,
     pub(super) sandbox_backend: String,
@@ -61,6 +64,9 @@ pub struct Runtime {
     pub(super) sandbox_network_destinations: Vec<String>,
     pub(super) workflow_repository: Arc<dyn WorkflowRepository>,
     pub(super) workflows: Arc<WorkflowService>,
+    // Declared last so every runtime service is dropped before workspace ownership
+    // is released to another effect-capable runtime.
+    pub(super) _workspace_lease: workspace_lease::WorkspaceOwnershipLease,
 }
 
 impl Runtime {
@@ -98,6 +104,26 @@ impl Runtime {
         user_prompts: Option<Arc<dyn UserPromptProvider>>,
         options: RuntimeOpenOptions,
     ) -> Result<Self, RuntimeError> {
+        Self::open_with_provider_credentials(
+            config,
+            approvals,
+            user_prompts,
+            options,
+            Arc::new(EnvironmentCredentialResolver),
+        )
+    }
+
+    /// Compose the runtime with a host-provided, late-bound provider credential resolver.
+    ///
+    /// Credential resolution remains inside the permit-bearing provider adapter and is
+    /// therefore not performed during configuration parsing or runtime startup.
+    pub fn open_with_provider_credentials(
+        config: &RuntimeConfig,
+        approvals: Arc<dyn ApprovalProvider>,
+        user_prompts: Option<Arc<dyn UserPromptProvider>>,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+    ) -> Result<Self, RuntimeError> {
         let workspace = fs::canonicalize(&options.workspace)?;
         if !workspace.is_dir() {
             return Err(RuntimeError::Config(format!(
@@ -105,6 +131,12 @@ impl Runtime {
                 workspace.display()
             )));
         }
+        let workspace_lease = workspace_lease::WorkspaceOwnershipLease::acquire_expected(
+            &workspace,
+            options.expected_workspace_identity.as_ref(),
+        )?;
+        let workspace_identity = workspace_lease.identity();
+        workspace_identity.revalidate()?;
         let development_sandbox = derive_development_sandbox(config, &workspace)?;
         let storage_path = workspace_absolute_path(&workspace, &config.storage.path);
         let repository_id = repository_identity(&workspace);
@@ -197,8 +229,17 @@ impl Runtime {
             PackService::new(Arc::clone(&extensions), pack_install_root)
                 .with_skill_install_root(user_skill_root.clone()),
         );
-        let pack_executor = Arc::new(PackExecutor::new(Arc::clone(&packs)));
+        let raw_pack_executor = Arc::new(PackExecutor::new(Arc::clone(&packs)));
+        let pack_executor: Arc<dyn EffectExecutor> = Arc::new(WorkspaceBoundEffectExecutor::new(
+            workspace_identity.clone(),
+            raw_pack_executor,
+        ));
         let integration_executor = Arc::new(IntegrationExecutor::new(Arc::clone(&extensions))?);
+        let integration_effect_executor: Arc<dyn EffectExecutor> =
+            Arc::new(WorkspaceBoundEffectExecutor::new(
+                workspace_identity.clone(),
+                Arc::clone(&integration_executor),
+            ));
         let integration_specs = integration_executor.tool_specs()?;
         let mut skill_roots = vec![
             SkillRoot {
@@ -244,11 +285,29 @@ impl Runtime {
             &config.mcp,
             &config.sandbox,
         )?;
-        let skills: Arc<dyn SkillRepository> = Arc::new(FilesystemSkillRepository::new(
+        #[cfg(unix)]
+        let filesystem_skills: Arc<dyn SkillRepository> =
+            Arc::new(FilesystemSkillRepository::new_workspace_bound(
+                workspace_identity.directory()?,
+                &workspace,
+                skill_roots,
+                config.skills.allow_user_overrides,
+                config.skills.disabled.clone(),
+            )?);
+        // Platforms without Unix descriptor-relative traversal retain the existing
+        // compatibility adapter plus the outer identity checks below. Managed Local
+        // remains macOS-first; no non-Unix build silently claims the Unix object-bound
+        // guarantee.
+        #[cfg(not(unix))]
+        let filesystem_skills: Arc<dyn SkillRepository> = Arc::new(FilesystemSkillRepository::new(
             skill_roots,
             config.skills.allow_user_overrides,
             config.skills.disabled.clone(),
         )?);
+        let skills: Arc<dyn SkillRepository> = Arc::new(WorkspaceBoundSkillRepository::new(
+            workspace_identity.clone(),
+            filesystem_skills,
+        ));
         let skill_composer = Arc::new(SkillComposer::new(Arc::clone(&skills)));
         let skill_resources = Arc::new(SkillResourceService::new(Arc::clone(&skills)));
         let skill_authoring = Arc::new(SkillAuthoringService::new(
@@ -273,7 +332,7 @@ impl Runtime {
         if !journal.is_recovery_mode() {
             recover_unknown_effects(journal.as_ref())?;
         }
-        let providers = Arc::new(provider_registry(&config.providers)?);
+        let providers = Arc::new(provider_registry(&config.providers, provider_credentials)?);
         let searches = Arc::new(search_registry(config)?);
         let access_config = &config.access;
         let mut candidate_tool_specs = builtin_specs();
@@ -501,11 +560,19 @@ impl Runtime {
             oci_image: config.sandbox.oci_image.clone(),
             oci_proxy_image: config.sandbox.oci_proxy_image.clone(),
         };
-        let filesystem_executor = Arc::new(FilesystemExecutor::new());
-        let process_executor = Arc::new(SandboxProcessExecutor::new(
+        let raw_filesystem_executor = Arc::new(FilesystemExecutor::new());
+        let filesystem_executor: Arc<dyn EffectExecutor> = Arc::new(
+            WorkspaceBoundEffectExecutor::new(workspace_identity.clone(), raw_filesystem_executor),
+        );
+        let raw_process_executor = Arc::new(SandboxProcessExecutor::new(
             sandbox_executor_config.clone(),
             sandbox_job_key,
         ));
+        let process_executor: Arc<dyn EffectExecutor> =
+            Arc::new(WorkspaceBoundEffectExecutor::new(
+                workspace_identity.clone(),
+                Arc::clone(&raw_process_executor),
+            ));
         let mut effective_executables = access_executables.clone();
         effective_executables.extend(active_pack_extensions.executables.iter().cloned());
         let mut effective_filesystem = access_filesystem.clone();
@@ -525,6 +592,11 @@ impl Runtime {
             &config.sandbox.backend,
             Arc::clone(&process_executor),
         )?);
+        let mcp_effect_executor: Arc<dyn EffectExecutor> =
+            Arc::new(WorkspaceBoundEffectExecutor::new(
+                workspace_identity.clone(),
+                Arc::clone(&mcp_executor),
+            ));
         let http_executor = Arc::new(HttpExecutor::new());
         let known_capabilities = access
             .actions
@@ -553,7 +625,7 @@ impl Runtime {
                 Some(Arc::new(GatewayDirectoryAuditExporter::new(
                     workspace_absolute_path(&workspace, path),
                     Arc::clone(&gateway),
-                    Arc::clone(&filesystem_executor) as Arc<dyn EffectExecutor>,
+                    Arc::clone(&filesystem_executor),
                 )?))
             }
             AuditExporterConfig::WormHttp {
@@ -589,14 +661,23 @@ impl Runtime {
             service: Arc::clone(&memory_service),
             repository_id: repository_id.clone(),
         });
-        let skill_executor = Arc::new(SkillEffectExecutor {
+        let raw_skill_executor = Arc::new(SkillEffectExecutor {
             resources: Arc::clone(&skill_resources),
             authoring: skill_authoring,
         });
+        let skill_executor: Arc<dyn EffectExecutor> = Arc::new(WorkspaceBoundEffectExecutor::new(
+            workspace_identity.clone(),
+            raw_skill_executor,
+        ));
         let pack_process_executor = Arc::new(PackProcessExecutor::new(
             active_pack_extensions.process_declarations.clone(),
-            Arc::clone(&process_executor) as Arc<dyn EffectExecutor>,
+            Arc::clone(&process_executor),
         ));
+        let pack_process_effect_executor: Arc<dyn EffectExecutor> =
+            Arc::new(WorkspaceBoundEffectExecutor::new(
+                workspace_identity.clone(),
+                Arc::clone(&pack_process_executor),
+            ));
         let memory_retriever: Arc<dyn MemoryRetriever> = Arc::new(GatewayMemoryRetriever {
             gateway: Arc::clone(&gateway),
             executor: Arc::clone(&memory_executor),
@@ -627,6 +708,7 @@ impl Runtime {
             workspace: workspace.clone(),
             search: Arc::clone(&search_provider),
             mcp: Arc::clone(&mcp_executor),
+            mcp_effect: Arc::clone(&mcp_effect_executor),
         });
         let research_model: Arc<dyn ResearchModel> = Arc::new(GatewayResearchModel {
             provider: Arc::clone(&model_provider),
@@ -666,7 +748,7 @@ impl Runtime {
         let gateway_tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
-            process: Some(Arc::clone(&process_executor) as Arc<dyn EffectExecutor>),
+            process: Some(Arc::clone(&process_executor)),
             http: Arc::clone(&http_executor),
             work: Some(Arc::clone(&work_executor)),
             memory: Some(Arc::clone(&memory_executor)),
@@ -674,6 +756,12 @@ impl Runtime {
             pack_processes: Some(Arc::clone(&pack_process_executor)),
             integrations: Some(Arc::clone(&integration_executor)),
             mcp: Some(Arc::clone(&mcp_executor)),
+            bound_effects: Some(GatewayBoundEffects {
+                identity: workspace_identity.clone(),
+                pack_process: Arc::clone(&pack_process_effect_executor),
+                integration: Arc::clone(&integration_effect_executor),
+                mcp: Arc::clone(&mcp_effect_executor),
+            }),
             search: Some(Arc::clone(&search_provider)),
             workspace: workspace.clone(),
             repository_id: repository_id.clone(),
@@ -714,9 +802,14 @@ impl Runtime {
                 inner: interface_tool_executor,
             });
         let subagent_notify = Arc::new(Notify::new());
-        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(SubagentSchedulingToolExecutor {
-            notify: Arc::clone(&subagent_notify),
-            inner: discoverable_tool_executor,
+        let scheduled_tool_executor: Arc<dyn ToolExecutor> =
+            Arc::new(SubagentSchedulingToolExecutor {
+                notify: Arc::clone(&subagent_notify),
+                inner: discoverable_tool_executor,
+            });
+        let tool_executor: Arc<dyn ToolExecutor> = Arc::new(WorkspaceBoundToolExecutor {
+            identity: workspace_identity.clone(),
+            inner: scheduled_tool_executor,
         });
         let agent = Arc::new(
             AgentService::new(
@@ -742,6 +835,7 @@ impl Runtime {
             workflows.recover_interrupted()?;
             projections.drain(256, 16_384)?;
         }
+        workspace_identity.revalidate()?;
         Ok(Self {
             workspace,
             writer_lease,
@@ -759,7 +853,9 @@ impl Runtime {
             packs,
             pack_executor,
             pack_process_executor,
+            pack_process_effect_executor,
             integration_executor,
+            integration_effect_executor,
             sessions,
             context_executor,
             presentation,
@@ -768,6 +864,7 @@ impl Runtime {
             work_executor,
             memory_executor,
             mcp_executor,
+            mcp_effect_executor,
             research,
             research_executor,
             policy,
@@ -794,6 +891,7 @@ impl Runtime {
             sandbox_network_destinations: config.sandbox.network_destinations.clone(),
             workflow_repository,
             workflows,
+            _workspace_lease: workspace_lease,
         })
     }
 }

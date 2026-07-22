@@ -6,6 +6,7 @@ const ZERO_HASH: &str = "0000000000000000000000000000000000000000000000000000000
 struct State {
     events: Vec<EventEnvelope>,
     payloads: BTreeMap<String, Value>,
+    streams: BTreeMap<String, Vec<EventEnvelope>>,
     stream_versions: BTreeMap<String, u64>,
 }
 
@@ -91,6 +92,11 @@ impl EventJournal for InMemoryEventJournal {
                 .insert(record.stream_id.clone(), stream_version);
             state.payloads.insert(event_id, event.payload);
             state.events.push(record.clone());
+            state
+                .streams
+                .entry(record.stream_id.clone())
+                .or_default()
+                .push(record.clone());
             persisted.push(record);
         }
         Ok(persisted)
@@ -101,11 +107,50 @@ impl EventJournal for InMemoryEventJournal {
             .state
             .lock()
             .map_err(failure)?
-            .events
-            .iter()
-            .filter(|event| event.stream_id == stream_id)
+            .streams
+            .get(stream_id)
             .cloned()
-            .collect())
+            .unwrap_or_default())
+    }
+
+    fn read_stream_from(
+        &self,
+        stream_id: &str,
+        after_version: u64,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        let limit = limit.min(MAX_STREAM_READ_BATCH);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let state = self.state.lock().map_err(failure)?;
+        let Some(events) = state.streams.get(stream_id) else {
+            return Ok(Vec::new());
+        };
+        let start = usize::try_from(after_version).unwrap_or(usize::MAX);
+        Ok(events.iter().skip(start).take(limit).cloned().collect())
+    }
+
+    fn read_stream_backwards(
+        &self,
+        stream_id: &str,
+        before_version: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        let limit = limit.min(MAX_STREAM_READ_BATCH);
+        if limit == 0 || before_version.is_some_and(|version| version <= 1) {
+            return Ok(Vec::new());
+        }
+        let state = self.state.lock().map_err(failure)?;
+        let Some(events) = state.streams.get(stream_id) else {
+            return Ok(Vec::new());
+        };
+        let end = before_version.map_or(events.len(), |version| {
+            usize::try_from(version.saturating_sub(1))
+                .unwrap_or(usize::MAX)
+                .min(events.len())
+        });
+        Ok(events[..end].iter().rev().take(limit).cloned().collect())
     }
 
     fn read_global(

@@ -19,6 +19,8 @@ operation stay in [Get started](../get-started/index.md) and
 - [Rust crate structure](crate-structure.md) keeps crate roots readable and behavior in
   responsibility-focused modules.
 - [Runtime and ports](runtime-ports.md) maps application responsibilities.
+- [Public API and application SDKs](application-sdk.md) defines the gRPC, SDK, and
+  Tauri integration boundary.
 - [State and recovery](state-recovery.md) explains canonical state and replay.
 - [Security architecture](security-architecture.md) defines the non-bypassable effect
   path.

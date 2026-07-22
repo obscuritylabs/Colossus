@@ -10,6 +10,8 @@ fi
 rust_required=false
 docs_required=false
 dependency_required=false
+sdk_required=false
+desktop_required=false
 
 for changed_path in "$@"; do
     case "$changed_path" in
@@ -26,9 +28,34 @@ for changed_path in "$@"; do
             dependency_required=true
             rust_required=true
             ;;
+        package*.json | */package*.json | go.mod | go.sum | */go.mod | */go.sum | pyproject.toml | */pyproject.toml | requirements*.txt | */requirements*.txt)
+            dependency_required=true
+            rust_required=true
+            ;;
+    esac
+
+    case "$changed_path" in
+        api/* | sdk/*)
+            sdk_required=true
+            ;;
+    esac
+
+    case "$changed_path" in
+        apps/desktop/* | scripts/desktop-dev | scripts/package-desktop-macos | scripts/patch-desktop-manifest-binding.mjs | scripts/prepare-desktop-binaries | scripts/write-desktop-bundle-manifest.mjs | scripts/verify-desktop-bundle.mjs | scripts/verify-desktop-unsigned-archive.mjs | crates/colossus-cli/* | crates/colossus-darwin-process/* | crates/colossus-sdk/* | crates/colossus-sidecar/* | crates/colossus-sidecar-protocol/*)
+            desktop_required=true
+            ;;
+    esac
+
+    case "$changed_path" in
+        .github/workflows/* | .github/rulesets/* | scripts/ci/* | crates/colossus-cli/tests/ci_contract.rs | crates/colossus-cli/tests/support/*)
+            sdk_required=true
+            desktop_required=true
+            ;;
     esac
 done
 
 printf 'rust_required=%s\n' "$rust_required"
 printf 'docs_required=%s\n' "$docs_required"
 printf 'dependency_required=%s\n' "$dependency_required"
+printf 'sdk_required=%s\n' "$sdk_required"
+printf 'desktop_required=%s\n' "$desktop_required"

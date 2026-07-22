@@ -215,6 +215,8 @@ fn export_retry_classification(error: &StoreError) -> (bool, &'static str) {
     match error {
         StoreError::Conflict { .. } => (true, "audit_export.conflict"),
         StoreError::KeyUnavailable(_) => (true, "audit_export.key_unavailable"),
+        StoreError::WriterLeaseHeld => (false, "audit_export.writer_lease_held"),
+        StoreError::WorkspaceIdentityChanged => (false, "audit_export.workspace_identity_changed"),
         StoreError::Adapter(_) => (true, "audit_export.adapter"),
         StoreError::NotFound(_) => (false, "audit_export.not_found"),
         StoreError::Verification(_) => (false, "audit_export.verification"),

@@ -1,0 +1,324 @@
+#!/bin/sh
+
+set -eu
+umask 077
+
+fail() {
+    printf 'package-desktop-macos: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$(uname -s)" = Darwin ] || fail "the managed desktop bundle is currently macOS-only"
+
+case "$#" in
+    0)
+        mode=all
+        app_argument=
+        ;;
+    1)
+        mode=$1
+        app_argument=
+        ;;
+    2)
+        mode=$1
+        app_argument=$2
+        ;;
+    *) fail "usage: scripts/package-desktop-macos [build | sign ABSOLUTE_APP_PATH]" ;;
+esac
+case "$mode" in
+    all)
+        [ "$#" -eq 0 ] || fail "the compatibility build-and-sign mode does not accept arguments"
+        ;;
+    build)
+        [ "$#" -eq 1 ] || fail "build mode does not accept an application path"
+        ;;
+    sign)
+        [ "$#" -eq 2 ] || fail "sign mode requires the exact absolute application path"
+        ;;
+    *) fail "mode must be build or sign" ;;
+esac
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+desktop="$repository/apps/desktop"
+tauri="$desktop/node_modules/.bin/tauri"
+release_version=${COLOSSUS_DESKTOP_RELEASE_VERSION:-}
+team_id=${COLOSSUS_DESKTOP_TEAM_ID:-}
+desktop_identifier=com.obscuritylabs.colossus.desktop
+sidecar_identifier=com.obscuritylabs.colossus.desktop.sidecar
+cli_identifier=com.obscuritylabs.colossus.desktop.cli
+
+canonical_team_id() {
+    value=$1
+    if [ "$value" = ADHOC ]; then
+        return 0
+    fi
+    printf '%s\n' "$value" | grep -Eq '^[A-Z0-9]{10}$'
+}
+
+resolve_target() {
+    if [ -n "${COLOSSUS_DESKTOP_TARGET:-}" ]; then
+        printf '%s\n' "$COLOSSUS_DESKTOP_TARGET"
+        return
+    fi
+    if [ "$mode" = sign ]; then
+        case "$(uname -m)" in
+            arm64) printf '%s\n' aarch64-apple-darwin ;;
+            x86_64) printf '%s\n' x86_64-apple-darwin ;;
+            *) fail "unsupported native macOS architecture" ;;
+        esac
+        return
+    fi
+    command -v rustc >/dev/null 2>&1 || fail "rustc is not installed or not on PATH"
+    rustc --print host-tuple
+}
+
+target=$(resolve_target)
+case "$target" in
+    aarch64-apple-darwin | x86_64-apple-darwin) ;;
+    *) fail "unsupported macOS target triple: $target" ;;
+esac
+
+target_dir=${CARGO_TARGET_DIR:-$desktop/src-tauri/target}
+case "$target_dir" in
+    /*) ;;
+    *) target_dir="$repository/$target_dir" ;;
+esac
+export CARGO_TARGET_DIR=$target_dir
+bundle_directory="$target_dir/release/bundle/macos"
+default_app="$bundle_directory/Colossus Desktop.app"
+unsigned_archive="$bundle_directory/Colossus Desktop.unsigned.zip"
+
+validate_app_path() {
+    candidate=$1
+    case "$candidate" in
+        /*) ;;
+        *) fail "application path must be absolute" ;;
+    esac
+    [ ! -L "$candidate" ] || fail "application bundle must not be a symlink"
+    [ -d "$candidate" ] || fail "application bundle is missing"
+    [ "${candidate##*/}" = "Colossus Desktop.app" ] || fail "application bundle name is unexpected"
+    canonical=$(CDPATH= cd -- "$candidate" && pwd -P)
+    [ "$canonical" = "$candidate" ] || fail "application bundle path must already be canonical"
+}
+
+validate_bundle_inputs() {
+    app=$1
+    validate_app_path "$app"
+    contents="$app/Contents"
+    macos="$app/Contents/MacOS"
+    resources="$app/Contents/Resources"
+    info_plist="$app/Contents/Info.plist"
+    for directory in "$contents" "$macos"; do
+        [ ! -L "$directory" ] || fail "$directory must not be a symlink"
+        [ -d "$directory" ] || fail "$directory is missing"
+    done
+    [ ! -L "$resources" ] || fail "$resources must not be a symlink"
+    if [ -e "$resources" ]; then
+        [ -d "$resources" ] || fail "$resources must be a directory when present"
+    fi
+    [ ! -L "$info_plist" ] && [ -f "$info_plist" ] || fail "Info.plist must be a regular non-symlink file"
+    main_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")
+    case "$main_name" in
+        *[!A-Za-z0-9_.-]* | "") fail "application bundle declares an unsafe executable name" ;;
+    esac
+    main="$macos/$main_name"
+    sidecar="$macos/colossus-sidecar"
+    cli="$macos/colossus"
+    manifest="$resources/colossus-bundle-manifest.json"
+    for binary in "$sidecar" "$cli" "$main"; do
+        [ ! -L "$binary" ] || fail "$binary must not be a symlink"
+        [ -f "$binary" ] || fail "$binary is missing"
+        chmod 0755 "$binary"
+    done
+}
+
+prepare_resources_directory() {
+    [ ! -L "$resources" ] || fail "$resources must not be a symlink"
+    if [ ! -e "$resources" ]; then
+        mkdir -m 0755 "$resources"
+    fi
+    [ -d "$resources" ] && [ ! -L "$resources" ] ||
+        fail "$resources could not be created safely"
+    canonical=$(CDPATH= cd -- "$resources" && pwd -P)
+    [ "$canonical" = "$resources" ] ||
+        fail "$resources must remain inside the canonical application bundle"
+}
+
+build_unsigned_app() {
+    if [ "$mode" = build ]; then
+        [ -z "${COLOSSUS_DESKTOP_SIGNING_IDENTITY:-}" ] || fail "build mode rejects signing identity state"
+        [ -z "${COLOSSUS_DESKTOP_NOTARY_PROFILE:-}" ] || fail "build mode rejects notarization state"
+        [ -z "${COLOSSUS_DESKTOP_NOTARY_KEYCHAIN:-}" ] || fail "build mode rejects notarization keychain state"
+        [ -z "${DEVELOPER_ID_P12_BASE64:-}" ] || fail "build mode rejects Developer ID credential state"
+        [ -z "${DEVELOPER_ID_P12_PASSWORD:-}" ] || fail "build mode rejects Developer ID credential state"
+        [ -z "${NOTARY_API_KEY_BASE64:-}" ] || fail "build mode rejects notarization credential state"
+        [ -z "${NOTARY_ISSUER_ID:-}" ] || fail "build mode rejects notarization credential state"
+        [ -z "${NOTARY_KEY_ID:-}" ] || fail "build mode rejects notarization credential state"
+    fi
+    canonical_team_id "$team_id" ||
+        fail "build mode requires COLOSSUS_DESKTOP_TEAM_ID=ADHOC or the public 10-character Apple Team ID"
+    command -v cargo >/dev/null 2>&1 || fail "cargo is not installed or not on PATH"
+    command -v rustc >/dev/null 2>&1 || fail "rustc is not installed or not on PATH"
+    command -v node >/dev/null 2>&1 || fail "node is not installed or not on PATH"
+    [ -x "$tauri" ] || fail "run npm ci in apps/desktop before packaging"
+    if [ -n "$release_version" ]; then
+        printf '%s\n' "$release_version" |
+            grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+            fail "desktop release version must be canonical semantic versioning"
+    fi
+
+    COLOSSUS_DESKTOP_TARGET=$target "$script_dir/prepare-desktop-binaries" release
+
+    cd "$desktop"
+    if [ -n "$release_version" ]; then
+        tauri_override=$(printf '{"version":"%s"}' "$release_version")
+        "$tauri" build --config "$tauri_override" --no-sign --bundles app -- --locked
+    else
+        "$tauri" build --no-sign --bundles app -- --locked
+    fi
+    cd "$repository"
+
+    validate_bundle_inputs "$default_app"
+    rm -f "$unsigned_archive"
+    /usr/bin/ditto -c -k --keepParent --norsrc --noextattr \
+        "$default_app" "$unsigned_archive"
+    [ -f "$unsigned_archive" ] && [ ! -L "$unsigned_archive" ] || fail "unsigned archive was not created"
+    printf 'Built credential-free unsigned Managed Local application: %s\n' "$unsigned_archive"
+}
+
+sign_one() {
+    candidate=$1
+    code_identifier=$2
+    if [ "$identity" = - ]; then
+        codesign --force --sign - --options runtime \
+            --identifier "$code_identifier" "$candidate"
+    else
+        codesign --force --timestamp --sign "$identity" --options runtime \
+            --identifier "$code_identifier" "$candidate"
+    fi
+}
+
+verify_signed_code() {
+    candidate=$1
+    expected_identifier=$2
+    codesign --verify --strict --verbose=2 "$candidate"
+    details=$(codesign -d --verbose=4 "$candidate" 2>&1) ||
+        fail "could not inspect a signed desktop code object"
+    actual_identifier=$(printf '%s\n' "$details" | sed -n 's/^Identifier=//p')
+    actual_team=$(printf '%s\n' "$details" | sed -n 's/^TeamIdentifier=//p')
+    [ "$actual_identifier" = "$expected_identifier" ] ||
+        fail "signed desktop code identifier does not match its fixed role"
+    if [ "$team_id" = ADHOC ]; then
+        [ "$actual_team" = "not set" ] ||
+            fail "validation-only ADHOC code unexpectedly has a TeamIdentifier"
+    else
+        [ "$actual_team" = "$team_id" ] ||
+            fail "signed desktop code TeamIdentifier does not match COLOSSUS_DESKTOP_TEAM_ID"
+    fi
+}
+
+sign_app() {
+    app=$1
+    identity=${COLOSSUS_DESKTOP_SIGNING_IDENTITY:-}
+    notary_keychain=${COLOSSUS_DESKTOP_NOTARY_KEYCHAIN:-}
+    [ -n "$identity" ] || fail "set COLOSSUS_DESKTOP_SIGNING_IDENTITY to a Developer ID Application identity (or '-' for validation-only ADHOC packaging)"
+    canonical_team_id "$team_id" ||
+        fail "sign mode requires COLOSSUS_DESKTOP_TEAM_ID=ADHOC or the public 10-character Apple Team ID"
+    if [ "$identity" = - ]; then
+        [ "$team_id" = ADHOC ] || fail "ad-hoc signing requires the explicit validation-only ADHOC team sentinel"
+    else
+        [ "$team_id" != ADHOC ] || fail "Developer ID signing requires a canonical Apple Team ID"
+    fi
+    command -v codesign >/dev/null 2>&1 || fail "codesign is not installed or not on PATH"
+    command -v node >/dev/null 2>&1 || fail "node is not installed or not on PATH"
+
+    validate_bundle_inputs "$app"
+    prepare_resources_directory
+
+    # Nested binaries are finalized before their exact raw digests are sealed into the
+    # outer application. Never use --deep here: it could silently replace these signatures
+    # after their hashes have been recorded.
+    sign_one "$sidecar" "$sidecar_identifier"
+    sign_one "$cli" "$cli_identifier"
+    node "$script_dir/write-desktop-bundle-manifest.mjs" \
+        --target "$target" \
+        --sidecar "$sidecar" \
+        --cli "$cli" \
+        --output "$manifest"
+
+    node "$script_dir/patch-desktop-manifest-binding.mjs" \
+        --executable "$main" \
+        --manifest "$manifest"
+
+    sign_one "$main" "$desktop_identifier"
+    sign_one "$app" "$desktop_identifier"
+
+    verify_signed_code "$sidecar" "$sidecar_identifier"
+    verify_signed_code "$cli" "$cli_identifier"
+    verify_signed_code "$main" "$desktop_identifier"
+    verify_signed_code "$app" "$desktop_identifier"
+    codesign --verify --deep --strict --verbose=2 "$app"
+    node "$script_dir/verify-desktop-bundle.mjs" --app "$app" --target "$target"
+
+    if [ -n "${COLOSSUS_DESKTOP_NOTARY_PROFILE:-}" ]; then
+        [ "$identity" != - ] || fail "notarization requires a Developer ID Application identity"
+        command -v xcrun >/dev/null 2>&1 || fail "xcrun is required for notarization"
+        case "$COLOSSUS_DESKTOP_NOTARY_PROFILE" in
+            *[!A-Za-z0-9_.-]* | "") fail "notary profile has an unsafe name" ;;
+        esac
+        if [ -n "$notary_keychain" ]; then
+            case "$notary_keychain" in
+                /*) ;;
+                *) fail "notary keychain must be an absolute path" ;;
+            esac
+            [ -f "$notary_keychain" ] && [ ! -L "$notary_keychain" ] ||
+                fail "notary keychain must be a regular non-symlink file"
+        fi
+        upload="$(dirname -- "$app")/Colossus Desktop.notary-upload.zip"
+        rm -f "$upload"
+        /usr/bin/ditto -c -k --keepParent "$app" "$upload"
+        if [ -n "$notary_keychain" ]; then
+            xcrun notarytool submit "$upload" \
+                --keychain-profile "$COLOSSUS_DESKTOP_NOTARY_PROFILE" \
+                --keychain "$notary_keychain" --wait
+        else
+            xcrun notarytool submit "$upload" \
+                --keychain-profile "$COLOSSUS_DESKTOP_NOTARY_PROFILE" --wait
+        fi
+        xcrun stapler staple "$app"
+        verify_signed_code "$sidecar" "$sidecar_identifier"
+        verify_signed_code "$cli" "$cli_identifier"
+        verify_signed_code "$main" "$desktop_identifier"
+        verify_signed_code "$app" "$desktop_identifier"
+        codesign --verify --deep --strict --verbose=2 "$app"
+        node "$script_dir/verify-desktop-bundle.mjs" --app "$app" --target "$target"
+        spctl --assess --type execute --verbose=2 "$app"
+        rm -f "$upload"
+    fi
+
+    archive="$(dirname -- "$app")/Colossus Desktop.zip"
+    rm -f "$archive"
+    /usr/bin/ditto -c -k --keepParent "$app" "$archive"
+
+    if [ "$team_id" = ADHOC ]; then
+        printf 'Packaged validation-only ADHOC bundle (Managed Local runtime intentionally rejects it): %s\n' "$archive"
+    elif [ -n "${COLOSSUS_DESKTOP_NOTARY_PROFILE:-}" ]; then
+        printf 'Packaged signed and notarized Managed Local application: %s\n' "$archive"
+    else
+        printf 'Packaged signed but not notarized Managed Local application: %s\n' "$archive"
+    fi
+}
+
+case "$mode" in
+    build)
+        build_unsigned_app
+        ;;
+    sign)
+        sign_app "$app_argument"
+        ;;
+    all)
+        build_unsigned_app
+        sign_app "$default_app"
+        ;;
+esac

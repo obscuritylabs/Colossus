@@ -70,7 +70,8 @@ impl ProviderProfile {
             && !valid_credential_reference(reference)
         {
             return Err(ProviderError::Configuration(
-                "provider credentials must use an env:VARIABLE reference".into(),
+                "provider credentials must use a valid env:VARIABLE or host:IDENTIFIER reference"
+                    .into(),
             ));
         }
         let base_url = match kind {

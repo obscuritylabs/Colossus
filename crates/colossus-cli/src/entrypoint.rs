@@ -12,17 +12,30 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    if (cli.worker_required || cli.desktop_worker_auth)
+        && !matches!(cli.command, Command::Tui { .. })
+    {
+        return Err("--worker-required is only valid with the TUI".into());
+    }
     if matches!(cli.command, Command::SandboxHelper) {
         colossus_sandbox::run_helper_stdio()?;
         return Ok(());
     }
     let runtime_options = RuntimeOpenOptions::for_workspace(&cli.workspace)?;
+    let desktop_workspace = cli
+        .desktop_worker_auth
+        .then(|| bind_desktop_tui_workspace(&runtime_options.workspace))
+        .transpose()?;
     let config_path = if cli.config.is_absolute() {
         cli.config.clone()
     } else {
         runtime_options.workspace.join(&cli.config)
     };
-    std::env::set_current_dir(&runtime_options.workspace)?;
+    if let Some(workspace) = desktop_workspace.as_ref() {
+        workspace.enter()?;
+    } else {
+        std::env::set_current_dir(&runtime_options.workspace)?;
+    }
     if let Command::Config(ConfigCommand {
         command:
             ConfigAction::Init {
@@ -52,11 +65,13 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     match &cli.command {
-        Command::Worker {
-            once: false,
-            shutdown: false,
-            status: false,
-        } => {
+        Command::Worker(worker)
+            if !worker.once
+                && !worker.shutdown
+                && !worker.status
+                && worker.enroll_application.is_none()
+                && worker.revoke_credential.is_none() =>
+        {
             let mode = match cli.approval_mode.unwrap_or(ApprovalMode::Ask) {
                 ApprovalMode::Deny => WorkerApprovalMode::Deny,
                 ApprovalMode::Ask => WorkerApprovalMode::Ask,
@@ -64,33 +79,118 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 ApprovalMode::FullAccess => WorkerApprovalMode::FullAccess,
             };
             let server =
-                WorkerServer::open_with_mode_at_workspace(&config, mode, runtime_options.clone())?;
+                WorkerServer::open_with_mode_at_workspace(&config, mode, runtime_options.clone())
+                    .map_err(worker_open_error)?;
+            let (server, public_environment) =
+                if let Some(directory) = worker.public_api_dir.as_deref() {
+                    let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;
+                    let credentials = environment.credential_manager(&server);
+                    let options = environment.host_options(&credentials)?;
+                    let server = server.enable_public_api(options).await?;
+                    eprintln!(
+                        "public API discovery published in {}",
+                        environment.directory().display()
+                    );
+                    (server, Some(environment))
+                } else {
+                    (server, None)
+                };
             eprintln!("worker listening on {}", server.endpoint());
-            server.serve().await?;
+            let result = server.serve().await;
+            drop(public_environment);
+            result?;
             return Ok(());
         }
-        Command::Worker { shutdown: true, .. } => {
+        Command::Worker(WorkerCommand { shutdown: true, .. }) => {
             let client = WorkerClient::from_config(&config)?;
             validate_worker_workspace(&client.ping().await?, &runtime_options.workspace)?;
             print_json(&client.call(WorkerOperation::Shutdown).await?)?;
             return Ok(());
         }
-        Command::Worker { status: true, .. } => {
+        Command::Worker(WorkerCommand { status: true, .. }) => {
             let client = WorkerClient::from_config(&config)?;
             let status = client.ping().await?;
             validate_worker_workspace(&status, &runtime_options.workspace)?;
             print_json(&status)?;
             return Ok(());
         }
+        Command::Worker(worker)
+            if worker.enroll_application.is_some() || worker.revoke_credential.is_some() =>
+        {
+            if WorkerClient::discover(&config)?.is_some() {
+                return Err(
+                    "offline public API administration refused because a worker endpoint exists"
+                        .into(),
+                );
+            }
+            let server = WorkerServer::open_with_mode_at_workspace(
+                &config,
+                WorkerApprovalMode::Deny,
+                runtime_options.clone(),
+            )
+            .map_err(worker_open_error)?;
+            let directory = worker
+                .public_api_dir
+                .as_deref()
+                .ok_or(PublicApiAdminError::InvalidDirectory)?;
+            let environment = PublicApiEnvironment::open(directory, &OsCredentialStore)?;
+            if let Some(application_id) = worker.enroll_application.as_deref() {
+                let destination_service = worker
+                    .credential_keyring_service
+                    .as_deref()
+                    .ok_or(PublicApiAdminError::InvalidKeyringIdentifier)?;
+                let destination_account = worker
+                    .credential_keyring_account
+                    .as_deref()
+                    .ok_or(PublicApiAdminError::InvalidKeyringIdentifier)?;
+                let retirement_source = match (
+                    worker.retire_credential_keyring_service.as_deref(),
+                    worker.retire_credential_keyring_account.as_deref(),
+                ) {
+                    (Some(service), Some(account)) => {
+                        Some(CredentialRetirementSource { service, account })
+                    }
+                    (None, None) => None,
+                    _ => return Err(PublicApiAdminError::InvalidRotationSource.into()),
+                };
+                let metadata = enroll_application(
+                    &environment,
+                    &server,
+                    &OsCredentialStore,
+                    EnrollmentRequest {
+                        application_id,
+                        scopes: &worker.scope,
+                        roles: &worker.role,
+                        tools: &worker.tool,
+                        destination_service,
+                        destination_account,
+                        replace_destination: worker.replace_credential,
+                        retirement_source,
+                    },
+                )?;
+                print_json(&metadata)?;
+            } else if let Some(credential_id) = worker.revoke_credential.as_deref() {
+                print_json(&revoke_credential(&environment, &server, credential_id)?)?;
+            }
+            return Ok(());
+        }
         _ => {}
     }
+    let inherited_worker = desktop_workspace
+        .as_ref()
+        .map(|workspace| inherited_desktop_worker_client(&config, workspace))
+        .transpose()?;
     if dispatch_to_worker_if_active(
         &config,
         &config_path,
         &runtime_options.workspace,
         &cli.command,
-        cli.approval_mode,
-        cli.no_alt_screen,
+        WorkerDispatchOptions {
+            approval_mode: cli.approval_mode,
+            no_alt_screen: cli.no_alt_screen,
+            worker_required: cli.worker_required,
+            inherited_worker,
+        },
     )
     .await?
     {
@@ -131,12 +231,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         } else {
             None
         };
-    let runtime = Arc::new(Runtime::open_with_options(
-        &config,
-        approvals,
-        user_prompts,
-        runtime_options,
-    )?);
+    let runtime = Arc::new(
+        Runtime::open_with_options(&config, approvals, user_prompts, runtime_options)
+            .map_err(runtime_open_error)?,
+    );
     match cli.command {
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
@@ -1056,11 +1154,12 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             let themes = ThemeLibrary::load_for_config(&cli.config)?;
             line_runner(&runtime, session, resume, configured_approval, &themes).await?
         }
-        Command::Worker {
+        Command::Worker(WorkerCommand {
             once,
             shutdown: false,
             status: false,
-        } => {
+            ..
+        }) => {
             let recovered = runtime.workflows().recover_interrupted()?;
             let drained = runtime.workflows().drain().await?;
             let projections = runtime.drain_projections()?;
@@ -1073,14 +1172,38 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 "subagents": subagents,
             }))?;
         }
-        Command::Worker { shutdown: true, .. } => {
+        Command::Worker(WorkerCommand { shutdown: true, .. }) => {
             unreachable!("handled before runtime construction")
         }
-        Command::Worker { status: true, .. } => {
+        Command::Worker(WorkerCommand { status: true, .. }) => {
             unreachable!("handled before runtime construction")
         }
         Command::SandboxHelper => unreachable!("handled before runtime construction"),
     }
     runtime.checkpoint()?;
     Ok(())
+}
+
+fn runtime_open_error(error: colossus_runtime::RuntimeError) -> Box<dyn Error> {
+    if matches!(
+        error,
+        colossus_runtime::RuntimeError::Store(colossus_ports::StoreError::WriterLeaseHeld)
+    ) {
+        Box::new(cli_error("runtime writer lease is already held"))
+    } else {
+        Box::new(error)
+    }
+}
+
+fn worker_open_error(error: colossus_worker::WorkerError) -> Box<dyn Error> {
+    if matches!(
+        error,
+        colossus_worker::WorkerError::Runtime(colossus_runtime::RuntimeError::Store(
+            colossus_ports::StoreError::WriterLeaseHeld
+        )) | colossus_worker::WorkerError::Store(colossus_ports::StoreError::WriterLeaseHeld)
+    ) {
+        Box::new(cli_error("runtime writer lease is already held"))
+    } else {
+        Box::new(error)
+    }
 }

@@ -12,6 +12,31 @@ use std::{
     },
 };
 
+#[test]
+fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
+    for allowed in [
+        "filesystem.read",
+        "git.diff",
+        "patch.preview",
+        "task.create",
+        "plan.create",
+        "memory.search",
+        "user.ask",
+    ] {
+        assert!(plan_mode_tool(allowed), "{allowed}");
+    }
+    for denied in [
+        "filesystem.write",
+        "process.run",
+        "network.fetch",
+        "patch.apply",
+        "git.commit",
+        "agent.delegate",
+    ] {
+        assert!(!plan_mode_tool(denied), "{denied}");
+    }
+}
+
 struct ScriptedProvider {
     turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
     requests: Mutex<Vec<ModelRequest>>,
@@ -237,6 +262,114 @@ fn turn(events: Vec<ProviderEvent>) -> Result<ProviderTurn, ModelProviderError> 
         response_id: None,
         events,
     })
+}
+
+#[tokio::test]
+async fn authenticated_application_is_the_immutable_run_initiator() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::FinalOutput {
+            text: "done".into(),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&[]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    let outcome = service
+        .run_in_session_with_skills_stream_controlled_as(
+            "primary",
+            "test",
+            "hello",
+            1,
+            None,
+            &[],
+            Actor {
+                actor_type: ActorType::Application,
+                id: "app:test-ui".into(),
+            },
+            &mut observer,
+            &RunControl::default(),
+        )
+        .await
+        .expect("application run");
+    let result = match outcome {
+        AgentRunOutcome::Completed { result } => result,
+        AgentRunOutcome::Cancelled { .. } => panic!("run unexpectedly cancelled"),
+    };
+    let events = journal.read_global(1, 100).expect("journal events");
+    for event_type in [
+        "session.created.v1",
+        "session.message.appended.v1",
+        "model.request.prepared.v1",
+    ] {
+        let event = events
+            .iter()
+            .find(|event| event.event_type == event_type)
+            .unwrap_or_else(|| panic!("missing {event_type}"));
+        assert_eq!(event.actor.actor_type, ActorType::Application);
+        assert_eq!(event.actor.id, "app:test-ui");
+    }
+    assert!(events.iter().any(|event| {
+        event.stream_id == format!("run:{}", result.run_id)
+            && event.actor.actor_type == ActorType::Model
+    }));
+}
+
+#[tokio::test]
+async fn public_tool_ceiling_cannot_expand_through_unscoped_delegation() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::FinalOutput {
+            text: "done".into(),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(
+            StaticToolRegistry::builtins(&["agent.delegate".into(), "echo".into()])
+                .expect("catalog"),
+        ),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    service
+        .run_public_with_skills_stream_controlled(
+            "primary",
+            "test",
+            "hello",
+            1,
+            "public-run-1",
+            "public-session-1",
+            true,
+            &[],
+            &["agent.delegate".into(), "echo".into()],
+            false,
+            Actor {
+                actor_type: ActorType::Application,
+                id: "app:test-ui".into(),
+            },
+            &mut observer,
+            &RunControl::default(),
+        )
+        .await
+        .expect("public application run");
+
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(
+        requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["echo"]
+    );
 }
 
 #[tokio::test]

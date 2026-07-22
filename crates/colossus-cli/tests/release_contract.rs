@@ -1,4 +1,4 @@
-//! Repository contracts for release readiness and six-platform draft releases.
+//! Repository contracts for release readiness and six-platform CLI plus Desktop drafts.
 
 mod support;
 
@@ -9,7 +9,7 @@ use std::{collections::BTreeSet, fs};
 use support::{field, job, jobs, mapping, named_step, repository_root, workflow};
 
 #[test]
-fn release_workflow_has_exactly_six_native_targets() {
+fn release_workflow_has_exactly_six_native_cli_targets() {
     let workflow = workflow("release.yml");
     let jobs = jobs(&workflow);
     let artifacts = job(jobs, "artifacts");
@@ -67,7 +67,7 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "publish_draft=false",
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 12",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 14",
     ] {
         assert!(
             source.contains(required),
@@ -81,6 +81,27 @@ fn tag_validation_and_draft_publication_fail_closed() {
         field(draft, "if")
             .as_str()
             .is_some_and(|condition| condition.contains("publish_draft == 'true'"))
+    );
+}
+
+#[test]
+fn release_readiness_allows_only_the_public_python_sdk() {
+    let source = fs::read_to_string(repository_root().join("release/verify-release-readiness.sh"))
+        .expect("read release readiness script");
+    for required in [
+        "legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**')",
+        "[ -e pyproject.toml ]",
+        "[ -n \"$legacy_python_sources\" ]",
+        "tracked Python source outside sdk/python",
+    ] {
+        assert!(
+            source.contains(required),
+            "release readiness is missing {required}"
+        );
+    }
+    assert!(
+        !source.contains("[ -n \"$(git ls-files '*.py')\" ]"),
+        "release readiness must not reject the intentional public Python SDK"
     );
 }
 
@@ -137,7 +158,7 @@ fn release_readiness_verifier_is_evergreen_and_pinned() {
         "cargo fmt --all -- --check",
         "cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace",
-        "git ls-files '*.py'",
+        "git ls-files -- '*.py' ':(exclude)sdk/python/**'",
         "release-readiness verification passed",
     ] {
         assert!(

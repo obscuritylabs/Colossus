@@ -80,6 +80,7 @@ pub(super) fn repository_identity(workspace: &Path) -> String {
 pub(super) async fn discover_mcp_tools(
     gateway: &EffectGateway,
     executor: &McpExecutor,
+    effect_executor: &dyn EffectExecutor,
     actor: Actor,
     context: ExecutionContext,
     selected_server: Option<&str>,
@@ -101,7 +102,7 @@ pub(super) async fn discover_mcp_tools(
                     cursor: cursor.clone(),
                 },
             )?;
-            let released = gateway.execute(request, executor).await?;
+            let released = gateway.execute(request, effect_executor).await?;
             let page: McpToolsPage = serde_json::from_slice(&released.bytes).map_err(|error| {
                 RuntimeError::Config(format!("invalid MCP tools page: {error}"))
             })?;
@@ -150,9 +151,14 @@ pub(super) async fn discover_mcp_tools(
     Ok(tools)
 }
 
+// Keep the typed request builder and the separately identity-bound effect adapter
+// explicit: combining them would make it easier to accidentally dispatch the raw MCP
+// executor without the permit-time workspace revalidation.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn invoke_mcp_tool(
     gateway: &EffectGateway,
     executor: &McpExecutor,
+    effect_executor: &dyn EffectExecutor,
     actor: Actor,
     context: ExecutionContext,
     server: &str,
@@ -162,6 +168,7 @@ pub(super) async fn invoke_mcp_tool(
     let discovered = discover_mcp_tools(
         gateway,
         executor,
+        effect_executor,
         actor.clone(),
         context.clone(),
         Some(server),
@@ -182,7 +189,7 @@ pub(super) async fn invoke_mcp_tool(
             input_schema: tool_spec.input_schema.clone(),
         },
     )?;
-    let released = gateway.execute(request, executor).await?;
+    let released = gateway.execute(request, effect_executor).await?;
     let output: McpCallOutput = serde_json::from_slice(&released.bytes)
         .map_err(|error| RuntimeError::Config(format!("invalid MCP call output: {error}")))?;
     if output.server != server || output.tool != tool {

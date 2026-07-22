@@ -3,7 +3,7 @@ use super::*;
 pub(super) struct TraceToolExecutor {
     pub(super) journal: Arc<dyn EventJournal>,
     pub(super) gateway: Arc<EffectGateway>,
-    pub(super) filesystem: Arc<FilesystemExecutor>,
+    pub(super) filesystem: Arc<dyn EffectExecutor>,
     pub(super) workspace: PathBuf,
     pub(super) inner: Arc<dyn ToolExecutor>,
 }

@@ -101,6 +101,11 @@ pub(super) fn validate_pack_manifest(manifest: &PackManifest) -> Result<(), Pack
             "pack files must contain 1..=10000 entries".into(),
         ));
     }
+    if manifest.skills.len() > MAX_PACK_SKILL_REFERENCES {
+        return Err(PackError::Invalid(format!(
+            "pack skills must contain at most {MAX_PACK_SKILL_REFERENCES} entries"
+        )));
+    }
     let capabilities = unique_values("capabilities", &manifest.capabilities)?;
     let known = BTreeSet::from([
         "integrations",

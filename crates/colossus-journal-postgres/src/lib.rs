@@ -11,7 +11,8 @@ use colossus_contracts::{
     ProjectionWorkItem, SignedCheckpoint,
 };
 use colossus_ports::{
-    CheckpointSigner, EventJournal, KeyProvider, ProjectionStore, StoreError, VerificationReport,
+    CheckpointSigner, EventJournal, KeyProvider, MAX_STREAM_READ_BATCH, ProjectionStore,
+    StoreError, VerificationReport,
 };
 use postgres::{
     Client, Config as PgConfig, NoTls,

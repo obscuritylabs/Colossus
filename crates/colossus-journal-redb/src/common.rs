@@ -1,6 +1,8 @@
 use super::*;
 
 pub(super) const EVENTS: TableDefinition<u64, &[u8]> = TableDefinition::new("events");
+pub(super) const STREAM_EVENTS: TableDefinition<(&str, u64), u64> =
+    TableDefinition::new("stream_events");
 pub(super) const STREAM_VERSIONS: TableDefinition<&str, u64> =
     TableDefinition::new("stream_versions");
 pub(super) const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
@@ -13,6 +15,8 @@ pub(super) const ZERO_HASH: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 pub(super) const CHECKPOINT_INTERVAL: u64 = 100;
 pub(super) const CHECKPOINT_MAX_AGE: Duration = Duration::from_secs(60);
+pub(super) const STREAM_EVENTS_INDEX_KEY: &str = "stream_events_index_version";
+pub(super) const STREAM_EVENTS_INDEX_VERSION: u64 = 1;
 
 pub(super) fn adapter_error(error: impl std::fmt::Display) -> StoreError {
     StoreError::Adapter(error.to_string())
@@ -75,10 +79,7 @@ impl RedbWriterLease {
             .open(&path)
             .map_err(adapter_error)?;
         if !file.try_lock_exclusive().map_err(adapter_error)? {
-            return Err(StoreError::Adapter(format!(
-                "redb writer lease is already held: {}",
-                path.display()
-            )));
+            return Err(StoreError::WriterLeaseHeld);
         }
         Ok(Self { file, path })
     }

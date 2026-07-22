@@ -401,6 +401,14 @@ pub trait SkillRepository: Send + Sync {
 
     /// Report every duplicate and the configured winner.
     fn duplicate_names(&self) -> Result<Vec<SkillDuplicate>, StoreError>;
+
+    /// List bounded resources for one selected skill through the repository's own
+    /// filesystem capability. Implementations must not reconstruct a path from
+    /// `SkillRecord::resource_root` after selection.
+    fn list_skill_resources(&self, name: &str) -> Result<Vec<SkillResourceEntry>, StoreError>;
+
+    /// Read one bounded resource through the same capability that selected the skill.
+    fn read_skill_resource(&self, name: &str, path: &str) -> Result<SkillResourceRead, StoreError>;
 }
 
 /// Workflow definitions and run projections.

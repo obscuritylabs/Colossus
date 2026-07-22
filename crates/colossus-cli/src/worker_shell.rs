@@ -1,7 +1,10 @@
 use super::*;
 
-pub(super) fn worker_probe_allows_embedded_fallback(error: &colossus_worker::WorkerError) -> bool {
-    matches!(error, colossus_worker::WorkerError::Unavailable(_))
+pub(super) fn worker_probe_allows_embedded_fallback(
+    error: &colossus_worker::WorkerError,
+    worker_required: bool,
+) -> bool {
+    !worker_required && matches!(error, colossus_worker::WorkerError::Unavailable(_))
 }
 
 pub(super) async fn worker_line_runner(

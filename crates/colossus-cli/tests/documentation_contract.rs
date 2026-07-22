@@ -311,7 +311,7 @@ fn zensical_site_is_pinned_searchable_and_complete() {
     );
     assert_eq!(
         mermaid_diagrams + 1,
-        7,
+        8,
         "the maintained product and architecture diagram set changed unexpectedly"
     );
     assert!(

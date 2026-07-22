@@ -4,9 +4,13 @@ mod unix {
     use std::{
         fs,
         os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _},
-        path::Path,
+        path::{Path, PathBuf},
     };
     use tokio::net::{UnixListener, UnixStream};
+
+    const SHORT_ENDPOINT_PREFIX: &str = "ipc-v2-";
+    const SHORT_ENDPOINT_DIGEST_BYTES: usize = 43;
+    const SHORT_ENDPOINT_SUFFIX: &str = ".sock";
 
     pub type ClientStream = UnixStream;
     pub type ServerStream = UnixStream;
@@ -19,7 +23,16 @@ mod unix {
     impl Listener {
         pub async fn bind(endpoint: &str) -> Result<Self, WorkerError> {
             let path = Path::new(endpoint);
-            if let Some(parent) = path.parent() {
+            if shortened_endpoint(path) {
+                match validate_shortened_parent(path)? {
+                    true => {}
+                    false => {
+                        return Err(WorkerError::Protocol(
+                            "worker endpoint private directory is unavailable".into(),
+                        ));
+                    }
+                }
+            } else if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
             if let Ok(metadata) = fs::symlink_metadata(path) {
@@ -79,6 +92,9 @@ mod unix {
 
     pub fn endpoint_is_trusted(endpoint: &str) -> Result<bool, WorkerError> {
         let path = Path::new(endpoint);
+        if shortened_endpoint(path) && !validate_shortened_parent(path)? {
+            return Ok(false);
+        }
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -99,6 +115,99 @@ mod unix {
             ));
         }
         Ok(true)
+    }
+
+    fn shortened_endpoint(path: &Path) -> bool {
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        let Some(digest) = name
+            .strip_prefix(SHORT_ENDPOINT_PREFIX)
+            .and_then(|name| name.strip_suffix(SHORT_ENDPOINT_SUFFIX))
+        else {
+            return false;
+        };
+        parent == shortened_endpoint_root()
+            && digest.len() == SHORT_ENDPOINT_DIGEST_BYTES
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    }
+
+    fn shortened_endpoint_root() -> PathBuf {
+        PathBuf::from("/tmp").join(format!(
+            "colossus-worker-leases-{}",
+            rustix::process::geteuid().as_raw()
+        ))
+    }
+
+    fn validate_shortened_parent(path: &Path) -> Result<bool, WorkerError> {
+        let parent = path.parent().ok_or_else(|| {
+            WorkerError::Protocol("worker endpoint has no parent directory".into())
+        })?;
+        let metadata = match fs::symlink_metadata(parent) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.file_type().is_dir()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(WorkerError::Protocol(
+                "worker endpoint private directory is not owner-only".into(),
+            ));
+        }
+        Ok(true)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn shaped_endpoint(root: &Path) -> PathBuf {
+            root.join(format!(
+                "{SHORT_ENDPOINT_PREFIX}{}{SHORT_ENDPOINT_SUFFIX}",
+                "a".repeat(SHORT_ENDPOINT_DIGEST_BYTES)
+            ))
+        }
+
+        #[test]
+        fn shortened_endpoint_shape_is_exact() {
+            let valid = shaped_endpoint(&shortened_endpoint_root());
+            assert!(shortened_endpoint(&valid));
+            assert!(!shortened_endpoint(
+                &shortened_endpoint_root().join("ipc-v2-too-short.sock")
+            ));
+            assert!(!shortened_endpoint(&shaped_endpoint(Path::new(
+                "/tmp/elsewhere"
+            ))));
+        }
+
+        #[test]
+        fn private_parent_validation_rejects_group_access_and_symlinks() {
+            let root = tempfile::tempdir().expect("root");
+            assert!(
+                !validate_shortened_parent(&shaped_endpoint(&root.path().join("missing")))
+                    .expect("missing parent")
+            );
+            let private = root.path().join("private");
+            fs::create_dir(&private).expect("private directory");
+            fs::set_permissions(&private, fs::Permissions::from_mode(0o700))
+                .expect("private permissions");
+            assert!(validate_shortened_parent(&shaped_endpoint(&private)).is_ok());
+
+            fs::set_permissions(&private, fs::Permissions::from_mode(0o770))
+                .expect("group permissions");
+            assert!(validate_shortened_parent(&shaped_endpoint(&private)).is_err());
+
+            let link = root.path().join("link");
+            std::os::unix::fs::symlink(&private, &link).expect("directory symlink");
+            assert!(validate_shortened_parent(&shaped_endpoint(&link)).is_err());
+        }
     }
 }
 

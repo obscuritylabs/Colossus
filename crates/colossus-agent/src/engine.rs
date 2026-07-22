@@ -10,12 +10,13 @@ impl AgentService {
         max_turns: u16,
         requested_session_id: Option<&str>,
         scope: RunScope<'_>,
+        initiator: Actor,
         mut released_observer: Option<&mut dyn RunEventObserver>,
         control: Option<&RunControl>,
     ) -> Result<AgentRunResult, AgentError> {
-        if role.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
+        if role.is_empty() || initiator.id.is_empty() || !(1..=MAX_TURNS).contains(&max_turns) {
             return Err(AgentError::Configuration(format!(
-                "role is required and max_turns must be in 1..={MAX_TURNS}"
+                "role and initiator id are required and max_turns must be in 1..={MAX_TURNS}"
             )));
         }
         let started = Instant::now();
@@ -25,9 +26,16 @@ impl AgentService {
             .unwrap_or_else(|| Uuid::now_v7().to_string());
         let session_id = match requested_session_id {
             Some(id) => {
-                self.sessions
-                    .get_session(id)?
-                    .ok_or_else(|| StoreError::NotFound(format!("session {id}")))?;
+                if self.sessions.get_session(id)?.is_none() {
+                    if !scope.create_requested_session {
+                        return Err(StoreError::NotFound(format!("session {id}")).into());
+                    }
+                    self.sessions.create_session(
+                        id,
+                        Some(&session_title(prompt)),
+                        initiator.clone(),
+                    )?;
+                }
                 id.to_owned()
             }
             None => {
@@ -35,10 +43,7 @@ impl AgentService {
                 self.sessions.create_session(
                     &id,
                     Some(&session_title(prompt)),
-                    Actor {
-                        actor_type: ActorType::User,
-                        id: "terminal-user".into(),
-                    },
+                    initiator.clone(),
                 )?;
                 id
             }
@@ -71,10 +76,7 @@ impl AgentService {
             &session_id,
             &run_id,
             user_message.clone(),
-            Actor {
-                actor_type: ActorType::User,
-                id: "terminal-user".into(),
-            },
+            initiator.clone(),
         )?;
         messages.push(user_message);
         let mut definitions = model_definitions(self.tools.as_ref());
@@ -82,7 +84,14 @@ impl AgentService {
             (scope.goal_id.is_some()
                 || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
                 && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
+                // Public application runs carry an explicit tool ceiling. Delegated
+                // jobs do not yet persist and inherit that ceiling, so exposing
+                // delegation here would let one allowed tool expand authority.
+                && (scope.allowed_tools.is_none() || definition.name != "agent.delegate")
                 && (!scope.plan_mode || plan_mode_tool(&definition.name))
+                && scope
+                    .allowed_tools
+                    .is_none_or(|allowed| allowed.contains(&definition.name))
         });
         let offered_tools = definitions
             .iter()
@@ -206,10 +215,7 @@ impl AgentService {
                 &stream_id,
                 &mut stream_version,
                 "model.request.prepared.v1",
-                Actor {
-                    actor_type: ActorType::User,
-                    id: "terminal-user".into(),
-                },
+                initiator.clone(),
                 &context,
                 json!({
                     "turn": turn,

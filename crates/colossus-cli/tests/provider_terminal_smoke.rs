@@ -29,6 +29,7 @@ impl Drop for ChildGuard {
 fn command(binary: &Path, config: &Path) -> Command {
     let mut command = Command::new(binary);
     command
+        .current_dir(config.parent().expect("provider test workspace"))
         .arg("--config")
         .arg(config)
         .env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY)
@@ -614,7 +615,7 @@ sandbox:
         String::from_utf8_lossy(&terminal.stderr)
     );
     let terminal_output = String::from_utf8_lossy(&terminal.stdout);
-    assert!(terminal_output.contains("Colossus Rust 0.9.0."));
+    assert!(terminal_output.contains("Colossus Rust 0.10.0."));
     assert!(terminal_output.contains("unknown terminal command: /session bogus"));
     assert!(terminal_output.contains("Choose a session to resume:"));
     assert!(terminal_output.contains("terminal-connected"));

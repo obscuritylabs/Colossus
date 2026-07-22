@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+fail() {
+    printf 'desktop-dev: %s\n' "$*" >&2
+    exit 1
+}
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+desktop="$repository/apps/desktop"
+
+command -v npm >/dev/null 2>&1 || fail "npm is not installed or not on PATH"
+command -v cargo >/dev/null 2>&1 || fail "cargo is not installed or not on PATH"
+command -v node >/dev/null 2>&1 || fail "node is not installed or not on PATH"
+
+connection="$desktop/src-tauri/connection.local.json"
+if [ -f "$connection" ]; then
+    node -e '
+const fs = require("fs");
+const path = process.argv[1];
+try {
+  const value = JSON.parse(fs.readFileSync(path, "utf8"));
+  const instance = typeof value.instanceId === "string" ? value.instanceId.replaceAll("-", "") : "";
+  const fingerprint = typeof value.certificateSha256 === "string" ? value.certificateSha256 : "";
+  if (!/^[0-9a-fA-F]{32}$/.test(instance) || /^0+$/.test(instance) || !/^[0-9a-fA-F]{64}$/.test(fingerprint) || /^0+$/.test(fingerprint)) {
+    process.exitCode = 1;
+  }
+} catch {
+  process.exitCode = 1;
+}
+' "$connection" || fail "connection.local.json has invalid External target trust values; remove it to use Managed Local only, or map enrollment instance_id and certificate_sha256 into it"
+fi
+
+cd "$desktop"
+npm ci --ignore-scripts
+
+exec npm run tauri:dev

@@ -1,0 +1,27 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-chat",
+  "description": "Only the main bundled WebView may use the narrow Colossus chat commands.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-initialize-desktop",
+    "allow-desktop-status",
+    "allow-add-external-target",
+    "allow-remove-external-target",
+    "allow-choose-workspace",
+    "allow-configure-managed-runtime",
+    "allow-run-managed-self-test",
+    "allow-restart-managed-runtime",
+    "allow-select-target",
+    "allow-set-terminal-enabled",
+    "allow-connect-colossus",
+    "allow-connection-status",
+    "allow-create-run",
+    "allow-get-run",
+    "allow-list-runs",
+    "allow-watch-run",
+    "allow-cancel-run",
+    "allow-respond-interaction",
+    "allow-show-terminal-window"
+  ]
+}

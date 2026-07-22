@@ -123,7 +123,7 @@ Include/exclude entries cannot overlap. The three action lists cannot overlap. W
 | `providers.profiles.NAME.kind` | `echo`, `open_ai_responses`, `open_ai_compatible` |
 | `.model` | Non-empty provider model identifier |
 | `.baseUrl` | URL including API path; remote endpoints use HTTPS |
-| `.credentialReference` | `env:VARIABLE` or `null` when supported |
+| `.credentialReference` | `env:VARIABLE`, injected `host:IDENTIFIER`, or `null` when supported |
 | `.timeoutMs` | Positive bounded duration |
 | `providers.roles.primary` | Required profile name |
 | Other role fields | Optional profile name; fall back to `primary` |
@@ -131,6 +131,10 @@ Include/exclude entries cannot overlap. The three action lists cannot overlap. W
 Known specialized roles are `risk_evaluator`, `context_summarizer`,
 `subagent_default`, `research_planner`, `research_worker`, and
 `research_synthesizer`.
+
+`host:` references are resolved only by an application-managed runtime through its
+in-memory credential resolver. The standard CLI and daemon composition remain
+environment-backed; they never interpret a `host:` identifier as a secret value.
 
 ## Storage
 
@@ -299,7 +303,7 @@ search:
 Kinds are `searxng` and `serp_api`. SerpAPI requires
 `credentialReference: env:VARIABLE`; SearXNG may use one and defaults `authHeader` to
 `X-Searxng-Key`. Both profiles accept `userAgent` and `timeoutMs`, which default to
-`colossus/0.9` and `30000`. The only route names are `agent` and `research`. Every
+`colossus/0.10` and `30000`. The only route names are `agent` and `research`. Every
 profile origin must be in `sandbox.networkDestinations`. Routes never silently fall
 back.
 

@@ -1,7 +1,8 @@
 use super::{
     EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX, PROJECTION_POSITIONS,
-    PersistedEventEnvelope, RedbEventJournal, RedbWriterLease, STREAM_VERSIONS, StaticKeyProvider,
-    adapter_error, cached_platform_secret, persisted_associated_data, persisted_record_hash,
+    PersistedEventEnvelope, RedbEventJournal, RedbWriterLease, STREAM_EVENTS,
+    STREAM_EVENTS_INDEX_KEY, STREAM_VERSIONS, StaticKeyProvider, adapter_error,
+    cached_platform_secret, persisted_associated_data, persisted_record_hash,
 };
 use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
@@ -125,6 +126,51 @@ fn journal_with_file_anchor(
         Arc::new(Ed25519CheckpointSigner::new("test-signing", [8_u8; 32])),
     )
     .expect("open journal with file anchor")
+}
+
+#[test]
+fn startup_builds_and_uses_the_verified_legacy_stream_index() {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("legacy-stream-index.redb");
+    {
+        let journal = journal(&path);
+        journal
+            .append_batch(vec![
+                event("stream-a", 0, 1),
+                event("stream-b", 0, 2),
+                event("stream-a", 1, 3),
+                event("stream-b", 1, 4),
+                event("stream-a", 2, 5),
+            ])
+            .expect("interleaved append");
+    }
+
+    let database = Database::create(&path).expect("database");
+    let write = database.begin_write().expect("write");
+    write
+        .delete_table(STREAM_EVENTS)
+        .expect("delete modern stream index");
+    {
+        let mut metadata = write.open_table(METADATA).expect("metadata");
+        metadata
+            .remove(STREAM_EVENTS_INDEX_KEY)
+            .expect("remove stream index version");
+    }
+    write.commit().expect("commit legacy shape");
+    drop(database);
+
+    let reopened = journal(&path);
+    assert!(!reopened.is_recovery_mode());
+    let page = reopened
+        .read_stream_from("stream-a", 1, 2)
+        .expect("indexed ranged read");
+    assert_eq!(
+        page.iter()
+            .map(|event| (event.stream_version, event.global_sequence))
+            .collect::<Vec<_>>(),
+        [(2, 3), (3, 5)]
+    );
+    reopened.verify().expect("verify rebuilt stream index");
 }
 
 #[test]
@@ -442,7 +488,10 @@ fn writer_lease_is_exclusive_and_reacquirable() {
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("state.redb");
     let first = RedbWriterLease::acquire(&path).expect("first lease");
-    assert!(RedbWriterLease::acquire(&path).is_err());
+    assert!(matches!(
+        RedbWriterLease::acquire(&path),
+        Err(StoreError::WriterLeaseHeld)
+    ));
     assert!(first.path().ends_with("state.redb.writer.lock"));
     drop(first);
     RedbWriterLease::acquire(&path).expect("reacquired lease");

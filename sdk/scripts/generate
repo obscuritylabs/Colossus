@@ -1,0 +1,91 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+sdk_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+BUF_CACHE_DIR=${BUF_CACHE_DIR:-"$sdk_dir/.cache/buf"}
+export BUF_CACHE_DIR
+
+if [ -x "$sdk_dir/node_modules/.bin/buf" ]; then
+  buf_command="$sdk_dir/node_modules/.bin/buf"
+elif command -v buf >/dev/null 2>&1; then
+  buf_command=buf
+else
+  echo "error: run 'npm ci --ignore-scripts' in sdk/ or install a trusted Buf CLI" >&2
+  exit 1
+fi
+if [ ! -x "$sdk_dir/typescript/node_modules/.bin/protoc-gen-ts_proto" ]; then
+  echo "error: run 'npm ci --ignore-scripts' in sdk/typescript/" >&2
+  exit 1
+fi
+if [ ! -x "$sdk_dir/.tools/bin/protoc-gen-go" ] ||
+  [ ! -x "$sdk_dir/.tools/bin/protoc-gen-go-grpc" ]; then
+  echo "error: pinned Go code generators are missing; run sdk/scripts/install-codegen-tools" >&2
+  exit 1
+fi
+if [ ! -x "$sdk_dir/python/.codegen/bin/python" ]; then
+  echo "error: pinned Python code generator is missing; run sdk/scripts/install-codegen-tools" >&2
+  exit 1
+fi
+if [ "$("$buf_command" --version)" != "1.72.0" ]; then
+  echo "error: Buf 1.72.0 is required for reproducible SDK generation" >&2
+  exit 1
+fi
+if [ "$("$sdk_dir/.tools/bin/protoc-gen-go" --version)" != "protoc-gen-go v1.36.11" ]; then
+  echo "error: protoc-gen-go v1.36.11 is required" >&2
+  exit 1
+fi
+if [ "$("$sdk_dir/.tools/bin/protoc-gen-go-grpc" --version)" != "protoc-gen-go-grpc 1.6.2" ]; then
+  echo "error: protoc-gen-go-grpc 1.6.2 is required" >&2
+  exit 1
+fi
+ts_proto_version=$(
+  node -p \
+    'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).version' \
+    "$sdk_dir/typescript/node_modules/ts-proto/package.json"
+)
+if [ "$ts_proto_version" != "2.12.0" ]; then
+  echo "error: ts-proto 2.12.0 is required" >&2
+  exit 1
+fi
+if ! "$sdk_dir/python/.codegen/bin/python" -c \
+  'from importlib.metadata import version; raise SystemExit(version("grpcio-tools") != "1.82.1" or version("protobuf") != "7.35.1")'
+then
+  echo "error: grpcio-tools 1.82.1 and protobuf 7.35.1 are required" >&2
+  exit 1
+fi
+
+cd "$sdk_dir"
+"$buf_command" lint ../api
+"$buf_command" build ../api
+"$buf_command" generate --template buf.gen.yaml
+
+# grpc-go already links the canonical google.golang.org/genproto Status
+# descriptor. Shipping a second generated google.rpc.Status in this module
+# would create a global Protobuf descriptor-registration conflict for callers
+# that import both packages, so retain the canonical dependency only.
+rm -f "$sdk_dir/go/gen/google/rpc/status.pb.go"
+rmdir "$sdk_dir/go/gen/google/rpc" "$sdk_dir/go/gen/google" 2>/dev/null || true
+
+python_include=$(
+  "$sdk_dir/python/.codegen/bin/python" -c \
+    'import pathlib, grpc_tools; print(pathlib.Path(grpc_tools.__file__).parent / "_proto")'
+)
+rm -rf "$sdk_dir/python/generated"
+mkdir -p "$sdk_dir/python/generated"
+"$sdk_dir/python/.codegen/bin/python" -m grpc_tools.protoc \
+  -I "$sdk_dir/../api" \
+  -I "$python_include" \
+  --python_out="$sdk_dir/python/generated" \
+  --pyi_out="$sdk_dir/python/generated" \
+  --grpc_python_out="$sdk_dir/python/generated" \
+  "$sdk_dir"/../api/colossus/api/v1alpha1/*.proto
+touch "$sdk_dir/python/generated/colossus/api/v1alpha1/py.typed"
+
+sh "$sdk_dir/scripts/generated-input-digest" >"$sdk_dir/generated-inputs.sha256"
+for language in typescript python go; do
+  sh "$sdk_dir/scripts/generated-output-digest" "$language" \
+    >"$sdk_dir/$language/generated-output.sha256"
+done
+"$sdk_dir/scripts/check-generated"
+echo "generated TypeScript, Python, and Go bindings from api/colossus/api/v1alpha1"

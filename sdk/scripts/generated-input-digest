@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repository_dir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+input_list=$(mktemp "${TMPDIR:-/tmp}/colossus-sdk-inputs.XXXXXX")
+hash_list=$(mktemp "${TMPDIR:-/tmp}/colossus-sdk-hashes.XXXXXX")
+trap 'rm -f "$input_list" "$hash_list"' EXIT HUP INT TERM
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1"
+  else
+    echo "error: sha256sum or shasum is required" >&2
+    exit 1
+  fi
+}
+
+cd "$repository_dir"
+{
+  find api -type f \( -name '*.proto' -o -name 'buf.yaml' \) -print
+  printf '%s\n' \
+    sdk/buf.gen.yaml \
+    sdk/package.json \
+    sdk/package-lock.json \
+    sdk/python/requirements-codegen.txt \
+    sdk/scripts/generated-input-digest \
+    sdk/scripts/generated-output-digest \
+    sdk/scripts/generate \
+    sdk/scripts/install-codegen-tools \
+    sdk/typescript/package.json \
+    sdk/typescript/package-lock.json
+} | LC_ALL=C sort >"$input_list"
+
+while IFS= read -r input; do
+  if [ ! -f "$input" ]; then
+    echo "error: generated SDK input is missing: $input" >&2
+    exit 1
+  fi
+  hash_file "$input"
+done <"$input_list" >"$hash_list"
+
+hash_file "$hash_list" | awk '{print $1}'

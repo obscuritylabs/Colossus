@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+package-lock.json
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
+src-tauri/connection.local.json

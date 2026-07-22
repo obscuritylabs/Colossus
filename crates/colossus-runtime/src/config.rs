@@ -287,7 +287,7 @@ pub(super) fn default_searxng_auth_header() -> String {
 }
 
 pub(super) fn default_search_user_agent() -> String {
-    "colossus/0.9".into()
+    "colossus/0.10".into()
 }
 
 const fn default_search_timeout_ms() -> u64 {
@@ -400,7 +400,7 @@ pub struct ProviderProfileConfig {
     pub model: String,
     /// API version base URL for network providers.
     pub base_url: Option<String>,
-    /// Credential reference such as `env:OPENAI_API_KEY`.
+    /// Credential reference such as `env:OPENAI_API_KEY` or an injected `host:provider-main`.
     pub credential_reference: Option<String>,
     /// Provider transport timeout.
     #[serde(default = "default_provider_timeout_ms")]
@@ -922,9 +922,37 @@ impl RuntimeConfig {
         let state_path = workspace_absolute_path(workspace, &self.storage.path);
         #[cfg(unix)]
         {
+            use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+            use std::os::unix::ffi::OsStrExt as _;
+            use std::os::unix::net::SocketAddr;
+
+            const SHORT_ENDPOINT_DOMAIN: &[u8] = b"colossus-worker-ipc-v2\0";
+
             let mut endpoint = state_path.as_os_str().to_os_string();
             endpoint.push(".worker.sock");
-            return Ok(PathBuf::from(endpoint).to_string_lossy().into_owned());
+            let endpoint = PathBuf::from(endpoint);
+            if SocketAddr::from_pathname(&endpoint).is_ok()
+                && let Some(endpoint) = endpoint.to_str()
+            {
+                return Ok(endpoint.to_owned());
+            }
+
+            // Darwin's sockaddr_un leaves only 103 bytes for a nul-terminated path,
+            // and application-support state paths routinely exceed it. Keep the
+            // stable state identity while placing only a domain-separated digest in
+            // the runtime's already validated owner-private coordination directory.
+            let mut digest = Sha256::new();
+            digest.update(SHORT_ENDPOINT_DOMAIN);
+            digest.update(state_path.as_os_str().as_bytes());
+            let digest = URL_SAFE_NO_PAD.encode(digest.finalize());
+            let endpoint = crate::workspace_lease::worker_coordination_root()
+                .join(format!("ipc-v2-{digest}.sock"));
+            SocketAddr::from_pathname(&endpoint).map_err(|_| {
+                RuntimeError::Config(
+                    "local worker IPC endpoint exceeds the native Unix path limit".into(),
+                )
+            })?;
+            return Ok(endpoint.to_string_lossy().into_owned());
         }
         #[cfg(windows)]
         {
@@ -1283,11 +1311,16 @@ pub(super) fn provider_profile(
 
 pub(super) fn provider_registry(
     config: &ProvidersConfig,
+    credentials: Arc<dyn CredentialResolver>,
 ) -> Result<ProviderRegistry, RuntimeError> {
     let profiles = config
         .profiles
         .iter()
-        .map(|(name, profile)| provider_profile(name, profile).map(ProviderExecutor::new))
+        .map(|(name, profile)| {
+            provider_profile(name, profile).map(|profile| {
+                ProviderExecutor::with_credentials(profile, Arc::clone(&credentials))
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
     ProviderRegistry::new(profiles, config.roles.clone()).map_err(Into::into)
 }
@@ -1403,7 +1436,7 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
             "provider roles contain an unknown role name".into(),
         ));
     }
-    let _ = provider_registry(&config.providers)?;
+    let _ = provider_registry(&config.providers, Arc::new(EnvironmentCredentialResolver))?;
     for (name, profile) in &config.providers.profiles {
         let profile = provider_profile(name, profile)?;
         if let Some(origin) = profile.network_origin()?

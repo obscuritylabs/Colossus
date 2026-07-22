@@ -7,6 +7,10 @@ type: how-to
 
 # Install Colossus
 
+For the macOS folder-first application, use [Colossus Desktop](desktop.md). It ships the
+CLI and managed runtime inside the signed app and does not require this separate native
+installation. Continue here for CLI, TUI, installed-daemon, and server deployments.
+
 ## Goal
 
 Install the native `colossus` executable into your user-local binary directory and

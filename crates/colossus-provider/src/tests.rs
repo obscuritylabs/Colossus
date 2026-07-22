@@ -16,6 +16,11 @@ struct CountingCredentialResolver {
     calls: AtomicUsize,
 }
 
+struct CountingHostCredentialResolver {
+    calls: AtomicUsize,
+    resolver: HostCredentialResolver,
+}
+
 struct ProviderPostDenyPolicy(BuiltInPolicy);
 
 #[async_trait]
@@ -50,6 +55,84 @@ impl CredentialResolver for CountingCredentialResolver {
         assert_eq!(reference, "env:UNIT_PROVIDER_KEY");
         self.calls.fetch_add(1, Ordering::AcqRel);
         Ok("unit-secret".into())
+    }
+}
+
+impl CountingHostCredentialResolver {
+    fn new(secret: &str) -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            resolver: HostCredentialResolver::new([("provider-main".into(), secret.to_owned())])
+                .expect("host credentials"),
+        }
+    }
+}
+
+impl CredentialResolver for CountingHostCredentialResolver {
+    fn resolve(&self, reference: &str) -> Result<String, ProviderError> {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        self.resolver.resolve(reference)
+    }
+}
+
+#[test]
+fn host_credentials_are_strict_bounded_and_debug_redacted() {
+    let resolver =
+        HostCredentialResolver::new([("provider-main".into(), "must-not-appear".into())])
+            .expect("host credentials");
+    assert_eq!(
+        resolver.resolve("host:provider-main").expect("resolved"),
+        "must-not-appear"
+    );
+    assert!(!format!("{resolver:?}").contains("must-not-appear"));
+
+    let missing = resolver
+        .resolve("host:provider-other")
+        .expect_err("unknown credential");
+    assert!(!missing.to_string().contains("must-not-appear"));
+    assert!(HostCredentialResolver::new([("bad/id".into(), "secret".into())]).is_err());
+    assert!(
+        HostCredentialResolver::new([
+            ("duplicate".into(), "first".into()),
+            ("duplicate".into(), "second".into()),
+        ])
+        .is_err()
+    );
+    assert!(HostCredentialResolver::new([("empty".into(), String::new())]).is_err());
+    assert!(
+        HostCredentialResolver::new(
+            (0..=64).map(|index| (format!("provider-{index}"), "secret".into()))
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn provider_profiles_accept_only_valid_environment_or_host_references() {
+    for reference in ["env:OPENAI_API_KEY", "host:provider-main"] {
+        ProviderProfile::new(
+            "remote",
+            ProviderKind::OpenAiResponses,
+            "unit-model",
+            Some("https://api.example.com/v1".into()),
+            Some(reference.into()),
+            1_000,
+        )
+        .expect("valid credential reference");
+    }
+    for reference in ["host:", "host:provider/main", "host:provider:main", "value"] {
+        assert!(
+            ProviderProfile::new(
+                "remote",
+                ProviderKind::OpenAiResponses,
+                "unit-model",
+                Some("https://api.example.com/v1".into()),
+                Some(reference.into()),
+                1_000,
+            )
+            .is_err(),
+            "invalid reference was accepted: {reference}"
+        );
     }
 }
 
@@ -420,11 +503,11 @@ async fn denial_happens_before_credential_resolution() {
         ProviderKind::OpenAiCompatible,
         "unit-model",
         Some("http://127.0.0.1:9/v1".into()),
-        Some("env:UNIT_PROVIDER_KEY".into()),
+        Some("host:provider-main".into()),
         1_000,
     )
     .expect("profile");
-    let credentials = Arc::new(CountingCredentialResolver::new());
+    let credentials = Arc::new(CountingHostCredentialResolver::new("unit-secret"));
     let executor = ProviderExecutor::with_credentials(
         profile.clone(),
         Arc::clone(&credentials) as Arc<dyn CredentialResolver>,
@@ -676,7 +759,7 @@ async fn streamed_credential_echo_is_redacted_before_release() {
         ProviderKind::OpenAiCompatible,
         "unit-model",
         Some(base_url),
-        Some("env:UNIT_PROVIDER_KEY".into()),
+        Some("host:provider-main".into()),
         5_000,
     )
     .expect("profile");
@@ -684,7 +767,7 @@ async fn streamed_credential_echo_is_redacted_before_release() {
         .network_origin()
         .expect("origin")
         .expect("network origin");
-    let credentials = Arc::new(CountingCredentialResolver::new());
+    let credentials = Arc::new(CountingHostCredentialResolver::new("unit-secret"));
     let executor = ProviderExecutor::with_credentials(
         profile.clone(),
         Arc::clone(&credentials) as Arc<dyn CredentialResolver>,

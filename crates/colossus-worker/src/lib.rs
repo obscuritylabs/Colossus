@@ -16,7 +16,10 @@ use colossus_ports::{
     ApprovalProvider, ModelProviderError, PolicyError, RunControl, RunEventObserver, ToolError,
     UserPromptProvider,
 };
-use colossus_runtime::{Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions};
+use colossus_runtime::{
+    CredentialResolver, EnvironmentCredentialResolver, Runtime, RuntimeConfig, RuntimeError,
+    RuntimeOpenOptions,
+};
 use hmac::{Hmac, Mac as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -57,6 +60,7 @@ const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 type HmacSha256 = Hmac<Sha256>;
 
 mod authentication;
+mod authentication_key;
 mod client;
 mod dispatch;
 mod frames;
@@ -66,11 +70,19 @@ mod observers;
 mod operation_names;
 mod operations;
 mod platform;
+mod public_api;
+mod public_credentials;
 mod server;
 
+pub use authentication_key::WorkerAuthenticationKey;
 pub use client::{WorkerClient, WorkerPromptHandler};
 pub use frames::{WorkerApprovalMode, WorkerPrompt, WorkerPromptKind};
 pub use operations::{WorkerError, WorkerOperation};
+pub use public_api::{PublicApiDeploymentMode, PublicApiHostOptions, PublicApiReadyMetadata};
+pub use public_credentials::{
+    ApplicationGrant, IssuedCredential, PublicApiAuthenticationKey, PublicApiCredentialError,
+    PublicApiCredentialManager, PublicApiRotationSourceError,
+};
 pub use server::WorkerServer;
 
 use authentication::*;

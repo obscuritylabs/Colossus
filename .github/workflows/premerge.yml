@@ -69,9 +69,11 @@ jobs:
     if: needs.eligibility.result == 'success'
     needs: eligibility
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
+      COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,6 +81,7 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
           toolchain: 1.96.0
+          components: clippy,rustfmt
       - name: Enable shared compiler cache
         id: sccache
         continue-on-error: true
@@ -92,8 +95,90 @@ jobs:
           workspaces: . -> target
           key: premerge-macos-arm
           cache-targets: false
+      - name: Prepare verified debug desktop executables
+        run: ./scripts/prepare-desktop-binaries debug
+      - name: Test Managed Local sidecar contracts
+        run: >-
+          cargo test --locked
+          --package colossus-sidecar-protocol
+          --package colossus-sidecar
+      - name: Exercise the native Managed Local lifecycle
+        run: >-
+          cargo test --locked -p colossus-sidecar
+          --test native_lifecycle -- --ignored --nocapture
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
+
+  macos-desktop:
+    name: Representative macOS desktop bundle
+    if: needs.eligibility.result == 'success'
+    needs: eligibility
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
+      CARGO_INCREMENTAL: "0"
+      # Use one release target for the bundled CLI, sidecar, and Tauri app.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          components: clippy,rustfmt
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+      - name: Cache standalone desktop target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+          key: premerge-macos-desktop-arm
+          cache-targets: false
+      - name: Install locked desktop renderer dependencies
+        working-directory: apps/desktop
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+      - name: Check and build the desktop renderer
+        working-directory: apps/desktop
+        run: |
+          npm run check
+          npm run build
+      - name: Prepare verified debug desktop executables
+        run: ./scripts/prepare-desktop-binaries debug
+      - name: Check desktop native formatting and lints
+        run: |
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Test the desktop native bridge
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Remove standalone debug artifacts before release packaging
+        run: |
+          expected="$GITHUB_WORKSPACE/apps/desktop/src-tauri/target"
+          test "$CARGO_TARGET_DIR" = "$expected"
+          rm -rf "$expected/debug"
+      - name: Build the pruned Tauri application
+        working-directory: apps/desktop
+        run: npm run tauri:build
+      - name: Build validation-only ADHOC macOS bundle structure
+        working-directory: apps/desktop
+        env:
+          COLOSSUS_DESKTOP_SIGNING_IDENTITY: "-"
+        run: npm run tauri:bundle:macos
 
   windows-runtime:
     name: Representative Windows runtime and sandbox
@@ -200,6 +285,13 @@ jobs:
           cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
           cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
           cargo audit --no-fetch -D warnings --file fuzz/Cargo.lock
+      - name: Enforce standalone desktop dependency policy
+        run: cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --config deny.toml --locked check -A duplicate -A license-not-encountered licenses sources bans
+      - name: Audit standalone desktop vulnerabilities
+        # Tauri's lockfile contains target-specific GTK3 maintenance advisories even
+        # on macOS. cargo-audit still fails on vulnerabilities while reporting those
+        # informational warnings for review.
+        run: cargo audit --no-fetch --file apps/desktop/src-tauri/Cargo.lock
 
   chroma:
     name: Chroma ${{ matrix.chroma }} compatibility
@@ -338,7 +430,7 @@ jobs:
   gate:
     name: Colossus pre-merge gate
     if: always()
-    needs: [eligibility, macos-native, windows-runtime, fuzz, supply-chain, chroma, storage, live-security]
+    needs: [eligibility, macos-native, macos-desktop, windows-runtime, fuzz, supply-chain, chroma, storage, live-security]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -352,6 +444,7 @@ jobs:
           RESULTS: >-
             eligibility=${{ needs.eligibility.result }}
             macos=${{ needs['macos-native'].result }}
+            macos-desktop=${{ needs['macos-desktop'].result }}
             windows=${{ needs['windows-runtime'].result }}
             fuzz=${{ needs.fuzz.result }}
             supply-chain=${{ needs['supply-chain'].result }}

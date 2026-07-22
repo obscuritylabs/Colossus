@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+sdk_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+repository_dir=$(CDPATH= cd -- "$sdk_dir/.." && pwd)
+base_revision=${1:-}
+BUF_CACHE_DIR=${BUF_CACHE_DIR:-"$sdk_dir/.cache/buf"}
+export BUF_CACHE_DIR
+
+if [ -z "$base_revision" ]; then
+  echo "usage: sdk/scripts/check-breaking <base-git-revision>" >&2
+  exit 2
+fi
+
+if [ -x "$sdk_dir/node_modules/.bin/buf" ]; then
+  buf_command="$sdk_dir/node_modules/.bin/buf"
+elif command -v buf >/dev/null 2>&1; then
+  buf_command=buf
+else
+  echo "error: run 'npm ci --ignore-scripts' in sdk/ or install a trusted Buf CLI" >&2
+  exit 1
+fi
+if [ "$("$buf_command" --version)" != "1.72.0" ]; then
+  echo "error: Buf 1.72.0 is required for compatibility checks" >&2
+  exit 1
+fi
+
+cd "$repository_dir"
+if ! git cat-file -e "$base_revision^{commit}" 2>/dev/null; then
+  echo "error: API compatibility base is not available: $base_revision" >&2
+  exit 1
+fi
+if ! git cat-file -e "$base_revision:api/buf.yaml" 2>/dev/null; then
+  echo "API compatibility baseline is not present at $base_revision; skipping initial baseline"
+  exit 0
+fi
+
+baseline_dir=$(mktemp -d "${TMPDIR:-/tmp}/colossus-api-baseline.XXXXXX")
+trap 'rm -rf "$baseline_dir"' EXIT HUP INT TERM
+git archive "$base_revision" api | tar -xf - -C "$baseline_dir"
+"$buf_command" breaking api --against "$baseline_dir/api"
+echo "public API is compatible with $base_revision"

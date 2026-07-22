@@ -1,0 +1,32 @@
+[package]
+name = "colossus-api-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runtime adapter for durable Colossus public application resources"
+
+[dependencies]
+async-trait.workspace = true
+colossus-api.workspace = true
+colossus-agent.workspace = true
+colossus-contracts.workspace = true
+colossus-policy.workspace = true
+colossus-ports.workspace = true
+colossus-runtime.workspace = true
+futures.workspace = true
+getrandom.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+uuid.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+colossus-testkit.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

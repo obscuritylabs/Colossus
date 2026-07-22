@@ -76,7 +76,7 @@ search:
       endpoint: http://127.0.0.1:8888/search
       credentialReference: null
       authHeader: X-Searxng-Key
-      userAgent: colossus/0.9
+      userAgent: colossus/0.10
       timeoutMs: 30000
   roles:
     agent: local-search

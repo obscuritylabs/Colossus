@@ -1,5 +1,11 @@
 use super::*;
 
+/// Maximum number of stream events returned by one ranged journal read.
+///
+/// Adapters must enforce this ceiling even when a caller supplies a larger
+/// `limit`, so untrusted cursors cannot induce unbounded allocation or reads.
+pub const MAX_STREAM_READ_BATCH: usize = 1_024;
+
 /// Authoritative immutable event store.
 pub trait EventJournal: Send + Sync {
     /// Append one event atomically.
@@ -10,6 +16,28 @@ pub trait EventJournal: Send + Sync {
 
     /// Read a stream in ascending version order.
     fn read_stream(&self, stream_id: &str) -> Result<Vec<EventEnvelope>, StoreError>;
+
+    /// Read stream events after an exclusive version cursor in ascending order.
+    ///
+    /// A zero `limit` returns no events. Larger limits are clamped to
+    /// [`MAX_STREAM_READ_BATCH`].
+    fn read_stream_from(
+        &self,
+        stream_id: &str,
+        after_version: u64,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError>;
+
+    /// Read stream events newest-first below an optional exclusive version cursor.
+    ///
+    /// `None` starts at the current stream tail. A zero `limit` returns no events.
+    /// Larger limits are clamped to [`MAX_STREAM_READ_BATCH`].
+    fn read_stream_backwards(
+        &self,
+        stream_id: &str,
+        before_version: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError>;
 
     /// Read global events from a one-based sequence, bounded by `limit`.
     fn read_global(

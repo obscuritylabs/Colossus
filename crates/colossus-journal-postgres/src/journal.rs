@@ -672,6 +672,60 @@ impl EventJournal for PostgresEventJournal {
             .collect()
     }
 
+    fn read_stream_from(
+        &self,
+        stream_id: &str,
+        after_version: u64,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        let limit = limit.min(MAX_STREAM_READ_BATCH);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let after_version = i64::try_from(after_version).unwrap_or(i64::MAX);
+        let mut client = self.connect()?;
+        client
+            .query(
+                "SELECT envelope FROM journal_events WHERE stream_id = $1 AND stream_version > $2 ORDER BY stream_version LIMIT $3",
+                &[
+                    &stream_id,
+                    &after_version,
+                    &bounded_limit(limit)?,
+                ],
+            )
+            .map_err(database_error)?
+            .into_iter()
+            .map(|row| serde_json::from_slice(&row.get::<_, Vec<u8>>(0)).map_err(adapter_error))
+            .collect()
+    }
+
+    fn read_stream_backwards(
+        &self,
+        stream_id: &str,
+        before_version: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        let limit = limit.min(MAX_STREAM_READ_BATCH);
+        if limit == 0 || before_version.is_some_and(|version| version <= 1) {
+            return Ok(Vec::new());
+        }
+        let mut client = self.connect()?;
+        let rows = match before_version.and_then(|version| i64::try_from(version).ok()) {
+            Some(before_version) => client.query(
+                "SELECT envelope FROM journal_events WHERE stream_id = $1 AND stream_version < $2 ORDER BY stream_version DESC LIMIT $3",
+                &[&stream_id, &before_version, &bounded_limit(limit)?],
+            ),
+            None => client.query(
+                "SELECT envelope FROM journal_events WHERE stream_id = $1 ORDER BY stream_version DESC LIMIT $2",
+                &[&stream_id, &bounded_limit(limit)?],
+            ),
+        }
+        .map_err(database_error)?;
+        rows.into_iter()
+            .map(|row| serde_json::from_slice(&row.get::<_, Vec<u8>>(0)).map_err(adapter_error))
+            .collect()
+    }
+
     fn read_global(
         &self,
         from_sequence: u64,

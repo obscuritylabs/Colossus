@@ -44,7 +44,7 @@ impl Runtime {
             .collect();
         let released = self
             .gateway
-            .execute(request, self.integration_executor.as_ref())
+            .execute(request, self.integration_effect_executor.as_ref())
             .await?;
         serde_json::from_slice(&released.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
@@ -333,7 +333,7 @@ impl Runtime {
             .collect();
         let released = self
             .gateway
-            .execute(request, self.pack_process_executor.as_ref())
+            .execute(request, self.pack_process_effect_executor.as_ref())
             .await?;
         let process: Value = serde_json::from_slice(&released.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
@@ -516,7 +516,7 @@ impl Runtime {
         request.credential_references = credentials;
         let released = self
             .gateway
-            .execute(request, self.integration_executor.as_ref())
+            .execute(request, self.integration_effect_executor.as_ref())
             .await?;
         serde_json::from_slice(&released.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))

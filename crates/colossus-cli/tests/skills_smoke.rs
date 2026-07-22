@@ -23,9 +23,13 @@ fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> st
 fn skill_activation_and_resources_are_durable_policy_bound_and_data_only() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let directory = tempdir().expect("directory");
-    let workflows = directory.path().join("workflows");
-    let skills = directory.path().join("skills");
-    let user_skills = directory.path().join("user-skills");
+    // macOS exposes the tempfile root through `/var`, a symlink to `/private/var`.
+    // Production skill roots reject symlink components, so construct every fixture
+    // path from the exact canonical workspace selected by the runtime.
+    let root = fs::canonicalize(directory.path()).expect("canonical directory");
+    let workflows = root.join("workflows");
+    let skills = root.join("skills");
+    let user_skills = root.join("user-skills");
     let skill = skills.join("demo");
     fs::create_dir_all(skill.join("references")).expect("skill directory");
     fs::create_dir_all(&workflows).expect("workflows");
@@ -40,9 +44,9 @@ fn skill_activation_and_resources_are_durable_policy_bound_and_data_only() {
     )
     .expect("manifest");
     fs::write(skill.join("references/guide.md"), "# Private guide\n").expect("resource");
-    let state = directory.path().join("state.redb");
-    let anchor = directory.path().join("anchor.json");
-    let config = directory.path().join("config.yaml");
+    let state = root.join("state.redb");
+    let anchor = root.join("anchor.json");
+    let config = root.join("config.yaml");
     fs::write(
         &config,
         format!(
@@ -102,7 +106,7 @@ sandbox:
             workflows = workflows.display(),
             skills = skills.display(),
             user_skills = user_skills.display(),
-            missing = directory.path().join("missing").display(),
+            missing = root.join("missing").display(),
         ),
     )
     .expect("config");

@@ -37,6 +37,8 @@ approvals, and sandbox grants still determine which effects it may perform.
   goal, and subagent capabilities through one effect gateway.
 - Automate repeatable work with validated YAML workflows, schedules, webhooks,
   recovery, signed packs, and collections.
+- Build Rust and Tauri applications in process, or connect enrolled Rust, TypeScript,
+  Python, and Go backends through the durable authenticated application API.
 - Apply access profiles, approvals, OPA policy, sandbox limits, encrypted journaling,
   audit verification, and offline operation without hiding security decisions in a UI.
 
@@ -53,7 +55,8 @@ approvals, and sandbox grants still determine which effects it may perform.
 - [Reference](docs/reference/index.md) — CLI, TUI, configuration, schemas, manifests,
   limits, and glossary.
 - [Develop](docs/develop/index.md) — source setup, architecture, security boundaries,
-  test tiers, and documentation authoring.
+  the [public application SDK](docs/develop/application-sdk.md), test tiers, and
+  documentation authoring.
 
 Release history lives in [CHANGELOG.md](CHANGELOG.md). Report vulnerabilities using
 the private process in [SECURITY.md](SECURITY.md).

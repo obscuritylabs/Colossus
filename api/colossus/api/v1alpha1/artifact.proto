@@ -1,0 +1,174 @@
+syntax = "proto3";
+
+package colossus.api.v1alpha1;
+
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
+option java_multiple_files = true;
+option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
+
+// ArtifactService transfers bounded content through opaque IDs, never server-local paths.
+service ArtifactService {
+  // CreateArtifactUpload reserves a bounded, expiring staged upload.
+  rpc CreateArtifactUpload(CreateArtifactUploadRequest) returns (CreateArtifactUploadResponse);
+
+  // UploadArtifact writes ordered chunks and returns the quarantined or released artifact.
+  rpc UploadArtifact(stream UploadArtifactRequest) returns (UploadArtifactResponse);
+
+  // GetArtifact returns metadata authorized for the caller.
+  rpc GetArtifact(GetArtifactRequest) returns (GetArtifactResponse);
+
+  // DownloadArtifact streams released bytes; quarantined artifacts are never downloadable.
+  rpc DownloadArtifact(DownloadArtifactRequest) returns (stream DownloadArtifactResponse);
+}
+
+// ArtifactPurpose identifies the intended public use of an upload.
+enum ArtifactPurpose {
+  // ARTIFACT_PURPOSE_UNSPECIFIED is rejected.
+  ARTIFACT_PURPOSE_UNSPECIFIED = 0;
+
+  // ARTIFACT_PURPOSE_RUN_INPUT is content supplied to an agent run.
+  ARTIFACT_PURPOSE_RUN_INPUT = 1;
+
+  // ARTIFACT_PURPOSE_RUN_OUTPUT is a released run result.
+  ARTIFACT_PURPOSE_RUN_OUTPUT = 2;
+
+  // ARTIFACT_PURPOSE_WORKFLOW is a workflow document or input.
+  ARTIFACT_PURPOSE_WORKFLOW = 3;
+
+  // ARTIFACT_PURPOSE_EXTENSION is a pack or extension archive.
+  ARTIFACT_PURPOSE_EXTENSION = 4;
+
+  // ARTIFACT_PURPOSE_ARCHIVE is an exported Colossus archive.
+  ARTIFACT_PURPOSE_ARCHIVE = 5;
+}
+
+// ArtifactState identifies release and verification state.
+enum ArtifactState {
+  // ARTIFACT_STATE_UNSPECIFIED is never emitted by a conforming server.
+  ARTIFACT_STATE_UNSPECIFIED = 0;
+
+  // ARTIFACT_STATE_UPLOADING means the staged upload is incomplete.
+  ARTIFACT_STATE_UPLOADING = 1;
+
+  // ARTIFACT_STATE_QUARANTINED means bytes are private pending validation and policy.
+  ARTIFACT_STATE_QUARANTINED = 2;
+
+  // ARTIFACT_STATE_AVAILABLE means the artifact is released to authorized callers.
+  ARTIFACT_STATE_AVAILABLE = 3;
+
+  // ARTIFACT_STATE_REJECTED means verification or policy denied release.
+  ARTIFACT_STATE_REJECTED = 4;
+
+  // ARTIFACT_STATE_EXPIRED means the staged upload can no longer be completed.
+  ARTIFACT_STATE_EXPIRED = 5;
+}
+
+// ArtifactReference is safe metadata for an opaque stored artifact.
+message ArtifactReference {
+  // artifact_id is the opaque stable identifier.
+  string artifact_id = 1;
+
+  // file_name is a bounded display name and is never interpreted as a server path.
+  string file_name = 2;
+
+  // media_type is the normalized declared or detected media type.
+  string media_type = 3;
+
+  // size_bytes is the verified byte length.
+  uint64 size_bytes = 4;
+
+  // sha256 is the lowercase hexadecimal digest of the complete bytes.
+  string sha256 = 5;
+
+  // purpose is the artifact's validated intended use.
+  ArtifactPurpose purpose = 6;
+
+  // state is the current release state.
+  ArtifactState state = 7;
+
+  // created_at is the durable creation time.
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// CreateArtifactUploadRequest describes a bounded artifact without providing a path.
+message CreateArtifactUploadRequest {
+  // file_name is a display name only.
+  string file_name = 1;
+
+  // media_type is the declared media type.
+  string media_type = 2;
+
+  // size_bytes is the exact expected size.
+  uint64 size_bytes = 3;
+
+  // sha256 is the expected lowercase hexadecimal digest.
+  string sha256 = 4;
+
+  // purpose selects purpose-specific validation, scope, and policy.
+  ArtifactPurpose purpose = 5;
+
+  // idempotency_key makes reservation retries safe.
+  string idempotency_key = 6;
+}
+
+// CreateArtifactUploadResponse returns an expiring upload reservation.
+message CreateArtifactUploadResponse {
+  // upload_id is an opaque, caller-bound upload identifier.
+  string upload_id = 1;
+
+  // chunk_size_bytes is the maximum accepted data size per stream message.
+  uint32 chunk_size_bytes = 2;
+
+  // expires_at is the last time at which upload completion is accepted.
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// UploadArtifactRequest carries one ordered chunk for one reserved upload.
+message UploadArtifactRequest {
+  // upload_id is the opaque reservation returned by CreateArtifactUpload.
+  string upload_id = 1;
+
+  // offset is the exact zero-based byte offset; gaps and overlaps are rejected.
+  uint64 offset = 2;
+
+  // data is one bounded chunk and may be logged only by length and digest.
+  bytes data = 3;
+}
+
+// UploadArtifactResponse returns verified metadata after the final chunk.
+message UploadArtifactResponse {
+  // artifact is quarantined until all required validation and release policy succeeds.
+  ArtifactReference artifact = 1;
+}
+
+// GetArtifactRequest selects an opaque artifact.
+message GetArtifactRequest {
+  // artifact_id is the exact opaque identifier.
+  string artifact_id = 1;
+}
+
+// GetArtifactResponse returns caller-visible artifact metadata.
+message GetArtifactResponse {
+  // artifact is the bounded metadata.
+  ArtifactReference artifact = 1;
+}
+
+// DownloadArtifactRequest selects a released artifact and optional resume offset.
+message DownloadArtifactRequest {
+  // artifact_id is the exact opaque identifier.
+  string artifact_id = 1;
+
+  // offset is the first byte to return and must not exceed the verified size.
+  uint64 offset = 2;
+}
+
+// DownloadArtifactResponse carries one ordered released chunk.
+message DownloadArtifactResponse {
+  // offset is the zero-based byte offset for data.
+  uint64 offset = 1;
+
+  // data contains only policy-released artifact bytes.
+  bytes data = 2;
+}

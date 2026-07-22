@@ -1,0 +1,609 @@
+syntax = "proto3";
+
+package colossus.api.v1alpha1;
+
+import "colossus/api/v1alpha1/common.proto";
+import "colossus/api/v1alpha1/session.proto";
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
+option java_multiple_files = true;
+option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
+
+// AgentRunService manages durable asynchronous runs and one-use interactions.
+service AgentRunService {
+  // CreateRun durably allocates a run before execution begins.
+  rpc CreateRun(CreateRunRequest) returns (CreateRunResponse);
+
+  // GetRun reconstructs one run and its terminal outcome, when present.
+  rpc GetRun(GetRunRequest) returns (GetRunResponse);
+
+  // ListRuns returns a stable page of durable runs.
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+
+  // WatchRun replays updates after an exclusive cursor and then tails live updates.
+  rpc WatchRun(WatchRunRequest) returns (stream WatchRunResponse);
+
+  // CancelRun requests idempotent cooperative cancellation.
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+
+  // RespondInteraction answers one caller-bound prompt or approval exactly once.
+  rpc RespondInteraction(RespondInteractionRequest) returns (RespondInteractionResponse);
+}
+
+// RunMode selects the runtime's public execution mode.
+enum RunMode {
+  // RUN_MODE_UNSPECIFIED is rejected so omitted input cannot become effectful execution.
+  RUN_MODE_UNSPECIFIED = 0;
+
+  // RUN_MODE_EXECUTE permits policy-authorized effects.
+  RUN_MODE_EXECUTE = 1;
+
+  // RUN_MODE_PLAN blocks implementation and external mutation but may create
+  // Colossus-local task and plan records.
+  RUN_MODE_PLAN = 2;
+}
+
+// RunStatus is the durable lifecycle state of an agent run.
+enum RunStatus {
+  // RUN_STATUS_UNSPECIFIED is never emitted by a conforming server.
+  RUN_STATUS_UNSPECIFIED = 0;
+
+  // RUN_STATUS_QUEUED means the run is durable but has not started.
+  RUN_STATUS_QUEUED = 1;
+
+  // RUN_STATUS_RUNNING means the coordinator is actively progressing the run.
+  RUN_STATUS_RUNNING = 2;
+
+  // RUN_STATUS_WAITING means a durable user interaction blocks progress.
+  RUN_STATUS_WAITING = 3;
+
+  // RUN_STATUS_CANCELLING means cooperative cancellation was requested.
+  RUN_STATUS_CANCELLING = 4;
+
+  // RUN_STATUS_COMPLETED means released output is terminal.
+  RUN_STATUS_COMPLETED = 5;
+
+  // RUN_STATUS_FAILED means the run failed with a known terminal outcome.
+  RUN_STATUS_FAILED = 6;
+
+  // RUN_STATUS_CANCELLED means cancellation became terminal before another effect began.
+  RUN_STATUS_CANCELLED = 7;
+
+  // RUN_STATUS_INTERRUPTED means the runtime stopped before the run could finish.
+  RUN_STATUS_INTERRUPTED = 8;
+
+  // RUN_STATUS_OUTCOME_UNKNOWN means an effect started without trustworthy terminal evidence.
+  RUN_STATUS_OUTCOME_UNKNOWN = 9;
+}
+
+// RunResult contains bounded released terminal output.
+message RunResult {
+  // output is the complete visible assistant text.
+  string output = 1;
+
+  // profile is the credential-free provider profile name.
+  string profile = 2;
+
+  // model is the provider model identifier.
+  string model = 3;
+
+  // elapsed_seconds is the finite non-negative wall time for the completed run.
+  double elapsed_seconds = 4;
+}
+
+// RunFailure contains a bounded user-safe terminal failure.
+message RunFailure {
+  // reason is a stable machine-readable failure reason.
+  string reason = 1;
+
+  // message is bounded and excludes secrets, quarantined bytes, and internal errors.
+  string message = 2;
+
+  // outcome_certainty prevents unsafe automatic retry.
+  OutcomeCertainty outcome_certainty = 3;
+}
+
+// RunCancellation contains durable cancellation evidence.
+message RunCancellation {
+  // turn is the model turn at which cancellation became terminal; zero is before turn one.
+  uint32 turn = 1;
+
+  // message is a bounded cancellation summary.
+  string message = 2;
+}
+
+// Run is the durable public run projection.
+message Run {
+  // run_id is the opaque stable run identifier.
+  string run_id = 1;
+
+  // session_id is the durable session identity associated with the run.
+  string session_id = 2;
+
+  // role is the selected logical model role.
+  string role = 3;
+
+  // mode is the selected execution mode.
+  RunMode mode = 4;
+
+  // status is the durable lifecycle state.
+  RunStatus status = 5;
+
+  // created_at is the durable allocation time.
+  google.protobuf.Timestamp created_at = 6;
+
+  // updated_at is the latest durable state-change time.
+  google.protobuf.Timestamp updated_at = 7;
+
+  // started_at is present after execution begins.
+  google.protobuf.Timestamp started_at = 8;
+
+  // finished_at is present after a terminal state.
+  google.protobuf.Timestamp finished_at = 9;
+
+  // last_sequence is the highest durable released run-feed sequence.
+  uint64 last_sequence = 10;
+
+  // pending_interaction_count counts unanswered caller-visible interactions.
+  uint32 pending_interaction_count = 11;
+
+  // terminal contains exactly one terminal payload when status is terminal.
+  oneof terminal {
+    // result is present for completed runs.
+    RunResult result = 12;
+
+    // failure is present for failed, interrupted, or outcome-unknown runs.
+    RunFailure failure = 13;
+
+    // cancellation is present for cancelled runs.
+    RunCancellation cancellation = 14;
+  }
+
+  // etag is an opaque optimistic-concurrency token.
+  string etag = 15;
+
+  // selected_skills is empty in v1alpha1 because public skill activation is denied.
+  repeated string selected_skills = 16;
+}
+
+// CreateRunRequest allocates and starts one durable agent run.
+message CreateRunRequest {
+  // input contains bounded user-visible content; v1alpha1 accepts text parts only.
+  repeated ContentPart input = 1;
+
+  // session_id attaches to an existing canonical session. Omission allocates a durable
+  // run-owned session identity; the canonical session is materialized during agent
+  // initialization if execution proceeds, while cancellation before start can leave
+  // only the run-owned identity.
+  optional string session_id = 2;
+
+  // role is a logical configured role, never a credential or actor identity.
+  string role = 3;
+
+  // mode selects execute or planning with no implementation/external mutation;
+  // planning may create Colossus-local task and plan records.
+  RunMode mode = 4;
+
+  // selected_skills is reserved in v1alpha1; public skill activation is denied.
+  repeated string selected_skills = 5;
+
+  // max_turns is bounded by server policy; zero selects the configured default.
+  uint32 max_turns = 6;
+
+  // idempotency_key is required and scoped to the authenticated caller.
+  string idempotency_key = 7;
+}
+
+// CreateRunResponse returns the durably allocated run; execution is independent of response delivery.
+message CreateRunResponse {
+  // run is the durable allocated run.
+  Run run = 1;
+}
+
+// GetRunRequest selects one run.
+message GetRunRequest {
+  // run_id is the exact opaque identifier.
+  string run_id = 1;
+}
+
+// GetRunResponse returns one durable run.
+message GetRunResponse {
+  // run is the current durable projection.
+  Run run = 1;
+
+  // pending_interactions contains caller-visible unanswered interactions.
+  repeated Interaction pending_interactions = 2;
+}
+
+// ListRunsRequest selects a stable run page.
+message ListRunsRequest {
+  // session_id limits results to one session when present.
+  optional string session_id = 1;
+
+  // statuses limits results to the specified lifecycle states.
+  repeated RunStatus statuses = 2;
+
+  // page contains the bounded size and opaque continuation token.
+  PageRequest page = 3;
+}
+
+// ListRunsResponse returns runs ordered by creation time then identifier.
+message ListRunsResponse {
+  // runs contains the current page.
+  repeated Run runs = 1;
+
+  // page identifies the next page.
+  PageResponse page = 2;
+}
+
+// WatchRunRequest selects replay and tail behavior for one run.
+message WatchRunRequest {
+  // run_id is the exact opaque identifier.
+  string run_id = 1;
+
+  // after_sequence is an exclusive durable cursor; zero replays from the beginning.
+  uint64 after_sequence = 2;
+}
+
+// WatchRunResponse carries one durable released update.
+message WatchRunResponse {
+  // update is delivered at least once and deduplicated by run_id and sequence.
+  RunUpdate update = 1;
+}
+
+// CancelRunRequest requests cooperative cancellation.
+message CancelRunRequest {
+  // run_id is the exact opaque identifier.
+  string run_id = 1;
+
+  // idempotency_key makes cancellation retries safe.
+  string idempotency_key = 2;
+}
+
+// CancelRunResponse returns the current durable run state.
+message CancelRunResponse {
+  // run reflects the accepted cancellation or an existing terminal state.
+  Run run = 1;
+}
+
+// InteractionKind identifies a caller-visible blocking interaction.
+enum InteractionKind {
+  // INTERACTION_KIND_UNSPECIFIED is never emitted by a conforming server.
+  INTERACTION_KIND_UNSPECIFIED = 0;
+
+  // INTERACTION_KIND_USER_PROMPT requests ordinary user input.
+  INTERACTION_KIND_USER_PROMPT = 1;
+
+  // INTERACTION_KIND_APPROVAL requests a policy obligation decision.
+  INTERACTION_KIND_APPROVAL = 2;
+}
+
+// InteractionStatus is the durable one-use interaction state.
+enum InteractionStatus {
+  // INTERACTION_STATUS_UNSPECIFIED is never emitted by a conforming server.
+  INTERACTION_STATUS_UNSPECIFIED = 0;
+
+  // INTERACTION_STATUS_PENDING may be answered by the bound principal.
+  INTERACTION_STATUS_PENDING = 1;
+
+  // INTERACTION_STATUS_ANSWERED has consumed its one-use response.
+  INTERACTION_STATUS_ANSWERED = 2;
+
+  // INTERACTION_STATUS_EXPIRED can no longer be answered.
+  INTERACTION_STATUS_EXPIRED = 3;
+
+  // INTERACTION_STATUS_CANCELLED was closed by run cancellation.
+  INTERACTION_STATUS_CANCELLED = 4;
+}
+
+// PromptChoice is one exact bounded suggested answer.
+message PromptChoice {
+  // choice_id is an opaque stable value returned in PromptAnswer.
+  string choice_id = 1;
+
+  // label is the user-visible answer text.
+  string label = 2;
+}
+
+// UserPromptInteraction requests bounded ordinary input.
+message UserPromptInteraction {
+  // question is policy-released user-visible text.
+  string question = 1;
+
+  // choices contains optional exact suggestions.
+  repeated PromptChoice choices = 2;
+
+  // allow_free_form permits bounded text outside the suggestions.
+  bool allow_free_form = 3;
+}
+
+// ApprovalRisk is a non-authoritative user-visible risk summary.
+enum ApprovalRisk {
+  // APPROVAL_RISK_UNSPECIFIED indicates no public risk classification.
+  APPROVAL_RISK_UNSPECIFIED = 0;
+
+  // APPROVAL_RISK_LOW indicates bounded reversible impact.
+  APPROVAL_RISK_LOW = 1;
+
+  // APPROVAL_RISK_MEDIUM indicates meaningful external or local impact.
+  APPROVAL_RISK_MEDIUM = 2;
+
+  // APPROVAL_RISK_HIGH indicates sensitive, destructive, or hard-to-reverse impact.
+  APPROVAL_RISK_HIGH = 3;
+}
+
+// ReleasedDetail is one bounded policy-released approval detail.
+message ReleasedDetail {
+  // label is a user-visible field name.
+  string label = 1;
+
+  // value is a bounded released value.
+  string value = 2;
+}
+
+// ApprovalInteraction requests an operator decision for a policy obligation.
+message ApprovalInteraction {
+  reserved 1;
+  reserved "title";
+
+  // reason is a bounded generic explanation; it never echoes raw policy input.
+  string reason = 2;
+
+  // action is a fixed public category; it never contains a raw internal action name.
+  string action = 3;
+
+  // resource is a sanitized display origin or opaque resource class. It never contains
+  // an absolute path, URL userinfo/path/query/fragment, raw executable, or secret.
+  string resource = 4;
+
+  // risk is non-authoritative user-visible risk metadata.
+  ApprovalRisk risk = 5;
+
+  // request_hash is a randomized one-use binding to the private evaluated request.
+  // It is not a deterministic digest of hidden request fields.
+  string request_hash = 6;
+
+  reserved 7;
+  reserved "details";
+}
+
+// Interaction is a durable caller-bound prompt or approval.
+message Interaction {
+  // interaction_id is the opaque one-use identifier.
+  string interaction_id = 1;
+
+  // run_id is the owning run.
+  string run_id = 2;
+
+  // kind identifies the required response type.
+  InteractionKind kind = 3;
+
+  // status is the durable interaction state.
+  InteractionStatus status = 4;
+
+  // created_at is the durable creation time.
+  google.protobuf.Timestamp created_at = 5;
+
+  // expires_at is the last time a response is accepted.
+  google.protobuf.Timestamp expires_at = 6;
+
+  // respondable_by_caller is true only when the current principal may respond.
+  bool respondable_by_caller = 7;
+
+  // etag is an opaque optimistic-concurrency token.
+  string etag = 8;
+
+  // content contains exactly one released interaction representation.
+  oneof content {
+    // user_prompt requests ordinary user input.
+    UserPromptInteraction user_prompt = 9;
+
+    // approval requests an allow or deny decision.
+    ApprovalInteraction approval = 10;
+  }
+}
+
+// PromptChoiceAnswer echoes one exact displayed choice for integrity validation.
+message PromptChoiceAnswer {
+  // choice_id is the opaque identifier supplied with the displayed choice.
+  string choice_id = 1;
+
+  // label echoes the exact user-visible label supplied with the displayed choice.
+  string label = 2;
+}
+
+// PromptAnswer answers one user prompt.
+message PromptAnswer {
+  // answer contains exactly one response representation.
+  oneof answer {
+    // choice selects and echoes one offered choice.
+    PromptChoiceAnswer choice = 1;
+
+    // free_form_text contains an alternative bounded answer when permitted.
+    string free_form_text = 2;
+  }
+}
+
+// ApprovalAnswer answers one approval obligation.
+message ApprovalAnswer {
+  // approved accepts the exact randomized binding displayed by the interaction.
+  bool approved = 1;
+
+  // request_hash must exactly echo the randomized one-use binding shown to the user.
+  string request_hash = 2;
+}
+
+// RespondInteractionRequest consumes one interaction response exactly once.
+message RespondInteractionRequest {
+  // run_id binds the response to the owning run.
+  string run_id = 1;
+
+  // interaction_id is the exact opaque one-use identifier.
+  string interaction_id = 2;
+
+  // etag must match the pending interaction.
+  string etag = 3;
+
+  // idempotency_key makes transport retries safe without permitting a second answer.
+  string idempotency_key = 4;
+
+  // response must match the interaction kind.
+  oneof response {
+    // prompt_answer answers ordinary input.
+    PromptAnswer prompt_answer = 5;
+
+    // approval_answer answers a policy approval obligation.
+    ApprovalAnswer approval_answer = 6;
+  }
+}
+
+// RespondInteractionResponse returns the consumed interaction.
+message RespondInteractionResponse {
+  // interaction is the terminal one-use interaction state.
+  Interaction interaction = 1;
+
+  reserved 2;
+  reserved "run";
+}
+
+// VisibleOutputDelta is policy-released incremental assistant text.
+message VisibleOutputDelta {
+  // text is the bounded released delta.
+  string text = 1;
+}
+
+// ReasoningSummary is provider-declared safe reasoning, never hidden reasoning.
+message ReasoningSummary {
+  // summary is bounded released text.
+  string summary = 1;
+}
+
+// ToolActivityState identifies released tool-call lifecycle.
+enum ToolActivityState {
+  // TOOL_ACTIVITY_STATE_UNSPECIFIED is never emitted by a conforming server.
+  TOOL_ACTIVITY_STATE_UNSPECIFIED = 0;
+
+  // TOOL_ACTIVITY_STATE_REQUESTED means a strict call was validated.
+  TOOL_ACTIVITY_STATE_REQUESTED = 1;
+
+  // TOOL_ACTIVITY_STATE_WAITING_APPROVAL means policy requires an interaction.
+  TOOL_ACTIVITY_STATE_WAITING_APPROVAL = 2;
+
+  // TOOL_ACTIVITY_STATE_STARTED means permit-bound execution began.
+  TOOL_ACTIVITY_STATE_STARTED = 3;
+
+  // TOOL_ACTIVITY_STATE_COMPLETED means released output is terminal.
+  TOOL_ACTIVITY_STATE_COMPLETED = 4;
+
+  // TOOL_ACTIVITY_STATE_FAILED means a known failure is terminal.
+  TOOL_ACTIVITY_STATE_FAILED = 5;
+
+  // TOOL_ACTIVITY_STATE_OUTCOME_UNKNOWN means terminal evidence is unavailable.
+  TOOL_ACTIVITY_STATE_OUTCOME_UNKNOWN = 6;
+}
+
+// ToolActivity contains bounded released tool lifecycle metadata.
+message ToolActivity {
+  // call_id correlates events for one strict call.
+  string call_id = 1;
+
+  // tool_name is the registered public tool name.
+  string tool_name = 2;
+
+  // state is the released lifecycle state.
+  ToolActivityState state = 3;
+
+  // summary is bounded and excludes raw arguments, secrets, and quarantined output.
+  string summary = 4;
+}
+
+// TokenUsage is normalized provider token accounting.
+message TokenUsage {
+  // input_tokens includes cached input tokens when provider-reported.
+  uint64 input_tokens = 1;
+
+  // output_tokens includes reasoning tokens when provider-reported.
+  uint64 output_tokens = 2;
+
+  // total_tokens is the provider-reported total.
+  uint64 total_tokens = 3;
+
+  // cached_input_tokens is present when reported.
+  optional uint64 cached_input_tokens = 4;
+
+  // reasoning_tokens is present when reported and never contains reasoning content.
+  optional uint64 reasoning_tokens = 5;
+}
+
+// RunNotice is a bounded non-terminal user-safe notice.
+message RunNotice {
+  // reason is a stable machine-readable notice reason.
+  string reason = 1;
+
+  // message is bounded released text.
+  string message = 2;
+}
+
+// RunStateChanged is one exact historical lifecycle transition.
+message RunStateChanged {
+  // status is the durable state entered at this update sequence.
+  RunStatus status = 1;
+}
+
+// RunFailed is one exact historical terminal failure transition.
+message RunFailed {
+  // status distinguishes failed, interrupted, and outcome-unknown terminal states.
+  RunStatus status = 1;
+
+  // failure contains bounded released failure detail.
+  RunFailure failure = 2;
+}
+
+// RunUpdate is one persist-before-broadcast item in a run's public feed.
+message RunUpdate {
+  // run_id is the owning run.
+  string run_id = 1;
+
+  // sequence is monotonic, starts at one, and is the replay cursor.
+  uint64 sequence = 2;
+
+  // created_at is the durable feed-item time.
+  google.protobuf.Timestamp created_at = 3;
+
+  // update contains exactly one released public item.
+  oneof update {
+    // state is the exact lifecycle transition at this sequence.
+    RunStateChanged state = 4;
+
+    // output_delta is incremental visible assistant output.
+    VisibleOutputDelta output_delta = 5;
+
+    // reasoning_summary is safe provider-declared reasoning metadata.
+    ReasoningSummary reasoning_summary = 6;
+
+    // tool_activity is bounded released tool lifecycle metadata.
+    ToolActivity tool_activity = 7;
+
+    // usage is normalized token accounting.
+    TokenUsage usage = 8;
+
+    // interaction is a durable caller-visible blocking interaction.
+    Interaction interaction = 9;
+
+    // message is a newly durable released session message.
+    SessionMessage message = 10;
+
+    // notice is a bounded non-terminal warning or informational event.
+    RunNotice notice = 11;
+
+    // result is the exact successful terminal update at this sequence.
+    RunResult result = 12;
+
+    // failure is the exact failed terminal update at this sequence.
+    RunFailed failure = 13;
+
+    // cancellation is the exact cancelled terminal update at this sequence.
+    RunCancellation cancellation = 14;
+  }
+}

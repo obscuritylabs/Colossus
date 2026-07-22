@@ -1,8 +1,9 @@
 use super::{
-    BUNDLE_MANIFEST, COLLECTION_MANIFEST, PACK_MANIFEST, PackError, PackExecutor, PackOperation,
-    PackService, RELEASE_TARGETS, bundle_artifact_path, canonical_bundle_signing_bytes,
-    canonical_collection_signing_bytes, canonical_pack_signing_bytes, current_release_target,
-    digest_hex, extract_collection_archive, write_collection_archive,
+    BUNDLE_MANIFEST, COLLECTION_MANIFEST, MAX_PACK_SKILL_REFERENCES, PACK_MANIFEST, PackError,
+    PackExecutor, PackOperation, PackService, RELEASE_TARGETS, bundle_artifact_path,
+    canonical_bundle_signing_bytes, canonical_collection_signing_bytes,
+    canonical_pack_signing_bytes, current_release_target, digest_hex, extract_collection_archive,
+    write_collection_archive,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
@@ -81,6 +82,38 @@ fn write_pack(root: &Path) -> PackManifest {
         serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
     )
     .expect("write manifest");
+    manifest
+}
+
+fn write_pack_with_skill_references(root: &Path, count: usize) -> PackManifest {
+    let mut manifest = write_pack(root);
+    manifest.capabilities.push("skills".into());
+    for index in 0..count {
+        let skill_path = format!("skills/skill-{index:02}");
+        let instructions = format!(
+            "---\nname: skill-{index:02}\ndescription: Bounded pack skill {index}\n---\nUse this bounded pack skill safely.\n"
+        );
+        fs::create_dir_all(root.join(&skill_path)).expect("create pack skill");
+        fs::write(
+            root.join(&skill_path).join("SKILL.md"),
+            instructions.as_bytes(),
+        )
+        .expect("write pack skill");
+        manifest.skills.push(PackPathReference {
+            path: skill_path.clone(),
+        });
+        manifest.files.push(PackFileEntry {
+            path: format!("{skill_path}/SKILL.md"),
+            sha256: hex::encode(Sha256::digest(instructions.as_bytes())),
+            size: instructions.len() as u64,
+            content_type: "text/markdown".into(),
+        });
+    }
+    fs::write(
+        root.join(PACK_MANIFEST),
+        serde_json::to_vec_pretty(&manifest).expect("serialize skill pack manifest"),
+    )
+    .expect("write skill pack manifest");
     manifest
 }
 
@@ -217,6 +250,31 @@ fn unsigned_pack_verifies_but_is_not_trusted() {
     assert_eq!(evidence.file_count, 1);
     assert!(!evidence.trusted);
     assert_eq!(evidence.manifest.name, "demo-pack");
+}
+
+#[test]
+fn pack_skill_references_are_bounded() {
+    let accepted = TempDir::new().expect("accepted source");
+    write_pack_with_skill_references(accepted.path(), MAX_PACK_SKILL_REFERENCES);
+    let (_, repository) = repository();
+    let service = PackService::new(repository, accepted.path().join("installed"));
+    let evidence = service
+        .verify(accepted.path())
+        .expect("verify bounded pack");
+    assert_eq!(evidence.manifest.skills.len(), MAX_PACK_SKILL_REFERENCES);
+
+    let rejected = TempDir::new().expect("rejected source");
+    write_pack_with_skill_references(rejected.path(), MAX_PACK_SKILL_REFERENCES + 1);
+    let error = service
+        .verify(rejected.path())
+        .expect_err("pack exceeding the skill-reference ceiling must fail");
+    assert!(matches!(
+        error,
+        PackError::Invalid(message)
+            if message == format!(
+                "pack skills must contain at most {MAX_PACK_SKILL_REFERENCES} entries"
+            )
+    ));
 }
 
 #[test]

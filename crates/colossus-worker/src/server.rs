@@ -1,12 +1,18 @@
 use super::*;
 
+const PUBLIC_RUN_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+const PUBLIC_TRANSPORT_FORCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Long-running single-writer runtime owner and authenticated IPC server.
 pub struct WorkerServer {
     endpoint: String,
-    authentication_key: [u8; 32],
+    listener: Option<platform::Listener>,
+    authentication_key: WorkerAuthenticationKey,
     runtime: Arc<Runtime>,
     replay: Arc<Mutex<ReplayGuard>>,
     maintenance: Arc<tokio::sync::Mutex<()>>,
+    public_interactions: Arc<colossus_api_runtime::PublicInteractionRouter>,
+    public_api: Option<public_api::PreparedPublicApi>,
 }
 
 impl WorkerServer {
@@ -28,16 +34,30 @@ impl WorkerServer {
         approvals: Arc<dyn colossus_ports::ApprovalProvider>,
         options: RuntimeOpenOptions,
     ) -> Result<Self, WorkerError> {
+        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
-        let authentication_key = config.worker_ipc_auth_key_at(&options.workspace)?;
+        let authentication_key =
+            WorkerAuthenticationKey::new(config.worker_ipc_auth_key_at(&options.workspace)?);
+        let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
+            approvals, None,
+        ));
+        let approval_interface: Arc<dyn ApprovalProvider> = interactions.clone();
+        let prompt_interface: Arc<dyn UserPromptProvider> = interactions.clone();
+        let runtime = Arc::new(Runtime::open_with_options(
+            config,
+            approval_interface,
+            Some(prompt_interface),
+            options,
+        )?);
         Ok(Self {
             endpoint,
+            listener: None,
             authentication_key,
-            runtime: Arc::new(Runtime::open_with_options(
-                config, approvals, None, options,
-            )?),
+            runtime,
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
+            public_interactions: interactions,
+            public_api: None,
         })
     }
 
@@ -59,24 +79,117 @@ impl WorkerServer {
         approval_mode: WorkerApprovalMode,
         options: RuntimeOpenOptions,
     ) -> Result<Self, WorkerError> {
+        Self::open_with_mode_at_workspace_and_provider_credentials(
+            config,
+            approval_mode,
+            options,
+            Arc::new(EnvironmentCredentialResolver),
+        )
+    }
+
+    /// Open an interactive worker with a host-provided late-bound provider credential
+    /// resolver. Credential values remain behind the permit-bearing provider adapter.
+    pub fn open_with_mode_at_workspace_and_provider_credentials(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+    ) -> Result<Self, WorkerError> {
+        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
+        let authentication_key =
+            WorkerAuthenticationKey::new(config.worker_ipc_auth_key_at(&options.workspace)?);
+        Self::open_with_mode_at_workspace_provider_credentials_and_authentication(
+            config,
+            approval_mode,
+            options,
+            provider_credentials,
+            authentication_key,
+        )
+    }
+
+    /// Open an interactive worker with host-provided provider credentials and an
+    /// independent worker key delivered through inherited native bootstrap memory.
+    pub fn open_with_mode_at_workspace_provider_credentials_and_authentication(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+        authentication_key: WorkerAuthenticationKey,
+    ) -> Result<Self, WorkerError> {
+        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
         let approvals: Arc<dyn ApprovalProvider> = Arc::new(WorkerInteractiveApproval {
             mode: approval_mode,
         });
         let user_prompts: Arc<dyn UserPromptProvider> = Arc::new(WorkerInteractiveUserPrompt);
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
-        let authentication_key = config.worker_ipc_auth_key_at(&options.workspace)?;
+        let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
+            approvals,
+            Some(user_prompts),
+        ));
+        let approval_interface: Arc<dyn ApprovalProvider> = interactions.clone();
+        let prompt_interface: Arc<dyn UserPromptProvider> = interactions.clone();
+        let runtime = Arc::new(Runtime::open_with_provider_credentials(
+            config,
+            approval_interface,
+            Some(prompt_interface),
+            options,
+            provider_credentials,
+        )?);
         Ok(Self {
             endpoint,
+            listener: None,
             authentication_key,
-            runtime: Arc::new(Runtime::open_with_options(
-                config,
-                approvals,
-                Some(user_prompts),
-                options,
-            )?),
+            runtime,
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
+            public_interactions: interactions,
+            public_api: None,
         })
+    }
+
+    /// Bind a credential manager to this worker's authoritative journal.
+    ///
+    /// The key must come from a stable, API-specific platform secret and must not be
+    /// derived from or reused as any worker IPC, journal, signing, TLS, or provider
+    /// secret. The returned manager issues bearer material exactly once and journals
+    /// only a verifier plus the bounded application grant. Trusted composition code
+    /// must deliver the bearer directly to an inherited bootstrap channel or OS
+    /// credential store; it must never use files, descriptors, argv, environment
+    /// variables, logs, error messages, or renderer state.
+    ///
+    /// Use the same manager when constructing [`PublicApiHostOptions`]. The worker
+    /// rejects options bound to any other journal.
+    pub fn public_api_credential_manager(
+        &self,
+        authentication_key: PublicApiAuthenticationKey,
+    ) -> PublicApiCredentialManager {
+        PublicApiCredentialManager::bind(self.runtime.journal(), authentication_key)
+    }
+
+    /// Bind and securely publish the independently keyed public application API.
+    pub async fn enable_public_api(
+        mut self,
+        options: PublicApiHostOptions,
+    ) -> Result<Self, WorkerError> {
+        if self.public_api.is_some() {
+            return Err(WorkerError::PublicApi(
+                "public API is already enabled".into(),
+            ));
+        }
+        if !options.is_bound_to(&self.runtime.journal()) {
+            return Err(WorkerError::PublicApi(
+                "public API credentials are bound to another worker journal".into(),
+            ));
+        }
+        self.public_api = Some(
+            public_api::PreparedPublicApi::prepare(
+                options,
+                Arc::clone(&self.runtime),
+                Arc::clone(&self.public_interactions),
+            )
+            .await?,
+        );
+        Ok(self)
     }
 
     /// Exact bound endpoint.
@@ -84,30 +197,128 @@ impl WorkerServer {
         &self.endpoint
     }
 
+    /// Bind private worker IPC before advertising any dependent public transport.
+    ///
+    /// Managed sidecars call this during bootstrap so a local endpoint failure is
+    /// reported on the inherited channel instead of being masked as a later gRPC
+    /// connection failure. Ordinary workers may continue to bind inside `serve`.
+    pub async fn prepare_worker_ipc(mut self) -> Result<Self, WorkerError> {
+        if self.listener.is_none() {
+            self.listener = Some(platform::Listener::bind(&self.endpoint).await?);
+        }
+        Ok(self)
+    }
+
+    /// Sanitized bound public API identity available before service begins.
+    pub fn public_api_ready_metadata(&self) -> Option<&PublicApiReadyMetadata> {
+        self.public_api.as_ref().map(|api| &api.metadata)
+    }
+
     /// Serve until Ctrl-C or an authenticated shutdown request, then checkpoint cleanly.
     pub async fn serve(self) -> Result<(), WorkerError> {
-        let mut listener = platform::Listener::bind(&self.endpoint).await?;
+        self.serve_with_signal(tokio::signal::ctrl_c()).await
+    }
+
+    /// Serve until an external guardian resolves or an authenticated shutdown request
+    /// arrives, preserving the normal public-run drain, transport force-close, and
+    /// checkpoint sequence.
+    pub async fn serve_until(
+        self,
+        shutdown: impl std::future::Future<Output = ()> + Send,
+    ) -> Result<(), WorkerError> {
+        self.serve_with_signal(async move {
+            shutdown.await;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn serve_with_signal(
+        mut self,
+        signal: impl std::future::Future<Output = std::io::Result<()>> + Send,
+    ) -> Result<(), WorkerError> {
+        let mut listener = match self.listener.take() {
+            Some(listener) => listener,
+            None => platform::Listener::bind(&self.endpoint).await?,
+        };
         let runtime = Arc::clone(&self.runtime);
         let replay = Arc::clone(&self.replay);
         let maintenance = Arc::clone(&self.maintenance);
         let drain_notify = Arc::new(tokio::sync::Notify::new());
-        let key = self.authentication_key;
+        let key = self.authentication_key.clone();
         let mut drain_interval = tokio::time::interval(Duration::from_secs(1));
         drain_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         drain_interval.tick().await;
         let draining = Arc::new(AtomicBool::new(false));
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
         let mut tasks = tokio::task::JoinSet::new();
+        let mut public_api = self.public_api.take();
+        let (public_error_tx, mut public_error_rx) = tokio::sync::mpsc::channel::<String>(1);
+        let mut public_error_open = false;
+        let mut public_shutdown = None;
+        let mut public_force_shutdown = None;
+        let mut public_completion = None;
+        let mut public_abort = None;
+        if let Some(api) = public_api.as_mut() {
+            let server = api
+                .server
+                .take()
+                .ok_or_else(|| WorkerError::PublicApi("public API server is absent".into()))?;
+            let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+            let (force_shutdown, force_shutdown_rx) = tokio::sync::oneshot::channel();
+            let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+            public_shutdown = Some(shutdown);
+            public_force_shutdown = Some(force_shutdown);
+            public_completion = Some(completion_rx);
+            public_error_open = true;
+            let errors = public_error_tx.clone();
+            let server_task = tokio::spawn(async move {
+                server
+                    .serve_with_force_shutdown(
+                        async move {
+                            let _ = shutdown_rx.await;
+                        },
+                        async move {
+                            let _ = force_shutdown_rx.await;
+                        },
+                    )
+                    .await
+            });
+            public_abort = Some(server_task.abort_handle());
+            tasks.spawn(async move {
+                let result = match server_task.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(error)) => Err(error.to_string()),
+                    Err(error) => Err(format!("public API server task failed: {error}")),
+                };
+                if let Err(error) = &result {
+                    let _ = errors.send(error.clone()).await;
+                }
+                let _ = completion_tx.send(result);
+            });
+        }
+        drop(public_error_tx);
         let mut stop = false;
+        let mut public_failure = None;
+        tokio::pin!(signal);
         while !stop {
             tokio::select! {
                 biased;
-                signal = tokio::signal::ctrl_c() => {
+                signal = &mut signal => {
                     signal?;
                     stop = true;
                 }
                 requested = shutdown_rx.recv() => {
                     stop = requested.is_some();
+                }
+                failure = public_error_rx.recv(), if public_error_open => {
+                    match failure {
+                        Some(error) => {
+                            public_failure = Some(error);
+                            stop = true;
+                        }
+                        None => public_error_open = false,
+                    }
                 }
                 _ = drain_notify.notified() => {
                     spawn_drain_if_idle(&mut tasks, &runtime, &maintenance, &draining);
@@ -122,6 +333,7 @@ impl WorkerServer {
                 }
                 accepted = listener.accept() => {
                     let stream = accepted?;
+                    let key = key.clone();
                     let runtime = Arc::clone(&runtime);
                     let replay = Arc::clone(&replay);
                     let maintenance = Arc::clone(&maintenance);
@@ -130,7 +342,7 @@ impl WorkerServer {
                     tasks.spawn(async move {
                         if handle_connection(
                             stream,
-                            &key,
+                            key.expose(),
                             runtime.as_ref(),
                             replay.as_ref(),
                             maintenance.as_ref(),
@@ -145,13 +357,55 @@ impl WorkerServer {
                 }
             }
         }
+        if let Some(shutdown) = public_shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(api) = public_api.as_ref()
+            && !api.runs.shutdown_and_wait(PUBLIC_RUN_SHUTDOWN_GRACE).await
+        {
+            public_failure.get_or_insert_with(|| {
+                "public runs did not reach a durable terminal state before shutdown".into()
+            });
+        }
+        if let Some(force_shutdown) = public_force_shutdown.take() {
+            let _ = force_shutdown.send(());
+        }
+        if let (Some(completion), Some(abort)) = (public_completion.take(), public_abort.take())
+            && let Err(error) = await_public_server_shutdown(
+                completion,
+                abort,
+                PUBLIC_TRANSPORT_FORCE_CLOSE_TIMEOUT,
+            )
+            .await
+        {
+            public_failure.get_or_insert(error);
+        }
         drop(shutdown_tx);
         while let Some(result) = tasks.join_next().await {
             result.map_err(|error| WorkerError::Protocol(error.to_string()))?;
         }
         runtime.checkpoint()?;
         listener.cleanup();
-        Ok(())
+        drop(public_api);
+        match public_failure {
+            Some(error) => Err(WorkerError::PublicApi(error)),
+            None => Ok(()),
+        }
+    }
+}
+
+async fn await_public_server_shutdown(
+    completion: tokio::sync::oneshot::Receiver<Result<(), String>>,
+    abort: tokio::task::AbortHandle,
+    timeout: Duration,
+) -> Result<(), String> {
+    match tokio::time::timeout(timeout, completion).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("public API server completion monitor disappeared".into()),
+        Err(_) => {
+            abort.abort();
+            Err("public API transport did not force-close within its shutdown timeout".into())
+        }
     }
 }
 
@@ -446,5 +700,52 @@ where
             }
             Ok(shutdown && succeeded)
         }
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn public_server_shutdown_aborts_after_the_force_close_timeout() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let abort = server_task.abort_handle();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let monitor = tokio::spawn(async move {
+            let _ = server_task.await;
+            let _ = completion_tx.send(Ok(()));
+        });
+        started_rx.await.expect("server task started");
+
+        let error = await_public_server_shutdown(completion_rx, abort, Duration::from_millis(10))
+            .await
+            .expect_err("pending public server must time out");
+        assert!(error.contains("did not force-close"));
+        tokio::time::timeout(Duration::from_secs(1), monitor)
+            .await
+            .expect("aborted public server monitor must finish")
+            .expect("monitor task");
+    }
+
+    #[tokio::test]
+    async fn public_server_shutdown_preserves_transport_failure() {
+        let server_task = tokio::spawn(std::future::pending::<()>());
+        let abort = server_task.abort_handle();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        completion_tx
+            .send(Err("transport failed".into()))
+            .expect("completion receiver");
+
+        let error =
+            await_public_server_shutdown(completion_rx, abort.clone(), Duration::from_secs(1))
+                .await
+                .expect_err("transport failure");
+        assert_eq!(error, "transport failed");
+        abort.abort();
     }
 }

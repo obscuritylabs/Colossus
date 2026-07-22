@@ -1,11 +1,19 @@
 use super::{
-    FilesystemSkillRepository, SkillAuthoringService, SkillComposer, SkillResourceService,
-    SkillRoot, content_hash, split_frontmatter,
+    FilesystemSkillRepository, MAX_SKILL_ROOTS, SkillAuthoringService, SkillComposer,
+    SkillResourceService, SkillRoot, content_hash, split_frontmatter,
 };
 use colossus_contracts::ToolSpec;
-use colossus_ports::SkillRepository;
+use colossus_ports::{SkillRepository, StoreError};
 use std::{fs, sync::Arc};
 use tempfile::tempdir;
+
+#[cfg(unix)]
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 
 fn write_skill(root: &std::path::Path, name: &str, required_tools: &[&str]) {
     fs::create_dir_all(root.join("references")).expect("directory");
@@ -25,6 +33,51 @@ fn write_skill(root: &std::path::Path, name: &str, required_tools: &[&str]) {
     )
     .expect("manifest");
     fs::write(root.join("references/guide.md"), "# Guide\n").expect("resource");
+}
+
+#[cfg(unix)]
+fn create_fifo(path: &Path) {
+    nix::unistd::mkfifo(
+        path,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .expect("FIFO");
+}
+
+#[cfg(unix)]
+fn assert_fifo_operation_does_not_block<T>(
+    fifo: PathBuf,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> T
+where
+    T: Send + 'static,
+{
+    let (sender, receiver) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let result = operation();
+        sender.send(result).expect("test receiver");
+    });
+    let result = match receiver.recv_timeout(Duration::from_secs(2)) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let writer = nix::fcntl::open(
+                &fifo,
+                nix::fcntl::OFlag::O_WRONLY | nix::fcntl::OFlag::O_NONBLOCK,
+                nix::sys::stat::Mode::empty(),
+            )
+            .expect("unblock FIFO reader");
+            let _ = receiver.recv_timeout(Duration::from_secs(2));
+            drop(writer);
+            worker.join().expect("FIFO worker");
+            panic!("skill repository blocked while opening a FIFO")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            worker.join().expect("FIFO worker");
+            unreachable!("worker exited without returning a result")
+        }
+    };
+    worker.join().expect("FIFO worker");
+    result
 }
 
 #[test]
@@ -158,6 +211,379 @@ fn resources_are_active_scoped_bounded_text_only_and_symlink_safe() {
             .is_err()
     );
     assert_eq!(content_hash(b"hello").len(), 64);
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_bound_skills_and_resources_ignore_an_aba_path_replacement() {
+    let directory = tempdir().expect("tempdir");
+    let parent = fs::canonicalize(directory.path()).expect("canonical parent");
+    let workspace = parent.join("workspace");
+    let moved = parent.join("workspace-moved");
+    let replacement = parent.join("workspace-replacement");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(&replacement).expect("replacement workspace");
+    write_skill(&workspace.join("skills/demo"), "demo", &[]);
+    write_skill(&replacement.join("skills/demo"), "demo", &[]);
+    fs::write(
+        replacement.join("skills/demo/SKILL.md"),
+        "Malicious replacement instructions.",
+    )
+    .expect("replacement instructions");
+    fs::write(
+        replacement.join("skills/demo/references/guide.md"),
+        "malicious replacement resource\n",
+    )
+    .expect("replacement resource");
+
+    let repository: Arc<dyn SkillRepository> = Arc::new(
+        FilesystemSkillRepository::new_workspace_bound(
+            fs::File::open(&workspace).expect("workspace descriptor"),
+            &workspace,
+            vec![SkillRoot {
+                path: workspace.join("skills"),
+                label: "workspace".into(),
+            }],
+            false,
+            Vec::new(),
+        )
+        .expect("bound repository"),
+    );
+
+    fs::rename(&workspace, &moved).expect("move selected workspace");
+    fs::rename(&replacement, &workspace).expect("install replacement at selected path");
+
+    let composition = SkillComposer::new(Arc::clone(&repository))
+        .compose("Base", "@skill:demo", &["demo".into()], &[], true, &[])
+        .expect("compose through retained workspace");
+    let resources = SkillResourceService::new(repository);
+    let active = vec!["demo".into()];
+    let listing = resources
+        .list_resources_inner("demo", &active)
+        .expect("list through retained skill directory");
+    let resource = resources
+        .read_resource_inner("demo", "references/guide.md", &active)
+        .expect("read through retained skill directory");
+
+    fs::rename(&workspace, &replacement).expect("remove replacement");
+    fs::rename(&moved, &workspace).expect("restore selected workspace");
+
+    assert!(composition.instructions.contains("Instructions for demo."));
+    assert!(!composition.instructions.contains("Malicious replacement"));
+    assert!(
+        listing
+            .iter()
+            .any(|entry| entry.path == "references/guide.md")
+    );
+    assert_eq!(resource.content, "# Guide\n");
+    assert!(!resource.content.contains("malicious"));
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_bound_missing_roots_are_discovered_later_from_the_retained_directory() {
+    let directory = tempdir().expect("tempdir");
+    let workspace = fs::canonicalize(directory.path()).expect("canonical workspace");
+    let repository = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: workspace.join("skills-created-later"),
+            label: "workspace".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .expect("bound repository");
+    assert!(repository.list_skills().expect("initial list").is_empty());
+
+    write_skill(&workspace.join("skills-created-later/demo"), "demo", &[]);
+    assert_eq!(
+        repository
+            .list_skills()
+            .expect("late root list")
+            .into_iter()
+            .map(|skill| skill.manifest.name)
+            .collect::<Vec<_>>(),
+        vec!["demo"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_bound_rejects_oversized_root_sets_before_binding_any_root() {
+    let directory = tempdir().expect("tempdir");
+    let parent = fs::canonicalize(directory.path()).expect("canonical parent");
+    let workspace = parent.join("workspace");
+    let outside = parent.join("outside");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(&outside).expect("outside");
+    std::os::unix::fs::symlink(&outside, parent.join("must-not-open")).expect("external symlink");
+    let mut roots = (0..MAX_SKILL_ROOTS)
+        .map(|index| SkillRoot {
+            path: workspace.join(format!("skills-{index}")),
+            label: format!("workspace-{index}"),
+        })
+        .collect::<Vec<_>>();
+    roots.insert(
+        0,
+        SkillRoot {
+            // Binding this first root would fail at its symlink component. The
+            // aggregate error below therefore proves validation precedes traversal.
+            path: parent.join("must-not-open/skills"),
+            label: "must-not-open".into(),
+        },
+    );
+
+    let error = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        roots,
+        false,
+        Vec::new(),
+    )
+    .err()
+    .expect("oversized roots must fail before binding");
+    let StoreError::Adapter(message) = error else {
+        panic!("expected aggregate root validation error, got {error}")
+    };
+    assert_eq!(
+        message,
+        format!("skill roots exceed the aggregate limit of {MAX_SKILL_ROOTS}")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_bound_external_roots_retain_the_opened_object() {
+    let directory = tempdir().expect("tempdir");
+    let parent = fs::canonicalize(directory.path()).expect("canonical parent");
+    let workspace = parent.join("workspace");
+    let outside = parent.join("outside");
+    let moved = parent.join("outside-moved");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(&outside).expect("outside");
+    write_skill(&outside.join("skills/demo"), "demo", &[]);
+
+    let repository = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: outside.join("skills"),
+            label: "outside".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .expect("external root capability");
+
+    fs::rename(&outside, &moved).expect("move external root");
+    write_skill(&outside.join("skills/demo"), "demo", &[]);
+    fs::write(
+        outside.join("skills/demo/SKILL.md"),
+        "Malicious external replacement instructions.",
+    )
+    .expect("replacement instructions");
+    fs::write(
+        outside.join("skills/demo/references/guide.md"),
+        "malicious external replacement resource\n",
+    )
+    .expect("replacement resource");
+
+    let skills = repository.list_skills().expect("retained external skills");
+    let resource = repository
+        .read_skill_resource("demo", "references/guide.md")
+        .expect("retained external resource");
+
+    fs::remove_dir_all(&outside).expect("remove external replacement");
+    fs::rename(&moved, &outside).expect("restore external root");
+
+    assert_eq!(skills.len(), 1);
+    assert!(skills[0].instructions.contains("Instructions for demo."));
+    assert!(!skills[0].instructions.contains("Malicious"));
+    assert_eq!(resource.content, "# Guide\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_bound_missing_external_roots_require_a_private_retained_ancestor() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempdir().expect("tempdir");
+    let parent = fs::canonicalize(directory.path()).expect("canonical parent");
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+        .expect("private app-support ancestor");
+    let workspace = parent.join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let repository = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: parent.join("app-support/skills"),
+            label: "app-support".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .expect("missing root beneath private ancestor");
+    assert!(repository.list_skills().expect("initial list").is_empty());
+    write_skill(&parent.join("app-support/skills/demo"), "demo", &[]);
+    assert_eq!(repository.list_skills().expect("late list").len(), 1);
+
+    let shared = parent.join("shared");
+    fs::create_dir(&shared).expect("shared ancestor");
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).expect("shared permissions");
+    let error = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: shared.join("missing/skills"),
+            label: "unsafe-missing".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .err()
+    .expect("missing external root beneath shared ancestor must fail");
+    assert!(matches!(error, StoreError::Adapter(_)));
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_bound_roots_fail_closed_at_symlink_components() {
+    let directory = tempdir().expect("tempdir");
+    let parent = fs::canonicalize(directory.path()).expect("canonical parent");
+    let workspace = parent.join("workspace");
+    let outside = parent.join("outside");
+    fs::create_dir(&workspace).expect("workspace");
+    fs::create_dir(&outside).expect("outside");
+    write_skill(&outside.join("skills/demo"), "demo", &[]);
+
+    std::os::unix::fs::symlink(&outside, workspace.join("linked-root")).expect("root symlink");
+    let linked_repository = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: workspace.join("linked-root/skills"),
+            label: "linked".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .expect("lexically contained root");
+    assert!(linked_repository.list_skills().is_err());
+
+    write_skill(&workspace.join("skills/demo"), "demo", &[]);
+    fs::remove_dir_all(workspace.join("skills/demo/references")).expect("remove references");
+    std::os::unix::fs::symlink(
+        outside.join("skills/demo/references"),
+        workspace.join("skills/demo/references"),
+    )
+    .expect("resource symlink");
+    let resource_repository = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: workspace.join("skills"),
+            label: "workspace".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .expect("resource repository");
+    assert!(resource_repository.list_skill_resources("demo").is_err());
+    assert!(
+        resource_repository
+            .read_skill_resource("demo", "references/guide.md")
+            .is_err()
+    );
+
+    std::os::unix::fs::symlink(&outside, parent.join("external-link")).expect("external symlink");
+    let external_error = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: parent.join("external-link/skills"),
+            label: "external-link".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .err()
+    .expect("external symlink component must fail");
+    assert!(matches!(external_error, StoreError::Adapter(_)));
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_bound_special_files_fail_without_blocking() {
+    let directory = tempdir().expect("tempdir");
+    let workspace = fs::canonicalize(directory.path()).expect("canonical workspace");
+
+    let instruction_root = workspace.join("instruction-fifo/demo");
+    fs::create_dir_all(&instruction_root).expect("instruction root");
+    let instruction_fifo = instruction_root.join("SKILL.md");
+    create_fifo(&instruction_fifo);
+    let instruction_repository = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: workspace.join("instruction-fifo"),
+            label: "instruction-fifo".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .expect("instruction repository");
+    let instruction_result = assert_fifo_operation_does_not_block(instruction_fifo, move || {
+        instruction_repository.list_skills()
+    });
+    assert!(instruction_result.is_err());
+
+    let manifest_root = workspace.join("manifest-fifo/demo");
+    fs::create_dir_all(&manifest_root).expect("manifest root");
+    fs::write(
+        manifest_root.join("SKILL.md"),
+        "---\nname: demo\ndescription: Demo\n---\nTrusted instructions.\n",
+    )
+    .expect("instructions");
+    let manifest_fifo = manifest_root.join("manifest.json");
+    create_fifo(&manifest_fifo);
+    let manifest_repository = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: workspace.join("manifest-fifo"),
+            label: "manifest-fifo".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .expect("manifest repository");
+    let manifest_result = assert_fifo_operation_does_not_block(manifest_fifo, move || {
+        manifest_repository.list_skills()
+    });
+    assert!(manifest_result.is_err());
+
+    let resource_root = workspace.join("resource-fifo/demo");
+    write_skill(&resource_root, "demo", &[]);
+    let resource_fifo = resource_root.join("references/pipe.txt");
+    create_fifo(&resource_fifo);
+    let resource_repository = FilesystemSkillRepository::new_workspace_bound(
+        fs::File::open(&workspace).expect("workspace descriptor"),
+        &workspace,
+        vec![SkillRoot {
+            path: workspace.join("resource-fifo"),
+            label: "resource-fifo".into(),
+        }],
+        false,
+        Vec::new(),
+    )
+    .expect("resource repository");
+    let resource_result = assert_fifo_operation_does_not_block(resource_fifo, move || {
+        resource_repository.read_skill_resource("demo", "references/pipe.txt")
+    });
+    assert!(resource_result.is_err());
 }
 
 #[test]

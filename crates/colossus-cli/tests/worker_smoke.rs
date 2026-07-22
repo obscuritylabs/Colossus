@@ -831,7 +831,11 @@ steps:
 
     let lease = run(binary, &config, &["worker", "--once"]);
     assert!(!lease.status.success());
-    assert!(String::from_utf8_lossy(&lease.stderr).contains("writer lease is already held"));
+    let lease_stderr = String::from_utf8_lossy(&lease.stderr);
+    assert!(
+        lease_stderr.contains("writer lease is already held"),
+        "{lease_stderr}"
+    );
 
     let wrong_key = command(binary, &config)
         .args(["worker", "--shutdown"])

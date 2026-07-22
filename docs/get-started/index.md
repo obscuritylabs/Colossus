@@ -13,6 +13,10 @@ uses the deterministic `echo` provider.
 
 ## The shortest path
 
+Choose the [macOS desktop app](desktop.md) for a folder-first, zero-terminal Managed
+Local setup. Choose the native interface path when you want direct CLI, TUI, daemon, or
+server administration:
+
 1. [Install the native binary](install.md).
 2. [Complete the five-minute offline quickstart](quickstart.md).
 3. [Connect a model](connect-model.md).
