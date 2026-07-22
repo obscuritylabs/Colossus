@@ -22,6 +22,7 @@ const TOKEN_PREFIX: &str = "cls_v1";
 const TOKEN_SECRET_BYTES: usize = 32;
 const MAX_AUTHORIZATION_BYTES: usize = 768;
 const CREDENTIAL_DOMAIN: &[u8] = b"colossus-public-api-credential-v1\0";
+pub(crate) const MAX_CREDENTIAL_BATCH_SIZE: usize = 2;
 /// Maximum authenticated protobuf decodes in progress across all applications.
 pub const MAX_CONCURRENT_AUTHENTICATED_DECODES: usize = 8;
 /// Maximum authenticated protobuf decodes in progress for one application.
@@ -184,14 +185,40 @@ pub trait CredentialRepository: Send + Sync {
     /// Insert a newly issued unique record.
     fn insert(&self, record: CredentialRecord) -> Result<(), CredentialStoreError>;
 
+    /// Insert multiple credentials as one all-or-nothing persistence operation.
+    ///
+    /// Repositories that cannot provide atomic multi-record insertion must fail closed.
+    fn insert_batch(&self, records: Vec<CredentialRecord>) -> Result<(), CredentialStoreError> {
+        if records.len() != 1 {
+            return Err(CredentialStoreError);
+        }
+        self.insert(records.into_iter().next().ok_or(CredentialStoreError)?)
+    }
+
     /// Load one record by exact identifier.
     fn get(&self, credential_id: &str) -> Result<Option<CredentialRecord>, CredentialStoreError>;
 
     /// Activate one pending credential after secret-safe delivery.
     fn activate(&self, credential_id: &str) -> Result<bool, CredentialStoreError>;
 
+    /// Activate multiple pending credentials atomically.
+    fn activate_batch(&self, credential_ids: &[String]) -> Result<bool, CredentialStoreError> {
+        if credential_ids.len() != 1 {
+            return Err(CredentialStoreError);
+        }
+        self.activate(credential_ids.first().ok_or(CredentialStoreError)?)
+    }
+
     /// Permanently revoke one existing record.
     fn revoke(&self, credential_id: &str) -> Result<bool, CredentialStoreError>;
+
+    /// Revoke multiple credentials atomically.
+    fn revoke_batch(&self, credential_ids: &[String]) -> Result<bool, CredentialStoreError> {
+        if credential_ids.len() != 1 {
+            return Err(CredentialStoreError);
+        }
+        self.revoke(credential_ids.first().ok_or(CredentialStoreError)?)
+    }
 }
 
 /// Deterministic in-memory credential repository for embedded use and tests.
@@ -207,6 +234,26 @@ impl CredentialRepository for InMemoryCredentialRepository {
             return Err(CredentialStoreError);
         }
         records.insert(record.credential_id.clone(), record);
+        Ok(())
+    }
+
+    fn insert_batch(&self, records: Vec<CredentialRecord>) -> Result<(), CredentialStoreError> {
+        if records.is_empty() || records.len() > MAX_CREDENTIAL_BATCH_SIZE {
+            return Err(CredentialStoreError);
+        }
+        let mut stored = self.records.lock().map_err(|_| CredentialStoreError)?;
+        let mut ids = BTreeSet::new();
+        if records.iter().any(|record| {
+            !record.is_valid()
+                || !record.is_pending()
+                || !ids.insert(record.credential_id().to_owned())
+                || stored.contains_key(record.credential_id())
+        }) {
+            return Err(CredentialStoreError);
+        }
+        for record in records {
+            stored.insert(record.credential_id.clone(), record);
+        }
         Ok(())
     }
 
@@ -234,12 +281,54 @@ impl CredentialRepository for InMemoryCredentialRepository {
         }
     }
 
+    fn activate_batch(&self, credential_ids: &[String]) -> Result<bool, CredentialStoreError> {
+        let mut records = self.records.lock().map_err(|_| CredentialStoreError)?;
+        if credential_ids.is_empty()
+            || credential_ids.len() > MAX_CREDENTIAL_BATCH_SIZE
+            || credential_ids.iter().collect::<BTreeSet<_>>().len() != credential_ids.len()
+            || credential_ids.iter().any(|credential_id| {
+                records
+                    .get(credential_id)
+                    .is_none_or(CredentialRecord::is_revoked)
+            })
+        {
+            return Ok(false);
+        }
+        for credential_id in credential_ids {
+            records
+                .get_mut(credential_id)
+                .ok_or(CredentialStoreError)?
+                .mark_active();
+        }
+        Ok(true)
+    }
+
     fn revoke(&self, credential_id: &str) -> Result<bool, CredentialStoreError> {
         let mut records = self.records.lock().map_err(|_| CredentialStoreError)?;
         let Some(record) = records.get_mut(credential_id) else {
             return Ok(false);
         };
         record.mark_revoked();
+        Ok(true)
+    }
+
+    fn revoke_batch(&self, credential_ids: &[String]) -> Result<bool, CredentialStoreError> {
+        let mut records = self.records.lock().map_err(|_| CredentialStoreError)?;
+        if credential_ids.is_empty()
+            || credential_ids.len() > MAX_CREDENTIAL_BATCH_SIZE
+            || credential_ids.iter().collect::<BTreeSet<_>>().len() != credential_ids.len()
+            || credential_ids
+                .iter()
+                .any(|credential_id| !records.contains_key(credential_id))
+        {
+            return Ok(false);
+        }
+        for credential_id in credential_ids {
+            records
+                .get_mut(credential_id)
+                .ok_or(CredentialStoreError)?
+                .mark_revoked();
+        }
         Ok(true)
     }
 }
@@ -300,6 +389,34 @@ impl CredentialAuthenticator {
         &self,
         grant: &ApplicationGrant,
     ) -> Result<IssuedCredential, CredentialStoreError> {
+        self.issue_pending_batch(std::slice::from_ref(grant))?
+            .pop()
+            .ok_or(CredentialStoreError)
+    }
+
+    /// Issue multiple pending credentials in one all-or-nothing repository transaction.
+    pub fn issue_pending_batch(
+        &self,
+        grants: &[ApplicationGrant],
+    ) -> Result<Vec<IssuedCredential>, CredentialStoreError> {
+        if grants.is_empty() || grants.len() > MAX_CREDENTIAL_BATCH_SIZE {
+            return Err(CredentialStoreError);
+        }
+        let mut records = Vec::with_capacity(grants.len());
+        let mut issued = Vec::with_capacity(grants.len());
+        for grant in grants {
+            let (record, credential) = self.pending_credential(grant)?;
+            records.push(record);
+            issued.push(credential);
+        }
+        self.repository.insert_batch(records)?;
+        Ok(issued)
+    }
+
+    fn pending_credential(
+        &self,
+        grant: &ApplicationGrant,
+    ) -> Result<(CredentialRecord, IssuedCredential), CredentialStoreError> {
         let credential_id = Uuid::now_v7().to_string();
         let mut secret = Zeroizing::new([0_u8; TOKEN_SECRET_BYTES]);
         fill(secret.as_mut()).map_err(|_| CredentialStoreError)?;
@@ -317,17 +434,25 @@ impl CredentialAuthenticator {
             verifier,
             state: CredentialState::Pending,
         };
-        self.repository.insert(record)?;
         let encoded = URL_SAFE_NO_PAD.encode(secret.as_ref());
-        Ok(IssuedCredential {
+        let credential = IssuedCredential {
             credential_id: credential_id.clone(),
             token: Zeroizing::new(format!("{TOKEN_PREFIX}.{credential_id}.{encoded}")),
-        })
+        };
+        Ok((record, credential))
     }
 
     /// Durably activate one pending credential after secret-safe delivery.
     pub fn activate(&self, credential_id: &str) -> Result<bool, CredentialStoreError> {
         self.repository.activate(credential_id)
+    }
+
+    /// Durably activate multiple pending credentials in one transaction.
+    pub fn activate_batch(&self, credential_ids: &[String]) -> Result<bool, CredentialStoreError> {
+        if credential_ids.is_empty() || credential_ids.len() > MAX_CREDENTIAL_BATCH_SIZE {
+            return Err(CredentialStoreError);
+        }
+        self.repository.activate_batch(credential_ids)
     }
 
     /// Verify an exact HTTP Authorization header.
@@ -375,6 +500,14 @@ impl CredentialAuthenticator {
     /// Revoke a credential by its non-secret identifier.
     pub fn revoke(&self, credential_id: &str) -> Result<bool, CredentialStoreError> {
         self.repository.revoke(credential_id)
+    }
+
+    /// Durably revoke multiple credentials in one transaction.
+    pub fn revoke_batch(&self, credential_ids: &[String]) -> Result<bool, CredentialStoreError> {
+        if credential_ids.is_empty() || credential_ids.len() > MAX_CREDENTIAL_BATCH_SIZE {
+            return Err(CredentialStoreError);
+        }
+        self.repository.revoke_batch(credential_ids)
     }
 
     fn verifier(&self, credential_id: &str, secret: &[u8]) -> [u8; 32] {
@@ -545,6 +678,85 @@ mod tests {
                 .application_id(),
             "app:test-ui"
         );
+    }
+
+    #[test]
+    fn credential_batches_activate_and_revoke_all_or_none() {
+        let repository = Arc::new(InMemoryCredentialRepository::default());
+        let authenticator = CredentialAuthenticator::new([19_u8; 32], repository);
+        assert!(
+            authenticator
+                .issue_pending_batch(&[grant(), grant(), grant()])
+                .is_err(),
+            "credential batches are bounded before allocation or random generation"
+        );
+        let issued = authenticator
+            .issue_pending_batch(&[grant(), grant()])
+            .expect("issue pair");
+        let authorizations = issued
+            .iter()
+            .map(|credential| format!("Bearer {}", credential.expose_token()))
+            .collect::<Vec<_>>();
+        let mut invalid_ids = vec![
+            issued[0].credential_id().to_owned(),
+            Uuid::now_v7().to_string(),
+        ];
+        assert!(
+            !authenticator
+                .activate_batch(&invalid_ids)
+                .expect("reject pair")
+        );
+        assert!(
+            authenticator
+                .authenticate_authorization(&authorizations[0])
+                .is_err(),
+            "a failed pair activation must not activate its valid member"
+        );
+
+        let credential_ids = issued
+            .iter()
+            .map(|credential| credential.credential_id().to_owned())
+            .collect::<Vec<_>>();
+        let oversized_ids = vec![
+            credential_ids[0].clone(),
+            credential_ids[1].clone(),
+            Uuid::now_v7().to_string(),
+        ];
+        assert!(authenticator.activate_batch(&oversized_ids).is_err());
+        assert!(authenticator.revoke_batch(&oversized_ids).is_err());
+        assert!(
+            authenticator
+                .activate_batch(&credential_ids)
+                .expect("activate pair")
+        );
+        assert!(authorizations.iter().all(|authorization| {
+            authenticator
+                .authenticate_authorization(authorization)
+                .is_ok()
+        }));
+
+        invalid_ids[0] = credential_ids[0].clone();
+        assert!(
+            !authenticator
+                .revoke_batch(&invalid_ids)
+                .expect("reject revoke")
+        );
+        assert!(
+            authenticator
+                .authenticate_authorization(&authorizations[0])
+                .is_ok(),
+            "a failed pair revocation must not revoke its valid member"
+        );
+        assert!(
+            authenticator
+                .revoke_batch(&credential_ids)
+                .expect("revoke pair")
+        );
+        assert!(authorizations.iter().all(|authorization| {
+            authenticator
+                .authenticate_authorization(authorization)
+                .is_err()
+        }));
     }
 
     #[test]

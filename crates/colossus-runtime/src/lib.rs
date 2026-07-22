@@ -160,6 +160,8 @@ mod trace_tools;
 mod work;
 mod workflows_research;
 mod workspace;
+mod workspace_binding;
+mod workspace_lease;
 
 pub use composition::Runtime;
 pub use config::{
@@ -171,6 +173,7 @@ pub use config::{
 };
 pub use error::RuntimeError;
 pub use workspace::RuntimeOpenOptions;
+pub use workspace_lease::WorkspaceIdentityToken;
 
 use agent_tools::*;
 use config::*;
@@ -191,6 +194,7 @@ use research_skill_effects::*;
 use runtime_helpers::*;
 use tool_arguments::*;
 use trace_tools::*;
+use workspace_binding::*;
 
 #[cfg(test)]
 mod tests;

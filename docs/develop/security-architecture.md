@@ -193,6 +193,109 @@ daemon credentials, private discovery paths, raw effect inputs or outputs, hidde
 reasoning, or a generic process, filesystem, network, or SDK invocation escape hatch.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
 
+A managed desktop sidecar is a separate signed process, not an in-process extension of
+renderer authority. Its exact signed executable and the bundled TUI CLI are named in a
+SHA-256 manifest whose exact byte digest is patched into, and then sealed by, the signed
+running desktop executable. The manifest is opened once without following symlinks;
+selected executables are code-identity checked immediately before no-shell spawn and
+bootstrapped only over inherited bounded channels. The release manifest is created
+after nested signing because signing changes Mach-O bytes; an unset compile-time marker
+or an unbound resource is never accepted as final executable authority.
+
+Executable binding is platform-specific and fails closed. On macOS, native code hashes
+and parses one private snapshot of the manifest-selected Mach-O, starts the bundle path
+with the kernel's start-suspended flag, and verifies the suspended process's exact live
+CodeDirectory identity under strict, network-disabled validation before `SIGCONT`.
+Linux executes the verified bytes from a sealed, non-writable `memfd`; other Unix
+platforms do not expose Managed Local until they provide an equivalent pre-instruction
+binding.
+
+Managed Local also binds the selected workspace by object identity rather than by
+pathname alone. On macOS, Desktop derives a versioned opaque digest from the device,
+inode, and birth timestamp read from one opened no-follow directory descriptor. It
+persists that digest in owner-private settings, includes it in the managed state
+partition, and supplies it as an exact launch and restart ceiling. Preview-era
+path-only and device/inode-only records are migration input, never launch authority;
+Desktop rotates their managed instance seed and requires explicit folder reselection.
+The SDK holds the selected directory open and rejects identity drift before cloning
+bootstrap secrets or spawning; the child independently opens and matches the same
+object, and runtime lease acquisition reopens it against a runtime-owned identity
+token. The runtime retains that descriptor and revalidates the pathname both before
+tool dispatch and at permit-bearing filesystem and process adapter boundaries. A
+renamed or replaced workspace therefore cannot inherit prior state or redirect an
+active managed runtime.
+
+Private worker IPC remains an authenticated owner-only Unix socket. When the canonical
+state-derived pathname would exceed the portable Unix socket limit, Colossus places a
+domain-separated digest of that state identity in the same fail-closed, owner-private
+coordination directory used by the workspace writer lease. The sidecar binds this
+endpoint before acknowledging bootstrap activation, so an unsafe or unavailable local
+endpoint fails on the inherited control channel rather than being misreported as a
+public TLS failure. No worker key or provider credential is written into the pathname.
+
+Skill discovery is part of model input and therefore uses the same object-bound
+discipline. On Unix, repository skill roots are traversed relative to the retained
+workspace descriptor. App-private user and installed-pack roots receive independent
+no-follow directory capabilities opened one component at a time; a not-yet-created
+root is accepted only beneath a retained owner-private directory. Instruction,
+manifest, and resource files are opened descriptor-relative, bounded, nonblocking,
+and accepted only after their opened type is verified. Aggregate discovery roots are
+capped at 128 before root descriptors are acquired, leaving conservative macOS file
+descriptor headroom; each verified pack may contribute at most 64 skill references,
+with the aggregate runtime ceiling remaining authoritative across packs. Runtime
+pre/post identity checks still reject stable workspace drift, but path checks are not
+treated as protection against an A-to-B-to-A swap.
+
+The retained descriptor makes state selection, lease ownership, skill context, and TUI
+attachment object-bound. Existing filesystem and sandbox effect adapters still consume
+policy-authorized absolute paths after an immediate identity check; POSIX does not make
+that multi-lookup handoff atomic against another native process with the same UID that
+can rename the workspace namespace. Such a process is part of the same explicitly
+excluded same-user-native-process boundary as the generic keyring provider, not a
+renderer or remote-agent capability. Managed Desktop grants neither renderer nor agent
+access to the workspace parent, and a stable rename or replacement fails closed. A
+deployment that treats peer same-UID processes as hostile must add OS process isolation
+or convert every effect adapter to descriptor-relative operations before relying on
+this boundary.
+
+Desktop's dedicated local Tauri window can operate only a native-owned PTY for the
+bundled TUI, using opaque window-bound sessions and fixed native-selected workspace
+context. The TUI connects to the existing worker and retains the ordinary Safety Kernel
+and audit path. The renderer cannot select a process, path, environment, or arguments.
+
+The macOS MVP rejects a general Shell PTY at the native DTO boundary. macOS has no
+supported race-free descendant job primitive for an ordinary desktop app that can
+guarantee cleanup after arbitrary `setsid`, double-fork, and reparenting behavior;
+`EVFILT_PROC/NOTE_TRACK` has been unsupported since macOS 10.5. Desktop therefore does
+not claim process-tree containment it cannot enforce. The bundled TUI starts suspended
+in its own session, its exact live code identity is verified against the manifest-bound
+CodeDirectory before resume, then independently opens and changes directory through the
+selected workspace descriptor and reports the same birthtime-bound identity. Only
+after the parent verifies that attestation does it release worker authentication
+through bounded one-use inherited anonymous pipes that are separate from the PTY.
+Closing the window or app freezes and kills that verified CLI session.
+Platforms without equivalent pre-instruction identity binding do not expose the
+managed TUI launcher.
+
+Discovery cleanup occurs only after the supervised process tree is confirmed dead. It
+holds a no-follow file descriptor for the exact owner-private discovery directory and
+may unlink only the fixed descriptor and certificate leaves after revalidating their
+type, owner, mode, link count, device, and inode immediately before removal. Unsafe or
+replaced state is preserved and reported rather than traversed or recursively deleted.
+
+Managed Desktop approval authority is isolated from its ordinary run client. The
+primary credential has the four run/read/control/prompt scopes and never
+`approvals:respond`. A second same-application native broker credential has only that
+approval scope, no tools, and no role outside the primary ceiling. The sidecar issues,
+delivers, acknowledges, activates, and revokes the pair as one bootstrap lifecycle;
+the SDK routes only approval answers over the broker's separately authenticated pinned
+gRPC client. Renderer approval input still requires the native operating-system
+confirmation before an allow response reaches this broker.
+First-time Development access and every Minimal-to-Development elevation likewise
+require a fixed native confirmation before the wider workspace and shell tool ceiling
+is persisted. A renderer can request key rotation but cannot suppress the native key
+prompt for first setup or a provider-kind change.
+
 ## Evidence and uncertainty
 
 Every effect records requested, decision, approval, started, and terminal evidence. If a

@@ -196,12 +196,32 @@ pub(super) struct WorkerCommand {
     /// Destination OS-keyring service for the one-time bearer.
     #[arg(long, value_name = "SERVICE", requires = "enroll_application")]
     pub(super) credential_keyring_service: Option<String>,
-    /// Destination OS-keyring account for the one-time bearer.
+    /// Destination OS-keyring account; Desktop external enrollment accepts `auto`.
     #[arg(long, value_name = "ACCOUNT", requires = "enroll_application")]
     pub(super) credential_keyring_account: Option<String>,
     /// Explicitly replace an existing destination keyring entry.
-    #[arg(long, requires = "enroll_application")]
+    #[arg(
+        long,
+        requires = "enroll_application",
+        conflicts_with = "retire_credential_keyring_service"
+    )]
     pub(super) replace_credential: bool,
+    /// Source keyring service to revoke and delete after successful enrollment.
+    #[arg(
+        long,
+        value_name = "SERVICE",
+        requires_all = ["enroll_application", "retire_credential_keyring_account"],
+        conflicts_with = "replace_credential"
+    )]
+    pub(super) retire_credential_keyring_service: Option<String>,
+    /// Source keyring account to revoke and delete after successful enrollment.
+    #[arg(
+        long,
+        value_name = "ACCOUNT",
+        requires_all = ["enroll_application", "retire_credential_keyring_service"],
+        conflicts_with = "replace_credential"
+    )]
+    pub(super) retire_credential_keyring_account: Option<String>,
     /// Revoke one public API credential by its non-secret canonical UUID.
     #[arg(
         long,

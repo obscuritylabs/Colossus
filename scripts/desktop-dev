@@ -15,11 +15,8 @@ command -v cargo >/dev/null 2>&1 || fail "cargo is not installed or not on PATH"
 command -v node >/dev/null 2>&1 || fail "node is not installed or not on PATH"
 
 connection="$desktop/src-tauri/connection.local.json"
-if [ ! -f "$connection" ]; then
-    fail "copy apps/desktop/src-tauri/connection.json to connection.local.json and set the enrolled instanceId and certificateSha256"
-fi
-
-node -e '
+if [ -f "$connection" ]; then
+    node -e '
 const fs = require("fs");
 const path = process.argv[1];
 try {
@@ -32,7 +29,8 @@ try {
 } catch {
   process.exitCode = 1;
 }
-' "$connection" || fail "connection.local.json still has placeholder or invalid trust values; map enrollment output instance_id to instanceId and certificate_sha256 to certificateSha256"
+' "$connection" || fail "connection.local.json has invalid External target trust values; remove it to use Managed Local only, or map enrollment instance_id and certificate_sha256 into it"
+fi
 
 cd "$desktop"
 npm ci --ignore-scripts

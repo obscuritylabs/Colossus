@@ -3,7 +3,7 @@ use super::*;
 /// Permit-bound configured MCP adapter.
 pub struct McpExecutor {
     servers: BTreeMap<String, ConfiguredServer>,
-    process: Arc<SandboxProcessExecutor>,
+    process: Arc<dyn EffectExecutor>,
 }
 
 impl McpExecutor {
@@ -12,7 +12,7 @@ impl McpExecutor {
         config: &McpConfig,
         workspace: &Path,
         sandbox_backend: &str,
-        process: Arc<SandboxProcessExecutor>,
+        process: Arc<dyn EffectExecutor>,
     ) -> Result<Self, McpError> {
         let mut servers = BTreeMap::new();
         for (name, server) in &config.servers {

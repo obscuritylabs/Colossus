@@ -6,24 +6,33 @@ import {
   IconCheck,
   IconCircle,
   IconFileText,
+  IconFolder,
+  IconPlus,
   IconPlugConnected,
   IconRefresh,
   IconRobot,
   IconShieldCheck,
+  IconTerminal2,
   IconTopologyStar3,
+  IconTrash,
 } from "@tabler/icons-react";
 
 import type { OperationalActivityItem, PresentedArtifact } from "../presenters";
 import { agentRoleLabel, presentRunStatus } from "../presenters";
-import type { Run } from "../types";
-import type { ConnectionStatus } from "../types";
+import type {
+  ConnectionStatus,
+  DesktopStatus,
+  Run,
+  TerminalKind,
+} from "../types";
 import type { AgentParticipant } from "./AgentFlow";
 import { AgentFlow } from "./AgentFlow";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
-  surface: Exclude<WorkspaceSurface, "work">;
+  surface: Exclude<WorkspaceSurface, "work" | "terminal">;
   connection: ConnectionStatus;
+  desktop: DesktopStatus;
   connecting: boolean;
   runs: readonly Run[];
   artifacts: readonly PresentedArtifact[];
@@ -31,6 +40,14 @@ interface OperationsSurfaceProps {
   demoParticipants: readonly AgentParticipant[] | null;
   onConnect: () => void;
   onOpenRun: (run: Run) => void;
+  onSelectTarget: (targetId: string) => void;
+  onAddExternalTarget: () => void;
+  onRemoveExternalTarget: (targetId: string) => void;
+  onChooseWorkspace: () => void;
+  onConfigureManaged: () => void;
+  onRestartManaged: () => void;
+  onSetTerminalEnabled: (enabled: boolean) => void;
+  onOpenTerminal: (kind: TerminalKind) => void;
 }
 
 function SurfaceHeader({
@@ -55,9 +72,14 @@ function SurfaceHeader({
 
 function FleetView({
   runs,
+  desktop,
   demoParticipants,
   onOpenRun,
-}: Pick<OperationsSurfaceProps, "runs" | "demoParticipants" | "onOpenRun">) {
+  onSelectTarget,
+}: Pick<
+  OperationsSurfaceProps,
+  "runs" | "desktop" | "demoParticipants" | "onOpenRun" | "onSelectTarget"
+>) {
   const active = runs.filter((run) =>
     ["queued", "running", "waiting", "cancelling"].includes(run.status),
   );
@@ -69,6 +91,57 @@ function FleetView({
         description="Coordinate active work while keeping every handoff visible."
       />
       <div className="overview-scroll">
+        <section className="overview-section">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Runtime targets</p>
+              <h3>{desktop.targets.length} available nodes</h3>
+            </div>
+            <span className="status-chip tone-neutral">
+              {
+                desktop.targets.filter((target) => target.state === "ready")
+                  .length
+              }{" "}
+              ready
+            </span>
+          </div>
+          <div className="target-grid">
+            {desktop.targets.map((target) => (
+              <button
+                type="button"
+                key={target.targetId}
+                className={target.selected ? "is-selected" : undefined}
+                aria-pressed={target.selected}
+                onClick={() => onSelectTarget(target.targetId)}
+              >
+                <span className="target-node-icon" aria-hidden="true">
+                  {target.kind === "managed_local" ? (
+                    <IconRobot size={20} stroke={1.6} />
+                  ) : (
+                    <IconTopologyStar3 size={20} stroke={1.6} />
+                  )}
+                </span>
+                <span>
+                  <strong>{target.label}</strong>
+                  <small>
+                    {target.kind === "managed_local"
+                      ? (target.workspace?.displayName ?? "Local workspace")
+                      : "External daemon"}
+                  </small>
+                </span>
+                <span className={`target-state target-state-${target.state}`}>
+                  {target.state.replace("_", " ")}
+                </span>
+              </button>
+            ))}
+            {desktop.targets.length === 0 ? (
+              <p className="inline-empty">
+                Configure Managed Local or connect an external daemon.
+              </p>
+            ) : null}
+          </div>
+        </section>
+
         {demoParticipants !== null ? (
           <section className="overview-section">
             <div className="section-heading">
@@ -244,15 +317,50 @@ function ActivityView({ activity }: Pick<OperationsSurfaceProps, "activity">) {
 
 function SettingsView({
   connection,
+  desktop,
   connecting,
   onConnect,
-}: Pick<OperationsSurfaceProps, "connection" | "connecting" | "onConnect">) {
+  onSelectTarget,
+  onAddExternalTarget,
+  onRemoveExternalTarget,
+  onChooseWorkspace,
+  onConfigureManaged,
+  onRestartManaged,
+  onSetTerminalEnabled,
+  onOpenTerminal,
+}: Pick<
+  OperationsSurfaceProps,
+  | "connection"
+  | "desktop"
+  | "connecting"
+  | "onConnect"
+  | "onSelectTarget"
+  | "onAddExternalTarget"
+  | "onRemoveExternalTarget"
+  | "onChooseWorkspace"
+  | "onConfigureManaged"
+  | "onRestartManaged"
+  | "onSetTerminalEnabled"
+  | "onOpenTerminal"
+>) {
+  const localTarget = desktop.targets.find(
+    (target) => target.kind === "managed_local",
+  );
+  const selectedTarget = desktop.targets.find(
+    (target) =>
+      target.selected ||
+      (connection.targetId !== null && target.targetId === connection.targetId),
+  );
+  const externalTargets = desktop.targets.filter(
+    (target) => target.kind === "external_daemon",
+  );
+  const terminalAvailable = selectedTarget?.terminalAvailable === true;
   return (
     <>
       <SurfaceHeader
         eyebrow="Settings / Runtime"
-        title="Desktop connection"
-        description="Inspect the connection state without exposing native credentials."
+        title="Desktop runtime"
+        description="Manage the local sidecar, external targets, and local-only terminal boundary."
       />
       <div className="overview-scroll settings-scroll">
         <section className="settings-card">
@@ -260,10 +368,10 @@ function SettingsView({
             <IconPlugConnected size={23} stroke={1.6} aria-hidden="true" />
           </div>
           <div>
-            <p className="eyebrow">Local agent</p>
+            <p className="eyebrow">Selected target</p>
             <h3>
               {connection.state === "connected"
-                ? "Connected"
+                ? (selectedTarget?.label ?? "Connected")
                 : "Connection required"}
             </h3>
             <p>{connection.message}</p>
@@ -277,6 +385,152 @@ function SettingsView({
             <IconRefresh size={16} stroke={1.8} aria-hidden="true" />
             {connecting ? "Connecting…" : "Reconnect"}
           </button>
+        </section>
+        <section className="settings-card settings-card-stack">
+          <div className="settings-card-icon">
+            <IconFolder size={23} stroke={1.6} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="eyebrow">Managed Local</p>
+            <h3>{desktop.workspace?.displayName ?? "Choose a workspace"}</h3>
+            <p>
+              {desktop.workspace?.displayPath ??
+                "Workspace authority has not been granted to this app yet."}
+            </p>
+            <div className="settings-inline-meta">
+              <span>{desktop.provider.kind ?? "No provider"}</span>
+              <span>{desktop.provider.model || "No model"}</span>
+              <span>{desktop.accessProfile.replace("_", " ")}</span>
+            </div>
+          </div>
+          <div className="settings-actions">
+            <button
+              className="button secondary"
+              type="button"
+              disabled={connecting}
+              onClick={onChooseWorkspace}
+            >
+              Choose folder
+            </button>
+            <button
+              className="button secondary"
+              type="button"
+              disabled={connecting || desktop.workspace === null}
+              onClick={onConfigureManaged}
+            >
+              Provider
+            </button>
+            <button
+              className="button secondary"
+              type="button"
+              disabled={connecting || localTarget === undefined}
+              onClick={onRestartManaged}
+            >
+              <IconRefresh size={16} stroke={1.8} aria-hidden="true" />
+              Restart
+            </button>
+          </div>
+        </section>
+        <section className="settings-card settings-card-stack external-targets-card">
+          <div className="settings-card-icon">
+            <IconTopologyStar3 size={23} stroke={1.6} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="eyebrow">Advanced daemon connections</p>
+            <h3>External targets</h3>
+            <p>
+              Import an existing pinned-TLS connection file. Trust anchors and
+              keyring lookup labels stay in native owner-private storage.
+            </p>
+          </div>
+          <div className="settings-actions">
+            <button
+              className="button secondary"
+              type="button"
+              disabled={connecting}
+              onClick={onAddExternalTarget}
+            >
+              <IconPlus size={16} stroke={1.8} aria-hidden="true" />
+              Add daemon
+            </button>
+          </div>
+          <div className="external-target-settings-list">
+            {externalTargets.map((target) => (
+              <article key={target.targetId}>
+                <div>
+                  <strong>{target.label}</strong>
+                  <span>{target.state.replace("_", " ")}</span>
+                </div>
+                <div className="external-target-row-actions">
+                  <button
+                    className="button secondary"
+                    type="button"
+                    disabled={connecting || target.selected}
+                    onClick={() => onSelectTarget(target.targetId)}
+                  >
+                    {target.selected ? "Selected" : "Use"}
+                  </button>
+                  <button
+                    className="icon-button danger-icon-button"
+                    type="button"
+                    disabled={connecting}
+                    aria-label={`Remove ${target.label}`}
+                    title={`Remove ${target.label}`}
+                    onClick={() => onRemoveExternalTarget(target.targetId)}
+                  >
+                    <IconTrash size={17} stroke={1.7} aria-hidden="true" />
+                  </button>
+                </div>
+              </article>
+            ))}
+            {externalTargets.length === 0 ? (
+              <p className="inline-empty">No external daemons are saved.</p>
+            ) : null}
+          </div>
+        </section>
+        <section className="settings-card settings-card-stack terminal-settings-card">
+          <div className="settings-card-icon">
+            <IconTerminal2 size={23} stroke={1.6} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="eyebrow">Advanced local feature</p>
+            <h3>Authenticated Colossus TUI</h3>
+            <p>
+              {terminalAvailable
+                ? "The verified bundled CLI connects only to the existing Managed Local worker. Its actions retain normal Colossus policy and audit behavior."
+                : "The local TUI is unavailable for an external target. Select Managed Local to use its authenticated worker connection."}
+            </p>
+          </div>
+          <div className="settings-actions terminal-settings-actions">
+            <label className="terminal-consent-toggle">
+              <input
+                type="checkbox"
+                checked={desktop.terminalEnabled}
+                disabled={
+                  connecting || !terminalAvailable || desktop.workspace === null
+                }
+                onChange={(event) => onSetTerminalEnabled(event.target.checked)}
+              />
+              <span>
+                {desktop.terminalEnabled
+                  ? "Local TUI enabled"
+                  : "I understand and want to enable it"}
+              </span>
+            </label>
+            <button
+              className="button primary"
+              type="button"
+              disabled={
+                !desktop.terminalEnabled ||
+                !terminalAvailable ||
+                localTarget === undefined ||
+                localTarget.state !== "ready"
+              }
+              onClick={() => onOpenTerminal("colossus_tui")}
+            >
+              Open Colossus TUI
+            </button>
+          </div>
         </section>
         <section className="settings-card security-settings-card">
           <div className="settings-card-icon">
@@ -310,8 +564,17 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       {props.surface === "settings" ? (
         <SettingsView
           connection={props.connection}
+          desktop={props.desktop}
           connecting={props.connecting}
           onConnect={props.onConnect}
+          onSelectTarget={props.onSelectTarget}
+          onAddExternalTarget={props.onAddExternalTarget}
+          onRemoveExternalTarget={props.onRemoveExternalTarget}
+          onChooseWorkspace={props.onChooseWorkspace}
+          onConfigureManaged={props.onConfigureManaged}
+          onRestartManaged={props.onRestartManaged}
+          onSetTerminalEnabled={props.onSetTerminalEnabled}
+          onOpenTerminal={props.onOpenTerminal}
         />
       ) : null}
     </main>

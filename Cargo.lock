@@ -912,6 +912,7 @@ dependencies = [
  "colossus-access",
  "colossus-api",
  "colossus-contracts",
+ "colossus-darwin-process",
  "colossus-grpc",
  "colossus-packs",
  "colossus-policy",
@@ -919,6 +920,7 @@ dependencies = [
  "colossus-presentation",
  "colossus-runtime",
  "colossus-sandbox",
+ "colossus-sidecar-protocol",
  "colossus-tools",
  "colossus-tui",
  "colossus-worker",
@@ -965,6 +967,13 @@ dependencies = [
  "colossus-domain",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "colossus-darwin-process"
+version = "0.9.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -1257,6 +1266,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -1308,8 +1318,10 @@ dependencies = [
  "colossus-tools",
  "colossus-work",
  "colossus-workflow",
+ "fs4",
  "hex",
  "ignore",
+ "rustix",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -1363,13 +1375,19 @@ dependencies = [
  "async-trait",
  "colossus-api",
  "colossus-api-proto",
+ "colossus-darwin-process",
  "colossus-grpc",
+ "colossus-sidecar-protocol",
  "futures",
  "hex",
  "keyring",
+ "nix 0.31.3",
  "prost",
  "prost-types",
+ "rustix",
  "rustls",
+ "security-framework",
+ "serde",
  "sha2 0.10.9",
  "sysinfo",
  "tempfile",
@@ -1411,12 +1429,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-sidecar"
+version = "0.9.0"
+dependencies = [
+ "colossus-access",
+ "colossus-api",
+ "colossus-grpc",
+ "colossus-ports",
+ "colossus-provider",
+ "colossus-runtime",
+ "colossus-sandbox",
+ "colossus-sdk",
+ "colossus-sidecar-protocol",
+ "colossus-worker",
+ "getrandom 0.4.3",
+ "keyring",
+ "rustix",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "colossus-sidecar-protocol"
+version = "0.9.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "colossus-skills"
 version = "0.9.0"
 dependencies = [
  "colossus-contracts",
  "colossus-policy",
  "colossus-ports",
+ "nix 0.31.3",
+ "rustix",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
@@ -1517,6 +1576,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "hmac 0.12.1",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",

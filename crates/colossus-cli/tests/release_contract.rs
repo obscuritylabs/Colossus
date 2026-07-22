@@ -1,4 +1,4 @@
-//! Repository contracts for release readiness and six-platform draft releases.
+//! Repository contracts for release readiness and six-platform CLI plus Desktop drafts.
 
 mod support;
 
@@ -9,7 +9,7 @@ use std::{collections::BTreeSet, fs};
 use support::{field, job, jobs, mapping, named_step, repository_root, workflow};
 
 #[test]
-fn release_workflow_has_exactly_six_native_targets() {
+fn release_workflow_has_exactly_six_native_cli_targets() {
     let workflow = workflow("release.yml");
     let jobs = jobs(&workflow);
     let artifacts = job(jobs, "artifacts");
@@ -67,7 +67,7 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "publish_draft=false",
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 12",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 14",
     ] {
         assert!(
             source.contains(required),

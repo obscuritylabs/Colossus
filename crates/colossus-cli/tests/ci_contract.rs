@@ -104,6 +104,8 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         "go test -mod=readonly ./...",
         "working-directory: apps/desktop",
         "npm audit --audit-level=high",
+        "--package colossus-sidecar-protocol",
+        "--package colossus-sidecar",
         "cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml",
         "cargo audit --no-fetch --file apps/desktop/src-tauri/Cargo.lock",
         "true:success",
@@ -143,6 +145,10 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         Some("macos-14")
     );
     assert_eq!(
+        field(job(jobs, "macos-desktop"), "runs-on").as_str(),
+        Some("macos-14")
+    );
+    assert_eq!(
         field(job(jobs, "windows-runtime"), "runs-on").as_str(),
         Some("windows-2025")
     );
@@ -157,6 +163,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     for name in [
         "macos-native",
+        "macos-desktop",
         "windows-runtime",
         "fuzz",
         "supply-chain",
@@ -189,10 +196,21 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         ".ci-trusted/scripts/ci/require-success.sh",
         "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
         "components: clippy,rustfmt",
+        "CARGO_INCREMENTAL: \"0\"",
+        "CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target",
+        "./scripts/prepare-desktop-binaries debug",
         "npm run tauri:build",
+        "npm run tauri:bundle:macos",
+        "COLOSSUS_DESKTOP_SIGNING_IDENTITY: \"-\"",
+        "COLOSSUS_DESKTOP_TEAM_ID: \"ADHOC\"",
+        "--package colossus-sidecar-protocol",
+        "--package colossus-sidecar",
+        "--test native_lifecycle -- --ignored --nocapture",
         "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
         "cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
         "cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
+        "test \"$CARGO_TARGET_DIR\" = \"$expected\"",
+        "rm -rf \"$expected/debug\"",
         "cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml",
         "cargo audit --no-fetch --file apps/desktop/src-tauri/Cargo.lock",
     ] {
@@ -209,11 +227,136 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     }
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
+    let native_source =
+        serde_json::to_string(job(jobs, "macos-native")).expect("serialize macOS native job");
+    assert!(!native_source.contains("npm run tauri:"));
+    assert!(!native_source.contains("apps/desktop/src-tauri/target"));
+
+    let desktop_source =
+        serde_json::to_string(job(jobs, "macos-desktop")).expect("serialize macOS desktop job");
+    assert!(desktop_source.contains("npm run tauri:build"));
+    assert!(desktop_source.contains("npm run tauri:bundle:macos"));
+    assert!(desktop_source.contains("CARGO_TARGET_DIR"));
+
     let concurrency = mapping(field(root, "concurrency"), "pre-merge concurrency");
     assert_eq!(
         field(concurrency, "cancel-in-progress").as_bool(),
         Some(true)
     );
+}
+
+#[test]
+fn release_includes_a_signed_notarized_apple_silicon_desktop() {
+    let workflow = workflow("release.yml");
+    let release_jobs = jobs(&workflow);
+    let desktop_build = job(release_jobs, "desktop_macos_build");
+    let desktop = job(release_jobs, "desktop_macos");
+    assert_eq!(field(desktop_build, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(field(desktop_build, "needs").as_str(), Some("validate"));
+    assert_eq!(field(desktop, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(
+        strings(field(desktop, "needs"), "Desktop signing needs"),
+        ["desktop_macos_build", "validate"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+    assert_eq!(
+        strings(
+            field(job(release_jobs, "gate"), "needs"),
+            "release gate needs"
+        ),
+        [
+            "artifacts",
+            "desktop_macos",
+            "desktop_macos_build",
+            "validate",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let source = fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
+        .expect("read release workflow");
+    for required in [
+        "needs.validate.outputs.publish_draft != 'true'",
+        "COLOSSUS_DESKTOP_SIGNING_IDENTITY=-",
+        "COLOSSUS_DESKTOP_TEAM_ID=ADHOC",
+        "needs.validate.outputs.publish_draft == 'true'",
+        "secrets.MACOS_DEVELOPER_ID_P12_BASE64",
+        "secrets.MACOS_DEVELOPER_ID_P12_PASSWORD",
+        "secrets.MACOS_NOTARY_API_KEY_BASE64",
+        "secrets.MACOS_NOTARY_KEY_ID",
+        "secrets.MACOS_NOTARY_ISSUER_ID",
+        "secrets.MACOS_TEAM_ID",
+        "vars.MACOS_TEAM_ID",
+        "[[ \"$MACOS_TEAM_ID\" =~ ^[A-Z0-9]{10}$ ]]",
+        "security create-keychain",
+        "security import",
+        "security set-key-partition-list",
+        "xcrun notarytool store-credentials",
+        "COLOSSUS_DESKTOP_NOTARY_KEYCHAIN",
+        "COLOSSUS_DESKTOP_TEAM_ID=%s",
+        "COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}",
+        "./scripts/package-desktop-macos build",
+        "./scripts/package-desktop-macos sign \"$COLOSSUS_DESKTOP_UNSIGNED_APP\"",
+        "Colossus Desktop.unsigned.zip",
+        "desktop-macos-unsigned-aarch64-apple-darwin",
+        "/usr/bin/ditto -x -k",
+        "verify-desktop-unsigned-archive.mjs",
+        "--extracted-root \"$destination\"",
+        "protected_hashes=()",
+        "realpathSync(process.execPath)",
+        "Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip",
+        "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
+        "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
+        "Upload non-runnable ADHOC validation archive and checksum",
+        "shasum -a 256",
+        "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
+        "desktop_macos=${{ needs.desktop_macos.result }}",
+        "-eq 14",
+    ] {
+        assert!(
+            source.contains(required),
+            "Desktop release is missing {required}"
+        );
+    }
+
+    let build_start = source.find("  desktop_macos_build:").expect("build job");
+    let sign_start = source[build_start..]
+        .find("  desktop_macos:")
+        .map(|offset| build_start + offset)
+        .expect("sign job");
+    let gate_start = source[sign_start..]
+        .find("  gate:")
+        .map(|offset| sign_start + offset)
+        .expect("gate job");
+    let build_job = &source[build_start..sign_start];
+    let sign_job = &source[sign_start..gate_start];
+    for forbidden in [
+        "${{ secrets.",
+        "MACOS_DEVELOPER_ID_P12",
+        "MACOS_NOTARY_API_KEY",
+        "security import",
+    ] {
+        assert!(
+            !build_job.contains(forbidden),
+            "credential-free Desktop build contains {forbidden}"
+        );
+    }
+    for forbidden in [
+        "actions/setup-node@",
+        "rust-toolchain@",
+        "npm ci",
+        "cargo build",
+        "tauri build",
+    ] {
+        assert!(
+            !sign_job.contains(forbidden),
+            "Desktop signing job contains build authority {forbidden}"
+        );
+    }
 }
 
 #[test]

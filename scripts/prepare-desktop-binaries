@@ -1,0 +1,92 @@
+#!/bin/sh
+
+set -eu
+umask 077
+
+fail() {
+    printf 'prepare-desktop-binaries: %s\n' "$*" >&2
+    exit 1
+}
+
+if [ "$#" -ne 1 ]; then
+    fail "usage: scripts/prepare-desktop-binaries debug|release"
+fi
+
+profile=$1
+case "$profile" in
+    debug | release) ;;
+    *) fail "profile must be debug or release" ;;
+esac
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repository=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+desktop_tauri="$repository/apps/desktop/src-tauri"
+
+command -v cargo >/dev/null 2>&1 || fail "cargo is not installed or not on PATH"
+command -v rustc >/dev/null 2>&1 || fail "rustc is not installed or not on PATH"
+command -v install >/dev/null 2>&1 || fail "install is not installed or not on PATH"
+command -v mktemp >/dev/null 2>&1 || fail "mktemp is not installed or not on PATH"
+
+host=$(rustc --print host-tuple)
+target=${COLOSSUS_DESKTOP_TARGET:-$host}
+case "$target" in
+    *[!A-Za-z0-9_.-]* | "") fail "target triple contains unsafe characters" ;;
+esac
+
+target_dir=${CARGO_TARGET_DIR:-$repository/target}
+case "$target_dir" in
+    /*) ;;
+    *) target_dir="$repository/$target_dir" ;;
+esac
+
+if [ "$profile" = release ]; then
+    cargo_profile=release
+    profile_flag=--release
+else
+    cargo_profile=debug
+    profile_flag=
+fi
+
+cd "$repository"
+if [ "$target" = "$host" ]; then
+    # Intentional field splitting supplies the optional fixed flag only.
+    # shellcheck disable=SC2086
+    cargo build --locked $profile_flag \
+        --package colossus-cli --package colossus-sidecar --bins
+    artifact_directory="$target_dir/$cargo_profile"
+else
+    # Intentional field splitting supplies the optional fixed flag only.
+    # shellcheck disable=SC2086
+    cargo build --locked $profile_flag --target "$target" \
+        --package colossus-cli --package colossus-sidecar --bins
+    artifact_directory="$target_dir/$target/$cargo_profile"
+fi
+
+case "$target" in
+    *-windows-* | *-pc-windows-*) extension=.exe ;;
+    *) extension= ;;
+esac
+
+stage_directory="$desktop_tauri/binaries"
+[ ! -L "$stage_directory" ] || fail "$stage_directory must not be a symlink"
+mkdir -p "$stage_directory"
+chmod 0700 "$stage_directory"
+
+stage() {
+    name=$1
+    source="$artifact_directory/$name$extension"
+    destination="$stage_directory/$name-$target$extension"
+    [ ! -L "$source" ] || fail "$source must not be a symlink"
+    [ -f "$source" ] || fail "$source was not produced"
+    [ -x "$source" ] || fail "$source is not executable"
+    temporary=$(mktemp "$stage_directory/.$name.XXXXXX")
+    trap 'rm -f "$temporary"' EXIT HUP INT TERM
+    install -m 0755 "$source" "$temporary"
+    mv -f "$temporary" "$destination"
+    trap - EXIT HUP INT TERM
+}
+
+stage colossus-sidecar
+stage colossus
+
+printf 'Prepared Managed Local binaries for %s (%s).\n' "$target" "$profile"

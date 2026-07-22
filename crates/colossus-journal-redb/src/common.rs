@@ -79,10 +79,7 @@ impl RedbWriterLease {
             .open(&path)
             .map_err(adapter_error)?;
         if !file.try_lock_exclusive().map_err(adapter_error)? {
-            return Err(StoreError::Adapter(format!(
-                "redb writer lease is already held: {}",
-                path.display()
-            )));
+            return Err(StoreError::WriterLeaseHeld);
         }
         Ok(Self { file, path })
     }

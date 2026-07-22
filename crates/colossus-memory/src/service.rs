@@ -617,6 +617,8 @@ fn retry_classification(error: &StoreError) -> (bool, &'static str) {
     match error {
         StoreError::Conflict { .. } => (true, "external_work.conflict"),
         StoreError::KeyUnavailable(_) => (true, "external_work.key_unavailable"),
+        StoreError::WriterLeaseHeld => (false, "external_work.writer_lease_held"),
+        StoreError::WorkspaceIdentityChanged => (false, "external_work.workspace_identity_changed"),
         StoreError::Adapter(_) => (true, "external_work.adapter"),
         StoreError::NotFound(_) => (false, "external_work.not_found"),
         StoreError::Verification(_) => (false, "external_work.verification"),

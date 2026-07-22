@@ -1,0 +1,20 @@
+[package]
+name = "colossus-darwin-process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Audited safe wrapper for Darwin start-suspended process launch"
+
+[dependencies]
+libc = "0.2.186"
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"

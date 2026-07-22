@@ -18,7 +18,7 @@ use colossus_policy::{DenyApproval, effect_request};
 use colossus_ports::{
     ApprovalProvider, EventJournal, StoreError, UserPromptProvider, VerificationReport,
 };
-use colossus_runtime::{KeyConfig, Runtime, RuntimeConfig};
+use colossus_runtime::{KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_testkit::InMemoryEventJournal;
 use futures::StreamExt as _;
 use std::{
@@ -139,7 +139,11 @@ impl EventJournal for PostCommitReconciliationGapJournal {
 
 fn runtime_fixture() -> RuntimeFixture {
     let directory = tempfile::tempdir().expect("runtime directory");
-    let root = directory.path();
+    // Keep every absolute fixture root in the same canonical namespace as
+    // RuntimeOpenOptions. On macOS, tempfile may expose `/var/...` while the native
+    // workspace picker/runtime identity resolves the same object as `/private/var/...`;
+    // production skill roots intentionally reject symlinked absolute components.
+    let root = fs::canonicalize(directory.path()).expect("canonical runtime directory");
     let state_path = root.join("state.redb");
     let anchor_path = root.join("anchor.json");
     let suffix = Uuid::now_v7().simple().to_string();
@@ -171,7 +175,15 @@ fn runtime_fixture() -> RuntimeFixture {
     }
 
     RuntimeFixture {
-        runtime: Arc::new(Runtime::open(&config).expect("runtime")),
+        runtime: Arc::new(
+            Runtime::open_with_options(
+                &config,
+                Arc::new(DenyApproval),
+                None,
+                RuntimeOpenOptions::for_workspace(&root).expect("workspace options"),
+            )
+            .expect("runtime"),
+        ),
         _directory: directory,
     }
 }

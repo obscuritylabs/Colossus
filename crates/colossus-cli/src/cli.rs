@@ -25,6 +25,9 @@ pub(super) struct Cli {
     /// Require the TUI to attach to an existing authenticated worker.
     #[arg(long, global = true, hide = true)]
     pub(super) worker_required: bool,
+    /// Read one managed-worker authentication key from the inherited native TUI channel.
+    #[arg(long, global = true, hide = true, requires = "worker_required")]
+    pub(super) desktop_worker_auth: bool,
     #[command(subcommand)]
     pub(super) command: Command,
 }

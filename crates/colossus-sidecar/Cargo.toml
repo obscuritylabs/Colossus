@@ -1,0 +1,34 @@
+[package]
+name = "colossus-sidecar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Minimal application-bundled Colossus managed runtime host"
+
+[dependencies]
+colossus-access.workspace = true
+colossus-api.workspace = true
+colossus-grpc.workspace = true
+colossus-ports.workspace = true
+colossus-provider.workspace = true
+colossus-runtime.workspace = true
+colossus-sandbox.workspace = true
+colossus-sidecar-protocol.workspace = true
+colossus-worker.workspace = true
+getrandom.workspace = true
+rustix.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+colossus-sdk = { workspace = true, features = ["sidecar"] }
+keyring.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

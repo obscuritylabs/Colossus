@@ -2,10 +2,11 @@ use super::*;
 
 pub(super) struct GatewayResearchCollector {
     pub(super) gateway: Arc<EffectGateway>,
-    pub(super) filesystem: Arc<FilesystemExecutor>,
+    pub(super) filesystem: Arc<dyn EffectExecutor>,
     pub(super) workspace: PathBuf,
     pub(super) search: Arc<dyn SearchProvider>,
     pub(super) mcp: Arc<McpExecutor>,
+    pub(super) mcp_effect: Arc<dyn EffectExecutor>,
 }
 
 impl GatewayResearchCollector {
@@ -36,6 +37,7 @@ impl GatewayResearchCollector {
             match invoke_mcp_tool(
                 self.gateway.as_ref(),
                 self.mcp.as_ref(),
+                self.mcp_effect.as_ref(),
                 Actor {
                     actor_type: ActorType::System,
                     id: "research-mcp-collector".into(),

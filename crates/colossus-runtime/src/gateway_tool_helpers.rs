@@ -1,16 +1,24 @@
 use super::*;
 
+pub(super) struct GatewayBoundEffects {
+    pub(super) identity: workspace_lease::WorkspaceIdentity,
+    pub(super) pack_process: Arc<dyn EffectExecutor>,
+    pub(super) integration: Arc<dyn EffectExecutor>,
+    pub(super) mcp: Arc<dyn EffectExecutor>,
+}
+
 pub(super) struct GatewayToolExecutor {
     pub(super) gateway: Arc<EffectGateway>,
-    pub(super) filesystem: Arc<FilesystemExecutor>,
+    pub(super) filesystem: Arc<dyn EffectExecutor>,
     pub(super) process: Option<Arc<dyn EffectExecutor>>,
     pub(super) http: Arc<HttpExecutor>,
     pub(super) work: Option<Arc<WorkEffectExecutor>>,
     pub(super) memory: Option<Arc<MemoryEffectExecutor>>,
-    pub(super) skills: Option<Arc<SkillEffectExecutor>>,
+    pub(super) skills: Option<Arc<dyn EffectExecutor>>,
     pub(super) pack_processes: Option<Arc<PackProcessExecutor>>,
     pub(super) integrations: Option<Arc<IntegrationExecutor>>,
     pub(super) mcp: Option<Arc<McpExecutor>>,
+    pub(super) bound_effects: Option<GatewayBoundEffects>,
     pub(super) search: Option<Arc<dyn SearchProvider>>,
     pub(super) workspace: PathBuf,
     pub(super) repository_id: String,
@@ -151,9 +159,15 @@ impl GatewayToolExecutor {
         request.capabilities = vec!["integration.invoke".into()];
         request.credential_references = credentials;
         request.context = context;
+        let effect = self
+            .bound_effects
+            .as_ref()
+            .map_or(executor as &dyn EffectExecutor, |effects| {
+                effects.integration.as_ref()
+            });
         let result = self
             .gateway
-            .execute(request, executor)
+            .execute(request, effect)
             .await
             .map_err(tool_gateway_error)?;
         let output = String::from_utf8(result.bytes)
@@ -172,6 +186,12 @@ impl GatewayToolExecutor {
             .pack_processes
             .as_deref()
             .ok_or_else(|| ToolError::Failed("pack process adapter is unavailable".into()))?;
+        let effect = self
+            .bound_effects
+            .as_ref()
+            .map_or(executor as &dyn EffectExecutor, |effects| {
+                effects.pack_process.as_ref()
+            });
         let Some((declaration, input)) = executor.invocation(&call.name) else {
             return Ok(None);
         };
@@ -206,7 +226,7 @@ impl GatewayToolExecutor {
         request.context = context;
         let result = self
             .gateway
-            .execute(request, executor)
+            .execute(request, effect)
             .await
             .map_err(tool_gateway_error)?;
         let value: Value = serde_json::from_slice(&result.bytes)
@@ -247,9 +267,16 @@ impl GatewayToolExecutor {
             .mcp
             .as_deref()
             .ok_or_else(|| ToolError::Failed("MCP adapter is unavailable".into()))?;
+        let effect = self
+            .bound_effects
+            .as_ref()
+            .map_or(executor as &dyn EffectExecutor, |effects| {
+                effects.mcp.as_ref()
+            });
         let tools = discover_mcp_tools(
             self.gateway.as_ref(),
             executor,
+            effect,
             model_actor(call, &context),
             context,
             server,
@@ -273,9 +300,16 @@ impl GatewayToolExecutor {
             .mcp
             .as_deref()
             .ok_or_else(|| ToolError::Failed("MCP adapter is unavailable".into()))?;
+        let effect = self
+            .bound_effects
+            .as_ref()
+            .map_or(executor as &dyn EffectExecutor, |effects| {
+                effects.mcp.as_ref()
+            });
         let output = invoke_mcp_tool(
             self.gateway.as_ref(),
             executor,
+            effect,
             model_actor(call, &context),
             context,
             server,
@@ -310,12 +344,21 @@ impl GatewayToolExecutor {
         );
         request.capabilities = vec![action];
         request.context = context;
-        let repository = RepositoryEffectExecutor {
+        let raw_repository = Arc::new(RepositoryEffectExecutor {
             workspace: self.workspace.clone(),
-        };
+        });
+        let repository: Arc<dyn EffectExecutor> = self.bound_effects.as_ref().map_or_else(
+            || Arc::clone(&raw_repository) as Arc<dyn EffectExecutor>,
+            |effects| {
+                Arc::new(WorkspaceBoundEffectExecutor::new(
+                    effects.identity.clone(),
+                    Arc::clone(&raw_repository),
+                )) as Arc<dyn EffectExecutor>
+            },
+        );
         let result = self
             .gateway
-            .execute(request, &repository)
+            .execute(request, repository.as_ref())
             .await
             .map_err(tool_gateway_error)?;
         let output = String::from_utf8(result.bytes)

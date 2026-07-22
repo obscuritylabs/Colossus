@@ -30,6 +30,9 @@ pub enum SdkError {
     /// The endpoint identity, instance identity, or TLS pin did not match.
     #[error("Colossus endpoint identity did not match")]
     IdentityMismatch,
+    /// The selected workspace pathname no longer names the host-attested directory.
+    #[error("Colossus workspace identity changed")]
+    WorkspaceIdentityChanged,
     /// The server and client do not share a supported public API major.
     #[error("Colossus API version is incompatible")]
     VersionMismatch,

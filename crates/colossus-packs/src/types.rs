@@ -7,6 +7,7 @@ pub(super) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub(super) const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 pub(super) const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub(super) const MAX_FILES: usize = 10_000;
+pub(super) const MAX_PACK_SKILL_REFERENCES: usize = 64;
 pub(super) const MAX_TEXT_BYTES: usize = 8 * 1024;
 pub(super) const MAX_ARCHIVE_BYTES: u64 = MAX_TOTAL_BYTES;
 pub(super) const RELEASE_TARGETS: [&str; 6] = [

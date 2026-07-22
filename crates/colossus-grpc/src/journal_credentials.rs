@@ -1,10 +1,12 @@
-use crate::auth::{CredentialRecord, CredentialRepository, CredentialStoreError};
+use crate::auth::{
+    CredentialRecord, CredentialRepository, CredentialStoreError, MAX_CREDENTIAL_BATCH_SIZE,
+};
 use colossus_contracts::{
     Actor, ActorType, EventClassification, EventEnvelope, ExecutionContext, NewEvent,
 };
 use colossus_ports::{EventJournal, StoreError};
 use serde::{Deserialize, Serialize};
-use std::{fmt, sync::Arc};
+use std::{collections::BTreeSet, fmt, sync::Arc};
 use uuid::Uuid;
 
 const STREAM_PREFIX: &str = "public-api-credential:";
@@ -117,6 +119,29 @@ impl CredentialRepository for JournalCredentialRepository {
         Ok(())
     }
 
+    fn insert_batch(&self, records: Vec<CredentialRecord>) -> Result<(), CredentialStoreError> {
+        if records.is_empty() || records.len() > MAX_CREDENTIAL_BATCH_SIZE {
+            return Err(CredentialStoreError);
+        }
+        let mut ids = BTreeSet::new();
+        let mut events = Vec::with_capacity(records.len());
+        for record in records {
+            if !record.is_valid()
+                || !record.is_pending()
+                || !ids.insert(record.credential_id().to_owned())
+                || self.load(record.credential_id())?.is_some()
+            {
+                return Err(CredentialStoreError);
+            }
+            let credential_id = record.credential_id().to_owned();
+            let payload = serde_json::to_value(CredentialIssued { credential: record })
+                .map_err(redacted_failure)?;
+            events.push(Self::event(&credential_id, 0, ISSUED_EVENT, payload)?);
+        }
+        self.journal.append_batch(events).map_err(store_failure)?;
+        Ok(())
+    }
+
     fn get(&self, credential_id: &str) -> Result<Option<CredentialRecord>, CredentialStoreError> {
         Ok(self.load(credential_id)?.map(|state| state.record))
     }
@@ -154,6 +179,56 @@ impl CredentialRepository for JournalCredentialRepository {
         }
     }
 
+    fn activate_batch(&self, credential_ids: &[String]) -> Result<bool, CredentialStoreError> {
+        if !valid_unique_credential_ids(credential_ids) {
+            return Ok(false);
+        }
+        for _ in 0..3 {
+            let mut events = Vec::with_capacity(credential_ids.len());
+            for credential_id in credential_ids {
+                let Some(state) = self.load(credential_id)? else {
+                    return Ok(false);
+                };
+                if state.record.is_revoked() {
+                    return Ok(false);
+                }
+                if state.record.is_active() {
+                    continue;
+                }
+                if !state.record.is_pending() {
+                    return Ok(false);
+                }
+                let payload = serde_json::to_value(CredentialActivated {
+                    credential_id: credential_id.clone(),
+                })
+                .map_err(redacted_failure)?;
+                events.push(Self::event(
+                    credential_id,
+                    state.stream_version,
+                    ACTIVATED_EVENT,
+                    payload,
+                )?);
+            }
+            if events.is_empty() {
+                return Ok(true);
+            }
+            match self.journal.append_batch(events) {
+                Ok(_) => return Ok(true),
+                Err(StoreError::Conflict { .. }) => continue,
+                Err(error) => {
+                    if credential_ids.iter().all(|credential_id| {
+                        self.load(credential_id)
+                            .is_ok_and(|state| state.is_some_and(|state| state.record.is_active()))
+                    }) {
+                        return Ok(true);
+                    }
+                    return Err(store_failure(error));
+                }
+            }
+        }
+        Err(CredentialStoreError)
+    }
+
     fn revoke(&self, credential_id: &str) -> Result<bool, CredentialStoreError> {
         for _ in 0..3 {
             let Some(state) = self.load(credential_id)? else {
@@ -180,6 +255,59 @@ impl CredentialRepository for JournalCredentialRepository {
         }
         Err(CredentialStoreError)
     }
+
+    fn revoke_batch(&self, credential_ids: &[String]) -> Result<bool, CredentialStoreError> {
+        if !valid_unique_credential_ids(credential_ids) {
+            return Ok(false);
+        }
+        for _ in 0..3 {
+            let mut events = Vec::with_capacity(credential_ids.len());
+            for credential_id in credential_ids {
+                let Some(state) = self.load(credential_id)? else {
+                    return Ok(false);
+                };
+                if state.record.is_revoked() {
+                    continue;
+                }
+                let payload = serde_json::to_value(CredentialRevoked {
+                    credential_id: credential_id.clone(),
+                })
+                .map_err(redacted_failure)?;
+                events.push(Self::event(
+                    credential_id,
+                    state.stream_version,
+                    REVOKED_EVENT,
+                    payload,
+                )?);
+            }
+            if events.is_empty() {
+                return Ok(true);
+            }
+            match self.journal.append_batch(events) {
+                Ok(_) => return Ok(true),
+                Err(StoreError::Conflict { .. }) => continue,
+                Err(error) => {
+                    if credential_ids.iter().all(|credential_id| {
+                        self.load(credential_id)
+                            .is_ok_and(|state| state.is_some_and(|state| state.record.is_revoked()))
+                    }) {
+                        return Ok(true);
+                    }
+                    return Err(store_failure(error));
+                }
+            }
+        }
+        Err(CredentialStoreError)
+    }
+}
+
+fn valid_unique_credential_ids(credential_ids: &[String]) -> bool {
+    !credential_ids.is_empty()
+        && credential_ids.len() <= MAX_CREDENTIAL_BATCH_SIZE
+        && credential_ids
+            .iter()
+            .all(|credential_id| validate_credential_id(credential_id).is_ok())
+        && credential_ids.iter().collect::<BTreeSet<_>>().len() == credential_ids.len()
 }
 
 fn reconstruct(

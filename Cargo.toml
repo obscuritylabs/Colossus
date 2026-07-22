@@ -8,6 +8,9 @@ members = [
     "crates/colossus-api-runtime",
     "crates/colossus-grpc",
     "crates/colossus-sdk",
+    "crates/colossus-darwin-process",
+    "crates/colossus-sidecar-protocol",
+    "crates/colossus-sidecar",
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
     "crates/colossus-journal-postgres",
@@ -84,6 +87,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.4", features = ["mount", "process"] }
+security-framework = "3.7.0"
 sysinfo = { version = "=0.39.5", default-features = false, features = ["system"] }
 subtle = "2.6.1"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -121,6 +125,8 @@ colossus-api = { version = "=0.9.0", path = "crates/colossus-api" }
 colossus-api-runtime = { version = "=0.9.0", path = "crates/colossus-api-runtime" }
 colossus-grpc = { version = "=0.9.0", path = "crates/colossus-grpc" }
 colossus-sdk = { version = "=0.9.0", path = "crates/colossus-sdk" }
+colossus-darwin-process = { version = "=0.9.0", path = "crates/colossus-darwin-process" }
+colossus-sidecar-protocol = { version = "=0.9.0", path = "crates/colossus-sidecar-protocol" }
 colossus-access = { version = "=0.9.0", path = "crates/colossus-access" }
 colossus-audit = { version = "=0.9.0", path = "crates/colossus-audit" }
 colossus-context = { version = "=0.9.0", path = "crates/colossus-context" }

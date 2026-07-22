@@ -38,6 +38,8 @@ const CERTIFICATE_FILENAME: &str = "certificate.pem";
 const LOCK_FILENAME: &str = ".public-api.lock";
 #[cfg(unix)]
 const KEYRING_SERVICE_PREFIX: &str = "dev.obscuritylabs.colossus.public-api";
+const DESKTOP_EXTERNAL_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.external";
+const DESKTOP_BOUND_ACCOUNT_REQUEST: &str = "auto";
 #[cfg(unix)]
 const AUTHENTICATION_ROOT_ACCOUNT: &str = "authentication-root-v1";
 #[cfg(unix)]
@@ -87,6 +89,14 @@ pub(super) enum PublicApiAdminError {
         credential_id: String,
     },
     CredentialRotationRevocationUnconfirmed {
+        previous_credential_id: String,
+        new_credential_id: String,
+    },
+    CredentialMigrationRevocationUnconfirmed {
+        previous_credential_id: String,
+        new_credential_id: String,
+    },
+    CredentialRetirementCleanupUnconfirmed {
         previous_credential_id: String,
         new_credential_id: String,
     },
@@ -148,6 +158,24 @@ impl fmt::Display for PublicApiAdminError {
                 return write!(
                     formatter,
                     "credential rotation activated new credential {new_credential_id}, but revocation of prior credential {previous_credential_id} could not be confirmed; the new credential remains active at the destination; reconcile and explicitly revoke prior credential {previous_credential_id}"
+                );
+            }
+            Self::CredentialMigrationRevocationUnconfirmed {
+                previous_credential_id,
+                new_credential_id,
+            } => {
+                return write!(
+                    formatter,
+                    "credential migration activated new credential {new_credential_id}, but revocation of prior credential {previous_credential_id} could not be confirmed; the new credential remains active and the source keyring entry was not deleted; reconcile prior credential {previous_credential_id}; delete the source value only if it is still credential {previous_credential_id} and its revocation is confirmed"
+                );
+            }
+            Self::CredentialRetirementCleanupUnconfirmed {
+                previous_credential_id,
+                new_credential_id,
+            } => {
+                return write!(
+                    formatter,
+                    "credential migration activated new credential {new_credential_id} and revoked prior credential {previous_credential_id}, but the source keyring entry could not be safely verified and deleted; the new credential remains active; reconcile the source selector and do not delete its current value unless it is confirmed to be credential {previous_credential_id}"
                 );
             }
             Self::WorkerUnavailable => "public API worker composition failed",
@@ -371,6 +399,12 @@ pub(super) struct EnrollmentRequest<'a> {
     pub(super) destination_service: &'a str,
     pub(super) destination_account: &'a str,
     pub(super) replace_destination: bool,
+    pub(super) retirement_source: Option<CredentialRetirementSource<'a>>,
+}
+
+pub(super) struct CredentialRetirementSource<'a> {
+    pub(super) service: &'a str,
+    pub(super) account: &'a str,
 }
 
 pub(super) fn enroll_application(
@@ -384,9 +418,30 @@ pub(super) fn enroll_application(
     if environment.rejects_destination_service(request.destination_service) {
         return Err(PublicApiAdminError::ReservedKeyringNamespace);
     }
+    if request.replace_destination && request.retirement_source.is_some() {
+        return Err(PublicApiAdminError::InvalidRotationSource);
+    }
 
     if request.scopes.is_empty() || request.roles.is_empty() {
         return Err(PublicApiAdminError::InvalidGrant);
+    }
+    let (instance_id, certificate_sha256) = environment.public_identity()?;
+    let destination_account = bound_destination_account(
+        request.destination_service,
+        request.destination_account,
+        instance_id,
+        &certificate_sha256,
+    );
+    validate_keyring_identifier(&destination_account)?;
+    if let Some(source) = request.retirement_source.as_ref() {
+        validate_keyring_identifier(source.service)?;
+        validate_keyring_identifier(source.account)?;
+        if environment.rejects_destination_service(source.service) {
+            return Err(PublicApiAdminError::ReservedKeyringNamespace);
+        }
+        if source.service == request.destination_service && source.account == destination_account {
+            return Err(PublicApiAdminError::InvalidRotationSource);
+        }
     }
     let exact_scopes = normalize_scopes(request.scopes)?;
     let mut roles = request.roles.to_vec();
@@ -402,12 +457,11 @@ pub(super) fn enroll_application(
         tools.clone(),
     )
     .map_err(|_| PublicApiAdminError::InvalidGrant)?;
-    let (instance_id, certificate_sha256) = environment.public_identity()?;
     let manager = environment.credential_manager(server);
     let prepared_destination = prepare_destination(
         destination,
         request.destination_service,
-        request.destination_account,
+        &destination_account,
         request.replace_destination,
         |bearer| {
             manager
@@ -415,20 +469,46 @@ pub(super) fn enroll_application(
                 .map_err(|_| ())
         },
     )?;
+    let retirement_source = request
+        .retirement_source
+        .as_ref()
+        .map(|source| {
+            prepare_retirement_source(destination, source.service, source.account, |bearer| {
+                manager
+                    .validate_rotation_source(bearer, request.application_id)
+                    .map_err(|_| ())
+            })
+        })
+        .transpose()?;
     let issued = manager
         .issue_pending(&grant)
         .map_err(|_| PublicApiAdminError::WorkerUnavailable)?;
     let credential_id = issued.credential_id().to_owned();
-    let revoked_credential_id = install_pending_credential(
-        destination,
-        request.destination_service,
-        request.destination_account,
-        &credential_id,
-        issued.expose_token().as_bytes(),
-        prepared_destination.previous,
-        |candidate| manager.activate(candidate),
-        |candidate| manager.revoke(candidate),
-    )?;
+    let replaced_destination = prepared_destination.previous.is_some();
+    let revoked_credential_id = if let Some(retirement_source) = retirement_source {
+        debug_assert!(prepared_destination.previous.is_none());
+        Some(install_migrated_credential(
+            destination,
+            request.destination_service,
+            &destination_account,
+            &credential_id,
+            issued.expose_token().as_bytes(),
+            retirement_source,
+            |candidate| manager.activate(candidate),
+            |candidate| manager.revoke(candidate),
+        )?)
+    } else {
+        install_pending_credential(
+            destination,
+            request.destination_service,
+            &destination_account,
+            &credential_id,
+            issued.expose_token().as_bytes(),
+            prepared_destination.previous,
+            |candidate| manager.activate(candidate),
+            |candidate| manager.revoke(candidate),
+        )?
+    };
 
     Ok(EnrollmentMetadata {
         application_id: request.application_id.to_owned(),
@@ -442,10 +522,23 @@ pub(super) fn enroll_application(
         allowed_roles: roles,
         allowed_tools: tools,
         credential_keyring_service: request.destination_service.to_owned(),
-        credential_keyring_account: request.destination_account.to_owned(),
-        replaced_destination: revoked_credential_id.is_some(),
+        credential_keyring_account: destination_account,
+        replaced_destination,
         revoked_credential_id,
     })
+}
+
+fn bound_destination_account(
+    service: &str,
+    account: &str,
+    instance_id: Uuid,
+    certificate_sha256: &str,
+) -> String {
+    if service == DESKTOP_EXTERNAL_KEYRING_SERVICE && account == DESKTOP_BOUND_ACCOUNT_REQUEST {
+        format!("daemon-{instance_id}-{certificate_sha256}")
+    } else {
+        account.to_owned()
+    }
 }
 
 pub(super) fn revoke_credential(
@@ -486,6 +579,35 @@ impl fmt::Debug for PreviousCredential {
 #[derive(Debug)]
 struct PreparedDestination {
     previous: Option<PreviousCredential>,
+}
+
+struct PreparedRetirementSource {
+    service: String,
+    account: String,
+    credential: PreviousCredential,
+}
+
+fn prepare_retirement_source<E>(
+    store: &dyn SecretStore,
+    service: &str,
+    account: &str,
+    validate_rotation_source: impl FnOnce(&str) -> Result<String, E>,
+) -> Result<PreparedRetirementSource, PublicApiAdminError> {
+    let existing = store
+        .read(service, account)?
+        .ok_or(PublicApiAdminError::InvalidRotationSource)?;
+    let bearer = std::str::from_utf8(existing.as_ref())
+        .map_err(|_| PublicApiAdminError::InvalidRotationSource)?;
+    let credential_id =
+        validate_rotation_source(bearer).map_err(|_| PublicApiAdminError::InvalidRotationSource)?;
+    Ok(PreparedRetirementSource {
+        service: service.to_owned(),
+        account: account.to_owned(),
+        credential: PreviousCredential {
+            credential_id,
+            bearer: existing,
+        },
+    })
 }
 
 fn prepare_destination<E>(
@@ -570,6 +692,75 @@ fn install_pending_credential<E>(
         ));
     }
     retire_replaced_credential(previous, new_credential_id, revoke)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_migrated_credential<E>(
+    store: &dyn SecretStore,
+    destination_service: &str,
+    destination_account: &str,
+    new_credential_id: &str,
+    token: &[u8],
+    retirement_source: PreparedRetirementSource,
+    mut activate: impl FnMut(&str) -> Result<bool, E>,
+    mut revoke: impl FnMut(&str) -> Result<bool, E>,
+) -> Result<String, PublicApiAdminError> {
+    install_pending_credential(
+        store,
+        destination_service,
+        destination_account,
+        new_credential_id,
+        token,
+        None,
+        |candidate| activate(candidate),
+        |candidate| revoke(candidate),
+    )?;
+    retire_migrated_credential(store, retirement_source, new_credential_id, |candidate| {
+        revoke(candidate)
+    })
+}
+
+fn retire_migrated_credential<E>(
+    store: &dyn SecretStore,
+    retirement_source: PreparedRetirementSource,
+    new_credential_id: &str,
+    mut revoke: impl FnMut(&str) -> Result<bool, E>,
+) -> Result<String, PublicApiAdminError> {
+    let previous_credential_id = retirement_source.credential.credential_id.clone();
+    if !revoke(&previous_credential_id).is_ok_and(|revoked| revoked) {
+        return Err(
+            PublicApiAdminError::CredentialMigrationRevocationUnconfirmed {
+                previous_credential_id,
+                new_credential_id: new_credential_id.to_owned(),
+            },
+        );
+    }
+
+    // Do not delete a different credential that was written to the source selector
+    // concurrently. A missing entry already satisfies cleanup; any read error or
+    // changed value requires explicit reconciliation. The OS keyring API has no
+    // portable compare-and-delete primitive, so the production adapter narrows but
+    // cannot eliminate the final same-user replacement race.
+    let source_still_matches = match store
+        .read(&retirement_source.service, &retirement_source.account)
+    {
+        Ok(None) => return Ok(previous_credential_id),
+        Ok(Some(current)) => current.as_slice() == retirement_source.credential.bearer.as_slice(),
+        Err(_) => false,
+    };
+    if !source_still_matches
+        || store
+            .delete(&retirement_source.service, &retirement_source.account)
+            .is_err()
+    {
+        return Err(
+            PublicApiAdminError::CredentialRetirementCleanupUnconfirmed {
+                previous_credential_id,
+                new_credential_id: new_credential_id.to_owned(),
+            },
+        );
+    }
+    Ok(previous_credential_id)
 }
 
 fn compensate_failed_activation<E>(
@@ -874,6 +1065,7 @@ mod tests {
     struct MemoryStore {
         values: Mutex<BTreeMap<(String, String), Vec<u8>>>,
         fail_writes: AtomicBool,
+        fail_deletes: AtomicBool,
         retained_failed_secret: Mutex<Option<Vec<u8>>>,
     }
 
@@ -912,6 +1104,9 @@ mod tests {
         }
 
         fn delete(&self, service: &str, account: &str) -> Result<(), PublicApiAdminError> {
+            if self.fail_deletes.load(Ordering::Acquire) {
+                return Err(PublicApiAdminError::SecretStoreUnavailable);
+            }
             self.values
                 .lock()
                 .expect("values")
@@ -986,6 +1181,26 @@ mod tests {
     }
 
     #[test]
+    fn desktop_auto_destination_is_bound_to_instance_and_certificate() {
+        let instance_id =
+            Uuid::parse_str("01968a3e-0ab3-7f10-bb27-4eadbd550007").expect("instance id");
+        let pin = "a".repeat(64);
+        assert_eq!(
+            bound_destination_account(
+                DESKTOP_EXTERNAL_KEYRING_SERVICE,
+                DESKTOP_BOUND_ACCOUNT_REQUEST,
+                instance_id,
+                &pin,
+            ),
+            format!("daemon-{instance_id}-{pin}")
+        );
+        assert_eq!(
+            bound_destination_account("com.example.app", "auto", instance_id, &pin),
+            "auto"
+        );
+    }
+
+    #[test]
     fn malformed_or_unrelated_rotation_source_fails_before_mutation() {
         let store = MemoryStore::default();
         store
@@ -1005,6 +1220,367 @@ mod tests {
             b"not-a-colossus-token"
         );
         assert!(!error.to_string().contains("not-a-colossus-token"));
+
+        let retirement_error =
+            prepare_retirement_source(&store, "com.example.app", "colossus-token", |_| {
+                Err::<String, _>(())
+            })
+            .err()
+            .expect("migration source must authenticate");
+        assert_eq!(retirement_error, PublicApiAdminError::InvalidRotationSource);
+        assert_eq!(
+            store
+                .read("com.example.app", "colossus-token")
+                .expect("read")
+                .expect("existing")
+                .as_slice(),
+            b"not-a-colossus-token"
+        );
+        assert!(
+            !retirement_error
+                .to_string()
+                .contains("not-a-colossus-token")
+        );
+    }
+
+    #[test]
+    fn migrated_credential_activates_then_revokes_then_deletes_legacy_source() {
+        let store = MemoryStore::default();
+        store
+            .write(
+                "com.obscuritylabs.colossus.desktop",
+                "colossus-public-api",
+                b"old-active-secret",
+            )
+            .expect("legacy credential");
+        let retirement_source = prepare_retirement_source(
+            &store,
+            "com.obscuritylabs.colossus.desktop",
+            "colossus-public-api",
+            |_| Ok::<_, ()>("old-id".into()),
+        )
+        .expect("validated source");
+        let calls = Mutex::new(Vec::new());
+
+        let retired = install_migrated_credential(
+            &store,
+            DESKTOP_EXTERNAL_KEYRING_SERVICE,
+            "daemon-instance-pin",
+            "new-id",
+            b"new-active-secret",
+            retirement_source,
+            |credential_id| {
+                assert_eq!(credential_id, "new-id");
+                assert_eq!(
+                    store
+                        .read(DESKTOP_EXTERNAL_KEYRING_SERVICE, "daemon-instance-pin")
+                        .expect("destination read")
+                        .expect("delivered destination")
+                        .as_slice(),
+                    b"new-active-secret"
+                );
+                assert!(
+                    store
+                        .read("com.obscuritylabs.colossus.desktop", "colossus-public-api")
+                        .expect("source read")
+                        .is_some(),
+                    "the source entry remains until its credential is revoked"
+                );
+                calls
+                    .lock()
+                    .expect("calls")
+                    .push(format!("activate:{credential_id}"));
+                Ok::<_, ()>(true)
+            },
+            |credential_id| {
+                assert_eq!(credential_id, "old-id");
+                assert!(
+                    store
+                        .read("com.obscuritylabs.colossus.desktop", "colossus-public-api")
+                        .expect("source read")
+                        .is_some(),
+                    "keyring deletion must follow durable revocation"
+                );
+                calls
+                    .lock()
+                    .expect("calls")
+                    .push(format!("revoke:{credential_id}"));
+                Ok::<_, ()>(true)
+            },
+        )
+        .expect("migration");
+
+        assert_eq!(retired, "old-id");
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            ["activate:new-id", "revoke:old-id"]
+        );
+        assert!(
+            store
+                .read("com.obscuritylabs.colossus.desktop", "colossus-public-api")
+                .expect("source read")
+                .is_none(),
+            "confirmed revocation is followed by legacy keyring cleanup"
+        );
+    }
+
+    #[test]
+    fn migration_activation_failure_preserves_legacy_source() {
+        let store = MemoryStore::default();
+        store
+            .write(
+                "com.obscuritylabs.colossus.desktop",
+                "colossus-public-api",
+                b"old-active-secret",
+            )
+            .expect("legacy credential");
+        let retirement_source = prepare_retirement_source(
+            &store,
+            "com.obscuritylabs.colossus.desktop",
+            "colossus-public-api",
+            |_| Ok::<_, ()>("old-id".into()),
+        )
+        .expect("validated source");
+        let calls = Mutex::new(Vec::new());
+
+        let error = install_migrated_credential(
+            &store,
+            DESKTOP_EXTERNAL_KEYRING_SERVICE,
+            "daemon-instance-pin",
+            "new-id",
+            b"new-pending-secret",
+            retirement_source,
+            |credential_id| {
+                calls
+                    .lock()
+                    .expect("calls")
+                    .push(format!("activate:{credential_id}"));
+                Ok::<_, ()>(false)
+            },
+            |credential_id| {
+                calls
+                    .lock()
+                    .expect("calls")
+                    .push(format!("revoke:{credential_id}"));
+                Ok::<_, ()>(true)
+            },
+        )
+        .expect_err("activation failure");
+
+        assert_eq!(error, PublicApiAdminError::CredentialActivationFailed);
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            ["activate:new-id", "revoke:new-id"]
+        );
+        assert!(
+            store
+                .read(DESKTOP_EXTERNAL_KEYRING_SERVICE, "daemon-instance-pin")
+                .expect("destination read")
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .read("com.obscuritylabs.colossus.desktop", "colossus-public-api")
+                .expect("source read")
+                .expect("legacy source preserved")
+                .as_slice(),
+            b"old-active-secret"
+        );
+    }
+
+    #[test]
+    fn migration_revocation_failure_preserves_both_reconciliation_handles() {
+        let store = MemoryStore::default();
+        store
+            .write(
+                "com.obscuritylabs.colossus.desktop",
+                "colossus-public-api",
+                b"old-secret-token",
+            )
+            .expect("legacy credential");
+        let retirement_source = prepare_retirement_source(
+            &store,
+            "com.obscuritylabs.colossus.desktop",
+            "colossus-public-api",
+            |_| Ok::<_, ()>("old-id".into()),
+        )
+        .expect("validated source");
+
+        let error = install_migrated_credential(
+            &store,
+            DESKTOP_EXTERNAL_KEYRING_SERVICE,
+            "daemon-instance-pin",
+            "new-id",
+            b"new-secret-token",
+            retirement_source,
+            |_| Ok::<_, ()>(true),
+            |_| Err::<bool, _>(()),
+        )
+        .expect_err("unconfirmed revocation");
+
+        assert_eq!(
+            error,
+            PublicApiAdminError::CredentialMigrationRevocationUnconfirmed {
+                previous_credential_id: "old-id".into(),
+                new_credential_id: "new-id".into(),
+            }
+        );
+        assert!(
+            store
+                .read("com.obscuritylabs.colossus.desktop", "colossus-public-api")
+                .expect("source read")
+                .is_some(),
+            "an unconfirmed revocation never deletes the source"
+        );
+        assert_eq!(
+            store
+                .read(DESKTOP_EXTERNAL_KEYRING_SERVICE, "daemon-instance-pin")
+                .expect("destination read")
+                .expect("active replacement")
+                .as_slice(),
+            b"new-secret-token"
+        );
+        let message = error.to_string();
+        assert!(message.contains("old-id"));
+        assert!(message.contains("new-id"));
+        assert!(message.contains("only if it is still credential old-id"));
+        assert!(!message.contains("secret-token"));
+    }
+
+    #[test]
+    fn migration_keyring_cleanup_failure_follows_confirmed_revocation() {
+        let store = MemoryStore::default();
+        store
+            .write(
+                "com.obscuritylabs.colossus.desktop",
+                "colossus-public-api",
+                b"old-secret-token",
+            )
+            .expect("legacy credential");
+        let retirement_source = prepare_retirement_source(
+            &store,
+            "com.obscuritylabs.colossus.desktop",
+            "colossus-public-api",
+            |_| Ok::<_, ()>("old-id".into()),
+        )
+        .expect("validated source");
+        store.fail_deletes.store(true, Ordering::Release);
+        let calls = Mutex::new(Vec::new());
+
+        let error = install_migrated_credential(
+            &store,
+            DESKTOP_EXTERNAL_KEYRING_SERVICE,
+            "daemon-instance-pin",
+            "new-id",
+            b"new-secret-token",
+            retirement_source,
+            |credential_id| {
+                calls
+                    .lock()
+                    .expect("calls")
+                    .push(format!("activate:{credential_id}"));
+                Ok::<_, ()>(true)
+            },
+            |credential_id| {
+                calls
+                    .lock()
+                    .expect("calls")
+                    .push(format!("revoke:{credential_id}"));
+                Ok::<_, ()>(true)
+            },
+        )
+        .expect_err("keyring cleanup failure");
+
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            ["activate:new-id", "revoke:old-id"]
+        );
+        assert_eq!(
+            error,
+            PublicApiAdminError::CredentialRetirementCleanupUnconfirmed {
+                previous_credential_id: "old-id".into(),
+                new_credential_id: "new-id".into(),
+            }
+        );
+        assert!(
+            store
+                .read("com.obscuritylabs.colossus.desktop", "colossus-public-api")
+                .expect("source read")
+                .is_some()
+        );
+        assert_eq!(
+            store
+                .read(DESKTOP_EXTERNAL_KEYRING_SERVICE, "daemon-instance-pin")
+                .expect("destination read")
+                .expect("active replacement")
+                .as_slice(),
+            b"new-secret-token"
+        );
+        let message = error.to_string();
+        assert!(message.contains("old-id"));
+        assert!(message.contains("new-id"));
+        assert!(!message.contains("secret-token"));
+    }
+
+    #[test]
+    fn migration_never_deletes_a_changed_source_keyring_value() {
+        let store = MemoryStore::default();
+        store
+            .write(
+                "com.obscuritylabs.colossus.desktop",
+                "colossus-public-api",
+                b"old-secret-token",
+            )
+            .expect("legacy credential");
+        let retirement_source = prepare_retirement_source(
+            &store,
+            "com.obscuritylabs.colossus.desktop",
+            "colossus-public-api",
+            |_| Ok::<_, ()>("old-id".into()),
+        )
+        .expect("validated source");
+
+        let error = install_migrated_credential(
+            &store,
+            DESKTOP_EXTERNAL_KEYRING_SERVICE,
+            "daemon-instance-pin",
+            "new-id",
+            b"new-secret-token",
+            retirement_source,
+            |_| Ok::<_, ()>(true),
+            |_| {
+                store
+                    .write(
+                        "com.obscuritylabs.colossus.desktop",
+                        "colossus-public-api",
+                        b"concurrently-replaced-token",
+                    )
+                    .expect("replace source selector");
+                Ok::<_, ()>(true)
+            },
+        )
+        .expect_err("changed source requires reconciliation");
+
+        assert_eq!(
+            error,
+            PublicApiAdminError::CredentialRetirementCleanupUnconfirmed {
+                previous_credential_id: "old-id".into(),
+                new_credential_id: "new-id".into(),
+            }
+        );
+        assert_eq!(
+            store
+                .read("com.obscuritylabs.colossus.desktop", "colossus-public-api")
+                .expect("source read")
+                .expect("changed source remains")
+                .as_slice(),
+            b"concurrently-replaced-token"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("do not delete its current value unless it is confirmed")
+        );
     }
 
     #[test]

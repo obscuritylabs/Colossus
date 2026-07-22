@@ -41,7 +41,7 @@ for changed_path in "$@"; do
     esac
 
     case "$changed_path" in
-        apps/desktop/* | scripts/desktop-dev | crates/colossus-sdk/*)
+        apps/desktop/* | scripts/desktop-dev | scripts/package-desktop-macos | scripts/patch-desktop-manifest-binding.mjs | scripts/prepare-desktop-binaries | scripts/write-desktop-bundle-manifest.mjs | scripts/verify-desktop-bundle.mjs | scripts/verify-desktop-unsigned-archive.mjs | crates/colossus-cli/* | crates/colossus-darwin-process/* | crates/colossus-sdk/* | crates/colossus-sidecar/* | crates/colossus-sidecar-protocol/*)
             desktop_required=true
             ;;
     esac

@@ -10,9 +10,12 @@ use colossus_sdk::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::terminal::{TerminalError, TerminalEvent, TerminalKind, TerminalSignal};
+
 const MAX_TEXT_BYTES: usize = 65_536;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_OPAQUE_BYTES: usize = 512;
+const MAX_ENCODED_TERMINAL_INPUT_BYTES: usize = 87_384;
 const PAGE_SIZE: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -21,6 +24,10 @@ pub(crate) enum ConnectionStateDto {
     Connected,
     Disconnected,
     NotConfigured,
+    Starting,
+    Restarting,
+    Stopping,
+    Failed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -28,20 +35,23 @@ pub(crate) enum ConnectionStateDto {
 pub(crate) struct ConnectionStatusDto {
     pub(crate) state: ConnectionStateDto,
     pub(crate) message: String,
+    pub(crate) target_id: Option<String>,
 }
 
 impl ConnectionStatusDto {
-    pub(crate) fn connected() -> Self {
+    pub(crate) fn connected(target_id: impl Into<String>) -> Self {
         Self {
             state: ConnectionStateDto::Connected,
             message: "Connected to Colossus.".into(),
+            target_id: Some(target_id.into()),
         }
     }
 
-    pub(crate) fn disconnected() -> Self {
+    pub(crate) fn disconnected(target_id: Option<String>) -> Self {
         Self {
             state: ConnectionStateDto::Disconnected,
             message: "Colossus is not connected.".into(),
+            target_id,
         }
     }
 
@@ -49,6 +59,15 @@ impl ConnectionStatusDto {
         Self {
             state: ConnectionStateDto::NotConfigured,
             message: "Desktop enrollment is not configured.".into(),
+            target_id: None,
+        }
+    }
+
+    pub(crate) fn managed(state: ConnectionStateDto, message: impl Into<String>) -> Self {
+        Self {
+            state,
+            message: message.into(),
+            target_id: Some(crate::state::MANAGED_TARGET_ID.into()),
         }
     }
 }
@@ -80,20 +99,15 @@ pub(crate) struct CommandErrorDto {
 }
 
 impl CommandErrorDto {
+    pub(crate) fn local_sanitized(code: &str, message: &str, retryable: bool) -> Self {
+        Self::local(code, message, retryable, false)
+    }
+
     pub(crate) fn not_configured() -> Self {
         Self::local(
             "not_configured",
             "Desktop enrollment is not configured.",
             false,
-            false,
-        )
-    }
-
-    pub(crate) fn disconnected() -> Self {
-        Self::local(
-            "disconnected",
-            "Connect to Colossus before using this action.",
-            true,
             false,
         )
     }
@@ -167,6 +181,12 @@ impl CommandErrorDto {
                 false,
                 false,
             ),
+            SdkError::WorkspaceIdentityChanged => Self::local(
+                "workspace_changed",
+                "The selected workspace changed. Choose the workspace again.",
+                false,
+                false,
+            ),
             SdkError::VersionMismatch => Self::local(
                 "version_mismatch",
                 "This desktop build is incompatible with the Colossus API.",
@@ -206,6 +226,207 @@ impl CommandErrorDto {
                 false,
                 false,
             ),
+        }
+    }
+
+    pub(crate) fn from_terminal(error: TerminalError) -> Self {
+        Self::local(error.code(), error.message(), error.retryable(), false)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TerminalKindDto {
+    ColossusTui,
+}
+
+impl From<TerminalKindDto> for TerminalKind {
+    fn from(value: TerminalKindDto) -> Self {
+        match value {
+            TerminalKindDto::ColossusTui => Self::ColossusTui,
+        }
+    }
+}
+
+impl From<TerminalKind> for TerminalKindDto {
+    fn from(value: TerminalKind) -> Self {
+        match value {
+            TerminalKind::ColossusTui => Self::ColossusTui,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ShowTerminalInput {
+    pub(crate) kind: TerminalKindDto,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TerminalContextDto {
+    pub(crate) enabled: bool,
+    pub(crate) context_generation: u64,
+    pub(crate) launch_request_id: u64,
+    pub(crate) workspace_id: Option<String>,
+    pub(crate) workspace_name: Option<String>,
+    pub(crate) requested_kind: Option<TerminalKindDto>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct OpenTerminalInput {
+    pub(crate) workspace_id: String,
+    pub(crate) context_generation: u64,
+    pub(crate) kind: TerminalKindDto,
+    pub(crate) rows: u16,
+    pub(crate) cols: u16,
+}
+
+impl OpenTerminalInput {
+    pub(crate) fn validate(&self) -> Result<(), CommandErrorDto> {
+        validate_identifier(&self.workspace_id, "workspaceId")
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OpenTerminalDto {
+    pub(crate) session_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct WriteTerminalInput {
+    pub(crate) session_id: String,
+    pub(crate) data_base64: String,
+}
+
+impl WriteTerminalInput {
+    pub(crate) fn decode(&self) -> Result<Vec<u8>, CommandErrorDto> {
+        use base64::Engine as _;
+
+        validate_identifier(&self.session_id, "sessionId")?;
+        if self.data_base64.len() > MAX_ENCODED_TERMINAL_INPUT_BYTES {
+            return Err(CommandErrorDto::invalid(
+                "dataBase64",
+                "Terminal input exceeds the per-request limit.",
+            ));
+        }
+        base64::engine::general_purpose::STANDARD
+            .decode(&self.data_base64)
+            .map_err(|_| {
+                CommandErrorDto::invalid("dataBase64", "Terminal input is not canonical base64.")
+            })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ResizeTerminalInput {
+    pub(crate) session_id: String,
+    pub(crate) rows: u16,
+    pub(crate) cols: u16,
+}
+
+impl ResizeTerminalInput {
+    pub(crate) fn validate(&self) -> Result<(), CommandErrorDto> {
+        validate_identifier(&self.session_id, "sessionId")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TerminalSignalDto {
+    Interrupt,
+    Terminate,
+}
+
+impl From<TerminalSignalDto> for TerminalSignal {
+    fn from(value: TerminalSignalDto) -> Self {
+        match value {
+            TerminalSignalDto::Interrupt => Self::Interrupt,
+            TerminalSignalDto::Terminate => Self::Terminate,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SignalTerminalInput {
+    pub(crate) session_id: String,
+    pub(crate) signal: TerminalSignalDto,
+}
+
+impl SignalTerminalInput {
+    pub(crate) fn validate(&self) -> Result<(), CommandErrorDto> {
+        validate_identifier(&self.session_id, "sessionId")
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CloseTerminalInput {
+    pub(crate) session_id: String,
+}
+
+impl CloseTerminalInput {
+    pub(crate) fn validate(&self) -> Result<(), CommandErrorDto> {
+        validate_identifier(&self.session_id, "sessionId")
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum TerminalEventDto {
+    Output {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "dataBase64")]
+        data_base64: String,
+    },
+    Exited {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "exitCode")]
+        exit_code: Option<u32>,
+        signal: Option<String>,
+    },
+    Error {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        code: String,
+        message: String,
+    },
+}
+
+impl From<TerminalEvent> for TerminalEventDto {
+    fn from(value: TerminalEvent) -> Self {
+        use base64::Engine as _;
+
+        match value {
+            TerminalEvent::Output { session_id, bytes } => Self::Output {
+                session_id,
+                data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            },
+            TerminalEvent::Exited {
+                session_id,
+                exit_code,
+                signal,
+            } => Self::Exited {
+                session_id,
+                exit_code,
+                signal,
+            },
+            TerminalEvent::Failed {
+                session_id,
+                code,
+                message,
+            } => Self::Error {
+                session_id,
+                code: code.into(),
+                message: message.into(),
+            },
         }
     }
 }
@@ -1260,5 +1481,53 @@ mod tests {
         assert!(value.contains("not_configured"));
         assert!(!value.contains("secret native configuration detail"));
         assert!(!value.contains("correlation"));
+    }
+
+    #[test]
+    fn terminal_inputs_cannot_choose_process_or_path_authority() {
+        let result = serde_json::from_value::<OpenTerminalInput>(json!({
+            "workspaceId": "workspace:managed",
+            "contextGeneration": 7,
+            "kind": "shell",
+            "rows": 24,
+            "cols": 80
+        }));
+        assert!(
+            result.is_err(),
+            "the macOS MVP must reject general Shell PTYs"
+        );
+
+        let result = serde_json::from_value::<OpenTerminalInput>(json!({
+            "workspaceId": "workspace:managed",
+            "contextGeneration": 7,
+            "kind": "colossus_tui",
+            "rows": 24,
+            "cols": 80,
+            "executable": "/bin/other"
+        }));
+        assert!(result.is_err());
+
+        let result = serde_json::from_value::<OpenTerminalInput>(json!({
+            "workspaceId": "workspace:managed",
+            "contextGeneration": 7,
+            "kind": "colossus_tui",
+            "rows": 24,
+            "cols": 80,
+            "cwd": "/private/tmp"
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn terminal_output_is_encoded_without_native_paths_or_arguments() {
+        let event = TerminalEventDto::from(TerminalEvent::Output {
+            session_id: "session-1".into(),
+            bytes: b"hello".to_vec(),
+        });
+        let value = serde_json::to_value(event).expect("terminal event serializes");
+        assert_eq!(value["type"], "output");
+        assert_eq!(value["dataBase64"], "aGVsbG8=");
+        assert!(value.get("workspace").is_none());
+        assert!(value.get("executable").is_none());
     }
 }

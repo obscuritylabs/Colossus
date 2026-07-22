@@ -3,6 +3,7 @@ import {
   IconBriefcase2,
   IconLibrary,
   IconSettings,
+  IconTerminal2,
   IconTopologyStar3,
 } from "@tabler/icons-react";
 
@@ -16,7 +17,10 @@ interface ProductRailProps {
   surface: WorkspaceSurface;
   attentionCount: number;
   connectionState: ConnectionState;
+  terminalEnabled: boolean;
+  terminalAvailable: boolean;
   onSelect: (surface: WorkspaceSurface) => void;
+  onOpenTerminal: () => void;
 }
 
 const MAIN_ITEMS = [
@@ -30,7 +34,10 @@ export function ProductRail({
   surface,
   attentionCount,
   connectionState,
+  terminalEnabled,
+  terminalAvailable,
   onSelect,
+  onOpenTerminal,
 }: ProductRailProps) {
   return (
     <aside className="product-rail" aria-label="Colossus navigation">
@@ -58,6 +65,24 @@ export function ProductRail({
             <span>{label}</span>
           </button>
         ))}
+        <button
+          className="product-nav-item"
+          type="button"
+          disabled={!terminalAvailable || !terminalEnabled}
+          title={
+            !terminalAvailable
+              ? "Terminal is available only for the selected Managed Local target"
+              : terminalEnabled
+                ? "Open the authenticated local Colossus TUI"
+                : "Enable the local Colossus TUI in Settings"
+          }
+          onClick={onOpenTerminal}
+        >
+          <span className="product-nav-icon" aria-hidden="true">
+            <IconTerminal2 size={21} stroke={1.7} />
+          </span>
+          <span>TUI</span>
+        </button>
       </nav>
 
       <div className="product-rail-footer">

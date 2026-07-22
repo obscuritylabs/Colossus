@@ -220,20 +220,305 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  desktop_macos_build:
+    name: Build unsigned Colossus Desktop aarch64-apple-darwin
+    needs: validate
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
+      COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
+      SCCACHE_GHA_ENABLED: "true"
+      COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+
+      - name: Cache the single desktop release target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+          key: release-desktop-aarch64-apple-darwin
+          cache-targets: false
+
+      - name: Install locked desktop dependencies
+        working-directory: apps/desktop
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+
+      - name: Configure the validation-only code identity
+        if: needs.validate.outputs.publish_draft != 'true'
+        run: echo 'COLOSSUS_DESKTOP_TEAM_ID=ADHOC' >> "$GITHUB_ENV"
+
+      - name: Configure the public release code identity
+        if: needs.validate.outputs.publish_draft == 'true'
+        shell: bash
+        env:
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          [[ "$MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          printf 'COLOSSUS_DESKTOP_TEAM_ID=%s\n' "$MACOS_TEAM_ID" >> "$GITHUB_ENV"
+
+      - name: Build the unsigned Desktop application without credentials
+        run: ./scripts/package-desktop-macos build
+
+      - name: Preserve the exact unsigned application archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          source='apps/desktop/src-tauri/target/release/bundle/macos/Colossus Desktop.unsigned.zip'
+          destination="$RUNNER_TEMP/desktop-unsigned"
+          archive='Colossus-Desktop-unsigned-aarch64-apple-darwin.zip'
+          test -f "$source"
+          test ! -L "$source"
+          install -d -m 0700 "$destination"
+          install -m 0600 "$source" "$destination/$archive"
+          printf '%s\n' "$COLOSSUS_DESKTOP_TEAM_ID" > "$destination/expected-team-id.txt"
+          (cd "$destination" && shasum -a 256 "$archive" > "$archive.sha256")
+
+      - name: Upload the exact unsigned application for isolated signing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-macos-unsigned-aarch64-apple-darwin
+          path: ${{ runner.temp }}/desktop-unsigned/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  desktop_macos:
+    name: Sign and notarize Colossus Desktop aarch64-apple-darwin
+    needs: [validate, desktop_macos_build]
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
+    steps:
+      - name: Check out signing and verification scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the exact unsigned application archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-macos-unsigned-aarch64-apple-darwin
+          path: ${{ runner.temp }}/desktop-unsigned
+
+      - name: Verify and extract the unsigned application with ditto
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="$RUNNER_TEMP/desktop-unsigned"
+          archive='Colossus-Desktop-unsigned-aarch64-apple-darwin.zip'
+          destination="$RUNNER_TEMP/desktop-sign"
+          test -f "$artifact/$archive"
+          test ! -L "$artifact/$archive"
+          (cd "$artifact" && shasum -a 256 --check "$archive.sha256")
+
+          repository=$(pwd -P)
+          node_path=$(node -p 'require("node:fs").realpathSync(process.execPath)')
+          protected_paths=(
+            "$repository/scripts/package-desktop-macos"
+            "$repository/scripts/write-desktop-bundle-manifest.mjs"
+            "$repository/scripts/patch-desktop-manifest-binding.mjs"
+            "$repository/scripts/verify-desktop-bundle.mjs"
+            "$repository/scripts/verify-desktop-unsigned-archive.mjs"
+            "$node_path"
+          )
+          protected_hashes=()
+          for path in "${protected_paths[@]}"; do
+            case "$path" in /*) ;; *) exit 1 ;; esac
+            test -f "$path"
+            test ! -L "$path"
+            digest=$(/usr/bin/shasum -a 256 "$path")
+            digest=${digest%% *}
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            protected_hashes+=("$digest")
+          done
+
+          node ./scripts/verify-desktop-unsigned-archive.mjs \
+            --archive "$artifact/$archive"
+          test ! -e "$destination"
+          test ! -L "$destination"
+          install -d -m 0700 "$destination"
+          /usr/bin/ditto -x -k "$artifact/$archive" "$destination"
+
+          for index in "${!protected_paths[@]}"; do
+            digest=$(/usr/bin/shasum -a 256 "${protected_paths[$index]}")
+            digest=${digest%% *}
+            test "$digest" = "${protected_hashes[$index]}"
+          done
+
+          node ./scripts/verify-desktop-unsigned-archive.mjs \
+            --archive "$artifact/$archive" \
+            --extracted-root "$destination"
+          app="$destination/Colossus Desktop.app"
+          test -d "$app"
+          test ! -L "$app"
+          printf 'COLOSSUS_DESKTOP_UNSIGNED_APP=%s\n' "$app" >> "$GITHUB_ENV"
+
+      - name: Configure validation-only ad-hoc signing
+        if: needs.validate.outputs.publish_draft != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat "$RUNNER_TEMP/desktop-unsigned/expected-team-id.txt")" = ADHOC
+          {
+            echo 'COLOSSUS_DESKTOP_SIGNING_IDENTITY=-'
+            echo 'COLOSSUS_DESKTOP_TEAM_ID=ADHOC'
+          } >> "$GITHUB_ENV"
+
+      - name: Import Developer ID and notarization credentials
+        if: needs.validate.outputs.publish_draft == 'true'
+        shell: bash
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_API_KEY_BASE64: ${{ secrets.MACOS_NOTARY_API_KEY_BASE64 }}
+          NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$DEVELOPER_ID_P12_BASE64"
+          test -n "$DEVELOPER_ID_P12_PASSWORD"
+          test -n "$NOTARY_API_KEY_BASE64"
+          test -n "$NOTARY_ISSUER_ID"
+          test -n "$NOTARY_KEY_ID"
+          [[ "$MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          test "$(cat "$RUNNER_TEMP/desktop-unsigned/expected-team-id.txt")" = "$MACOS_TEAM_ID"
+
+          keychain="$RUNNER_TEMP/colossus-desktop-signing.keychain-db"
+          p12="$RUNNER_TEMP/colossus-developer-id.p12"
+          notary_key="$RUNNER_TEMP/colossus-notary-api-key.p8"
+          profile="colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          keychain_password=$(openssl rand -hex 32)
+
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | base64 --decode > "$p12"
+          printf '%s' "$NOTARY_API_KEY_BASE64" | base64 --decode > "$notary_key"
+          chmod 0600 "$p12" "$notary_key"
+          test -s "$p12"
+          test -s "$notary_key"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+
+          identity_record=$(security find-identity -v -p codesigning "$keychain" \
+            | awk '/"Developer ID Application:/ { count += 1; value = $0 } END { if (count == 1) print value }')
+          test -n "$identity_record"
+          printf '%s\n' "$identity_record" | grep -F "($MACOS_TEAM_ID)" >/dev/null
+          identity=$(printf '%s\n' "$identity_record" | awk '{ print $2 }')
+          [[ "$identity" =~ ^[0-9A-Fa-f]{40}$ ]]
+          xcrun notarytool store-credentials "$profile" \
+            --key "$notary_key" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --keychain "$keychain" \
+            --validate
+
+          {
+            printf 'COLOSSUS_DESKTOP_SIGNING_IDENTITY=%s\n' "$identity"
+            printf 'COLOSSUS_DESKTOP_NOTARY_PROFILE=%s\n' "$profile"
+            printf 'COLOSSUS_DESKTOP_NOTARY_KEYCHAIN=%s\n' "$keychain"
+            printf 'COLOSSUS_DESKTOP_TEAM_ID=%s\n' "$MACOS_TEAM_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Sign, verify, notarize, and staple without running build tools
+        run: ./scripts/package-desktop-macos sign "$COLOSSUS_DESKTOP_UNSIGNED_APP"
+
+      - name: Name desktop archive and checksum
+        shell: bash
+        env:
+          PUBLISH_DRAFT: ${{ needs.validate.outputs.publish_draft }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          source="$RUNNER_TEMP/desktop-sign/Colossus Desktop.zip"
+          destination="$RUNNER_TEMP/desktop-release"
+          if [ "$PUBLISH_DRAFT" = true ]; then
+            archive="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+          else
+            archive="Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+          fi
+          test -f "$source"
+          install -d -m 0700 "$destination"
+          install -m 0644 "$source" "$destination/$archive"
+          (cd "$destination" && shasum -a 256 "$archive" > "$archive.sha256")
+
+      - name: Upload signed Desktop archive and checksum
+        if: needs.validate.outputs.publish_draft == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-desktop-aarch64-apple-darwin
+          path: ${{ runner.temp }}/desktop-release/Colossus-Desktop-*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload non-runnable ADHOC validation archive and checksum
+        if: needs.validate.outputs.publish_draft != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-desktop-validation-only-adhoc-aarch64-apple-darwin
+          path: ${{ runner.temp }}/desktop-release/Colossus-Desktop-VALIDATION-ONLY-ADHOC-*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Remove ephemeral signing material
+        if: always() && needs.validate.outputs.publish_draft == 'true'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/colossus-desktop-signing.keychain-db" || true
+          rm -f \
+            "$RUNNER_TEMP/colossus-developer-id.p12" \
+            "$RUNNER_TEMP/colossus-notary-api-key.p8"
+
   gate:
     name: Colossus release gate
     if: always()
-    needs: [validate, artifacts]
+    needs: [validate, artifacts, desktop_macos_build, desktop_macos]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Require release readiness and all six artifacts
+      - name: Require release readiness, all six CLI targets, and Desktop
         run: >-
           ./scripts/ci/require-success.sh
           validate=${{ needs.validate.result }}
           artifacts=${{ needs.artifacts.result }}
+          desktop_macos_build=${{ needs.desktop_macos_build.result }}
+          desktop_macos=${{ needs.desktop_macos.result }}
 
   draft-release:
     name: Create draft GitHub Release
@@ -253,9 +538,14 @@ jobs:
 
       - name: Verify complete release asset set
         shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 12
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 14
+          desktop="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+          test -f "dist/$desktop"
+          test -f "dist/$desktop.sha256"
           for checksum in dist/*.sha256; do
             (cd dist && sha256sum --check --strict "$(basename "$checksum")")
           done

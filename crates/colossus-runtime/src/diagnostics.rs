@@ -249,6 +249,7 @@ impl Runtime {
         discover_mcp_tools(
             self.gateway.as_ref(),
             self.mcp_executor.as_ref(),
+            self.mcp_effect_executor.as_ref(),
             Actor {
                 actor_type: ActorType::User,
                 id: "terminal-user".into(),
@@ -269,6 +270,7 @@ impl Runtime {
         invoke_mcp_tool(
             self.gateway.as_ref(),
             self.mcp_executor.as_ref(),
+            self.mcp_effect_executor.as_ref(),
             Actor {
                 actor_type: ActorType::User,
                 id: "terminal-user".into(),

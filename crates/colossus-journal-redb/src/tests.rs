@@ -488,7 +488,10 @@ fn writer_lease_is_exclusive_and_reacquirable() {
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("state.redb");
     let first = RedbWriterLease::acquire(&path).expect("first lease");
-    assert!(RedbWriterLease::acquire(&path).is_err());
+    assert!(matches!(
+        RedbWriterLease::acquire(&path),
+        Err(StoreError::WriterLeaseHeld)
+    ));
     assert!(first.path().ends_with("state.redb.writer.lock"));
     drop(first);
     RedbWriterLease::acquire(&path).expect("reacquired lease");

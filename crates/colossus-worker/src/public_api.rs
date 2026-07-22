@@ -67,6 +67,60 @@ pub enum PublicApiDeploymentMode {
     Sidecar,
 }
 
+/// Sanitized identity of one bound public API endpoint awaiting service.
+///
+/// This deliberately excludes authentication credentials, private keys, journal
+/// paths, and worker IPC material. A native sidecar host may deliver it alongside a
+/// one-use bearer over its private inherited bootstrap channel.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PublicApiReadyMetadata {
+    instance_id: Uuid,
+    endpoint: String,
+    certificate_pem: Vec<u8>,
+    certificate_sha256: String,
+    deployment_mode: PublicApiDeploymentMode,
+}
+
+impl PublicApiReadyMetadata {
+    /// Exact runtime instance identity.
+    pub const fn instance_id(&self) -> Uuid {
+        self.instance_id
+    }
+
+    /// Exact bound loopback HTTPS endpoint.
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    /// Single public end-entity certificate PEM.
+    pub fn certificate_pem(&self) -> &[u8] {
+        &self.certificate_pem
+    }
+
+    /// Canonical lowercase SHA-256 fingerprint of the certificate leaf.
+    pub fn certificate_sha256(&self) -> &str {
+        &self.certificate_sha256
+    }
+
+    /// Advertised deployment identity.
+    pub const fn deployment_mode(&self) -> PublicApiDeploymentMode {
+        self.deployment_mode
+    }
+}
+
+impl fmt::Debug for PublicApiReadyMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PublicApiReadyMetadata")
+            .field("instance_id", &self.instance_id)
+            .field("endpoint", &self.endpoint)
+            .field("certificate_pem_bytes", &self.certificate_pem.len())
+            .field("certificate_sha256", &self.certificate_sha256)
+            .field("deployment_mode", &self.deployment_mode)
+            .finish()
+    }
+}
+
 impl From<PublicApiDeploymentMode> for DeploymentMode {
     fn from(value: PublicApiDeploymentMode) -> Self {
         match value {
@@ -204,6 +258,7 @@ pub(super) struct PreparedPublicApi {
     pub(super) descriptor_path: PathBuf,
     pub(super) certificate_path: PathBuf,
     pub(super) runs: Arc<RuntimeAgentRunApi>,
+    pub(super) metadata: PublicApiReadyMetadata,
 }
 
 impl PreparedPublicApi {
@@ -213,6 +268,8 @@ impl PreparedPublicApi {
         interactions: Arc<PublicInteractionRouter>,
     ) -> Result<Self, WorkerError> {
         let advertised_limits = application_limits(&options.admission);
+        let instance_id = options.instance_id;
+        let deployment_mode = options.deployment_mode;
         let readiness: Arc<dyn ReadinessProvider> = Arc::new(JournalReadiness::new(Arc::clone(
             &options.credential_journal,
         )));
@@ -255,8 +312,8 @@ impl PreparedPublicApi {
             SocketAddr::V6(address) => format!("https://[::1]:{}", address.port()),
         };
         let descriptor = EndpointDescriptor::new(
-            options.instance_id,
-            endpoint,
+            instance_id,
+            endpoint.clone(),
             std::process::id(),
             server.certificate_sha256(),
         )
@@ -266,6 +323,13 @@ impl PreparedPublicApi {
             return Err(WorkerError::PublicApi(error.to_string()));
         }
         Ok(Self {
+            metadata: PublicApiReadyMetadata {
+                instance_id,
+                endpoint,
+                certificate_pem: server.certificate_pem().to_vec(),
+                certificate_sha256: server.certificate_sha256().to_owned(),
+                deployment_mode,
+            },
             server: Some(server),
             descriptor_path: options.descriptor_path,
             certificate_path: options.certificate_path,
@@ -470,6 +534,20 @@ mod tests {
         .with_deployment_mode(PublicApiDeploymentMode::Sidecar);
 
         assert_eq!(options.deployment_mode(), PublicApiDeploymentMode::Sidecar);
+    }
+
+    #[test]
+    fn ready_metadata_debug_never_includes_certificate_body() {
+        let metadata = PublicApiReadyMetadata {
+            instance_id: Uuid::now_v7(),
+            endpoint: "https://127.0.0.1:1234".into(),
+            certificate_pem: b"private-test-marker".to_vec(),
+            certificate_sha256: "a".repeat(64),
+            deployment_mode: PublicApiDeploymentMode::Sidecar,
+        };
+        let debug = format!("{metadata:?}");
+        assert!(!debug.contains("private-test-marker"));
+        assert!(debug.contains("certificate_pem_bytes"));
     }
 
     #[test]

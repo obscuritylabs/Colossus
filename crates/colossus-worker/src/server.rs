@@ -6,7 +6,8 @@ const PUBLIC_TRANSPORT_FORCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Long-running single-writer runtime owner and authenticated IPC server.
 pub struct WorkerServer {
     endpoint: String,
-    authentication_key: [u8; 32],
+    listener: Option<platform::Listener>,
+    authentication_key: WorkerAuthenticationKey,
     runtime: Arc<Runtime>,
     replay: Arc<Mutex<ReplayGuard>>,
     maintenance: Arc<tokio::sync::Mutex<()>>,
@@ -33,22 +34,26 @@ impl WorkerServer {
         approvals: Arc<dyn colossus_ports::ApprovalProvider>,
         options: RuntimeOpenOptions,
     ) -> Result<Self, WorkerError> {
+        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
-        let authentication_key = config.worker_ipc_auth_key_at(&options.workspace)?;
+        let authentication_key =
+            WorkerAuthenticationKey::new(config.worker_ipc_auth_key_at(&options.workspace)?);
         let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
             approvals, None,
         ));
         let approval_interface: Arc<dyn ApprovalProvider> = interactions.clone();
         let prompt_interface: Arc<dyn UserPromptProvider> = interactions.clone();
+        let runtime = Arc::new(Runtime::open_with_options(
+            config,
+            approval_interface,
+            Some(prompt_interface),
+            options,
+        )?);
         Ok(Self {
             endpoint,
+            listener: None,
             authentication_key,
-            runtime: Arc::new(Runtime::open_with_options(
-                config,
-                approval_interface,
-                Some(prompt_interface),
-                options,
-            )?),
+            runtime,
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
             public_interactions: interactions,
@@ -74,27 +79,67 @@ impl WorkerServer {
         approval_mode: WorkerApprovalMode,
         options: RuntimeOpenOptions,
     ) -> Result<Self, WorkerError> {
+        Self::open_with_mode_at_workspace_and_provider_credentials(
+            config,
+            approval_mode,
+            options,
+            Arc::new(EnvironmentCredentialResolver),
+        )
+    }
+
+    /// Open an interactive worker with a host-provided late-bound provider credential
+    /// resolver. Credential values remain behind the permit-bearing provider adapter.
+    pub fn open_with_mode_at_workspace_and_provider_credentials(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+    ) -> Result<Self, WorkerError> {
+        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
+        let authentication_key =
+            WorkerAuthenticationKey::new(config.worker_ipc_auth_key_at(&options.workspace)?);
+        Self::open_with_mode_at_workspace_provider_credentials_and_authentication(
+            config,
+            approval_mode,
+            options,
+            provider_credentials,
+            authentication_key,
+        )
+    }
+
+    /// Open an interactive worker with host-provided provider credentials and an
+    /// independent worker key delivered through inherited native bootstrap memory.
+    pub fn open_with_mode_at_workspace_provider_credentials_and_authentication(
+        config: &RuntimeConfig,
+        approval_mode: WorkerApprovalMode,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+        authentication_key: WorkerAuthenticationKey,
+    ) -> Result<Self, WorkerError> {
+        let options = RuntimeOpenOptions::for_workspace(&options.workspace)?;
         let approvals: Arc<dyn ApprovalProvider> = Arc::new(WorkerInteractiveApproval {
             mode: approval_mode,
         });
         let user_prompts: Arc<dyn UserPromptProvider> = Arc::new(WorkerInteractiveUserPrompt);
         let endpoint = config.worker_ipc_endpoint_at(&options.workspace)?;
-        let authentication_key = config.worker_ipc_auth_key_at(&options.workspace)?;
         let interactions = Arc::new(colossus_api_runtime::PublicInteractionRouter::new(
             approvals,
             Some(user_prompts),
         ));
         let approval_interface: Arc<dyn ApprovalProvider> = interactions.clone();
         let prompt_interface: Arc<dyn UserPromptProvider> = interactions.clone();
+        let runtime = Arc::new(Runtime::open_with_provider_credentials(
+            config,
+            approval_interface,
+            Some(prompt_interface),
+            options,
+            provider_credentials,
+        )?);
         Ok(Self {
             endpoint,
+            listener: None,
             authentication_key,
-            runtime: Arc::new(Runtime::open_with_options(
-                config,
-                approval_interface,
-                Some(prompt_interface),
-                options,
-            )?),
+            runtime,
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
             public_interactions: interactions,
@@ -152,14 +197,55 @@ impl WorkerServer {
         &self.endpoint
     }
 
+    /// Bind private worker IPC before advertising any dependent public transport.
+    ///
+    /// Managed sidecars call this during bootstrap so a local endpoint failure is
+    /// reported on the inherited channel instead of being masked as a later gRPC
+    /// connection failure. Ordinary workers may continue to bind inside `serve`.
+    pub async fn prepare_worker_ipc(mut self) -> Result<Self, WorkerError> {
+        if self.listener.is_none() {
+            self.listener = Some(platform::Listener::bind(&self.endpoint).await?);
+        }
+        Ok(self)
+    }
+
+    /// Sanitized bound public API identity available before service begins.
+    pub fn public_api_ready_metadata(&self) -> Option<&PublicApiReadyMetadata> {
+        self.public_api.as_ref().map(|api| &api.metadata)
+    }
+
     /// Serve until Ctrl-C or an authenticated shutdown request, then checkpoint cleanly.
-    pub async fn serve(mut self) -> Result<(), WorkerError> {
-        let mut listener = platform::Listener::bind(&self.endpoint).await?;
+    pub async fn serve(self) -> Result<(), WorkerError> {
+        self.serve_with_signal(tokio::signal::ctrl_c()).await
+    }
+
+    /// Serve until an external guardian resolves or an authenticated shutdown request
+    /// arrives, preserving the normal public-run drain, transport force-close, and
+    /// checkpoint sequence.
+    pub async fn serve_until(
+        self,
+        shutdown: impl std::future::Future<Output = ()> + Send,
+    ) -> Result<(), WorkerError> {
+        self.serve_with_signal(async move {
+            shutdown.await;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn serve_with_signal(
+        mut self,
+        signal: impl std::future::Future<Output = std::io::Result<()>> + Send,
+    ) -> Result<(), WorkerError> {
+        let mut listener = match self.listener.take() {
+            Some(listener) => listener,
+            None => platform::Listener::bind(&self.endpoint).await?,
+        };
         let runtime = Arc::clone(&self.runtime);
         let replay = Arc::clone(&self.replay);
         let maintenance = Arc::clone(&self.maintenance);
         let drain_notify = Arc::new(tokio::sync::Notify::new());
-        let key = self.authentication_key;
+        let key = self.authentication_key.clone();
         let mut drain_interval = tokio::time::interval(Duration::from_secs(1));
         drain_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         drain_interval.tick().await;
@@ -214,10 +300,11 @@ impl WorkerServer {
         drop(public_error_tx);
         let mut stop = false;
         let mut public_failure = None;
+        tokio::pin!(signal);
         while !stop {
             tokio::select! {
                 biased;
-                signal = tokio::signal::ctrl_c() => {
+                signal = &mut signal => {
                     signal?;
                     stop = true;
                 }
@@ -246,6 +333,7 @@ impl WorkerServer {
                 }
                 accepted = listener.accept() => {
                     let stream = accepted?;
+                    let key = key.clone();
                     let runtime = Arc::clone(&runtime);
                     let replay = Arc::clone(&replay);
                     let maintenance = Arc::clone(&maintenance);
@@ -254,7 +342,7 @@ impl WorkerServer {
                     tasks.spawn(async move {
                         if handle_connection(
                             stream,
-                            &key,
+                            key.expose(),
                             runtime.as_ref(),
                             replay.as_ref(),
                             maintenance.as_ref(),

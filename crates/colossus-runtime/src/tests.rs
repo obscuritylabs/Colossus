@@ -77,6 +77,85 @@ struct UnusedToolExecutor;
 
 struct FixedUserPrompt;
 
+#[cfg(unix)]
+#[test]
+fn long_worker_ipc_endpoints_use_stable_private_short_paths() {
+    let long_root = std::path::PathBuf::from("/tmp")
+        .join("managed-local")
+        .join("a".repeat(160));
+    let mut config = RuntimeConfig::offline_template(long_root.join("state.redb"));
+    let workspace = std::path::Path::new("/tmp/colossus-worker-endpoint-test");
+    let first = config
+        .worker_ipc_endpoint_at(workspace)
+        .expect("first short endpoint");
+    let repeated = config
+        .worker_ipc_endpoint_at(workspace)
+        .expect("stable short endpoint");
+    assert_eq!(first, repeated);
+
+    let first = std::path::PathBuf::from(first);
+    assert_eq!(
+        first.parent(),
+        Some(super::workspace_lease::worker_coordination_root().as_path())
+    );
+    assert!(std::os::unix::net::SocketAddr::from_pathname(&first).is_ok());
+    assert_eq!(
+        first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::len),
+        Some("ipc-v2-".len() + 43 + ".sock".len())
+    );
+    assert!(!first.to_string_lossy().contains(&"a".repeat(32)));
+
+    config.storage.path = long_root.join("other-state.redb");
+    let second = config
+        .worker_ipc_endpoint_at(workspace)
+        .expect("distinct short endpoint");
+    assert_ne!(first, std::path::PathBuf::from(second));
+}
+
+#[cfg(unix)]
+#[test]
+fn short_worker_ipc_endpoint_keeps_the_state_adjacent_contract() {
+    let state = std::path::PathBuf::from("/tmp/colossus-short-state.redb");
+    let config = RuntimeConfig::offline_template(&state);
+    assert_eq!(
+        config
+            .worker_ipc_endpoint_at(std::path::Path::new("/tmp/workspace"))
+            .expect("worker endpoint"),
+        format!("{}.worker.sock", state.display())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_worker_state_paths_hash_native_bytes_without_aliasing() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
+
+    let workspace = std::path::Path::new("/tmp/workspace");
+    let state = |byte| {
+        let mut path = b"/tmp/colossus-non-utf8-".to_vec();
+        path.push(byte);
+        path.extend_from_slice(b".redb");
+        std::path::PathBuf::from(OsString::from_vec(path))
+    };
+    let first = RuntimeConfig::offline_template(state(0x80))
+        .worker_ipc_endpoint_at(workspace)
+        .expect("first native-byte endpoint");
+    let second = RuntimeConfig::offline_template(state(0x81))
+        .worker_ipc_endpoint_at(workspace)
+        .expect("second native-byte endpoint");
+
+    assert_ne!(first, second);
+    assert_eq!(
+        std::path::Path::new(&first).parent(),
+        Some(super::workspace_lease::worker_coordination_root().as_path())
+    );
+    assert!(!first.contains(char::REPLACEMENT_CHARACTER));
+    assert!(!second.contains(char::REPLACEMENT_CHARACTER));
+}
+
 #[tokio::test]
 async fn subworkflow_start_and_compensation_are_independent_gateway_effects() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
@@ -1260,6 +1339,7 @@ async fn model_skill_resource_tool_is_active_scoped_and_post_gated() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: directory.path().to_path_buf(),
         repository_id: "repo-test".into(),
@@ -1500,6 +1580,7 @@ async fn agent_filesystem_tool_executes_only_through_the_gateway() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: allowed.path().to_path_buf(),
         repository_id: "repo-test".into(),
@@ -1568,6 +1649,7 @@ async fn agent_list_and_search_tools_return_only_workspace_relative_results() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: allowed.path().to_path_buf(),
         repository_id: "repo-test".into(),
@@ -1654,6 +1736,7 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
@@ -1701,6 +1784,7 @@ async fn agent_mutations_require_approval_and_return_audited_diff_visibility() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
@@ -1820,6 +1904,7 @@ async fn model_work_tools_are_durable_attributed_and_session_confined() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
@@ -1954,6 +2039,7 @@ async fn subprocess_content_denied_post_effect_never_reaches_the_tool_caller() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
@@ -2153,6 +2239,7 @@ async fn model_memory_tools_are_durable_scoped_and_post_gated() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
@@ -2366,6 +2453,7 @@ async fn model_plans_are_session_confined_and_approval_obligated() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
@@ -2498,6 +2586,7 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
@@ -2721,6 +2810,7 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
@@ -2868,6 +2958,7 @@ async fn memory_created_by_one_model_turn_is_retrieved_for_the_next_turn() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
@@ -3032,6 +3123,7 @@ async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() 
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: std::env::current_dir().expect("cwd"),
         repository_id: "repo-test".into(),
@@ -3251,6 +3343,7 @@ async fn model_patch_tools_preview_apply_and_reverse_exact_text_under_policy() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),
@@ -3576,6 +3669,7 @@ async fn repository_context_tools_are_permit_bound_bounded_and_workspace_confine
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: workspace_path,
         repository_id: "repo-test".into(),
@@ -3747,6 +3841,7 @@ async fn git_and_shell_tools_keep_distinct_policy_and_nonzero_exit_semantics() {
         pack_processes: None,
         integrations: None,
         mcp: None,
+        bound_effects: None,
         search: None,
         workspace: workspace.path().to_path_buf(),
         repository_id: "repo-test".into(),

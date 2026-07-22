@@ -90,6 +90,14 @@ impl PublicApiCredentialManager {
         self.authenticator.issue_pending(grant)
     }
 
+    /// Issue a bounded credential set in one durable all-or-nothing transaction.
+    pub fn issue_pending_batch(
+        &self,
+        grants: &[ApplicationGrant],
+    ) -> Result<Vec<IssuedCredential>, PublicApiCredentialError> {
+        self.authenticator.issue_pending_batch(grants)
+    }
+
     /// Activate one pending credential after confirmed secret-safe delivery.
     ///
     /// Returns `false` for an absent or already revoked credential. Activation is
@@ -98,12 +106,28 @@ impl PublicApiCredentialManager {
         self.authenticator.activate(credential_id)
     }
 
+    /// Activate a delivered credential set in one durable transaction.
+    pub fn activate_batch(
+        &self,
+        credential_ids: &[String],
+    ) -> Result<bool, PublicApiCredentialError> {
+        self.authenticator.activate_batch(credential_ids)
+    }
+
     /// Permanently revoke an issued credential by its non-secret identifier.
     ///
     /// Returns `false` when no such credential exists. A successful revocation is
     /// durable and idempotent.
     pub fn revoke(&self, credential_id: &str) -> Result<bool, PublicApiCredentialError> {
         self.authenticator.revoke(credential_id)
+    }
+
+    /// Revoke a credential set in one durable transaction.
+    pub fn revoke_batch(
+        &self,
+        credential_ids: &[String],
+    ) -> Result<bool, PublicApiCredentialError> {
+        self.authenticator.revoke_batch(credential_ids)
     }
 
     /// Authenticate a bearer loaded from a trusted credential store for rotation.
@@ -223,6 +247,105 @@ mod tests {
         assert!(principal.has_scope(scopes::RUNS_EXECUTE));
         assert!(principal.allows_role("primary"));
         assert!(principal.allows_tool("session.list"));
+    }
+
+    #[test]
+    fn manager_commits_native_credential_pairs_as_one_lifecycle() {
+        let journal = Arc::new(InMemoryEventJournal::default());
+        let journal_port: Arc<dyn EventJournal> = journal.clone();
+        let manager = PublicApiCredentialManager::bind(
+            journal_port,
+            PublicApiAuthenticationKey::new([51_u8; 32]),
+        );
+        let primary_grant = ApplicationGrant::new(
+            "app:worker-credential-test",
+            ApplicationKind::Sidecar,
+            [
+                ApiScope::new(scopes::RUNS_EXECUTE).expect("execute scope"),
+                ApiScope::new(scopes::RUNS_READ).expect("read scope"),
+                ApiScope::new(scopes::RUNS_CONTROL).expect("control scope"),
+                ApiScope::new(scopes::PROMPTS_RESPOND).expect("prompt scope"),
+            ],
+            ["primary".into()],
+            ["session.list".into()],
+        )
+        .expect("primary grant");
+        let approval_grant = ApplicationGrant::new(
+            "app:worker-credential-test",
+            ApplicationKind::Sidecar,
+            [ApiScope::new(scopes::APPROVALS_RESPOND).expect("approval scope")],
+            ["primary".into()],
+            Vec::<String>::new(),
+        )
+        .expect("approval grant");
+        let issued = manager
+            .issue_pending_batch(&[primary_grant, approval_grant])
+            .expect("issue credential pair");
+        let credential_ids = issued
+            .iter()
+            .map(|credential| credential.credential_id().to_owned())
+            .collect::<Vec<_>>();
+        let authorizations = issued
+            .iter()
+            .map(|credential| format!("Bearer {}", credential.expose_token()))
+            .collect::<Vec<_>>();
+        assert!(authorizations.iter().all(|authorization| {
+            manager
+                .authenticator
+                .authenticate_authorization(authorization)
+                .is_err()
+        }));
+        let invalid_pair = vec![credential_ids[0].clone(), uuid::Uuid::now_v7().to_string()];
+        assert!(!manager.activate_batch(&invalid_pair).expect("reject pair"));
+        assert!(
+            manager
+                .authenticator
+                .authenticate_authorization(&authorizations[0])
+                .is_err(),
+            "journal batch activation must leave every member pending on failure"
+        );
+        assert!(
+            manager
+                .activate_batch(&credential_ids)
+                .expect("activate pair")
+        );
+        let principals = authorizations
+            .iter()
+            .map(|authorization| {
+                manager
+                    .authenticator
+                    .authenticate_authorization(authorization)
+                    .expect("active credential")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            principals[0].application_id(),
+            principals[1].application_id()
+        );
+        assert_eq!(principals[0].kind(), ApplicationKind::Sidecar);
+        assert_eq!(principals[1].kind(), ApplicationKind::Sidecar);
+        assert!(principals[0].has_scope(scopes::RUNS_EXECUTE));
+        assert!(!principals[0].has_scope(scopes::APPROVALS_RESPOND));
+        assert!(principals[1].has_scope(scopes::APPROVALS_RESPOND));
+        assert!(!principals[1].has_scope(scopes::RUNS_EXECUTE));
+        assert_eq!(principals[1].allowed_tools().len(), 0);
+
+        assert!(!manager.revoke_batch(&invalid_pair).expect("reject revoke"));
+        assert!(
+            manager
+                .authenticator
+                .authenticate_authorization(&authorizations[0])
+                .is_ok(),
+            "journal batch revocation must leave every member active on failure"
+        );
+        assert!(manager.revoke_batch(&credential_ids).expect("revoke pair"));
+        assert!(authorizations.iter().all(|authorization| {
+            manager
+                .authenticator
+                .authenticate_authorization(authorization)
+                .is_err()
+        }));
+        assert_eq!(journal.read_global(0, 16).expect("events").len(), 6);
     }
 
     #[test]

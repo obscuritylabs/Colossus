@@ -23,7 +23,15 @@ daemon = [
     "keyring",
 ]
 keyring = ["dep:keyring"]
-sidecar = ["daemon"]
+sidecar = [
+    "daemon",
+    "dep:colossus-darwin-process",
+    "dep:colossus-sidecar-protocol",
+    "dep:nix",
+    "dep:rustix",
+    "dep:serde",
+    "dep:tempfile",
+]
 embedded = []
 
 [dependencies]
@@ -31,20 +39,29 @@ async-trait.workspace = true
 colossus-api.workspace = true
 colossus-api-proto = { workspace = true, optional = true }
 colossus-grpc = { workspace = true, optional = true }
+colossus-sidecar-protocol = { workspace = true, optional = true }
 futures.workspace = true
 hex.workspace = true
 keyring = { workspace = true, optional = true }
+nix = { workspace = true, features = ["fs", "process", "signal"], optional = true }
 prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 sysinfo = { workspace = true, optional = true }
 thiserror.workspace = true
 tonic = { workspace = true, features = ["transport", "tls-ring"], optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["fs"], optional = true }
 url = { workspace = true, optional = true }
 uuid.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+colossus-darwin-process = { workspace = true, optional = true }
+security-framework.workspace = true
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true

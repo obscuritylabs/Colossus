@@ -47,6 +47,7 @@ export interface ChatState {
 }
 
 export type ChatAction =
+  | { type: "reset" }
   | { type: "select_run"; runId: string | null }
   | { type: "upsert_run"; run: Run }
   | { type: "record_local_prompt"; runId: string; prompt: string }
@@ -576,6 +577,8 @@ function updateRecentRun(recentRuns: Run[], run: Run): Run[] {
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
+    case "reset":
+      return initialChatState;
     case "select_run":
       return {
         ...state,

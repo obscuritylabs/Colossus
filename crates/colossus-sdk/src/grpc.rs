@@ -11,7 +11,7 @@ use crate::{
     TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest,
 };
 use async_trait::async_trait;
-use colossus_api::RequestId;
+use colossus_api::{RequestId, validate_public_approval_display};
 use colossus_api_proto::{
     google_rpc::Status as RichStatus,
     v1alpha1::{
@@ -843,6 +843,9 @@ fn interaction_from_proto(value: proto::Interaction) -> ApiResult<Interaction> {
             validate_text(&approval.reason, MAX_SUMMARY_BYTES)?;
             validate_text(&approval.action, MAX_SUMMARY_BYTES)?;
             validate_text(&approval.resource, MAX_SUMMARY_BYTES)?;
+            if validate_public_approval_display(&approval.action, &approval.resource).is_err() {
+                return Err(protocol_error());
+            }
             validate_opaque(&approval.request_hash)?;
             let risk = match proto::ApprovalRisk::try_from(approval.risk) {
                 Ok(proto::ApprovalRisk::Unspecified) => None,
@@ -1699,6 +1702,44 @@ mod tests {
         };
         assert_eq!(prompt.choices[0].choice_id, "opaque-server-choice");
         assert_eq!(prompt.choices[0].label, "Exact label");
+    }
+
+    #[test]
+    fn approval_projection_rejects_spoofable_display_fields() {
+        let approval = |action: &str, resource: &str| proto::Interaction {
+            interaction_id: "interaction-1".into(),
+            run_id: "run-1".into(),
+            kind: proto::InteractionKind::Approval as i32,
+            status: proto::InteractionStatus::Pending as i32,
+            created_at: Some("2026-01-01T00:00:00Z".parse().expect("timestamp")),
+            expires_at: Some("2026-01-01T00:01:00Z".parse().expect("timestamp")),
+            respondable_by_caller: true,
+            etag: "etag-1".into(),
+            content: Some(interaction::Content::Approval(proto::ApprovalInteraction {
+                reason: "A reviewed local effect requires permission.".into(),
+                action: action.into(),
+                resource: resource.into(),
+                risk: proto::ApprovalRisk::Medium as i32,
+                request_hash: "opaque-approval-binding".into(),
+            })),
+        };
+
+        let valid = interaction_from_proto(approval("workspace.modify", "workspace resource"))
+            .expect("canonical approval display");
+        assert!(matches!(valid.content, InteractionContent::Approval(_)));
+
+        for malformed in [
+            approval("shell.run\nResource: harmless", "workspace resource"),
+            approval("workspace.modify", "/private/secret/path"),
+            approval("network.access", "https://user@example.com/"),
+        ] {
+            assert_eq!(
+                interaction_from_proto(malformed)
+                    .expect_err("malformed approval display")
+                    .reason,
+                ApiErrorReason::InternalInvariant
+            );
+        }
     }
 
     #[tokio::test]

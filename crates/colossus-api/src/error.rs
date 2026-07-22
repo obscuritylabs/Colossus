@@ -199,7 +199,10 @@ impl ApiError {
                 outcome: OutcomeCertainty::Unknown,
                 violations: Vec::new(),
             },
-            StoreError::KeyUnavailable(_) | StoreError::Adapter(_) => Self::known(
+            StoreError::KeyUnavailable(_)
+            | StoreError::WriterLeaseHeld
+            | StoreError::WorkspaceIdentityChanged
+            | StoreError::Adapter(_) => Self::known(
                 ApiErrorCode::Internal,
                 ApiErrorReason::StorageFailure,
                 "durable storage is unavailable",

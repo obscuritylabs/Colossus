@@ -11,7 +11,7 @@ pub trait WorkerPromptHandler: Send + Sync {
 #[derive(Clone)]
 pub struct WorkerClient {
     endpoint: String,
-    authentication_key: [u8; 32],
+    authentication_key: WorkerAuthenticationKey,
 }
 
 impl WorkerClient {
@@ -23,7 +23,7 @@ impl WorkerClient {
         }
         Ok(Some(Self {
             endpoint,
-            authentication_key: config.worker_ipc_auth_key()?,
+            authentication_key: WorkerAuthenticationKey::new(config.worker_ipc_auth_key()?),
         }))
     }
 
@@ -35,7 +35,23 @@ impl WorkerClient {
         }
         Ok(Self {
             endpoint,
-            authentication_key: config.worker_ipc_auth_key()?,
+            authentication_key: WorkerAuthenticationKey::new(config.worker_ipc_auth_key()?),
+        })
+    }
+
+    /// Resolve only the trusted endpoint from configuration while using a key
+    /// delivered through an inherited native channel.
+    pub fn from_config_with_authentication(
+        config: &RuntimeConfig,
+        authentication_key: WorkerAuthenticationKey,
+    ) -> Result<Self, WorkerError> {
+        let endpoint = config.worker_ipc_endpoint()?;
+        if !platform::endpoint_is_trusted(&endpoint)? {
+            return Err(WorkerError::Unavailable(endpoint));
+        }
+        Ok(Self {
+            endpoint,
+            authentication_key,
         })
     }
 
@@ -54,16 +70,20 @@ impl WorkerClient {
         let mut stream = self.connect().await?;
         let connection_nonce = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
-            client_handshake(&mut stream, &self.authentication_key),
+            client_handshake(&mut stream, self.authentication_key.expose()),
         )
         .await
         .map_err(|_| handshake_timeout_error(&self.endpoint))??;
-        let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
+        let request = signed_request(
+            self.authentication_key.expose(),
+            operation,
+            &connection_nonce,
+        )?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let mut sequence = 0_u64;
         let frame: WorkerFrame = read_message(&mut stream, MAX_FRAME_BYTES).await?;
         let content = validate_frame(
-            &self.authentication_key,
+            self.authentication_key.expose(),
             &request.request_id,
             &mut sequence,
             &frame,
@@ -97,17 +117,21 @@ impl WorkerClient {
         let mut stream = self.connect().await?;
         let connection_nonce = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
-            client_handshake(&mut stream, &self.authentication_key),
+            client_handshake(&mut stream, self.authentication_key.expose()),
         )
         .await
         .map_err(|_| handshake_timeout_error(&self.endpoint))??;
-        let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
+        let request = signed_request(
+            self.authentication_key.expose(),
+            operation,
+            &connection_nonce,
+        )?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let mut sequence = 0_u64;
         loop {
             let frame: WorkerFrame = read_message(&mut stream, MAX_FRAME_BYTES).await?;
             let content = validate_frame(
-                &self.authentication_key,
+                self.authentication_key.expose(),
                 &request.request_id,
                 &mut sequence,
                 &frame,
@@ -148,11 +172,15 @@ impl WorkerClient {
         let mut stream = self.connect().await?;
         let connection_nonce = tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
-            client_handshake(&mut stream, &self.authentication_key),
+            client_handshake(&mut stream, self.authentication_key.expose()),
         )
         .await
         .map_err(|_| handshake_timeout_error(&self.endpoint))??;
-        let request = signed_request(&self.authentication_key, operation, &connection_nonce)?;
+        let request = signed_request(
+            self.authentication_key.expose(),
+            operation,
+            &connection_nonce,
+        )?;
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         let (mut reader, mut writer) = tokio::io::split(stream);
         let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel(32);
@@ -180,7 +208,7 @@ impl WorkerClient {
                         client_sequence = client_sequence.saturating_add(1);
                         write_signed_client_frame(
                             &mut writer,
-                            &self.authentication_key,
+                            self.authentication_key.expose(),
                             &request.request_id,
                             &connection_nonce,
                             client_sequence,
@@ -193,7 +221,7 @@ impl WorkerClient {
                 }
             };
             let content = validate_frame(
-                &self.authentication_key,
+                self.authentication_key.expose(),
                 &request.request_id,
                 &mut server_sequence,
                 &frame,
@@ -209,7 +237,7 @@ impl WorkerClient {
                     client_sequence = client_sequence.saturating_add(1);
                     write_signed_client_frame(
                         &mut writer,
-                        &self.authentication_key,
+                        self.authentication_key.expose(),
                         &request.request_id,
                         &connection_nonce,
                         client_sequence,

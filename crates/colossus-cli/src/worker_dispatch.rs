@@ -1,15 +1,30 @@
 use super::*;
 
+pub(super) struct WorkerDispatchOptions {
+    pub(super) approval_mode: Option<ApprovalMode>,
+    pub(super) no_alt_screen: bool,
+    pub(super) worker_required: bool,
+    pub(super) inherited_worker: Option<WorkerClient>,
+}
+
 pub(super) async fn dispatch_to_worker_if_active(
     config: &RuntimeConfig,
     config_path: &Path,
     workspace: &Path,
     command: &Command,
-    approval_mode: Option<ApprovalMode>,
-    no_alt_screen: bool,
-    worker_required: bool,
+    options: WorkerDispatchOptions,
 ) -> Result<bool, Box<dyn Error>> {
-    let Some(client) = WorkerClient::discover(config)? else {
+    let WorkerDispatchOptions {
+        approval_mode,
+        no_alt_screen,
+        worker_required,
+        inherited_worker,
+    } = options;
+    let client = match inherited_worker {
+        Some(client) => Some(client),
+        None => WorkerClient::discover(config)?,
+    };
+    let Some(client) = client else {
         if worker_required {
             return Err(
                 "the desktop TUI requires an existing authenticated worker for this workspace"

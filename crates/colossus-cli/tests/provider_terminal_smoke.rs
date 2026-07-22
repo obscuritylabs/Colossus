@@ -29,6 +29,7 @@ impl Drop for ChildGuard {
 fn command(binary: &Path, config: &Path) -> Command {
     let mut command = Command::new(binary);
     command
+        .current_dir(config.parent().expect("provider test workspace"))
         .arg("--config")
         .arg(config)
         .env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY)

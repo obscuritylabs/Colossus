@@ -1,8 +1,122 @@
-export type ConnectionState = "connected" | "disconnected" | "not_configured";
+export type ConnectionState =
+  | "connected"
+  | "disconnected"
+  | "not_configured"
+  | "starting"
+  | "restarting"
+  | "stopping"
+  | "failed";
 
 export interface ConnectionStatus {
   state: ConnectionState;
   message: string;
+  targetId: string | null;
+}
+
+export type RuntimeTargetKind = "managed_local" | "external_daemon";
+
+export type ManagedRuntimeState =
+  | "needs_workspace"
+  | "needs_provider"
+  | "starting"
+  | "ready"
+  | "restarting"
+  | "stopping"
+  | "failed";
+
+export type RuntimeFailureCode =
+  | "integrity"
+  | "permission"
+  | "workspace_busy"
+  | "configuration"
+  | "authentication"
+  | "provider"
+  | "crash_loop"
+  | "transport"
+  | "internal";
+
+export interface WorkspaceSummary {
+  workspaceId: string;
+  displayName: string;
+  displayPath: string;
+}
+
+export interface RuntimeTarget {
+  targetId: string;
+  kind: RuntimeTargetKind;
+  label: string;
+  state:
+    | ManagedRuntimeState
+    | "disconnected"
+    | "checking"
+    | "available"
+    | "unreachable";
+  message: string;
+  selected: boolean;
+  terminalAvailable: boolean;
+  workspace: WorkspaceSummary | null;
+  failureCode: RuntimeFailureCode | null;
+}
+
+export interface ProviderSummary {
+  configured: boolean;
+  kind: "openai_responses" | "openai_compatible" | null;
+  model: string;
+}
+
+export interface DesktopStatus {
+  connection: ConnectionStatus;
+  targets: RuntimeTarget[];
+  selectedTargetId: string | null;
+  managedState: ManagedRuntimeState;
+  workspace: WorkspaceSummary | null;
+  provider: ProviderSummary;
+  accessProfile: "minimal" | "development";
+  terminalEnabled: boolean;
+}
+
+export interface ConfigureManagedRuntimeRequest {
+  workspaceId: string;
+  providerKind: "openai_responses" | "openai_compatible";
+  model: string;
+  accessProfile: "minimal" | "development";
+  replaceCredential: boolean;
+}
+
+export type TerminalKind = "colossus_tui";
+
+export type TerminalSignal = "interrupt" | "terminate";
+
+export interface TerminalContext {
+  enabled: boolean;
+  contextGeneration: number;
+  launchRequestId: number;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  requestedKind: TerminalKind | null;
+}
+
+export type TerminalEvent =
+  | {
+      type: "output";
+      sessionId: string;
+      dataBase64: string;
+    }
+  | {
+      type: "exited";
+      sessionId: string;
+      exitCode: number | null;
+      signal: string | null;
+    }
+  | {
+      type: "error";
+      sessionId: string;
+      code: string;
+      message: string;
+    };
+
+export interface OpenTerminalResponse {
+  sessionId: string;
 }
 
 export interface CommandViolation {

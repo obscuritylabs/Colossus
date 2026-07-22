@@ -170,6 +170,13 @@ jobs:
       - name: Run Clippy with warnings denied
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      - name: Test Managed Local sidecar contracts
+        if: needs.classify.outputs.desktop_required == 'true'
+        run: >-
+          cargo test --locked
+          --package colossus-sidecar-protocol
+          --package colossus-sidecar
+
       - name: Prepare exact-path AppArmor profile for workspace tests
         run: |
           cargo build --locked -p colossus-cli --bin colossus

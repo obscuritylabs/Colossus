@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "terminal-pty",
+  "description": "Only the dedicated local terminal WebView may control native-owned PTY sessions.",
+  "local": true,
+  "windows": ["terminal"],
+  "permissions": [
+    "allow-terminal-context",
+    "allow-open-terminal",
+    "allow-write-terminal",
+    "allow-resize-terminal",
+    "allow-signal-terminal",
+    "allow-close-terminal"
+  ]
+}

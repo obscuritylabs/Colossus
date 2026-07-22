@@ -9,19 +9,24 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",
-    "check": "npm run typecheck && vitest run && npm run format:check",
+    "check": "npm run typecheck && vitest run && npm run check:security && npm run format:check",
+    "check:security": "node --test ../../scripts/ci/desktop-contract.test.mjs ../../scripts/ci/desktop-manifest-binding.test.mjs ../../scripts/ci/desktop-unsigned-archive.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev -- --locked",
-    "tauri:build": "tauri build --no-bundle -- --locked"
+    "prepare:sidecars:dev": "../../scripts/prepare-desktop-binaries debug",
+    "prepare:sidecars:release": "../../scripts/prepare-desktop-binaries release",
+    "tauri:dev": "npm run prepare:sidecars:dev && tauri dev -- --locked",
+    "tauri:build": "npm run prepare:sidecars:release && tauri build --no-bundle -- --locked",
+    "tauri:bundle:macos": "../../scripts/package-desktop-macos"
   },
   "dependencies": {
     "@tabler/icons-react": "3.45.0",
     "@tauri-apps/api": "2.11.1",
+    "@xterm/xterm": "6.0.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "react-markdown": "10.1.0",

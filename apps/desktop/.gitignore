@@ -5,6 +5,7 @@ coverage/
 *.local
 *.tsbuildinfo
 src-tauri/connection.local.json
+src-tauri/binaries/
 .DS_Store
 src-tauri/target/
 src-tauri/gen/schemas/

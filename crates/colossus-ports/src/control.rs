@@ -42,6 +42,13 @@ pub enum StoreError {
     /// The configured key is absent or invalid.
     #[error("key unavailable: {0}")]
     KeyUnavailable(String),
+    /// Another live runtime owns the canonical single-writer lease.
+    #[error("runtime writer lease is already held")]
+    WriterLeaseHeld,
+    /// The configured workspace pathname no longer names the directory whose
+    /// identity was captured by the trusted host or running runtime.
+    #[error("workspace identity changed")]
+    WorkspaceIdentityChanged,
     /// Adapter-specific failure with secrets removed.
     #[error("storage adapter failure: {0}")]
     Adapter(String),

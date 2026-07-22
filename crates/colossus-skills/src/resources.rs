@@ -26,21 +26,8 @@ impl SkillResourceService {
         skill_name: &str,
         active_skills: &[String],
     ) -> Result<Vec<SkillResourceEntry>, StoreError> {
-        let root = self.active_root(skill_name, active_skills)?;
-        let mut resources = Vec::new();
-        for kind in RESOURCE_DIRS {
-            let directory = root.join(kind);
-            if !directory.is_dir() {
-                continue;
-            }
-            collect_resources(&root, &directory, kind, 1, &mut resources)?;
-            if resources.len() >= MAX_RESOURCE_ENTRIES {
-                break;
-            }
-        }
-        resources.sort_by(|left, right| left.path.cmp(&right.path));
-        resources.truncate(MAX_RESOURCE_ENTRIES);
-        Ok(resources)
+        ensure_active(skill_name, active_skills)?;
+        self.repository.list_skill_resources(skill_name)
     }
 
     /// Read one bounded UTF-8 text resource after canonical containment checks.
@@ -60,56 +47,78 @@ impl SkillResourceService {
         path: &str,
         active_skills: &[String],
     ) -> Result<SkillResourceRead, StoreError> {
-        let root = self.active_root(skill_name, active_skills)?;
-        let relative = validate_resource_path(path)?;
-        let joined = root.join(&relative);
-        let metadata = fs::symlink_metadata(&joined).map_err(adapter)?;
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() > MAX_RESOURCE_BYTES
-        {
-            return Err(StoreError::Adapter(
-                "skill resource is symlinked, non-regular, or larger than 64,000 bytes".into(),
-            ));
-        }
-        let canonical = fs::canonicalize(&joined).map_err(adapter)?;
-        ensure_contained(&root, &canonical)?;
-        let bytes = fs::read(&canonical).map_err(adapter)?;
-        if bytes.contains(&0) {
-            return Err(StoreError::Adapter(
-                "skill resource is not text-safe".into(),
-            ));
-        }
-        let content = String::from_utf8(bytes).map_err(adapter)?;
-        Ok(SkillResourceRead {
-            path: posix_path(&relative),
-            size: metadata.len(),
-            content,
-        })
+        ensure_active(skill_name, active_skills)?;
+        self.repository.read_skill_resource(skill_name, path)
     }
+}
 
-    fn active_root(
-        &self,
-        skill_name: &str,
-        active_skills: &[String],
-    ) -> Result<PathBuf, StoreError> {
-        if !active_skills.iter().any(|name| name == skill_name) {
-            return Err(StoreError::Adapter(format!(
-                "skill is not active for this turn: {skill_name}"
-            )));
-        }
-        let skill = self
-            .repository
-            .get_skill(skill_name)?
-            .ok_or_else(|| StoreError::NotFound(format!("skill {skill_name}")))?;
-        let root = fs::canonicalize(&skill.resource_root).map_err(adapter)?;
-        if !root.is_dir() {
-            return Err(StoreError::Adapter(
-                "skill resource root is unavailable".into(),
-            ));
-        }
-        Ok(root)
+fn ensure_active(skill_name: &str, active_skills: &[String]) -> Result<(), StoreError> {
+    if !active_skills.iter().any(|name| name == skill_name) {
+        return Err(StoreError::Adapter(format!(
+            "skill is not active for this turn: {skill_name}"
+        )));
     }
+    Ok(())
+}
+
+pub(super) fn list_resources_for_root(root: &Path) -> Result<Vec<SkillResourceEntry>, StoreError> {
+    let root = fs::canonicalize(root).map_err(adapter)?;
+    if !root.is_dir() {
+        return Err(StoreError::Adapter(
+            "skill resource root is unavailable".into(),
+        ));
+    }
+    let mut resources = Vec::new();
+    for kind in RESOURCE_DIRS {
+        let directory = root.join(kind);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_resources(&root, &directory, kind, 1, &mut resources)?;
+        if resources.len() >= MAX_RESOURCE_ENTRIES {
+            break;
+        }
+    }
+    resources.sort_by(|left, right| left.path.cmp(&right.path));
+    resources.truncate(MAX_RESOURCE_ENTRIES);
+    Ok(resources)
+}
+
+pub(super) fn read_resource_for_root(
+    root: &Path,
+    path: &str,
+) -> Result<SkillResourceRead, StoreError> {
+    let root = fs::canonicalize(root).map_err(adapter)?;
+    if !root.is_dir() {
+        return Err(StoreError::Adapter(
+            "skill resource root is unavailable".into(),
+        ));
+    }
+    let relative = validate_resource_path(path)?;
+    let joined = root.join(&relative);
+    let metadata = fs::symlink_metadata(&joined).map_err(adapter)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_RESOURCE_BYTES
+    {
+        return Err(StoreError::Adapter(
+            "skill resource is symlinked, non-regular, or larger than 64,000 bytes".into(),
+        ));
+    }
+    let canonical = fs::canonicalize(&joined).map_err(adapter)?;
+    ensure_contained(&root, &canonical)?;
+    let bytes = fs::read(&canonical).map_err(adapter)?;
+    if bytes.contains(&0) {
+        return Err(StoreError::Adapter(
+            "skill resource is not text-safe".into(),
+        ));
+    }
+    let content = String::from_utf8(bytes).map_err(adapter)?;
+    Ok(SkillResourceRead {
+        path: posix_path(&relative),
+        size: metadata.len(),
+        content,
+    })
 }
 
 fn collect_resources(
@@ -157,7 +166,7 @@ fn collect_resources(
     Ok(())
 }
 
-fn validate_resource_path(path: &str) -> Result<PathBuf, StoreError> {
+pub(super) fn validate_resource_path(path: &str) -> Result<PathBuf, StoreError> {
     let path = Path::new(path.trim());
     let mut components = path.components();
     let Some(Component::Normal(first)) = components.next() else {

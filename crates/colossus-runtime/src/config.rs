@@ -922,9 +922,37 @@ impl RuntimeConfig {
         let state_path = workspace_absolute_path(workspace, &self.storage.path);
         #[cfg(unix)]
         {
+            use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+            use std::os::unix::ffi::OsStrExt as _;
+            use std::os::unix::net::SocketAddr;
+
+            const SHORT_ENDPOINT_DOMAIN: &[u8] = b"colossus-worker-ipc-v2\0";
+
             let mut endpoint = state_path.as_os_str().to_os_string();
             endpoint.push(".worker.sock");
-            return Ok(PathBuf::from(endpoint).to_string_lossy().into_owned());
+            let endpoint = PathBuf::from(endpoint);
+            if SocketAddr::from_pathname(&endpoint).is_ok()
+                && let Some(endpoint) = endpoint.to_str()
+            {
+                return Ok(endpoint.to_owned());
+            }
+
+            // Darwin's sockaddr_un leaves only 103 bytes for a nul-terminated path,
+            // and application-support state paths routinely exceed it. Keep the
+            // stable state identity while placing only a domain-separated digest in
+            // the runtime's already validated owner-private coordination directory.
+            let mut digest = Sha256::new();
+            digest.update(SHORT_ENDPOINT_DOMAIN);
+            digest.update(state_path.as_os_str().as_bytes());
+            let digest = URL_SAFE_NO_PAD.encode(digest.finalize());
+            let endpoint = crate::workspace_lease::worker_coordination_root()
+                .join(format!("ipc-v2-{digest}.sock"));
+            SocketAddr::from_pathname(&endpoint).map_err(|_| {
+                RuntimeError::Config(
+                    "local worker IPC endpoint exceeds the native Unix path limit".into(),
+                )
+            })?;
+            return Ok(endpoint.to_string_lossy().into_owned());
         }
         #[cfg(windows)]
         {

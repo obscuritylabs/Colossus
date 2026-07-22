@@ -7,7 +7,7 @@ use colossus_contracts::{
     QuarantinedEffectResult,
 };
 use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit, effect_request};
-use colossus_sandbox::{ProcessSpec, SandboxProcessExecutor};
+use colossus_sandbox::ProcessSpec;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, Implementation,
     InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,

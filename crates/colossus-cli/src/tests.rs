@@ -569,9 +569,15 @@ fn tui_parses_with_the_global_inline_flag_and_repl_is_rejected() {
 
 #[test]
 fn desktop_worker_required_flag_is_hidden_and_tui_only() {
-    let tui = Cli::try_parse_from(["colossus", "tui", "--worker-required"])
-        .expect("desktop worker-required TUI");
+    let tui = Cli::try_parse_from([
+        "colossus",
+        "tui",
+        "--worker-required",
+        "--desktop-worker-auth",
+    ])
+    .expect("desktop worker-required TUI");
     assert!(tui.worker_required);
+    assert!(tui.desktop_worker_auth);
     assert!(matches!(tui.command, Command::Tui { .. }));
 
     let help = Cli::try_parse_from(["colossus", "--help"])
@@ -579,6 +585,12 @@ fn desktop_worker_required_flag_is_hidden_and_tui_only() {
         .expect("help exits through clap")
         .to_string();
     assert!(!help.contains("worker-required"));
+    assert!(!help.contains("desktop-worker-auth"));
+
+    assert!(
+        Cli::try_parse_from(["colossus", "tui", "--desktop-worker-auth"]).is_err(),
+        "the inherited channel must require fail-closed worker attachment"
+    );
 }
 
 #[test]
@@ -639,6 +651,8 @@ fn worker_public_api_cli_preserves_legacy_modes_and_requires_explicit_enrollment
             role,
             tool,
             replace_credential: false,
+            retire_credential_keyring_service: None,
+            retire_credential_keyring_account: None,
             ..
         }) if application_id == "app:desktop"
             && scope == ["runs:execute", "runs:read"]
@@ -666,6 +680,38 @@ fn worker_public_api_cli_preserves_legacy_modes_and_requires_explicit_enrollment
         missing_role.kind(),
         clap::error::ErrorKind::MissingRequiredArgument
     );
+
+    let migrated = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/tmp/colossus-public-api",
+        "--enroll-application",
+        "app:colossus-desktop",
+        "--scope",
+        "runs:read",
+        "--role",
+        "primary",
+        "--credential-keyring-service",
+        "com.obscuritylabs.colossus.desktop.external",
+        "--credential-keyring-account",
+        "auto",
+        "--retire-credential-keyring-service",
+        "com.obscuritylabs.colossus.desktop",
+        "--retire-credential-keyring-account",
+        "colossus-public-api",
+    ])
+    .expect("explicit keyring migration");
+    assert!(matches!(
+        migrated.command,
+        Command::Worker(WorkerCommand {
+            replace_credential: false,
+            retire_credential_keyring_service: Some(service),
+            retire_credential_keyring_account: Some(account),
+            ..
+        }) if service == "com.obscuritylabs.colossus.desktop"
+            && account == "colossus-public-api"
+    ));
 }
 
 #[test]
@@ -725,6 +771,59 @@ fn worker_public_api_modes_conflict_and_never_accept_bearer_material() {
     assert_eq!(
         replace_without_enrollment.kind(),
         clap::error::ErrorKind::MissingRequiredArgument
+    );
+
+    let incomplete_retirement = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/tmp/colossus-public-api",
+        "--enroll-application",
+        "app:colossus-desktop",
+        "--scope",
+        "runs:read",
+        "--role",
+        "primary",
+        "--credential-keyring-service",
+        "com.obscuritylabs.colossus.desktop.external",
+        "--credential-keyring-account",
+        "auto",
+        "--retire-credential-keyring-service",
+        "com.obscuritylabs.colossus.desktop",
+    ])
+    .err()
+    .expect("retirement keyring selectors must be paired");
+    assert_eq!(
+        incomplete_retirement.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+
+    let conflicting_retirement = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/tmp/colossus-public-api",
+        "--enroll-application",
+        "app:colossus-desktop",
+        "--scope",
+        "runs:read",
+        "--role",
+        "primary",
+        "--credential-keyring-service",
+        "com.obscuritylabs.colossus.desktop.external",
+        "--credential-keyring-account",
+        "auto",
+        "--replace-credential",
+        "--retire-credential-keyring-service",
+        "com.obscuritylabs.colossus.desktop",
+        "--retire-credential-keyring-account",
+        "colossus-public-api",
+    ])
+    .err()
+    .expect("destination replacement and source retirement are distinct modes");
+    assert_eq!(
+        conflicting_retirement.kind(),
+        clap::error::ErrorKind::ArgumentConflict
     );
 }
 

@@ -10,12 +10,23 @@ import type { FormEvent } from "react";
 
 import {
   CommandFailure,
+  addExternalTarget,
   cancelRun,
+  chooseWorkspace,
+  configureManagedRuntime,
   connectColossus,
   createRun,
+  desktopStatus,
   getRun,
+  initializeDesktop,
   listRuns,
+  restartManagedRuntime,
+  removeExternalTarget,
   respondInteraction,
+  runManagedSelfTest,
+  selectTarget,
+  setTerminalEnabled,
+  showTerminalWindow,
   watchRun,
 } from "./api";
 import type { AgentParticipant, AgentWorkState } from "./components/AgentFlow";
@@ -25,12 +36,14 @@ import type {
 } from "./components/ArtifactWorkspace";
 import { ContextSidebar } from "./components/ContextSidebar";
 import { OperationsSurface } from "./components/OperationsSurface";
+import { OnboardingSurface } from "./components/OnboardingSurface";
 import { ProductRail } from "./components/ProductRail";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
 import { WorkSidebar } from "./components/WorkSidebar";
 import { WorkSurface } from "./components/WorkSurface";
 import { buildOperationsStudioFixture } from "./fixtures";
+import { managedOnboardingRequired } from "./onboarding";
 import {
   agentRoleLabel,
   selectOperationalActivity,
@@ -51,16 +64,24 @@ import {
   withBoundedEntry,
 } from "./state";
 import type { IdempotentAttempt } from "./state";
+import {
+  TargetRouteRegistry,
+  selectedTargetRouteChanged,
+  watchDurableRun,
+} from "./target-routing";
+import type { TargetRoute } from "./target-routing";
 import type {
   CommandError,
+  ConfigureManagedRuntimeRequest,
   ConnectionStatus,
   CreateRunRequest,
+  DesktopStatus,
   Interaction,
   InteractionAnswer,
   Run,
   RunMode,
   RunStatus,
-  WatchEvent,
+  TerminalKind,
 } from "./types";
 import { isTerminalStatus } from "./types";
 
@@ -74,11 +95,54 @@ const INITIAL_CONNECTION: ConnectionStatus = FIXTURE_MODE
       state: "connected",
       message:
         "Development showcase connected to a deterministic local fixture.",
+      targetId: "fixture-managed-local",
     }
   : {
       state: "disconnected",
       message: "Connecting to the local Colossus agent…",
+      targetId: null,
     };
+
+const INITIAL_DESKTOP: DesktopStatus = {
+  connection: INITIAL_CONNECTION,
+  targets: FIXTURE_MODE
+    ? [
+        {
+          targetId: "fixture-managed-local",
+          kind: "managed_local",
+          label: "Managed Local",
+          state: "ready",
+          message: "Fixture runtime ready.",
+          selected: true,
+          terminalAvailable: true,
+          workspace: {
+            workspaceId: "fixture-workspace",
+            displayName: "Colossus",
+            displayPath: "~/tools/Colossus",
+          },
+          failureCode: null,
+        },
+      ]
+    : [],
+  selectedTargetId: FIXTURE_MODE ? "fixture-managed-local" : null,
+  managedState: FIXTURE_MODE ? "ready" : "starting",
+  workspace: FIXTURE_MODE
+    ? {
+        workspaceId: "fixture-workspace",
+        displayName: "Colossus",
+        displayPath: "~/tools/Colossus",
+      }
+    : null,
+  provider: FIXTURE_MODE
+    ? {
+        configured: true,
+        kind: "openai_compatible",
+        model: "fixture",
+      }
+    : { configured: false, kind: null, model: "" },
+  accessProfile: "development",
+  terminalEnabled: false,
+};
 
 const FALLBACK_ACTION_ERROR: CommandError = {
   code: "desktop_request_failed",
@@ -255,17 +319,24 @@ function previewFor(
   return undefined;
 }
 
+interface RoutedAttempt {
+  targetId: string;
+  attempt: IdempotentAttempt;
+}
+
 export default function App() {
   const [chat, dispatch] = useReducer(
     chatReducer,
     FIXTURE_MODE ? buildOperationsStudioFixture() : initialChatState,
   );
   const chatRef = useRef(chat);
+  const [desktop, setDesktop] = useState<DesktopStatus>(INITIAL_DESKTOP);
+  const desktopRef = useRef(desktop);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
   const [workNavigationOpen, setWorkNavigationOpen] = useState(false);
   const [workQuery, setWorkQuery] = useState("");
-  const [connection, setConnection] =
-    useState<ConnectionStatus>(INITIAL_CONNECTION);
+  const connection = desktop.connection;
   const [connecting, setConnecting] = useState(!FIXTURE_MODE);
   const [listBusy, setListBusy] = useState(false);
   const [listError, setListError] = useState("");
@@ -279,12 +350,20 @@ export default function App() {
   const [actionError, setActionError] = useState<CommandError | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const watchedRuns = useRef(new Map<string, symbol>());
-  const connectionGeneration = useRef(0);
+  const targetRoutes = useRef<TargetRouteRegistry | null>(null);
+  if (targetRoutes.current === null) {
+    targetRoutes.current = new TargetRouteRegistry();
+    if (FIXTURE_MODE) {
+      targetRoutes.current.activate("fixture-managed-local", "managed_local");
+    }
+  }
   const connectingRef = useRef(false);
   const submitInFlight = useRef(false);
-  const createAttempt = useRef<IdempotentAttempt | null>(null);
+  const createAttempt = useRef<RoutedAttempt | null>(null);
   const cancelAttempts = useRef(new Map<string, IdempotentAttempt>());
   const responseAttempts = useRef(new Map<string, IdempotentAttempt>());
+  const listRequest = useRef<symbol | null>(null);
+  const cancelRequest = useRef<symbol | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
 
@@ -292,24 +371,60 @@ export default function App() {
     chatRef.current = chat;
   }, [chat]);
 
-  const markConnectionFailure = useCallback((failure: CommandError) => {
-    if (isConnectionError(failure)) {
-      setConnection({
-        state: connectionStateForError(failure),
-        message: failure.message,
-      });
-    }
+  useEffect(() => {
+    desktopRef.current = desktop;
+  }, [desktop]);
+
+  const markConnectionFailure = useCallback(
+    (failure: CommandError, route?: TargetRoute) => {
+      if (
+        isConnectionError(failure) &&
+        (route === undefined || targetRoutes.current?.isCurrent(route) === true)
+      ) {
+        setDesktop((current) => ({
+          ...current,
+          connection: {
+            state: connectionStateForError(failure),
+            message: failure.message,
+            targetId: current.selectedTargetId,
+          },
+        }));
+      }
+    },
+    [],
+  );
+
+  const invalidateTargetRoute = useCallback(() => {
+    targetRoutes.current?.invalidate();
+    watchedRuns.current.clear();
   }, []);
 
   const loadRuns = useCallback(
-    async (pageToken: string, append: boolean) => {
+    async (pageToken: string, append: boolean, explicitRoute?: TargetRoute) => {
       if (FIXTURE_MODE) {
         return true;
       }
+      const route = explicitRoute ?? targetRoutes.current?.capture() ?? null;
+      if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+        setListError("Select a connected Colossus target first.");
+        return false;
+      }
+      const requestToken = Symbol("list-runs");
+      listRequest.current = requestToken;
       setListBusy(true);
       setListError("");
       try {
-        const page = await listRuns({ pageToken });
+        const page = await listRuns(route.targetId, { pageToken });
+        if (
+          targetRoutes.current?.isCurrent(route) !== true ||
+          listRequest.current !== requestToken
+        ) {
+          return false;
+        }
+        targetRoutes.current.bindRuns(
+          page.runs.map((run) => run.runId),
+          route,
+        );
         dispatch({
           type: append ? "append_recent" : "replace_recent",
           runs: page.runs,
@@ -317,90 +432,152 @@ export default function App() {
         });
         return true;
       } catch (error: unknown) {
+        if (
+          targetRoutes.current?.isCurrent(route) !== true ||
+          listRequest.current !== requestToken
+        ) {
+          return false;
+        }
         const failure = commandError(error);
-        markConnectionFailure(failure);
+        markConnectionFailure(failure, route);
         setListError(failure.message);
         return false;
       } finally {
-        setListBusy(false);
+        if (listRequest.current === requestToken) {
+          listRequest.current = null;
+          setListBusy(false);
+        }
       }
     },
     [markConnectionFailure],
   );
 
   const startWatch = useCallback(
-    (runId: string, afterSequence: number) => {
-      if (FIXTURE_MODE || watchedRuns.current.has(runId)) {
+    (runId: string, afterSequence: number, explicitRoute?: TargetRoute) => {
+      const route =
+        explicitRoute ?? targetRoutes.current?.routeForRun(runId) ?? null;
+      if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      const watchKey = `${route.targetId}:${route.generation}:${runId}`;
+      if (FIXTURE_MODE || watchedRuns.current.has(watchKey)) {
         return;
       }
       const token = Symbol(runId);
-      const generation = connectionGeneration.current;
-      watchedRuns.current.set(runId, token);
+      watchedRuns.current.set(watchKey, token);
       dispatch({ type: "watch_started", runId });
 
-      const handleEvent = (event: WatchEvent) => {
-        if (generation !== connectionGeneration.current) {
-          return;
-        }
-        switch (event.type) {
-          case "update":
-            dispatch({ type: "ingest_update", update: event.update });
-            break;
-          case "complete":
-            dispatch({ type: "watch_complete", runId: event.runId });
-            break;
-          case "error":
-            markConnectionFailure(event.error);
-            dispatch({ type: "watch_error", runId, error: event.error });
-            break;
-        }
-      };
-
-      void watchRun({ runId, afterSequence }, handleEvent)
-        .then(() => {
-          if (generation === connectionGeneration.current) {
-            dispatch({ type: "watch_complete", runId });
-          }
-        })
-        .catch((error: unknown) => {
-          if (generation !== connectionGeneration.current) {
+      void watchDurableRun({
+        route,
+        runId,
+        afterSequence,
+        isCurrent: (candidate) =>
+          targetRoutes.current?.isCurrent(candidate) === true,
+        watch: (targetId, watchedRunId, cursor, onEvent) =>
+          watchRun(
+            targetId,
+            { runId: watchedRunId, afterSequence: cursor },
+            onEvent,
+          ),
+        getRun: (targetId, watchedRunId) =>
+          getRun(targetId, { runId: watchedRunId }),
+        normalizeError: commandError,
+        canRecover: (failure, candidate) =>
+          candidate.kind === "managed_local" &&
+          failure.retryable &&
+          isConnectionError(failure),
+        onUpdate: (update) => {
+          dispatch({ type: "ingest_update", update });
+        },
+        onHydrate: (details) => {
+          targetRoutes.current?.bindRun(details.run.runId, route);
+          dispatch({ type: "hydrate_run", details });
+        },
+      })
+        .then((result) => {
+          if (
+            result.type === "stale" ||
+            targetRoutes.current?.isCurrent(route) !== true
+          ) {
             return;
           }
-          const failure = commandError(error);
-          markConnectionFailure(failure);
-          dispatch({ type: "watch_error", runId, error: failure });
+          if (result.type === "complete") {
+            dispatch({ type: "watch_complete", runId });
+            return;
+          }
+          markConnectionFailure(result.error, route);
+          dispatch({ type: "watch_error", runId, error: result.error });
         })
         .finally(() => {
-          if (watchedRuns.current.get(runId) === token) {
-            watchedRuns.current.delete(runId);
+          if (watchedRuns.current.get(watchKey) === token) {
+            watchedRuns.current.delete(watchKey);
           }
         });
     },
     [markConnectionFailure],
   );
 
-  const connect = useCallback(async () => {
-    if (FIXTURE_MODE) {
-      setConnection(INITIAL_CONNECTION);
-      setConnecting(false);
-      return;
-    }
-    if (connectingRef.current || submitInFlight.current) {
-      return;
-    }
-    connectingRef.current = true;
-    setConnecting(true);
-    setActionError(null);
-    try {
-      const status = await connectColossus();
-      setConnection(status);
-      if (status.state === "connected") {
-        connectionGeneration.current += 1;
-        watchedRuns.current.clear();
-        const runsLoaded = await loadRuns("", false);
-        if (!runsLoaded) {
-          return;
+  const acceptDesktopStatus = useCallback(
+    async (status: DesktopStatus, resetWork: boolean) => {
+      const previousStatus = desktopRef.current;
+      desktopRef.current = status;
+      setDesktop(status);
+      const requiresOnboarding = managedOnboardingRequired(status);
+      setShowOnboarding((current) => current || requiresOnboarding);
+      if (
+        status.connection.state !== "connected" ||
+        status.selectedTargetId === null
+      ) {
+        invalidateTargetRoute();
+        if (resetWork) {
+          dispatch({ type: "reset" });
         }
+        return;
+      }
+      const selectedTarget = status.targets.find(
+        (target) => target.targetId === status.selectedTargetId,
+      );
+      if (
+        selectedTarget === undefined ||
+        selectedTarget.state !== "ready" ||
+        status.connection.targetId !== status.selectedTargetId
+      ) {
+        invalidateTargetRoute();
+        setListError("The selected Colossus target is unavailable.");
+        if (resetWork) {
+          dispatch({ type: "reset" });
+        }
+        return;
+      }
+      const currentRoute = targetRoutes.current?.capture() ?? null;
+      if (
+        !resetWork &&
+        currentRoute !== null &&
+        currentRoute.targetId === selectedTarget.targetId &&
+        currentRoute.kind === selectedTarget.kind &&
+        !selectedTargetRouteChanged(previousStatus, status)
+      ) {
+        return;
+      }
+      const route = targetRoutes.current?.activate(
+        selectedTarget.targetId,
+        selectedTarget.kind,
+      );
+      watchedRuns.current.clear();
+      if (route === undefined) {
+        return;
+      }
+      if (resetWork) {
+        dispatch({ type: "reset" });
+      } else {
+        targetRoutes.current?.bindRuns(chatRef.current.views.keys(), route);
+      }
+      const runsLoaded = await loadRuns("", false, route);
+      if (
+        runsLoaded &&
+        !resetWork &&
+        targetRoutes.current?.isCurrent(route) === true
+      ) {
         const activeRunId = chatRef.current.activeRunId;
         const activeView =
           activeRunId === null
@@ -410,49 +587,163 @@ export default function App() {
           activeView !== undefined &&
           !isTerminalStatus(activeView.run.status)
         ) {
-          startWatch(activeView.run.runId, activeView.lastSequence);
+          startWatch(activeView.run.runId, activeView.lastSequence, route);
         }
       }
-    } catch (error: unknown) {
-      const failure = commandError(error);
-      setConnection({
-        state: connectionStateForError(failure),
-        message: failure.message,
-      });
-    } finally {
-      connectingRef.current = false;
-      setConnecting(false);
-    }
-  }, [loadRuns, startWatch]);
+    },
+    [invalidateTargetRoute, loadRuns, startWatch],
+  );
+
+  const connect = useCallback(
+    async (targetId?: string) => {
+      if (managedOnboardingRequired(desktopRef.current)) {
+        setActionError(null);
+        setShowOnboarding(true);
+        return;
+      }
+      if (FIXTURE_MODE) {
+        setDesktop(INITIAL_DESKTOP);
+        setConnecting(false);
+        return;
+      }
+      if (connectingRef.current || submitInFlight.current) {
+        return;
+      }
+      connectingRef.current = true;
+      invalidateTargetRoute();
+      setConnecting(true);
+      setActionError(null);
+      try {
+        await connectColossus(targetId);
+        const status = await desktopStatus();
+        await acceptDesktopStatus(status, false);
+      } catch (error: unknown) {
+        const failure = commandError(error);
+        markConnectionFailure(failure);
+        setActionError(failure);
+        try {
+          await acceptDesktopStatus(await desktopStatus(), false);
+        } catch (statusError: unknown) {
+          markConnectionFailure(commandError(statusError));
+        }
+      } finally {
+        connectingRef.current = false;
+        setConnecting(false);
+      }
+    },
+    [acceptDesktopStatus, invalidateTargetRoute, markConnectionFailure],
+  );
 
   useEffect(() => {
-    void connect();
-  }, [connect]);
-
-  async function openRun(run: Run) {
-    if (submitInFlight.current) {
+    if (FIXTURE_MODE) {
+      setConnecting(false);
       return;
     }
+    let cancelled = false;
+    connectingRef.current = true;
+    setConnecting(true);
+    void initializeDesktop()
+      .then(async (status) => {
+        if (!cancelled) {
+          await acceptDesktopStatus(status, true);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          const failure = commandError(error);
+          markConnectionFailure(failure);
+          setActionError(failure);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          connectingRef.current = false;
+          setConnecting(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [acceptDesktopStatus, markConnectionFailure]);
+
+  useEffect(() => {
+    if (FIXTURE_MODE) {
+      return;
+    }
+    let cancelled = false;
+    let polling = false;
+    const refresh = async () => {
+      if (
+        cancelled ||
+        polling ||
+        connectingRef.current ||
+        submitInFlight.current
+      ) {
+        return;
+      }
+      polling = true;
+      try {
+        const status = await desktopStatus();
+        if (!cancelled && !connectingRef.current && !submitInFlight.current) {
+          await acceptDesktopStatus(status, false);
+        }
+      } catch {
+        // Interactive commands and watches surface selected-target failures.
+        // Periodic health refresh remains quiet and tries again on the next tick.
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [acceptDesktopStatus]);
+
+  async function openRun(run: Run) {
+    if (submitInFlight.current || connectingRef.current) {
+      return;
+    }
+    if (FIXTURE_MODE) {
+      setWorkNavigationOpen(false);
+      setSurface("work");
+      dispatch({ type: "upsert_run", run });
+      dispatch({ type: "select_run", runId: run.runId });
+      setRunLoadError("");
+      setActionError(null);
+      return;
+    }
+    const route = targetRoutes.current?.routeForRun(run.runId) ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      setRunLoadError("Select a connected Colossus target first.");
+      return;
+    }
+    targetRoutes.current.bindRun(run.runId, route);
     setWorkNavigationOpen(false);
     setSurface("work");
     dispatch({ type: "upsert_run", run });
     dispatch({ type: "select_run", runId: run.runId });
     setRunLoadError("");
     setActionError(null);
-    if (FIXTURE_MODE) {
-      return;
-    }
     const existingCursor =
       chatRef.current.views.get(run.runId)?.lastSequence ?? 0;
     try {
-      const details = await getRun({ runId: run.runId });
+      const details = await getRun(route.targetId, { runId: run.runId });
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      targetRoutes.current.bindRun(details.run.runId, route);
       dispatch({ type: "hydrate_run", details });
       if (!isTerminalStatus(details.run.status)) {
-        startWatch(run.runId, existingCursor);
+        startWatch(run.runId, existingCursor, route);
       }
     } catch (error: unknown) {
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
       const failure = commandError(error);
-      markConnectionFailure(failure);
+      markConnectionFailure(failure, route);
       setRunLoadError(failure.message);
     }
   }
@@ -472,7 +763,7 @@ export default function App() {
 
   async function submitRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitInFlight.current) {
+    if (submitInFlight.current || connectingRef.current) {
       return;
     }
     const cleanPrompt = prompt.trim();
@@ -488,19 +779,44 @@ export default function App() {
 
     const currentView =
       chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
+    const route =
+      currentView === undefined
+        ? (targetRoutes.current?.capture() ?? null)
+        : (targetRoutes.current?.routeForRun(currentView.run.runId) ?? null);
+    if (
+      !FIXTURE_MODE &&
+      (route === null || targetRoutes.current?.isCurrent(route) !== true)
+    ) {
+      setComposerError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "disconnected",
+        message: "Select a connected Colossus target first.",
+      });
+      return;
+    }
     const sessionId =
       currentView !== undefined && isTerminalStatus(currentView.run.status)
         ? currentView.run.sessionId
         : undefined;
     const fingerprint = operationFingerprint([
       cleanPrompt,
+      route?.targetId ?? "fixture-managed-local",
       sessionId ?? "",
       cleanRole,
       mode,
       maxTurns,
     ]);
-    const attempt = stableIdempotentAttempt(createAttempt.current, fingerprint);
-    createAttempt.current = attempt;
+    const previousRoutedAttempt = createAttempt.current;
+    const previousAttempt =
+      previousRoutedAttempt !== null &&
+      previousRoutedAttempt.targetId === route?.targetId
+        ? previousRoutedAttempt.attempt
+        : null;
+    const attempt = stableIdempotentAttempt(previousAttempt, fingerprint);
+    createAttempt.current = {
+      targetId: route?.targetId ?? "fixture-managed-local",
+      attempt,
+    };
     const commonRequest: CreateRunRequest = {
       prompt: cleanPrompt,
       role: cleanRole,
@@ -552,9 +868,16 @@ export default function App() {
         return;
       }
 
-      const run = await createRun(request);
+      if (route === null) {
+        return;
+      }
+      const run = await createRun(route.targetId, request);
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
       createAttempt.current = null;
       setPrompt("");
+      targetRoutes.current.bindRun(run.runId, route);
       dispatch({ type: "upsert_run", run });
       dispatch({
         type: "record_local_prompt",
@@ -562,10 +885,13 @@ export default function App() {
         prompt: cleanPrompt,
       });
       dispatch({ type: "select_run", runId: run.runId });
-      startWatch(run.runId, 0);
+      startWatch(run.runId, 0, route);
     } catch (error: unknown) {
+      if (route !== null && targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
       const failure = commandError(error);
-      markConnectionFailure(failure);
+      markConnectionFailure(failure, route ?? undefined);
       setComposerError(failure);
     } finally {
       submitInFlight.current = false;
@@ -574,6 +900,9 @@ export default function App() {
   }
 
   async function cancelActiveRun() {
+    if (connectingRef.current) {
+      return;
+    }
     const activeView =
       chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
     if (activeView === undefined || !isCancelable(activeView.run.status)) {
@@ -599,28 +928,52 @@ export default function App() {
       return;
     }
 
-    const fingerprint = operationFingerprint([runId, "cancel"]);
+    const route = targetRoutes.current?.routeForRun(runId) ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "disconnected",
+        message: "The active run is no longer bound to this target.",
+      });
+      return;
+    }
+    const attemptKey = `${route.targetId}:${runId}`;
+    const fingerprint = operationFingerprint([route.targetId, runId, "cancel"]);
     const attempt = stableIdempotentAttempt(
-      cancelAttempts.current.get(runId) ?? null,
+      cancelAttempts.current.get(attemptKey) ?? null,
       fingerprint,
     );
     cancelAttempts.current = withBoundedEntry(
       cancelAttempts.current,
-      runId,
+      attemptKey,
       attempt,
     );
+    const requestToken = Symbol("cancel-run");
+    cancelRequest.current = requestToken;
     setCancelling(true);
     setActionError(null);
     try {
-      const run = await cancelRun({ runId, idempotencyKey: attempt.key });
+      const run = await cancelRun(route.targetId, {
+        runId,
+        idempotencyKey: attempt.key,
+      });
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
       dispatch({ type: "upsert_run", run });
-      startWatch(runId, activeView.lastSequence);
+      startWatch(runId, activeView.lastSequence, route);
     } catch (error: unknown) {
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
       const failure = commandError(error);
-      markConnectionFailure(failure);
+      markConnectionFailure(failure, route);
       setActionError(failure);
     } finally {
-      setCancelling(false);
+      if (cancelRequest.current === requestToken) {
+        cancelRequest.current = null;
+        setCancelling(false);
+      }
     }
   }
 
@@ -634,38 +987,62 @@ export default function App() {
         });
         return;
       }
+      if (connectingRef.current) {
+        throw new CommandFailure({
+          ...FALLBACK_ACTION_ERROR,
+          code: "busy",
+          message: "Wait for the current connection operation to finish.",
+        });
+      }
+      const route =
+        targetRoutes.current?.routeForRun(interaction.runId) ?? null;
+      if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+        throw new CommandFailure({
+          ...FALLBACK_ACTION_ERROR,
+          code: "disconnected",
+          message: "The interaction is no longer bound to this target.",
+        });
+      }
       const fingerprint = operationFingerprint([
+        route.targetId,
         interaction.runId,
         interaction.interactionId,
         interaction.etag,
         response,
       ]);
+      const attemptKey = `${route.targetId}:${interaction.interactionId}`;
       const attempt = stableIdempotentAttempt(
-        responseAttempts.current.get(interaction.interactionId) ?? null,
+        responseAttempts.current.get(attemptKey) ?? null,
         fingerprint,
       );
       responseAttempts.current = withBoundedEntry(
         responseAttempts.current,
-        interaction.interactionId,
+        attemptKey,
         attempt,
       );
 
       try {
-        const resolved = await respondInteraction({
+        const resolved = await respondInteraction(route.targetId, {
           runId: interaction.runId,
           interactionId: interaction.interactionId,
           etag: interaction.etag,
           idempotencyKey: attempt.key,
           response,
         });
-        responseAttempts.current.delete(interaction.interactionId);
+        if (targetRoutes.current?.isCurrent(route) !== true) {
+          return;
+        }
+        responseAttempts.current.delete(attemptKey);
         dispatch({ type: "interaction_resolved", interaction: resolved });
         const cursor =
           chatRef.current.views.get(interaction.runId)?.lastSequence ?? 0;
-        startWatch(interaction.runId, cursor);
+        startWatch(interaction.runId, cursor, route);
       } catch (error: unknown) {
+        if (targetRoutes.current?.isCurrent(route) !== true) {
+          return;
+        }
         const failure = commandError(error);
-        markConnectionFailure(failure);
+        markConnectionFailure(failure, route);
         throw error instanceof CommandFailure
           ? error
           : new CommandFailure(failure);
@@ -674,11 +1051,288 @@ export default function App() {
     [markConnectionFailure, startWatch],
   );
 
+  async function handleChooseWorkspace() {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    const generation = targetRoutes.current?.captureGeneration() ?? 0;
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        setShowOnboarding(true);
+        return;
+      }
+      const workspace = await chooseWorkspace();
+      if (
+        workspace === null ||
+        targetRoutes.current?.isGenerationCurrent(generation) !== true
+      ) {
+        return;
+      }
+      invalidateTargetRoute();
+      const status = await desktopStatus();
+      const next =
+        status.workspace === null
+          ? {
+              ...status,
+              workspace,
+              managedState: "needs_provider" as const,
+            }
+          : status;
+      await acceptDesktopStatus(next, true);
+      setShowOnboarding(true);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      setActionError(failure);
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function resyncDesktopAfterFailedMutation() {
+    if (FIXTURE_MODE) {
+      return;
+    }
+    try {
+      await acceptDesktopStatus(await desktopStatus(), false);
+    } catch (error: unknown) {
+      markConnectionFailure(commandError(error));
+    }
+  }
+
+  async function handleConfigureManaged(
+    request: ConfigureManagedRuntimeRequest,
+  ): Promise<boolean> {
+    if (connectingRef.current || submitInFlight.current) {
+      return false;
+    }
+    connectingRef.current = true;
+    if (!FIXTURE_MODE) {
+      invalidateTargetRoute();
+    }
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        setDesktop((current) => ({
+          ...current,
+          terminalEnabled: false,
+          provider: {
+            configured: true,
+            kind: request.providerKind,
+            model: request.model,
+          },
+          accessProfile: request.accessProfile,
+        }));
+        setShowOnboarding(false);
+        return true;
+      }
+      const status = await configureManagedRuntime(request);
+      await acceptDesktopStatus(status, true);
+      setShowOnboarding(false);
+      return status.connection.state === "connected";
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+      return false;
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleManagedSelfTest() {
+    if (FIXTURE_MODE) {
+      return;
+    }
+    if (connectingRef.current || submitInFlight.current) {
+      throw new Error("Another desktop operation is already in progress.");
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      await runManagedSelfTest();
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      setActionError(failure);
+      throw new Error(failure.message);
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleSelectTarget(targetId: string) {
+    if (
+      targetId === desktop.selectedTargetId ||
+      connectingRef.current ||
+      submitInFlight.current
+    ) {
+      return;
+    }
+    connectingRef.current = true;
+    if (!FIXTURE_MODE) {
+      invalidateTargetRoute();
+    }
+    setConnecting(true);
+    setActionError(null);
+    try {
+      const status = FIXTURE_MODE ? desktop : await selectTarget(targetId);
+      await acceptDesktopStatus(status, true);
+      setSurface("work");
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleAddExternalTarget(): Promise<boolean> {
+    if (connectingRef.current || submitInFlight.current) {
+      return false;
+    }
+    connectingRef.current = true;
+    if (!FIXTURE_MODE) {
+      invalidateTargetRoute();
+    }
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        return false;
+      }
+      const imported = await addExternalTarget();
+      if (imported === null || imported.selectedTargetId === null) {
+        await resyncDesktopAfterFailedMutation();
+        return false;
+      }
+      await acceptDesktopStatus(imported, true);
+      if (imported.connection.state === "connected") {
+        setShowOnboarding(false);
+        return true;
+      }
+      return false;
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+      return false;
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleRemoveExternalTarget(targetId: string) {
+    const target = desktopRef.current.targets.find(
+      (candidate) => candidate.targetId === targetId,
+    );
+    if (target?.kind !== "external_daemon" || connectingRef.current) {
+      return;
+    }
+    connectingRef.current = true;
+    if (!FIXTURE_MODE) {
+      invalidateTargetRoute();
+    }
+    setConnecting(true);
+    setActionError(null);
+    try {
+      const status = FIXTURE_MODE
+        ? desktopRef.current
+        : await removeExternalTarget(targetId);
+      await acceptDesktopStatus(status, true);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleRestartManaged() {
+    if (connectingRef.current) {
+      return;
+    }
+    connectingRef.current = true;
+    if (!FIXTURE_MODE) {
+      invalidateTargetRoute();
+    }
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (!FIXTURE_MODE) {
+        const status = await restartManagedRuntime();
+        await acceptDesktopStatus(status, true);
+      }
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleSetTerminalEnabled(enabled: boolean) {
+    const status = desktopRef.current;
+    const selectedTarget = status.targets.find(
+      (target) => target.targetId === status.selectedTargetId,
+    );
+    if (enabled && selectedTarget?.terminalAvailable !== true) {
+      setSurface("settings");
+      return;
+    }
+    try {
+      const status = FIXTURE_MODE
+        ? { ...desktopRef.current, terminalEnabled: enabled }
+        : await setTerminalEnabled(enabled);
+      desktopRef.current = status;
+      setDesktop(status);
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+    }
+  }
+
+  async function handleOpenTerminal(kind: TerminalKind) {
+    const status = desktopRef.current;
+    const selectedTarget = status.targets.find(
+      (target) => target.targetId === status.selectedTargetId,
+    );
+    if (!status.terminalEnabled || selectedTarget?.terminalAvailable !== true) {
+      setSurface("settings");
+      return;
+    }
+    try {
+      if (!FIXTURE_MODE) {
+        await showTerminalWindow(kind);
+      }
+    } catch (error: unknown) {
+      setActionError(commandError(error));
+    }
+  }
+
   const activeView =
     chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
   const activeRun = activeView?.run;
   const canCompose =
     connection.state === "connected" &&
+    !connecting &&
     !submitting &&
     (activeRun === undefined || isTerminalStatus(activeRun.status));
   const continuation =
@@ -732,6 +1386,10 @@ export default function App() {
       (run.status === "outcome_unknown" ? 1 : 0),
     0,
   );
+  const selectedTarget = desktop.targets.find(
+    (target) => target.targetId === desktop.selectedTargetId,
+  );
+  const terminalAvailable = selectedTarget?.terminalAvailable === true;
   const activeCount = chat.recentRuns.filter((run) =>
     ["queued", "running", "waiting", "cancelling"].includes(run.status),
   ).length;
@@ -780,6 +1438,8 @@ export default function App() {
       onSubmit={(event) => void submitRun(event)}
     />
   );
+  const onboardingRequired = managedOnboardingRequired(desktop);
+  const onboardingActive = showOnboarding || onboardingRequired;
 
   return (
     <div className="app-shell">
@@ -790,10 +1450,13 @@ export default function App() {
         surface={surface}
         attentionCount={attentionCount}
         connectionState={connection.state}
+        terminalEnabled={desktop.terminalEnabled}
+        terminalAvailable={terminalAvailable}
         onSelect={selectSurface}
+        onOpenTerminal={() => void handleOpenTerminal("colossus_tui")}
       />
 
-      {surface === "work" && workNavigationOpen ? (
+      {!onboardingActive && surface === "work" && workNavigationOpen ? (
         <button
           className="workspace-drawer-backdrop work-navigation-backdrop"
           type="button"
@@ -804,7 +1467,7 @@ export default function App() {
         />
       ) : null}
 
-      {surface === "work" ? (
+      {onboardingActive ? null : surface === "work" ? (
         <WorkSidebar
           runs={chat.recentRuns}
           activeRunId={chat.activeRunId}
@@ -812,7 +1475,7 @@ export default function App() {
           busy={listBusy}
           error={listError}
           hasMore={chat.nextPageToken !== ""}
-          disabled={submitting}
+          disabled={submitting || connecting}
           drawerOpen={workNavigationOpen}
           onQueryChange={setWorkQuery}
           onNewWork={newWork}
@@ -832,7 +1495,24 @@ export default function App() {
         />
       )}
 
-      {surface === "work" ? (
+      {onboardingActive ? (
+        <OnboardingSurface
+          desktop={desktop}
+          busy={connecting}
+          error={actionError?.message ?? ""}
+          onChooseWorkspace={handleChooseWorkspace}
+          onConfigure={handleConfigureManaged}
+          onRunSelfTest={handleManagedSelfTest}
+          onUseExternal={async () => {
+            await handleAddExternalTarget();
+          }}
+          dismissible={showOnboarding && !onboardingRequired}
+          onCancel={() => {
+            setActionError(null);
+            setShowOnboarding(false);
+          }}
+        />
+      ) : surface === "work" ? (
         <WorkSurface
           title={title}
           view={activeView}
@@ -845,7 +1525,7 @@ export default function App() {
           artifacts={artifactItems}
           composer={composer}
           workNavigationOpen={workNavigationOpen}
-          onConnect={() => void connect()}
+          onConnect={() => void connect(desktop.selectedTargetId ?? undefined)}
           onCancel={() => void cancelActiveRun()}
           onRespond={handleInteraction}
           onResume={() => {
@@ -864,13 +1544,26 @@ export default function App() {
         <OperationsSurface
           surface={surface}
           connection={connection}
+          desktop={desktop}
           connecting={connecting}
           runs={chat.recentRuns}
           artifacts={allArtifacts}
           activity={activity}
           demoParticipants={FIXTURE_MODE ? DEMO_PARTICIPANTS : null}
-          onConnect={() => void connect()}
+          onConnect={() => void connect(desktop.selectedTargetId ?? undefined)}
           onOpenRun={(run) => void openRun(run)}
+          onSelectTarget={(targetId) => void handleSelectTarget(targetId)}
+          onAddExternalTarget={() => void handleAddExternalTarget()}
+          onRemoveExternalTarget={(targetId) =>
+            void handleRemoveExternalTarget(targetId)
+          }
+          onChooseWorkspace={() => void handleChooseWorkspace()}
+          onConfigureManaged={() => setShowOnboarding(true)}
+          onRestartManaged={() => void handleRestartManaged()}
+          onSetTerminalEnabled={(enabled) =>
+            void handleSetTerminalEnabled(enabled)
+          }
+          onOpenTerminal={(kind) => void handleOpenTerminal(kind)}
         />
       )}
     </div>

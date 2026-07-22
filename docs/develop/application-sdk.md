@@ -67,12 +67,14 @@ another.
 
 The Rust SDK uses one public API across three explicit placements:
 
-- **Daemon** connects to the installed shared worker. This is the preferred desktop
-  topology because durable work continues when a window closes.
+- **Daemon** connects to an installed shared worker. Desktop presents these connections
+  as External targets for advanced, persistent, and fleet use; durable work can continue
+  after the desktop application exits.
 - **Sidecar** supervises an application-bundled isolated worker. It is appropriate when
-  the application needs separate state and lifecycle ownership. A sidecar gRPC host
-  must explicitly advertise `Sidecar`; the host API defaults to `SharedDaemon` and its
-  bounded deployment-mode type cannot advertise `Embedded`.
+  the application needs separate state and lifecycle ownership. Colossus Desktop calls
+  this placement Managed Local and makes it the default. A sidecar gRPC host must
+  explicitly advertise `Sidecar`; the host API defaults to `SharedDaemon` and its bounded
+  deployment-mode type cannot advertise `Embedded`.
 - **Embedded** calls an application-private runtime in process. It needs no gRPC
   transport, but it still uses the SDK interface so application code does not depend on
   runtime internals.
@@ -88,8 +90,11 @@ gRPC-Web or permissive cross-origin transport.
 ## Tauri integration
 
 Tauri can call Rust directly, so a Tauri application does not need a separate
-JavaScript-to-Colossus transport SDK. It should hold one cloneable Rust `Colossus`
-client in managed state and expose only product-level Tauri commands:
+JavaScript-to-Colossus transport SDK. Colossus Desktop holds a native
+`ConnectionManager` keyed by opaque target IDs. It owns one Managed Local sidecar for
+the active workspace, any saved External daemon clients, per-target watch limits, and
+the selected Work target. The renderer receives sanitized target health and invokes
+only product-level Tauri commands:
 
 - `create_run`
 - `get_run`
@@ -98,10 +103,23 @@ client in managed state and expose only product-level Tauri commands:
 - `cancel_run`
 - `respond_interaction`
 
+Every run operation carries an opaque target ID. The target manager, not the renderer,
+resolves it to an authenticated SDK client. Fleet may display health for all targets,
+but Work sends an operation to exactly one selected target.
+
+Renderer target IDs are advisory, not routing authority. Native code accepts a run
+operation only when its ID matches the current Work selection, binds returned run IDs
+to that target, and requires the binding again for watches and mutations. Selection
+epochs terminate an old watch before it can deliver another target's update. Target
+switch, reconnect, removal, and Managed Local restart take the native selection writer,
+wait for in-flight mutations, and never replay a request. External import, selection,
+reconnect, and removal also require an operating-system dialog naming the native-sourced
+label, instance ID, and full certificate pin.
+
 Use a Tauri channel for the ordered `watch_run` feed. The WebView receives released
 run DTOs only. It must never receive the bearer credential, certificate file contents,
-daemon descriptor path, raw gRPC channel, caller scopes, tool arguments, hidden
-reasoning, or quarantined output.
+daemon descriptor path, provider key, private runtime path, raw gRPC channel, caller
+scopes, tool arguments, hidden reasoning, or quarantined output.
 
 The Rust client can use either placement without changing that WebView contract:
 `Embedded` calls the trusted runtime in process and uses no gRPC, while `Daemon` or
@@ -113,6 +131,144 @@ Keep Tauri capabilities deny-by-default. Grant each window only the commands it 
 and enforce resource scope again inside each command. Do not add generic “run process,”
 “read path,” “call URL,” or “invoke SDK method” commands; those would turn the WebView
 into a capability-confused deputy.
+
+## Managed Local bootstrap and lifecycle
+
+The signed desktop bundle contains two independent executables:
+
+- `colossus-sidecar` owns runtime composition, private worker IPC, the public gRPC host,
+  sandbox-helper dispatch, drain, checkpoint, and guardian-triggered shutdown;
+- `colossus` is the separately verified interface binary used only for the fixed TUI
+  launcher.
+
+The native application verifies the sealed bundle manifest and macOS code identity
+immediately before a no-shell spawn. It sends bounded workspace configuration, exact
+application grants, one-use API material, and provider credentials over inherited
+anonymous pipes. Bootstrap secrets never enter argv, environment variables, files,
+renderer events, logs, or debug output. The sidecar binds a loopback TLS endpoint,
+creates an independent API authentication root, and returns the exact endpoint,
+certificate pin, instance identity, API version, and bearer through that private
+channel. Native code validates every field before activating the credential and marking
+the target Ready.
+
+Executable binding is completed before either bootstrap secrets or execution are
+released. On macOS, the SDK hashes and parses one private snapshot, starts the selected
+bundle executable with the kernel's start-suspended flag, and requires its exact live
+CodeDirectory identity to match before `SIGCONT`. On Linux, it executes the verified
+bytes from a sealed, non-writable `memfd`. Platforms without an equivalent mechanism
+fail Managed Local startup closed.
+
+The selected macOS workspace is also persistent object authority rather than a saved
+path. Desktop hashes the device, inode, and birth timestamp obtained from a securely
+opened directory descriptor and includes that versioned identity in its private state
+partition. The SDK parent and sidecar child independently reproduce it before launch
+or runtime composition; preview-era path-only or inode-only settings require explicit
+folder reselection. Unix skill discovery and resource reads then stay relative to the
+retained workspace or independently retained app-private root descriptors.
+
+Desktop uses two same-application credentials delivered and activated as one bootstrap
+set. The primary credential has exactly `runs:execute`, `runs:read`, `runs:control`, and
+`prompts:respond`, plus the selected role and tool ceilings. A separate native approval
+broker has only `approvals:respond`, no tools, and roles bounded by the primary grant.
+The SDK routes only approval answers through that second pinned-TLS client; every other
+operation uses the primary client. Both credentials are revoked together during
+shutdown or a failed bootstrap, and neither transport replays an operation after a
+restart.
+
+Provider YAML for Managed Local contains a validated `host:<opaque-id>` reference. The
+key remains in the desktop keychain and is copied into a zeroizing, in-memory sidecar
+resolver during bootstrap. The provider adapter can resolve it only after policy has
+authorized the provider action. CLI and daemon configurations remain environment-backed
+and do not interpret `host:` identifiers as values.
+
+Same-provider model and profile edits can reuse the native keychain binding without
+opening another secret prompt. First enrollment, provider-kind changes, and explicit
+rotation never take that reuse branch. A missing reused key fails before any settings
+or runtime mutation and requires an explicit replacement retry.
+Minimal-to-Development elevation also requires a separate native confirmation that
+describes the workspace and shell-effect authority being enabled; renderer input alone
+cannot widen the effective grant.
+
+WebView reload does not own sidecar lifetime. Provider and workspace changes request a
+graceful restart. An unexpected exit receives at most three backoff attempts; create and
+effect requests are never automatically replayed. Application exit uses the worker's
+existing run drain, transport force-close, checkpoint, and native process supervision.
+It terminates the signed sidecar, its managed process group, and still-discoverable
+descendants. A writer-lease conflict is reported without killing or taking over the
+existing owner.
+
+### Sealed macOS bundle manifest
+
+macOS code signing changes executable bytes, so a digest captured by the Rust build
+script cannot authenticate the final signed sidecar. Release packaging therefore uses
+a two-phase contract:
+
+1. A credential-free runner creates and archives the unsigned `.app` with both
+   `externalBin` entries.
+2. A fresh signing runner verifies and extracts those exact bytes, then imports the
+   Developer ID and notarization authority.
+3. Packaging signs the nested sidecar and CLI individually.
+4. It hashes those final bytes into
+   `Contents/Resources/colossus-bundle-manifest.json`.
+5. It patches the exact manifest SHA-256 into the one fixed binding record in the
+   already-built desktop executable, then signs that executable and the outer app
+   without `--deep`.
+6. It verifies every nested signature, the outer seal, the embedded manifest binding,
+   and both nested-binary hashes before
+   optional notarization and stapling.
+
+The signed running desktop executable is the manifest trust anchor. Release native code
+ignores the compile-time `unsealed_release` marker, opens the resource once with
+`NOFOLLOW`, hashes and decodes that same bounded byte buffer, and rejects an unset or
+mismatched embedded digest. This prevents a same-user path swap or rollback to an older
+same-team bundle after outer verification. It also fails closed unless the bound
+manifest has the expected schema, target triple, fixed filenames, and exact lowercase
+SHA-256s.
+It also requires the outer app and desktop executable identifier
+`com.obscuritylabs.colossus.desktop`, the fixed `.sidecar` and `.cli` nested identifiers,
+and the exact 10-character Apple Team ID compiled into the release. The `ADHOC` build
+sentinel is accepted only by validation packaging; the resulting release runtime rejects
+Managed Local startup. Debug builds instead use the compile-time manifest with canonical
+development paths.
+
+## Local terminal boundary
+
+Terminal commands are available only to a dedicated local Tauri window capability.
+The main window may request that window be shown but cannot open or control a PTY. The
+terminal renderer receives random window-bound session IDs and can request only the
+bundled Colossus TUI for the native-selected workspace. It cannot choose a program,
+environment, absolute working directory, or arguments. The native DTO rejects a
+general Shell request.
+
+Desktop does not inject managed credentials, persist transcripts, or send terminal
+bytes to models, remote nodes, telemetry, or run context. Output, input, and session
+count are bounded. On macOS, the bundled CLI starts suspended in a new session so
+native code can verify its live code identity against the sealed manifest before
+resuming it. The CLI independently opens and changes directory through the selected
+workspace, reports the same persistent object identity to the parent, and receives
+worker authentication only after that attestation succeeds. Authentication crosses
+bounded one-use inherited anonymous pipes, never the renderer-visible PTY. Closing the
+window or app freezes and kills that verified CLI session.
+
+The PTY transports only terminal input and output. Native code passes worker
+authentication through separate bounded one-use inherited pipes at fixed child file
+descriptors; those descriptors are never renderer-selectable and never share the PTY
+stream.
+
+Desktop does not claim cleanup of arbitrary descendants after `setsid`, double-fork,
+or reparenting because macOS exposes no supported race-free job primitive for that
+boundary. Clipboard escape writes, automatic URL opening, remote navigation, and
+renderer-initiated spawning stay disabled. The release terminal surface is served from
+a label-bound local protocol with its own CSP so xterm may create
+its required runtime style sheets; the main Work WebView retains the stricter
+`style-src 'self'` policy. The TUI path is different: fixed arguments require the
+existing worker, and its actions retain normal Colossus policy and audit behavior.
+
+After shutdown or a failed launch, SDK cleanup waits for confirmed process-tree death,
+then removes only the fixed public endpoint descriptor and certificate through a held
+no-follow directory descriptor. Every leaf is revalidated for identity, ownership,
+mode, type, and single-link status immediately before unlink; unrelated or unsafe state
+is left intact.
 
 ## Connection and enrollment
 
