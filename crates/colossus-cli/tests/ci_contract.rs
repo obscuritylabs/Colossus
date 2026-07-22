@@ -115,6 +115,34 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
 }
 
 #[test]
+fn rust_codegen_uses_an_exact_vendored_protoc_on_every_runner() {
+    let workspace =
+        fs::read_to_string(repository_root().join("Cargo.toml")).expect("read workspace manifest");
+    assert!(
+        workspace.contains("protoc-bin-vendored = \"=3.2.0\""),
+        "the build-time protoc must remain exact and cross-platform"
+    );
+
+    let manifest =
+        fs::read_to_string(repository_root().join("crates/colossus-api-proto/Cargo.toml"))
+            .expect("read public API proto manifest");
+    assert!(manifest.contains("protoc-bin-vendored.workspace = true"));
+
+    let build = fs::read_to_string(repository_root().join("crates/colossus-api-proto/build.rs"))
+        .expect("read public API proto build script");
+    for required in [
+        "protoc_bin_vendored::protoc_bin_path()",
+        "prost_config.protoc_executable(protoc_path)",
+        "compile_with_config(prost_config",
+    ] {
+        assert!(
+            build.contains(required),
+            "public API proto build is missing {required}"
+        );
+    }
+}
+
+#[test]
 fn premerge_requires_an_authorized_label_and_representative_platforms() {
     let workflow = workflow("premerge.yml");
     let root = mapping(&workflow, "pre-merge workflow");

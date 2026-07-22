@@ -27,6 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("OUT_DIR must be available while generating the public API contract")?,
     )
     .join("colossus_api_descriptor.bin");
+    let protoc_path = protoc_bin_vendored::protoc_bin_path()
+        .map_err(|error| format!("vendored protoc is unavailable: {error}"))?;
 
     for (relative, vendored) in relative_protos.iter().zip(&protos) {
         println!("cargo:rerun-if-changed={}", vendored.display());
@@ -42,10 +44,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let mut prost_config = tonic_prost_build::Config::new();
+    prost_config.protoc_executable(protoc_path);
     tonic_prost_build::configure()
         .build_transport(false)
         .file_descriptor_set_path(descriptor_path)
-        .compile_protos(&protos, &[api_root])?;
+        .compile_with_config(prost_config, &protos, &[api_root])?;
 
     Ok(())
 }

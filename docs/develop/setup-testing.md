@@ -18,6 +18,11 @@ test loop.
 - Git and the native build dependencies required by your platform.
 - A source checkout at the repository root.
 
+Rust API contract builds use the exact cross-platform `protoc-bin-vendored` workspace
+dependency, so contributors and release runners do not need an ambient `protoc` binary.
+Language SDK generation remains separate and uses its own pinned local generator
+toolchain under `sdk/`.
+
 ## Steps
 
 1. Confirm the toolchain and build the workspace:

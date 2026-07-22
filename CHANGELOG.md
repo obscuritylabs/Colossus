@@ -40,6 +40,8 @@ include breaking changes while the public API is still settling.
 
 ### Fixed
 
+- Made Rust public-API code generation use an exact cross-platform vendored `protoc` so
+  clean developer, CI, and release runners do not depend on an ambient compiler install.
 - Shortened overlong macOS worker socket paths through an owner-private, deterministic
   lease endpoint while preserving direct legacy endpoints wherever the operating system
   accepts them.
