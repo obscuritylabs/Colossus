@@ -3,7 +3,7 @@ from __future__ import annotations
 import ipaddress
 import unittest
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -34,7 +34,7 @@ B3vteJgCIQDCudF1+zHi2zb9DDOG7S6e+i7kGNR0a8oGuIvFlqJG7w==
 def self_signed_certificate(basic_constraints: x509.BasicConstraints | None) -> bytes:
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Colossus test")])
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     builder = (
         x509.CertificateBuilder()
         .subject_name(name)
