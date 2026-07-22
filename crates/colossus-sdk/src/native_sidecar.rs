@@ -1580,6 +1580,7 @@ fn terminate_managed_process_tree(
     let _ = rustix::process::kill_process_group(session_id, rustix::process::Signal::STOP);
     let mut system = System::new();
     let mut members = HashSet::new();
+    let managed_session = SystemPid::from_u32(session_id.as_raw_nonzero().get().cast_unsigned());
     if include_root_ancestry {
         // Include the still-running root if cancellation wins before it establishes
         // its new session. An ancestry expansion can then discover children created
@@ -1594,10 +1595,12 @@ fn terminate_managed_process_tree(
             true,
             ProcessRefreshKind::nothing(),
         );
-        members.extend(system.processes().keys().copied().filter(|pid| {
-            system_pid_to_rustix(*pid).is_some_and(|pid| {
-                rustix::process::getsid(Some(pid)).is_ok_and(|session| session == session_id)
-            })
+        // Query session IDs through Sysinfo. A process visible across a Linux
+        // PID-namespace boundary can report session ID zero; Sysinfo can represent
+        // that value, while constructing a Rustix `Pid` from it panics in debug
+        // builds. Rustix conversion remains limited to members we signal.
+        members.extend(system.processes().iter().filter_map(|(pid, process)| {
+            (process.session_id() == Some(managed_session)).then_some(*pid)
         }));
         expand_process_tree_members(&system, &mut members);
         for pid in &members {
