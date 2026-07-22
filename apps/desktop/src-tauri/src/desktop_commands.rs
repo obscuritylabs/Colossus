@@ -7,8 +7,9 @@ use uuid::Uuid;
 use crate::{
     connection,
     desktop_dto::{
-        ConfigureManagedRuntimeInput, DesktopStatusDto, ManagedRuntimeStateDto, ProviderSummaryDto,
-        RuntimeTargetDto, RuntimeTargetKindDto, WorkspaceSummaryDto,
+        ConfigureManagedRuntimeInput, DesktopReleaseChannelDto, DesktopStatusDto,
+        ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto, RuntimeTargetKindDto,
+        WorkspaceSummaryDto,
     },
     desktop_settings::{
         DesktopSettings, ExternalTargetSetting, MAX_EXTERNAL_TARGETS,
@@ -25,6 +26,11 @@ use crate::{
 };
 
 const EXTERNAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[tauri::command]
+pub(crate) fn desktop_release_channel() -> DesktopReleaseChannelDto {
+    DesktopReleaseChannelDto::current()
+}
 
 #[tauri::command]
 pub(crate) async fn initialize_desktop(
@@ -1058,6 +1064,7 @@ async fn desktop_status_from(
         _ => ConnectionStatusDto::not_configured(),
     };
     Ok(DesktopStatusDto {
+        release_channel: DesktopReleaseChannelDto::current(),
         connection,
         targets,
         selected_target_id: selected,

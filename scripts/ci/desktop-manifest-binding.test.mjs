@@ -22,9 +22,10 @@ const placeholder = `${prefix}${"0".repeat(64)}${suffix}`;
 
 function manifest() {
   return `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     targetTriple: "aarch64-apple-darwin",
     profile: "release",
+    releaseChannel: "developer_preview",
     sidecar: { fileName: "colossus-sidecar", sha256: "a".repeat(64) },
     cli: { fileName: "colossus", sha256: "b".repeat(64) },
   })}\n`;

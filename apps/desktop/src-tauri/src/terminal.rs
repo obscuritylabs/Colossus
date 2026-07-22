@@ -363,6 +363,7 @@ impl TerminalManager {
         &self,
         path: &Path,
         sha256: [u8; 32],
+        macos_code_signing_requirement: colossus_sdk::MacosCodeSigningRequirement,
     ) -> Result<(), TerminalError> {
         let path = validate_executable(path)?;
         if sha256_file(&path)? != sha256 {
@@ -374,7 +375,8 @@ impl TerminalManager {
                 &path,
                 colossus_sdk::Sha256Digest::from_bytes(sha256),
             )
-            .map_err(|_| TerminalError::ProgramUnavailable)?,
+            .map_err(|_| TerminalError::ProgramUnavailable)?
+            .with_macos_code_signing_requirement(macos_code_signing_requirement),
         )
         .map_err(|_| TerminalError::ProgramUnavailable)?;
         *self
@@ -1241,12 +1243,13 @@ mod tests {
         let cli_sha256 = sha256_file(&cli).expect("CLI digest");
         let mut invalid_sha256 = cli_sha256;
         invalid_sha256[0] ^= 0xff;
+        let signing = colossus_sdk::MacosCodeSigningRequirement::AppleTeam;
         assert_eq!(
-            manager.set_verified_colossus_cli(&cli, invalid_sha256),
+            manager.set_verified_colossus_cli(&cli, invalid_sha256, signing),
             Err(TerminalError::ProgramUnavailable)
         );
         manager
-            .set_verified_colossus_cli(&cli, cli_sha256)
+            .set_verified_colossus_cli(&cli, cli_sha256, signing)
             .expect("verified CLI path");
         let terminal_workspace = TerminalWorkspace {
             id: "workspace:test".into(),

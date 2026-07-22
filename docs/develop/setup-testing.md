@@ -103,31 +103,51 @@ daemon `connection.local.json` is optional. If the file exists, its instance ide
 and certificate pin must be valid; remove it to test Managed Local only.
 
 The pruned release compilation path requires an explicit non-runnable validation
-sentinel:
+channel and sentinel:
 
 ```bash
 cd apps/desktop
-COLOSSUS_DESKTOP_TEAM_ID=ADHOC npm run tauri:build
+COLOSSUS_DESKTOP_RELEASE_CHANNEL=validation_only \
+COLOSSUS_DESKTOP_TEAM_ID=ADHOC \
+  npm run tauri:build
 ```
 
-A sealed, runnable macOS application requires both the signing identity and the exact
+A stable, sealed macOS application requires both the signing identity and the exact
 10-character Apple Team ID embedded into the native runtime:
 
 ```bash
 cd apps/desktop
 COLOSSUS_DESKTOP_SIGNING_IDENTITY='Developer ID Application: Example (TEAMID)' \
 COLOSSUS_DESKTOP_TEAM_ID='TEAMID1234' \
+COLOSSUS_DESKTOP_RELEASE_CHANNEL=stable \
   npm run tauri:bundle:macos
 ```
 
 Set `COLOSSUS_DESKTOP_NOTARY_PROFILE` to a `notarytool` keychain profile to submit,
 staple, assess, and archive the signed app without placing Apple credentials in argv or
-environment variables. Use signing identity `-` only for local/CI structural validation;
-it must be paired with `COLOSSUS_DESKTOP_TEAM_ID=ADHOC`. That explicit sentinel produces
-a validation-only bundle whose release runtime rejects Managed Local startup; it is not a
-runnable or distributable application.
+environment variables.
 When the profile lives outside the default search list, also set
 `COLOSSUS_DESKTOP_NOTARY_KEYCHAIN` to its absolute keychain path.
+
+For the explicitly labeled, runnable Developer Preview, use only the ad-hoc identity and
+preview channel. Never attach a notary profile to this build:
+
+```bash
+cd apps/desktop
+COLOSSUS_DESKTOP_RELEASE_VERSION=0.10.1-preview.1 \
+COLOSSUS_DESKTOP_RELEASE_CHANNEL=developer_preview \
+COLOSSUS_DESKTOP_TEAM_ID=ADHOC \
+COLOSSUS_DESKTOP_SIGNING_IDENTITY=- \
+  npm run tauri:bundle:macos
+```
+
+The Developer Preview retains strict signature, fixed identifier, sealed-manifest, and
+nested-binary hash verification, but ad-hoc signing does not establish Apple publisher
+identity and the app is not notarized. The native release channel keeps a persistent
+warning visible in the application. The separate `validation_only` channel also requires
+the `ADHOC` sentinel and identity `-`, but its runtime intentionally rejects Managed Local
+startup. Stable packaging rejects both ad-hoc channels, and stable release publication
+still requires Developer ID plus notarization.
 
 Tag-triggered GitHub releases require the public Actions repository variable
 `MACOS_TEAM_ID`. The credential-free build job embeds that canonical 10-character Team
@@ -145,11 +165,15 @@ runner keychain and also requires these repository secrets:
 - `MACOS_TEAM_ID`: a protected copy of the public repository variable, cross-checked
   against the app and the imported Developer ID identity.
 
-The release jobs validate the variable and every secret, compare the imported
+Stable release jobs validate the variable and every secret, compare the imported
 certificate's Team ID, grant key access only to the macOS signing tools, store the notary
 profile in that ephemeral keychain, and delete the decoded files and keychain in an
-`always()` cleanup step. Missing or inconsistent configuration fails a tag release
-closed. Manual `workflow_dispatch` remains validation-only, uses ad-hoc signing,
+`always()` cleanup step. Missing or inconsistent configuration fails a stable tag release
+closed. A canonical `vX.Y.Z-preview.N` Developer Preview tag (currently
+`v0.10.1-preview.1`) is the only credential-free runnable tag path: it uses the ad-hoc
+preview channel, reads no Apple signing secret, and creates a clearly named unnotarized
+Desktop asset. Manual `workflow_dispatch` remains
+validation-only, uses ad-hoc signing,
 embeds the rejected `ADHOC` sentinel, labels its artifacts `VALIDATION-ONLY-ADHOC`, and
 cannot create a runnable app or draft release.
 

@@ -215,7 +215,11 @@ test("release packaging records hashes only after nested signing", () => {
   assert.match(source, /prepare_resources_directory/u);
   assert.match(source, /resources must remain inside the canonical application bundle/u);
   assert.match(source, /COLOSSUS_DESKTOP_TEAM_ID/u);
-  assert.match(source, /team_id" = ADHOC/u);
+  assert.match(source, /COLOSSUS_DESKTOP_RELEASE_CHANNEL/u);
+  assert.match(source, /developer_preview \| validation_only/u);
+  assert.match(source, /release_channel" = developer_preview/u);
+  assert.match(source, /not notarized/u);
+  assert.match(source, /--release-channel "\$release_channel"/u);
   assert.match(source, /--identifier "\$code_identifier"/u);
   assert.match(source, /TeamIdentifier=/u);
   assert.match(source, /com\.obscuritylabs\.colossus\.desktop\.sidecar/u);
@@ -229,7 +233,7 @@ test("release packaging records hashes only after nested signing", () => {
     staple,
   );
   const postStapleManifest = source.indexOf(
-    'verify-desktop-bundle.mjs" --app "$app"',
+    'verify-desktop-bundle.mjs"',
     staple,
   );
   const archive = source.lastIndexOf("/usr/bin/ditto -c -k --keepParent");
@@ -244,8 +248,11 @@ test("release packaging records hashes only after nested signing", () => {
   assert.match(build, /"unsealed_release"/u);
   assert.match(build, /"0"\.repeat\(64\)/u);
   assert.match(build, /COLOSSUS_DESKTOP_TARGET_TRIPLE/u);
-  assert.match(build, /cargo:rustc-env=\{VARIABLE\}=\{team_id\}/u);
-  assert.match(build, /team_id == "ADHOC" \|\| canonical_team/u);
+  assert.match(build, /COLOSSUS_DESKTOP_RELEASE_CHANNEL/u);
+  assert.match(build, /cargo:rustc-env=\{TEAM_VARIABLE\}=\{team_id\}/u);
+  assert.match(build, /"developer_preview" \| "validation_only"/u);
+  assert.match(build, /team_id == "ADHOC"/u);
+  assert.match(build, /schema_version: 2/u);
   assert.match(
     build,
     /env::var\("PROFILE"\)\.as_deref\(\) == Ok\("debug"\) && local\.is_file\(\)/u,
@@ -253,7 +260,11 @@ test("release packaging records hashes only after nested signing", () => {
 
   const runtime = read("apps/desktop/src-tauri/src/bundle.rs");
   assert.match(runtime, /env!\("COLOSSUS_DESKTOP_TEAM_ID"\)/u);
-  assert.match(runtime, /canonical_apple_team_id\(EXPECTED_RELEASE_TEAM_ID\)/u);
+  assert.match(runtime, /env!\("COLOSSUS_DESKTOP_RELEASE_CHANNEL"\)/u);
+  assert.match(runtime, /ReleaseChannel::DeveloperPreview/u);
+  assert.match(runtime, /configured_team == "ADHOC"/u);
+  assert.match(runtime, /Some\("not set"\)/u);
+  assert.match(runtime, /ReleaseChannel::ValidationOnly/u);
   assert.match(runtime, /identifier != expected_identifier/u);
   assert.match(runtime, /team != expected_team/u);
   assert.match(runtime, /std::hint::black_box\(&RELEASE_MANIFEST_BINDING\)/u);
@@ -261,6 +272,20 @@ test("release packaging records hashes only after nested signing", () => {
   assert.match(runtime, /verify_release_manifest_binding/u);
   assert.match(runtime, /com\.obscuritylabs\.colossus\.desktop\.sidecar/u);
   assert.match(runtime, /com\.obscuritylabs\.colossus\.desktop\.cli/u);
+});
+
+test("pre-merge desktop packaging declares its non-runnable trust channel", () => {
+  const workflow = read(".github/workflows/premerge.yml");
+  const desktopStart = workflow.indexOf("  macos-desktop:");
+  const windowsStart = workflow.indexOf("  windows-runtime:", desktopStart);
+  assert.ok(desktopStart >= 0 && windowsStart > desktopStart);
+  const desktop = workflow.slice(desktopStart, windowsStart);
+  assert.match(desktop, /COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"/u);
+  assert.match(
+    desktop,
+    /COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"/u,
+  );
+  assert.match(desktop, /Build validation-only ADHOC macOS bundle structure/u);
 });
 
 test("release compilation and signing authority use separate runners", () => {
@@ -277,11 +302,31 @@ test("release compilation and signing authority use separate runners", () => {
   assert.match(buildJob, /Colossus Desktop\.unsigned\.zip/u);
   assert.match(buildJob, /CARGO_TARGET_DIR/u);
   assert.match(buildJob, /CARGO_INCREMENTAL: "0"/u);
+  assert.match(
+    buildJob,
+    /COLOSSUS_DESKTOP_RELEASE_CHANNEL: \$\{\{ needs\.validate\.outputs\.release_channel \}\}/u,
+  );
   assert.doesNotMatch(buildJob, /MACOS_DEVELOPER_ID_P12/u);
   assert.doesNotMatch(buildJob, /MACOS_NOTARY/u);
   assert.doesNotMatch(buildJob, /security import/u);
   assert.doesNotMatch(buildJob, /\$\{\{ secrets\./u);
   assert.match(buildJob, /MACOS_TEAM_ID: \$\{\{ vars\.MACOS_TEAM_ID \}\}/u);
+  assert.match(
+    buildJob,
+    /if: needs\.validate\.outputs\.release_channel == 'stable'/u,
+  );
+  assert.match(
+    buildJob,
+    /if: needs\.validate\.outputs\.release_channel != 'stable'/u,
+  );
+  assert.match(
+    buildJob,
+    /if ! \[\[ "\$MACOS_TEAM_ID" =~ \^\[A-Z0-9\]\{10\}\$ \]\]; then/u,
+  );
+  assert.match(
+    buildJob,
+    /MACOS_TEAM_ID repository variable must be a 10-character Apple Team ID' >&2\n\s+exit 1\n\s+fi/u,
+  );
 
   assert.match(signJob, /actions\/download-artifact@[0-9a-f]{40}/u);
   assert.match(signJob, /\/usr\/bin\/ditto -x -k/u);
@@ -304,8 +349,28 @@ test("release compilation and signing authority use separate runners", () => {
     );
   }
   assert.match(signJob, /package-desktop-macos sign/u);
+  assert.match(
+    signJob,
+    /COLOSSUS_DESKTOP_RELEASE_CHANNEL: \$\{\{ needs\.validate\.outputs\.release_channel \}\}/u,
+  );
+  assert.match(
+    signJob,
+    /if: needs\.validate\.outputs\.release_channel == 'stable'/u,
+  );
+  assert.match(
+    signJob,
+    /if: needs\.validate\.outputs\.release_channel != 'stable'/u,
+  );
   assert.match(signJob, /security import/u);
   assert.match(signJob, /grep -F "\(\$MACOS_TEAM_ID\)"/u);
+  assert.match(
+    signJob,
+    /if ! \[\[ "\$MACOS_TEAM_ID" =~ \^\[A-Z0-9\]\{10\}\$ \]\]; then/u,
+  );
+  assert.match(
+    signJob,
+    /MACOS_TEAM_ID secret must be a 10-character Apple Team ID' >&2\n\s+exit 1\n\s+fi/u,
+  );
   assert.doesNotMatch(signJob, /actions\/setup-node@/u);
   assert.doesNotMatch(signJob, /rust-toolchain@/u);
   assert.doesNotMatch(signJob, /\bnpm\s/u);
@@ -366,6 +431,8 @@ test("release manifest writer emits exact final binary digests", () => {
       join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
       "--target",
       "aarch64-apple-darwin",
+      "--release-channel",
+      "developer_preview",
       "--sidecar",
       sidecar,
       "--cli",
@@ -375,9 +442,10 @@ test("release manifest writer emits exact final binary digests", () => {
     ]);
     const manifest = JSON.parse(readFileSync(output, "utf8"));
     assert.deepEqual(manifest, {
-      schemaVersion: 1,
+      schemaVersion: 2,
       targetTriple: "aarch64-apple-darwin",
       profile: "release",
+      releaseChannel: "developer_preview",
       sidecar: { fileName: "colossus-sidecar", sha256: digest(sidecar) },
       cli: { fileName: "colossus", sha256: digest(cli) },
     });
@@ -388,7 +456,19 @@ test("release manifest writer emits exact final binary digests", () => {
       join(root, "Colossus Desktop.app"),
       "--target",
       "aarch64-apple-darwin",
+      "--release-channel",
+      "developer_preview",
     ]);
+    const wrongChannel = spawnSync(process.execPath, [
+      join(repository, "scripts/verify-desktop-bundle.mjs"),
+      "--app",
+      join(root, "Colossus Desktop.app"),
+      "--target",
+      "aarch64-apple-darwin",
+      "--release-channel",
+      "stable",
+    ]);
+    assert.notEqual(wrongChannel.status, 0);
     appendFileSync(cli, "tampered");
     const tampered = spawnSync(process.execPath, [
       join(repository, "scripts/verify-desktop-bundle.mjs"),
@@ -396,6 +476,8 @@ test("release manifest writer emits exact final binary digests", () => {
       join(root, "Colossus Desktop.app"),
       "--target",
       "aarch64-apple-darwin",
+      "--release-channel",
+      "developer_preview",
     ]);
     assert.notEqual(tampered.status, 0);
 
@@ -405,6 +487,8 @@ test("release manifest writer emits exact final binary digests", () => {
       join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
       "--target",
       "aarch64-apple-darwin",
+      "--release-channel",
+      "developer_preview",
       "--sidecar",
       sidecar,
       "--cli",

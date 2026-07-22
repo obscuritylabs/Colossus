@@ -78,8 +78,8 @@ access:
     include: [echo]
     exclude: []
   actions:
-    allow: []
-    requireApproval: []
+    allow: [bundle.verify]
+    requireApproval: [bundle.key.inspect, pack.trust.add, bundle.build, bundle.install]
     deny: []
 storage:
   path: $bundle_root/state.redb

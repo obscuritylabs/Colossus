@@ -35,6 +35,7 @@ const externalTarget: RuntimeTarget = {
 
 function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
   return {
+    releaseChannel: "development",
     connection: {
       state: "connected",
       message: "Connected securely.",

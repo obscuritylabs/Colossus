@@ -11,6 +11,27 @@ const MAX_MODEL_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub(crate) enum DesktopReleaseChannelDto {
+    Development,
+    Stable,
+    DeveloperPreview,
+    ValidationOnly,
+}
+
+impl DesktopReleaseChannelDto {
+    pub(crate) fn current() -> Self {
+        match env!("COLOSSUS_DESKTOP_RELEASE_CHANNEL") {
+            "development" => Self::Development,
+            "stable" => Self::Stable,
+            "developer_preview" => Self::DeveloperPreview,
+            "validation_only" => Self::ValidationOnly,
+            _ => unreachable!("the desktop build script validates the release channel"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum RuntimeTargetKindDto {
     ManagedLocal,
     ExternalDaemon,
@@ -102,6 +123,7 @@ impl ProviderSummaryDto {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopStatusDto {
+    pub(crate) release_channel: DesktopReleaseChannelDto,
     pub(crate) connection: ConnectionStatusDto,
     pub(crate) targets: Vec<RuntimeTargetDto>,
     pub(crate) selected_target_id: Option<String>,
@@ -198,5 +220,26 @@ mod tests {
         let mut input = input();
         input.access_profile = AccessProfileSetting::LegacyAllowAll;
         assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn release_channel_dto_exposes_only_sanitized_channel_names() {
+        for (channel, expected) in [
+            (DesktopReleaseChannelDto::Development, "\"development\""),
+            (DesktopReleaseChannelDto::Stable, "\"stable\""),
+            (
+                DesktopReleaseChannelDto::DeveloperPreview,
+                "\"developer_preview\"",
+            ),
+            (
+                DesktopReleaseChannelDto::ValidationOnly,
+                "\"validation_only\"",
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&channel).expect("serialize"),
+                expected
+            );
+        }
     }
 }

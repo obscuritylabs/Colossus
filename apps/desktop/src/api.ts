@@ -7,6 +7,7 @@ import type {
   ConnectionStatus,
   CreateRunRequest,
   DesktopStatus,
+  DesktopReleaseChannel,
   GetRunRequest,
   Interaction,
   ListRunsRequest,
@@ -99,6 +100,10 @@ async function call<T>(
 
 export function initializeDesktop(): Promise<DesktopStatus> {
   return call("initialize_desktop");
+}
+
+export function desktopReleaseChannel(): Promise<DesktopReleaseChannel> {
+  return call("desktop_release_channel");
 }
 
 export function desktopStatus(): Promise<DesktopStatus> {

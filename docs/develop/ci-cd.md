@@ -45,7 +45,7 @@ flowchart LR
     E --> A["macOS ARM + Windows x64 + live security"]
     A --> MG["Colossus pre-merge gate"]
     MG --> M["Merge to main"]
-    M --> T["Annotated vX.Y.Z tag"]
+    M --> T["Annotated stable or approved prerelease tag"]
     T --> V["Release readiness + six native targets"]
     V --> RG["Colossus release gate"]
     RG --> DR["Draft GitHub Release for human approval"]
@@ -59,7 +59,7 @@ flowchart LR
 |---|---|---|---|---:|
 | PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
 | Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
-| Release | Push annotated `vX.Y.Z` tag | Six CLI targets plus signed/notarized Apple-silicon Desktop | `Colossus release gate` | $4.50 per release |
+| Release | Push an annotated stable or approved prerelease tag | Six CLI targets plus the channel-specific Apple-silicon Desktop | `Colossus release gate` | $4.50 per release |
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
@@ -152,8 +152,9 @@ replaces that sentinel result; a skipped gate can never satisfy the ruleset.
 
 ## Release flow
 
-A release tag must be annotated, match `vX.Y.Z`, point to a commit contained in `main`,
-and match both the workspace version and changelog heading. Tag pushes run local
+A release tag must be annotated, match either `vX.Y.Z` or `vX.Y.Z-preview.N` with
+`N > 0`, point to a commit contained in `main`, and match both the workspace version and
+changelog heading. Tag pushes run local
 release-readiness verification and exactly six native CLI targets. Each CLI target
 combines its security acceptance, locked release build, archive and checksum generation,
 clean installation, offline echo/audit, and signed-bundle smoke. A credential-free macOS
@@ -167,23 +168,43 @@ staples and assesses it, and uploads an Apple-silicon direct-download zip plus c
 The validated workspace release version and public Apple Team ID are injected during the
 unsigned build, then the signing runner checks the imported identity against that Team ID,
 so application metadata, code identity, and asset tag cannot drift.
-The build receives the Team ID from the non-secret `MACOS_TEAM_ID` repository variable;
-the signing runner requires a matching protected `MACOS_TEAM_ID` secret alongside the
-Developer ID and notary credentials.
+For a stable tag, the build receives the Team ID from the non-secret `MACOS_TEAM_ID`
+repository variable; the signing runner requires a matching protected `MACOS_TEAM_ID`
+secret alongside the Developer ID and notary credentials.
 
 ```bash
 git tag -a vX.Y.Z -m "Colossus vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
+### Developer Preview channel
+
+`vX.Y.Z-preview.N` is the only credential-free tag path that may produce a runnable
+Desktop; `v0.10.1-preview.1` is the current example. It still runs all six CLI release
+jobs. Its Desktop build uses the `developer_preview` channel,
+`COLOSSUS_DESKTOP_TEAM_ID=ADHOC`, and the ad-hoc identity `-`; it never reads Apple signing
+or notarization secrets. Packaging still verifies strict code signatures, fixed code
+identifiers, the channel-bound sealed manifest, and the exact hashes of the bundled
+sidecar and CLI.
+
+The resulting Desktop archive is runnable for testing but is not Apple-notarized and its
+ad-hoc signature does not establish publisher identity. The workflow names it
+`Colossus-Desktop-DEVELOPER-PREVIEW-vX.Y.Z-preview.N-aarch64-apple-darwin.zip`, includes
+an adjacent SHA-256 sidecar, sets GitHub prerelease metadata, and labels the draft
+**Colossus vX.Y.Z-preview.N - Developer Preview (Unnotarized)**. The native compile-time
+channel also drives a persistent in-app warning. Stable tags continue to require the
+canonical Team ID, Developer ID signature, notarization, stapling, and Gatekeeper
+assessment.
+
 Only the final publication job receives `contents: write`. After all six CLI targets and
 the Desktop artifact pass, automation creates or updates a draft GitHub Release. A human
-reviews the draft and publishes it. Manual dispatch is artifact-only and cannot create a
-release; it exercises the same Desktop packaging path with an explicitly ad-hoc signature
-and `ADHOC` validation sentinel, never reads production signing secrets, and does not
-produce a runnable Desktop application. Its Actions artifact and archive are explicitly
-named `validation-only-adhoc` / `VALIDATION-ONLY-ADHOC` so they cannot be mistaken for a
-signed release:
+reviews the draft and publishes it; the approved Developer Preview draft is already
+marked as a GitHub prerelease. Manual dispatch is artifact-only and cannot create a
+release; it uses the separate `validation_only` channel with an ad-hoc signature and
+`ADHOC` sentinel, never reads production signing secrets, and does not produce a runnable
+Desktop application. Its Actions artifact and archive are explicitly named
+`validation-only-adhoc` / `VALIDATION-ONLY-ADHOC` so they cannot be mistaken for a
+Developer Preview or stable signed release:
 
 ```bash
 gh workflow run release.yml --ref BRANCH -f version=vX.Y.Z
@@ -193,8 +214,9 @@ gh workflow run release.yml --ref BRANCH -f version=vX.Y.Z
 
 Routine PR updates allocate only selected Linux/documentation jobs, one deliberate final
 run provides representative pre-merge evidence, and release tags alone allocate all six
-CLI architecture jobs plus notarized Apple-silicon Desktop packaging. Each tier has one
-stable fail-closed aggregate check.
+CLI architecture jobs plus channel-specific Apple-silicon Desktop packaging. Stable
+Desktop releases are notarized; the one explicit Developer Preview remains visibly
+unnotarized. Each tier has one stable fail-closed aggregate check.
 
 ## Bootstrap repository enforcement
 

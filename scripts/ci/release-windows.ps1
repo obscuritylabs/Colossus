@@ -77,7 +77,11 @@ $config = [ordered]@{
     access = [ordered]@{
         profile = "pinned"
         tools = [ordered]@{ include = @("echo"); exclude = @() }
-        actions = [ordered]@{ allow = @(); requireApproval = @(); deny = @() }
+        actions = [ordered]@{
+            allow = @("bundle.verify")
+            requireApproval = @("bundle.key.inspect", "pack.trust.add", "bundle.build", "bundle.install")
+            deny = @()
+        }
     }
     storage = [ordered]@{
         path = (Join-Path $bundleRoot "state.redb")

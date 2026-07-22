@@ -56,6 +56,7 @@ function normalizeError(error: unknown): CommandError {
 
 function status(): DesktopStatus {
   return {
+    releaseChannel: "development",
     connection: {
       state: "connected",
       message: "Connected.",

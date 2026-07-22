@@ -16,8 +16,9 @@ mod terminal_protocol;
 use commands::{cancel_run, create_run, get_run, list_runs, respond_interaction, watch_run};
 use desktop_commands::{
     add_external_target, choose_workspace, configure_managed_runtime, connect_colossus,
-    connection_status, desktop_status, initialize_desktop, remove_external_target,
-    restart_managed_runtime, run_managed_self_test, select_target, set_terminal_enabled,
+    connection_status, desktop_release_channel, desktop_status, initialize_desktop,
+    remove_external_target, restart_managed_runtime, run_managed_self_test, select_target,
+    set_terminal_enabled,
 };
 use terminal_commands::{
     close_terminal, open_terminal, resize_terminal, show_terminal_window, signal_terminal,
@@ -38,6 +39,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default())
         .invoke_handler(tauri::generate_handler![
+            desktop_release_channel,
             initialize_desktop,
             desktop_status,
             add_external_target,

@@ -19,6 +19,11 @@ const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 16 * 1024;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const TARGET_PATTERN = /^[A-Za-z0-9_.-]+$/u;
+const RELEASE_CHANNELS = new Set([
+  "stable",
+  "developer_preview",
+  "validation_only",
+]);
 const BINDING_PREFIX = Buffer.from(
   "COLOSSUS_DESKTOP_RELEASE_MANIFEST_SHA256_V1=",
   "ascii",
@@ -136,11 +141,13 @@ function validateManifest(bytes) {
       "schemaVersion",
       "targetTriple",
       "profile",
+      "releaseChannel",
       "sidecar",
       "cli",
     ]) ||
-    manifest.schemaVersion !== 1 ||
+    manifest.schemaVersion !== 2 ||
     manifest.profile !== "release" ||
+    !RELEASE_CHANNELS.has(manifest.releaseChannel) ||
     typeof manifest.targetTriple !== "string" ||
     !TARGET_PATTERN.test(manifest.targetTriple) ||
     !validExecutableEntry(manifest.sidecar, "colossus-sidecar") ||

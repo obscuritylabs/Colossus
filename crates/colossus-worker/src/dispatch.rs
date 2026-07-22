@@ -1,5 +1,8 @@
 use super::*;
 
+const BACKGROUND_PROJECTION_BATCH_LIMIT: usize = 32;
+const BACKGROUND_PROJECTION_MAX_ROUNDS: usize = 1;
+
 pub(super) async fn dispatch(
     runtime: &Runtime,
     operation: WorkerOperation,
@@ -965,6 +968,28 @@ pub(super) async fn drain_once(
     runtime: &Runtime,
     maintenance: &tokio::sync::Mutex<()>,
 ) -> Result<Value, WorkerError> {
+    drain_with_projection_bounds(runtime, maintenance, 256, 16_384).await
+}
+
+pub(super) async fn drain_background_once(
+    runtime: &Runtime,
+    maintenance: &tokio::sync::Mutex<()>,
+) -> Result<Value, WorkerError> {
+    drain_with_projection_bounds(
+        runtime,
+        maintenance,
+        BACKGROUND_PROJECTION_BATCH_LIMIT,
+        BACKGROUND_PROJECTION_MAX_ROUNDS,
+    )
+    .await
+}
+
+async fn drain_with_projection_bounds(
+    runtime: &Runtime,
+    maintenance: &tokio::sync::Mutex<()>,
+    projection_batch_limit: usize,
+    projection_max_rounds: usize,
+) -> Result<Value, WorkerError> {
     let _guard = maintenance.lock().await;
     let schedules = runtime.workflows().tick_schedules_now()?;
     let subscriptions = runtime.workflows().tick_subscriptions_now().await?;
@@ -972,7 +997,8 @@ pub(super) async fn drain_once(
     // Durable execution queues take precedence over disposable projections so
     // a large projection backlog cannot starve queued child work.
     let subagents = runtime.drain_subagents().await?;
-    let projections = runtime.drain_projections()?;
+    let projections =
+        runtime.drain_projections_bounded(projection_batch_limit, projection_max_rounds)?;
     let audit_exports = runtime.drain_audit_exports().await?;
     Ok(json!({
         "schedules": schedules,

@@ -103,6 +103,12 @@ only product-level Tauri commands:
 - `cancel_run`
 - `respond_interaction`
 
+The zero-input `desktop_release_channel` metadata command returns only the native
+compile-time `development`, `stable`, `developer_preview`, or `validation_only` enum. It
+lets the renderer label a Developer Preview even if runtime initialization fails; it
+accepts no renderer data and exposes no signing identity, path, credential, or runtime
+authority.
+
 Every run operation carries an opaque target ID. The target manager, not the renderer,
 resolves it to an authenticated SDK client. Fleet may display health for all targets,
 but Work sends an operation to exactly one selected target.
@@ -222,14 +228,25 @@ ignores the compile-time `unsealed_release` marker, opens the resource once with
 `NOFOLLOW`, hashes and decodes that same bounded byte buffer, and rejects an unset or
 mismatched embedded digest. This prevents a same-user path swap or rollback to an older
 same-team bundle after outer verification. It also fails closed unless the bound
-manifest has the expected schema, target triple, fixed filenames, and exact lowercase
-SHA-256s.
-It also requires the outer app and desktop executable identifier
+manifest has the expected schema, target triple, release channel, fixed filenames, and
+exact lowercase SHA-256s. The compile-time channel and sealed-manifest channel must match.
+
+The stable channel requires the outer app and desktop executable identifier
 `com.obscuritylabs.colossus.desktop`, the fixed `.sidecar` and `.cli` nested identifiers,
-and the exact 10-character Apple Team ID compiled into the release. The `ADHOC` build
-sentinel is accepted only by validation packaging; the resulting release runtime rejects
-Managed Local startup. Debug builds instead use the compile-time manifest with canonical
-development paths.
+and the exact 10-character Apple Team ID compiled into the release. It uses Developer ID
+signing and notarization. The explicitly separate `developer_preview` channel instead
+requires the `ADHOC` sentinel, an ad-hoc signature with no Team Identifier, the same fixed
+code identifiers, strict signature verification, and the same executable/manifest hash
+binding. It is runnable for time-bounded testing, but it does not establish Apple
+publisher identity and is not notarized. Native code exposes only this bounded channel
+name to the renderer so Desktop can keep a persistent **Developer Preview** warning on
+screen; no signing identity, filesystem path, or credential enters renderer state.
+
+The `validation_only` channel also uses the `ADHOC` sentinel but remains non-runnable and
+is accepted only for CI structure checks; Managed Local rejects it. Debug builds use the
+`development` channel and compile-time manifest with canonical development paths. These
+channels are mutually exclusive, so enabling the preview does not relax stable-channel
+identity or notarization requirements.
 
 ## Local terminal boundary
 

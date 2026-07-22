@@ -19,8 +19,14 @@ import { finished } from "node:stream/promises";
 
 const MAX_BINARY_BYTES = 512 * 1024 * 1024;
 const TARGET_PATTERN = /^[A-Za-z0-9_.-]+$/;
+const RELEASE_CHANNELS = new Set([
+  "stable",
+  "developer_preview",
+  "validation_only",
+]);
 const EXPECTED_ARGUMENTS = new Set([
   "--target",
+  "--release-channel",
   "--sidecar",
   "--cli",
   "--output",
@@ -32,8 +38,10 @@ function fail(message) {
 }
 
 function parseArguments(argv) {
-  if (argv.length !== 8) {
-    fail("expected --target, --sidecar, --cli, and --output");
+  if (argv.length !== 10) {
+    fail(
+      "expected --target, --release-channel, --sidecar, --cli, and --output",
+    );
   }
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -82,6 +90,10 @@ const target = values.get("--target");
 if (!TARGET_PATTERN.test(target)) {
   fail("target triple contains unsafe characters");
 }
+const releaseChannel = values.get("--release-channel");
+if (!RELEASE_CHANNELS.has(releaseChannel)) {
+  fail("release channel is not stable, developer_preview, or validation_only");
+}
 const sidecar = validatedBinary(values.get("--sidecar"), "colossus-sidecar");
 const cli = validatedBinary(values.get("--cli"), "colossus");
 const output = values.get("--output");
@@ -101,9 +113,10 @@ if (realpathSync(parent) !== parent) {
 }
 
 const manifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   targetTriple: target,
   profile: "release",
+  releaseChannel,
   sidecar: {
     fileName: "colossus-sidecar",
     sha256: await sha256(sidecar),

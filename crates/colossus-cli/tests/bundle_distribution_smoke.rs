@@ -89,13 +89,13 @@ storage:
     signing_variable: COLOSSUS_BUNDLE_TEST_CHECKPOINT_KEY
     anchor_path: {anchor}
 access:
-  profile: development
+  profile: pinned
   tools:
     include: []
     exclude: []
   actions:
-    allow: []
-    requireApproval: []
+    allow: [bundle.verify]
+    requireApproval: [bundle.key.inspect, pack.trust.add, bundle.build, bundle.install]
     deny: []
 policy:
   kind: built_in

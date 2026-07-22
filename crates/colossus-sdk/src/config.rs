@@ -145,6 +145,21 @@ impl fmt::Debug for TlsFingerprint {
 pub struct VerifiedExecutable {
     path: PathBuf,
     sha256: Sha256Digest,
+    macos_code_signing_requirement: MacosCodeSigningRequirement,
+}
+
+/// Expected macOS signing authority for a manifest-pinned bundled executable.
+///
+/// Stable/default callers require a matching canonical Apple TeamIdentifier. The ad-hoc
+/// option exists only for an explicitly labeled Developer Preview whose trusted host has
+/// already bound that release channel into its sealed bundle manifest.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MacosCodeSigningRequirement {
+    /// Require the child and current executable to share one canonical Apple TeamIdentifier.
+    #[default]
+    AppleTeam,
+    /// Require both the child and current executable to be ad-hoc signed without a TeamIdentifier.
+    AdHocDeveloperPreview,
 }
 
 impl VerifiedExecutable {
@@ -155,7 +170,21 @@ impl VerifiedExecutable {
     /// races. This constructor only validates the portable shape.
     pub fn new(path: impl Into<PathBuf>, sha256: Sha256Digest) -> SdkResult<Self> {
         let path = absolute_non_root_path(path.into())?;
-        Ok(Self { path, sha256 })
+        Ok(Self {
+            path,
+            sha256,
+            macos_code_signing_requirement: MacosCodeSigningRequirement::AppleTeam,
+        })
+    }
+
+    /// Set the explicit macOS code-signing requirement selected by trusted host policy.
+    #[must_use]
+    pub const fn with_macos_code_signing_requirement(
+        mut self,
+        requirement: MacosCodeSigningRequirement,
+    ) -> Self {
+        self.macos_code_signing_requirement = requirement;
+        self
     }
 
     /// Exact absolute path supplied by a signed installer or application bundle.
@@ -166,6 +195,11 @@ impl VerifiedExecutable {
     /// Required executable digest.
     pub const fn sha256(&self) -> Sha256Digest {
         self.sha256
+    }
+
+    /// Required macOS parent/child code-signing relationship.
+    pub const fn macos_code_signing_requirement(&self) -> MacosCodeSigningRequirement {
+        self.macos_code_signing_requirement
     }
 }
 

@@ -136,6 +136,49 @@ impl ProjectionHandler for FailingProjection {
     }
 }
 
+struct NoopProjection;
+
+impl ProjectionHandler for NoopProjection {
+    fn name(&self) -> &'static str {
+        "noop-v1"
+    }
+
+    fn project(
+        &self,
+        _store: &dyn ProjectionStore,
+        _event: &colossus_contracts::EventEnvelope,
+        _payload: &Value,
+    ) -> Result<Vec<ProjectionMutation>, StoreError> {
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn one_projection_round_honors_its_batch_and_round_bounds() {
+    let journal = Arc::new(InMemoryEventJournal::default());
+    for index in 0..3 {
+        journal
+            .append(event(
+                &format!("audit:{index}"),
+                0,
+                "worker.ipc.accepted.v1",
+                json!({}),
+            ))
+            .expect("append");
+    }
+    let store = Arc::new(InMemoryProjectionStore::default());
+    let journal_port: Arc<dyn EventJournal> = journal;
+    let store_port: Arc<dyn ProjectionStore> = store;
+    let worker = ProjectionWorker::new(journal_port, store_port, vec![Arc::new(NoopProjection)])
+        .expect("worker");
+
+    let report = worker.drain(1, 1).expect("bounded drain");
+    assert_eq!(report.applied, 1);
+    assert_eq!(report.projections[0].position, 1);
+    assert_eq!(report.projections[0].lag, 2);
+    assert!(!report.projections[0].ready);
+}
+
 #[test]
 fn handler_failure_never_advances_position() {
     let journal = Arc::new(InMemoryEventJournal::default());

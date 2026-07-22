@@ -1,4 +1,4 @@
-use colossus_sdk::{Sha256Digest, VerifiedExecutable};
+use colossus_sdk::{MacosCodeSigningRequirement, Sha256Digest, VerifiedExecutable};
 use serde::Deserialize;
 #[cfg(any(test, not(debug_assertions)))]
 use sha2::{Digest as _, Sha256};
@@ -25,6 +25,8 @@ const SEALED_RELEASE_MANIFEST: &str = "colossus-bundle-manifest.json";
 #[cfg(not(debug_assertions))]
 const EXPECTED_RELEASE_TEAM_ID: &str = env!("COLOSSUS_DESKTOP_TEAM_ID");
 #[cfg(not(debug_assertions))]
+const EXPECTED_RELEASE_CHANNEL: &str = env!("COLOSSUS_DESKTOP_RELEASE_CHANNEL");
+#[cfg(not(debug_assertions))]
 const DESKTOP_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop";
 #[cfg(not(debug_assertions))]
 const SIDECAR_CODE_IDENTIFIER: &str = "com.obscuritylabs.colossus.desktop.sidecar";
@@ -37,6 +39,7 @@ struct BundleManifest {
     schema_version: u16,
     target_triple: String,
     profile: BundleProfile,
+    release_channel: ReleaseChannel,
     sidecar: BundledExecutable,
     cli: BundledExecutable,
 }
@@ -47,6 +50,15 @@ enum BundleProfile {
     Debug,
     Release,
     UnsealedRelease,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ReleaseChannel {
+    Development,
+    Stable,
+    DeveloperPreview,
+    ValidationOnly,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +74,7 @@ pub(crate) struct VerifiedBundle {
     pub(crate) sidecar: VerifiedExecutable,
     pub(crate) cli_path: PathBuf,
     pub(crate) cli_sha256: [u8; 32],
+    pub(crate) macos_code_signing_requirement: MacosCodeSigningRequirement,
 }
 
 impl VerifiedBundle {
@@ -91,7 +104,9 @@ impl VerifiedBundle {
                 std::hint::black_box(&RELEASE_MANIFEST_BINDING).as_bytes(),
             )?;
             let release = decode_manifest(&source)?;
-            if release.profile != BundleProfile::Release {
+            if release.profile != BundleProfile::Release
+                || release.release_channel != expected_release_channel()?
+            {
                 return Err(integrity_error());
             }
             verified_manifest(&release, release_directory().as_deref())
@@ -103,27 +118,33 @@ fn verified_manifest(
     manifest: &BundleManifest,
     release_directory: Option<&Path>,
 ) -> Result<VerifiedBundle, CommandErrorDto> {
-    if manifest.schema_version != 1
+    if manifest.schema_version != 2
         || manifest.target_triple != env!("COLOSSUS_DESKTOP_TARGET_TRIPLE")
     {
         return Err(integrity_error());
     }
     #[cfg(debug_assertions)]
-    if manifest.profile != BundleProfile::Debug {
+    if manifest.profile != BundleProfile::Debug
+        || manifest.release_channel != ReleaseChannel::Development
+    {
         return Err(integrity_error());
     }
     #[cfg(not(debug_assertions))]
-    if manifest.profile != BundleProfile::Release {
+    if manifest.profile != BundleProfile::Release
+        || manifest.release_channel != expected_release_channel()?
+    {
         return Err(integrity_error());
     }
 
     let sidecar = resolve_executable(&manifest.sidecar, manifest.profile, release_directory)?;
     let cli = resolve_executable(&manifest.cli, manifest.profile, release_directory)?;
+    let macos_code_signing_requirement = bundle_code_signing_requirement(manifest.release_channel)?;
     let sidecar_digest =
         Sha256Digest::from_hex(&manifest.sidecar.sha256).map_err(|_| integrity_error())?;
     let cli_digest = Sha256Digest::from_hex(&manifest.cli.sha256).map_err(|_| integrity_error())?;
-    let sidecar =
-        VerifiedExecutable::new(sidecar, sidecar_digest).map_err(|_| integrity_error())?;
+    let sidecar = VerifiedExecutable::new(sidecar, sidecar_digest)
+        .map_err(|_| integrity_error())?
+        .with_macos_code_signing_requirement(macos_code_signing_requirement);
 
     #[cfg(all(target_os = "macos", not(debug_assertions)))]
     {
@@ -134,7 +155,20 @@ fn verified_manifest(
         sidecar,
         cli_path: cli,
         cli_sha256: *cli_digest.as_bytes(),
+        macos_code_signing_requirement,
     })
+}
+
+fn bundle_code_signing_requirement(
+    release_channel: ReleaseChannel,
+) -> Result<MacosCodeSigningRequirement, CommandErrorDto> {
+    match release_channel {
+        ReleaseChannel::Development | ReleaseChannel::Stable => {
+            Ok(MacosCodeSigningRequirement::AppleTeam)
+        }
+        ReleaseChannel::DeveloperPreview => Ok(MacosCodeSigningRequirement::AdHocDeveloperPreview),
+        ReleaseChannel::ValidationOnly => Err(integrity_error()),
+    }
 }
 
 fn decode_manifest(source: &[u8]) -> Result<BundleManifest, CommandErrorDto> {
@@ -269,7 +303,7 @@ fn read_bounded_manifest(_path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
 
 #[cfg(all(target_os = "macos", not(debug_assertions)))]
 fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
-    let expected_team = expected_release_team_id()?;
+    let expected_team = expected_release_team_identifier()?;
     verify_signed_code_identity(app_root, DESKTOP_CODE_IDENTIFIER, expected_team)?;
     let main = std::env::current_exe().map_err(|_| integrity_error())?;
     verify_signed_code_identity(&main, DESKTOP_CODE_IDENTIFIER, expected_team)?;
@@ -296,7 +330,7 @@ fn verify_release_code_identity(
     path: &Path,
     expected_identifier: &str,
 ) -> Result<(), CommandErrorDto> {
-    let expected_team = expected_release_team_id()?;
+    let expected_team = expected_release_team_identifier()?;
     verify_signed_code_identity(path, expected_identifier, expected_team)?;
     let parent = std::env::current_exe().map_err(|_| integrity_error())?;
     verify_signed_code_identity(&parent, DESKTOP_CODE_IDENTIFIER, expected_team)
@@ -354,13 +388,31 @@ fn verify_release_code_identity(
 }
 
 #[cfg(not(debug_assertions))]
-fn expected_release_team_id() -> Result<&'static str, CommandErrorDto> {
-    if canonical_apple_team_id(EXPECTED_RELEASE_TEAM_ID) {
-        Ok(EXPECTED_RELEASE_TEAM_ID)
-    } else {
-        // ADHOC is a packaging-only validation sentinel. The runtime must never
-        // accept a bundle compiled without a real expected Apple TeamIdentifier.
-        Err(integrity_error())
+fn expected_release_channel() -> Result<ReleaseChannel, CommandErrorDto> {
+    match EXPECTED_RELEASE_CHANNEL {
+        "stable" => Ok(ReleaseChannel::Stable),
+        "developer_preview" => Ok(ReleaseChannel::DeveloperPreview),
+        // Validation-only bundles exercise packaging without becoming runnable.
+        "validation_only" | "development" => Err(integrity_error()),
+        _ => Err(integrity_error()),
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn expected_release_team_identifier() -> Result<&'static str, CommandErrorDto> {
+    release_team_identifier(expected_release_channel()?, EXPECTED_RELEASE_TEAM_ID)
+        .ok_or_else(integrity_error)
+}
+
+#[cfg(any(test, not(debug_assertions)))]
+fn release_team_identifier(release_channel: ReleaseChannel, configured_team: &str) -> Option<&str> {
+    match release_channel {
+        ReleaseChannel::Stable if canonical_apple_team_id(configured_team) => Some(configured_team),
+        ReleaseChannel::DeveloperPreview if configured_team == "ADHOC" => Some("not set"),
+        ReleaseChannel::Development
+        | ReleaseChannel::ValidationOnly
+        | ReleaseChannel::Stable
+        | ReleaseChannel::DeveloperPreview => None,
     }
 }
 
@@ -400,6 +452,36 @@ mod tests {
         assert!(canonical_apple_team_id("A1B2C3D4E5"));
         assert!(!canonical_apple_team_id("ADHOC"));
         assert!(!canonical_apple_team_id("a1b2c3d4e5"));
+        assert_eq!(
+            release_team_identifier(ReleaseChannel::Stable, "A1B2C3D4E5"),
+            Some("A1B2C3D4E5")
+        );
+        assert_eq!(
+            release_team_identifier(ReleaseChannel::DeveloperPreview, "ADHOC"),
+            Some("not set")
+        );
+        assert_eq!(
+            release_team_identifier(ReleaseChannel::Stable, "ADHOC"),
+            None
+        );
+        assert_eq!(
+            release_team_identifier(ReleaseChannel::DeveloperPreview, "A1B2C3D4E5"),
+            None
+        );
+        assert_eq!(
+            release_team_identifier(ReleaseChannel::ValidationOnly, "ADHOC"),
+            None
+        );
+        assert_eq!(
+            bundle_code_signing_requirement(ReleaseChannel::Stable).expect("stable requirement"),
+            MacosCodeSigningRequirement::AppleTeam
+        );
+        assert_eq!(
+            bundle_code_signing_requirement(ReleaseChannel::DeveloperPreview)
+                .expect("preview requirement"),
+            MacosCodeSigningRequirement::AdHocDeveloperPreview
+        );
+        assert!(bundle_code_signing_requirement(ReleaseChannel::ValidationOnly).is_err());
     }
 
     #[test]
