@@ -1791,6 +1791,7 @@ fn verify_executable(
 
 /// Derive an exact macOS CodeDirectory identity from a private snapshot whose full
 /// bytes match the executable's signed-manifest SHA-256.
+#[cfg(target_os = "macos")]
 pub fn verify_macos_executable_identity(
     executable: &crate::VerifiedExecutable,
 ) -> SdkResult<MacosCodeIdentity> {
