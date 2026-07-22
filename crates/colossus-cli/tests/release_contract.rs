@@ -128,6 +128,8 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
         for required in [
             "access",
             "pinned",
+            "bundle.key.inspect",
+            "pack.trust.add",
             "bundle build",
             "bundle verify",
             "bundle install",
@@ -140,6 +142,14 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
         assert!(!source.contains("allow_actions"));
         assert!(!source.contains("approval_actions"));
     }
+    assert!(unix.contains("allow: [bundle.verify]"));
+    assert!(unix.contains(
+        "requireApproval: [bundle.key.inspect, pack.trust.add, bundle.build, bundle.install]"
+    ));
+    assert!(windows.contains("allow = @(\"bundle.verify\")"));
+    assert!(windows.contains(
+        "requireApproval = @(\"bundle.key.inspect\", \"pack.trust.add\", \"bundle.build\", \"bundle.install\")"
+    ));
 }
 
 #[test]

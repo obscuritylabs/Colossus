@@ -282,6 +282,14 @@ test("release compilation and signing authority use separate runners", () => {
   assert.doesNotMatch(buildJob, /security import/u);
   assert.doesNotMatch(buildJob, /\$\{\{ secrets\./u);
   assert.match(buildJob, /MACOS_TEAM_ID: \$\{\{ vars\.MACOS_TEAM_ID \}\}/u);
+  assert.match(
+    buildJob,
+    /if ! \[\[ "\$MACOS_TEAM_ID" =~ \^\[A-Z0-9\]\{10\}\$ \]\]; then/u,
+  );
+  assert.match(
+    buildJob,
+    /MACOS_TEAM_ID repository variable must be a 10-character Apple Team ID' >&2\n\s+exit 1\n\s+fi/u,
+  );
 
   assert.match(signJob, /actions\/download-artifact@[0-9a-f]{40}/u);
   assert.match(signJob, /\/usr\/bin\/ditto -x -k/u);
@@ -306,6 +314,14 @@ test("release compilation and signing authority use separate runners", () => {
   assert.match(signJob, /package-desktop-macos sign/u);
   assert.match(signJob, /security import/u);
   assert.match(signJob, /grep -F "\(\$MACOS_TEAM_ID\)"/u);
+  assert.match(
+    signJob,
+    /if ! \[\[ "\$MACOS_TEAM_ID" =~ \^\[A-Z0-9\]\{10\}\$ \]\]; then/u,
+  );
+  assert.match(
+    signJob,
+    /MACOS_TEAM_ID secret must be a 10-character Apple Team ID' >&2\n\s+exit 1\n\s+fi/u,
+  );
   assert.doesNotMatch(signJob, /actions\/setup-node@/u);
   assert.doesNotMatch(signJob, /rust-toolchain@/u);
   assert.doesNotMatch(signJob, /\bnpm\s/u);

@@ -280,7 +280,11 @@ jobs:
           MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
         run: |
           set -euo pipefail
-          [[ "$MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          if ! [[ "$MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            printf '%s\n' \
+              'MACOS_TEAM_ID repository variable must be a 10-character Apple Team ID' >&2
+            exit 1
+          fi
           printf 'COLOSSUS_DESKTOP_TEAM_ID=%s\n' "$MACOS_TEAM_ID" >> "$GITHUB_ENV"
 
       - name: Build the unsigned Desktop application without credentials
@@ -408,7 +412,11 @@ jobs:
           test -n "$NOTARY_API_KEY_BASE64"
           test -n "$NOTARY_ISSUER_ID"
           test -n "$NOTARY_KEY_ID"
-          [[ "$MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          if ! [[ "$MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            printf '%s\n' \
+              'MACOS_TEAM_ID secret must be a 10-character Apple Team ID' >&2
+            exit 1
+          fi
           test "$(cat "$RUNNER_TEMP/desktop-unsigned/expected-team-id.txt")" = "$MACOS_TEAM_ID"
 
           keychain="$RUNNER_TEMP/colossus-desktop-signing.keychain-db"
