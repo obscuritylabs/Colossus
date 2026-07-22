@@ -173,11 +173,10 @@ pub(super) fn inherited_desktop_worker_client(
     Err("the native TUI authentication channel is unsupported on this platform".into())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn desktop_workspace_binding_attests_the_securely_opened_object() {
         use std::os::macos::fs::MetadataExt as _;
@@ -206,7 +205,6 @@ mod tests {
         assert!(!format!("{ready:?}").contains(&ready.workspace_identity.sha256));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn desktop_workspace_binding_does_not_follow_a_same_path_replacement() {
         let root = tempfile::tempdir().expect("workspace parent");
