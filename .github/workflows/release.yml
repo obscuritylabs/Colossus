@@ -659,9 +659,12 @@ jobs:
           elif grep -F '(HTTP 404)' "$api_error" >/dev/null; then
             if [ "$RELEASE_CHANNEL" = developer_preview ]; then
               preview_checksum="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip.sha256"
+              # Markdown code spans are intentionally literal in the release notes.
+              # shellcheck disable=SC2016
               checksum_note=$(printf '%s `%s`.' \
                 'Keep the archive and its `.sha256` file together, then verify it with' \
                 "shasum -a 256 --check $preview_checksum")
+              # shellcheck disable=SC2016
               preview_notes=$(printf '%s\n' \
                 '> [!WARNING]' \
                 '> **Developer Preview (Unnotarized):** This entire release is pre-release software for testing. The macOS Desktop build is ad-hoc signed and not notarized by Apple. macOS will require an explicit user-approved Gatekeeper override. Do not treat it as a stable or production release.' \
