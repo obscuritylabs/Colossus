@@ -471,7 +471,7 @@ impl ProviderExecutor {
             }
             bytes.extend_from_slice(&chunk);
         }
-        redact_exact_bytes(&mut bytes, secret.as_deref());
+        redact_exact_bytes(&mut bytes, secret.as_ref().map(|secret| secret.as_str()));
         Ok(bytes)
     }
 
@@ -480,7 +480,7 @@ impl ProviderExecutor {
         endpoint: &str,
         payload: Option<Value>,
         permit: &ExecutionPermit,
-    ) -> Result<(reqwest::Response, Option<String>), ProviderError> {
+    ) -> Result<(reqwest::Response, Option<zeroize::Zeroizing<String>>), ProviderError> {
         let url = Url::parse(endpoint)?;
         let host = url
             .host_str()
@@ -511,13 +511,13 @@ impl ProviderExecutor {
             .as_ref()
             .map_or_else(|| client.get(url.clone()), |_| client.post(url.clone()));
         let secret = if let Some(reference) = self.profile.credential_reference.as_deref() {
-            let secret = self.credentials.resolve(reference)?;
+            let secret = zeroize::Zeroizing::new(self.credentials.resolve(reference)?);
             if secret.is_empty() {
                 return Err(ProviderError::Credential(
                     "resolved provider credential is empty".into(),
                 ));
             }
-            builder = builder.bearer_auth(&secret);
+            builder = builder.bearer_auth(secret.as_str());
             Some(secret)
         } else {
             None
@@ -586,7 +586,7 @@ impl ProviderExecutor {
             }
             for data in decoder.feed(&chunk).map_err(provider_execution_error)? {
                 let mut data = data;
-                redact_exact_bytes(&mut data, secret.as_deref());
+                redact_exact_bytes(&mut data, secret.as_ref().map(|secret| secret.as_str()));
                 if data == b"[DONE]" {
                     state.mark_done();
                     continue;
@@ -596,7 +596,7 @@ impl ProviderExecutor {
                         "provider SSE data is not valid JSON: {error}"
                     )))
                 })?;
-                redact_value_exact(&mut value, secret.as_deref());
+                redact_value_exact(&mut value, secret.as_ref().map(|secret| secret.as_str()));
                 for event in state.ingest(value).map_err(provider_execution_error)? {
                     emit_stream_item(ProviderStreamItem::Event { event }, permit, observer).await?;
                 }
