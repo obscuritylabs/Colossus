@@ -118,6 +118,7 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
       CARGO_INCREMENTAL: "0"
       # Use one release target for the bundled CLI, sidecar, and Tauri app.
       CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target

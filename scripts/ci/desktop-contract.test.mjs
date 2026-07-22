@@ -274,6 +274,20 @@ test("release packaging records hashes only after nested signing", () => {
   assert.match(runtime, /com\.obscuritylabs\.colossus\.desktop\.cli/u);
 });
 
+test("pre-merge desktop packaging declares its non-runnable trust channel", () => {
+  const workflow = read(".github/workflows/premerge.yml");
+  const desktopStart = workflow.indexOf("  macos-desktop:");
+  const windowsStart = workflow.indexOf("  windows-runtime:", desktopStart);
+  assert.ok(desktopStart >= 0 && windowsStart > desktopStart);
+  const desktop = workflow.slice(desktopStart, windowsStart);
+  assert.match(desktop, /COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"/u);
+  assert.match(
+    desktop,
+    /COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"/u,
+  );
+  assert.match(desktop, /Build validation-only ADHOC macOS bundle structure/u);
+});
+
 test("release compilation and signing authority use separate runners", () => {
   const workflow = read(".github/workflows/release.yml");
   const buildStart = workflow.indexOf("  desktop_macos_build:");

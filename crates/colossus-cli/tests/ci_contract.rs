@@ -231,6 +231,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "npm run tauri:bundle:macos",
         "COLOSSUS_DESKTOP_SIGNING_IDENTITY: \"-\"",
         "COLOSSUS_DESKTOP_TEAM_ID: \"ADHOC\"",
+        "COLOSSUS_DESKTOP_RELEASE_CHANNEL: \"validation_only\"",
         "--package colossus-sidecar-protocol",
         "--package colossus-sidecar",
         "--test native_lifecycle -- --ignored --nocapture",
