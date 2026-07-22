@@ -84,55 +84,59 @@ function verify(archive, extractedRoot) {
   return spawnSync(process.execPath, arguments_, { encoding: "utf8" });
 }
 
-test("accepts one ditto app and its symlink-free extraction", () => {
-  const temporary = realpathSync(
-    mkdtempSync(join(tmpdir(), "colossus-unsigned-archive-")),
-  );
-  try {
-    const source = join(temporary, "source");
-    const app = join(source, "Colossus Desktop.app");
-    const macos = join(app, "Contents", "MacOS");
-    mkdirSync(macos, { recursive: true, mode: 0o755 });
-    const executable = join(macos, "Colossus Desktop");
-    writeFileSync(executable, "desktop", { mode: 0o755 });
-    chmodSync(executable, 0o755);
-    const archive = join(temporary, archiveName);
-    execFileSync("/usr/bin/ditto", [
-      "-c",
-      "-k",
-      "--keepParent",
-      "--norsrc",
-      "--noextattr",
-      app,
-      archive,
-    ]);
-    const archiveResult = verify(archive);
-    assert.equal(archiveResult.status, 0, archiveResult.stderr);
-
-    const extracted = join(temporary, "extracted");
-    mkdirSync(extracted, { mode: 0o700 });
-    execFileSync("/usr/bin/ditto", ["-x", "-k", archive, extracted]);
-    const extractionResult = verify(archive, extracted);
-    assert.equal(extractionResult.status, 0, extractionResult.stderr);
-
-    const extractedExecutable = join(
-      extracted,
-      "Colossus Desktop.app",
-      "Contents",
-      "MacOS",
-      "Colossus Desktop",
+test(
+  "accepts one ditto app and its symlink-free extraction",
+  { skip: process.platform !== "darwin" },
+  () => {
+    const temporary = realpathSync(
+      mkdtempSync(join(tmpdir(), "colossus-unsigned-archive-")),
     );
-    const hardLink = join(extracted, "Colossus Desktop.app", "hard-link");
-    linkSync(extractedExecutable, hardLink);
-    assert.notEqual(verify(archive, extracted).status, 0);
-    unlinkSync(hardLink);
+    try {
+      const source = join(temporary, "source");
+      const app = join(source, "Colossus Desktop.app");
+      const macos = join(app, "Contents", "MacOS");
+      mkdirSync(macos, { recursive: true, mode: 0o755 });
+      const executable = join(macos, "Colossus Desktop");
+      writeFileSync(executable, "desktop", { mode: 0o755 });
+      chmodSync(executable, 0o755);
+      const archive = join(temporary, archiveName);
+      execFileSync("/usr/bin/ditto", [
+        "-c",
+        "-k",
+        "--keepParent",
+        "--norsrc",
+        "--noextattr",
+        app,
+        archive,
+      ]);
+      const archiveResult = verify(archive);
+      assert.equal(archiveResult.status, 0, archiveResult.stderr);
 
-    symlinkSync("Contents", join(extracted, "Colossus Desktop.app", "link"));
-    assert.notEqual(verify(archive, extracted).status, 0);
-  } finally {
-    rmSync(temporary, { recursive: true, force: true });
-  }
-});
+      const extracted = join(temporary, "extracted");
+      mkdirSync(extracted, { mode: 0o700 });
+      execFileSync("/usr/bin/ditto", ["-x", "-k", archive, extracted]);
+      const extractionResult = verify(archive, extracted);
+      assert.equal(extractionResult.status, 0, extractionResult.stderr);
+
+      const extractedExecutable = join(
+        extracted,
+        "Colossus Desktop.app",
+        "Contents",
+        "MacOS",
+        "Colossus Desktop",
+      );
+      const hardLink = join(extracted, "Colossus Desktop.app", "hard-link");
+      linkSync(extractedExecutable, hardLink);
+      assert.notEqual(verify(archive, extracted).status, 0);
+      unlinkSync(hardLink);
+
+      symlinkSync("Contents", join(extracted, "Colossus Desktop.app", "link"));
+      assert.notEqual(verify(archive, extracted).status, 0);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  },
+);
 
 test("rejects traversal, absolute, control, duplicate, link, and split names", () => {
   const cases = [
