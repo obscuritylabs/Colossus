@@ -1072,6 +1072,28 @@ fn remote_provider_http_and_responses_without_credentials_fail_closed() {
         RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
         "OpenAI Responses profile without a credential reference was accepted"
     );
+
+    config
+        .providers
+        .profiles
+        .get_mut("remote")
+        .expect("remote profile")
+        .credential_reference = Some("host:provider-main".into());
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
+        "managed-runtime host credential reference was rejected"
+    );
+
+    config
+        .providers
+        .profiles
+        .get_mut("remote")
+        .expect("remote profile")
+        .credential_reference = Some("host:provider/main".into());
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
+        "unsafe managed-runtime host credential reference was accepted"
+    );
 }
 
 #[test]

@@ -98,6 +98,26 @@ impl Runtime {
         user_prompts: Option<Arc<dyn UserPromptProvider>>,
         options: RuntimeOpenOptions,
     ) -> Result<Self, RuntimeError> {
+        Self::open_with_provider_credentials(
+            config,
+            approvals,
+            user_prompts,
+            options,
+            Arc::new(EnvironmentCredentialResolver),
+        )
+    }
+
+    /// Compose the runtime with a host-provided, late-bound provider credential resolver.
+    ///
+    /// Credential resolution remains inside the permit-bearing provider adapter and is
+    /// therefore not performed during configuration parsing or runtime startup.
+    pub fn open_with_provider_credentials(
+        config: &RuntimeConfig,
+        approvals: Arc<dyn ApprovalProvider>,
+        user_prompts: Option<Arc<dyn UserPromptProvider>>,
+        options: RuntimeOpenOptions,
+        provider_credentials: Arc<dyn CredentialResolver>,
+    ) -> Result<Self, RuntimeError> {
         let workspace = fs::canonicalize(&options.workspace)?;
         if !workspace.is_dir() {
             return Err(RuntimeError::Config(format!(
@@ -273,7 +293,7 @@ impl Runtime {
         if !journal.is_recovery_mode() {
             recover_unknown_effects(journal.as_ref())?;
         }
-        let providers = Arc::new(provider_registry(&config.providers)?);
+        let providers = Arc::new(provider_registry(&config.providers, provider_credentials)?);
         let searches = Arc::new(search_registry(config)?);
         let access_config = &config.access;
         let mut candidate_tool_specs = builtin_specs();

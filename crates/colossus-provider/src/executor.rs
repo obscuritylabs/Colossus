@@ -1,4 +1,7 @@
 use super::*;
+use std::fmt;
+
+const MAX_HOST_CREDENTIALS: usize = 64;
 
 /// Strict content placed inside a provider effect request.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -63,6 +66,84 @@ impl CredentialResolver for EnvironmentCredentialResolver {
         std::env::var(variable).map_err(|_| {
             ProviderError::Credential(format!("environment variable {variable} is unset"))
         })
+    }
+}
+
+/// In-memory host credential resolver used by application-managed runtimes.
+///
+/// Host values are retained only in zeroizing memory. Existing `env:` references keep
+/// their normal behavior so injecting this resolver does not change headless runtime
+/// compatibility. The resolver deliberately has a redacted [`Debug`] implementation.
+pub struct HostCredentialResolver {
+    credentials: BTreeMap<String, zeroize::Zeroizing<String>>,
+    environment: EnvironmentCredentialResolver,
+}
+
+impl HostCredentialResolver {
+    /// Validate and retain one bounded set of opaque host credential identifiers.
+    pub fn new(
+        credentials: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self, ProviderError> {
+        let mut retained = BTreeMap::new();
+        for (identifier, secret) in credentials {
+            let secret = zeroize::Zeroizing::new(secret);
+            if retained.len() >= MAX_HOST_CREDENTIALS {
+                return Err(ProviderError::Configuration(
+                    "host credential count exceeds the supported bound".into(),
+                ));
+            }
+            if !valid_host_credential_identifier(&identifier) {
+                return Err(ProviderError::Configuration(
+                    "host credential identifier is invalid".into(),
+                ));
+            }
+            if secret.is_empty() || secret.len() > 64 * 1024 || secret.contains('\0') {
+                return Err(ProviderError::Configuration(
+                    "host credential value is invalid".into(),
+                ));
+            }
+            if retained.insert(identifier, secret).is_some() {
+                return Err(ProviderError::Configuration(
+                    "host credential identifier is duplicated".into(),
+                ));
+            }
+        }
+        Ok(Self {
+            credentials: retained,
+            environment: EnvironmentCredentialResolver,
+        })
+    }
+}
+
+impl fmt::Debug for HostCredentialResolver {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HostCredentialResolver")
+            .field("credential_count", &self.credentials.len())
+            .field("credentials", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl CredentialResolver for HostCredentialResolver {
+    fn resolve(&self, reference: &str) -> Result<String, ProviderError> {
+        if let Some(identifier) = reference.strip_prefix("host:") {
+            if !valid_host_credential_identifier(identifier) {
+                return Err(ProviderError::Credential(
+                    "host credential reference is invalid".into(),
+                ));
+            }
+            return self
+                .credentials
+                .get(identifier)
+                .map(|secret| secret.as_str().to_owned())
+                .ok_or_else(|| {
+                    ProviderError::Credential(format!(
+                        "host credential {identifier} is unavailable"
+                    ))
+                });
+        }
+        self.environment.resolve(reference)
     }
 }
 

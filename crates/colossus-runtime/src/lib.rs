@@ -79,6 +79,9 @@ use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::{
     JournalExternalWorkQueue, ProjectionRunReport, ProjectionWorker, default_handlers,
 };
+pub use colossus_provider::{
+    CredentialResolver, EnvironmentCredentialResolver, HostCredentialResolver,
+};
 use colossus_provider::{
     ProviderEffectInput, ProviderError, ProviderExecutor, ProviderKind, ProviderProfile,
     ProviderRegistry,

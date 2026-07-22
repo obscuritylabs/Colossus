@@ -400,7 +400,7 @@ pub struct ProviderProfileConfig {
     pub model: String,
     /// API version base URL for network providers.
     pub base_url: Option<String>,
-    /// Credential reference such as `env:OPENAI_API_KEY`.
+    /// Credential reference such as `env:OPENAI_API_KEY` or an injected `host:provider-main`.
     pub credential_reference: Option<String>,
     /// Provider transport timeout.
     #[serde(default = "default_provider_timeout_ms")]
@@ -1283,11 +1283,16 @@ pub(super) fn provider_profile(
 
 pub(super) fn provider_registry(
     config: &ProvidersConfig,
+    credentials: Arc<dyn CredentialResolver>,
 ) -> Result<ProviderRegistry, RuntimeError> {
     let profiles = config
         .profiles
         .iter()
-        .map(|(name, profile)| provider_profile(name, profile).map(ProviderExecutor::new))
+        .map(|(name, profile)| {
+            provider_profile(name, profile).map(|profile| {
+                ProviderExecutor::with_credentials(profile, Arc::clone(&credentials))
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
     ProviderRegistry::new(profiles, config.roles.clone()).map_err(Into::into)
 }
@@ -1403,7 +1408,7 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
             "provider roles contain an unknown role name".into(),
         ));
     }
-    let _ = provider_registry(&config.providers)?;
+    let _ = provider_registry(&config.providers, Arc::new(EnvironmentCredentialResolver))?;
     for (name, profile) in &config.providers.profiles {
         let profile = provider_profile(name, profile)?;
         if let Some(origin) = profile.network_origin()?

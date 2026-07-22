@@ -25,14 +25,31 @@ pub(super) fn normalize_base_url(raw: &str) -> Result<String, ProviderError> {
 }
 
 pub(super) fn valid_credential_reference(reference: &str) -> bool {
-    let Some(variable) = reference.strip_prefix("env:") else {
-        return false;
-    };
+    reference
+        .strip_prefix("env:")
+        .is_some_and(valid_environment_credential_identifier)
+        || reference
+            .strip_prefix("host:")
+            .is_some_and(valid_host_credential_identifier)
+}
+
+fn valid_environment_credential_identifier(variable: &str) -> bool {
     let mut bytes = variable.bytes();
     bytes
         .next()
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+pub(super) fn valid_host_credential_identifier(identifier: &str) -> bool {
+    identifier.len() <= 256
+        && identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && identifier
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
 }
 
 pub(super) fn validate_credential_disclosure(
