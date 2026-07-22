@@ -13,7 +13,20 @@ impl Runtime {
 
     /// Catch all built-in projections up to the current journal head.
     pub fn drain_projections(&self) -> Result<ProjectionRunReport, RuntimeError> {
-        self.projections.drain(256, 16_384).map_err(Into::into)
+        self.drain_projections_bounded(256, 16_384)
+    }
+
+    /// Replay bounded projection batches without requiring a moving journal head to
+    /// become current. Long-running hosts use this to keep background maintenance
+    /// fair; explicit operator drains and shutdown checkpoints use [`Self::drain_projections`].
+    pub fn drain_projections_bounded(
+        &self,
+        batch_limit: usize,
+        max_rounds: usize,
+    ) -> Result<ProjectionRunReport, RuntimeError> {
+        self.projections
+            .drain(batch_limit, max_rounds)
+            .map_err(Into::into)
     }
 
     /// Delete and replay one projection, or every projection when omitted.

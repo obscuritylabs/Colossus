@@ -244,14 +244,22 @@ impl WorkerServer {
         let runtime = Arc::clone(&self.runtime);
         let replay = Arc::clone(&self.replay);
         let maintenance = Arc::clone(&self.maintenance);
-        let drain_notify = Arc::new(tokio::sync::Notify::new());
         let key = self.authentication_key.clone();
         let mut drain_interval = tokio::time::interval(Duration::from_secs(1));
         drain_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         drain_interval.tick().await;
-        let draining = Arc::new(AtomicBool::new(false));
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
         let mut tasks = tokio::task::JoinSet::new();
+        let (drain_request_tx, drain_request_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let drain_runtime = Arc::clone(&runtime);
+        let drain_maintenance = Arc::clone(&maintenance);
+        tasks.spawn(run_background_drains(drain_request_rx, move || {
+            let runtime = Arc::clone(&drain_runtime);
+            let maintenance = Arc::clone(&drain_maintenance);
+            async move {
+                let _ = drain_background_once(runtime.as_ref(), maintenance.as_ref()).await;
+            }
+        }));
         let mut public_api = self.public_api.take();
         let (public_error_tx, mut public_error_rx) = tokio::sync::mpsc::channel::<String>(1);
         let mut public_error_open = false;
@@ -320,11 +328,8 @@ impl WorkerServer {
                         None => public_error_open = false,
                     }
                 }
-                _ = drain_notify.notified() => {
-                    spawn_drain_if_idle(&mut tasks, &runtime, &maintenance, &draining);
-                }
                 _ = drain_interval.tick() => {
-                    spawn_drain_if_idle(&mut tasks, &runtime, &maintenance, &draining);
+                    request_background_drain(&drain_request_tx);
                 }
                 completed = tasks.join_next(), if !tasks.is_empty() => {
                     if let Some(result) = completed {
@@ -337,7 +342,7 @@ impl WorkerServer {
                     let runtime = Arc::clone(&runtime);
                     let replay = Arc::clone(&replay);
                     let maintenance = Arc::clone(&maintenance);
-                    let drain_notify = Arc::clone(&drain_notify);
+                    let drain_requests = drain_request_tx.clone();
                     let shutdown = shutdown_tx.clone();
                     tasks.spawn(async move {
                         if handle_connection(
@@ -346,7 +351,7 @@ impl WorkerServer {
                             runtime.as_ref(),
                             replay.as_ref(),
                             maintenance.as_ref(),
-                            drain_notify.as_ref(),
+                            &drain_requests,
                         )
                             .await
                             .is_ok_and(|stopping| stopping)
@@ -381,6 +386,7 @@ impl WorkerServer {
             public_failure.get_or_insert(error);
         }
         drop(shutdown_tx);
+        drop(drain_request_tx);
         while let Some(result) = tasks.join_next().await {
             result.map_err(|error| WorkerError::Protocol(error.to_string()))?;
         }
@@ -409,25 +415,22 @@ async fn await_public_server_shutdown(
     }
 }
 
-fn spawn_drain_if_idle(
-    tasks: &mut tokio::task::JoinSet<()>,
-    runtime: &Arc<Runtime>,
-    maintenance: &Arc<tokio::sync::Mutex<()>>,
-    draining: &Arc<AtomicBool>,
-) {
-    if draining
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
+fn request_background_drain(requests: &tokio::sync::mpsc::Sender<()>) {
+    // One pending token is sufficient because every pass drains each durable queue
+    // until empty. Keeping that token in the channel while a pass is active makes
+    // the wake level-triggered: work queued after the current pass inspected its
+    // queue always receives an immediate follow-up pass.
+    let _ = requests.try_send(());
+}
+
+async fn run_background_drains<F, Fut>(mut requests: tokio::sync::mpsc::Receiver<()>, mut drain: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    while requests.recv().await.is_some() {
+        drain().await;
     }
-    let runtime = Arc::clone(runtime);
-    let draining = Arc::clone(draining);
-    let maintenance = Arc::clone(maintenance);
-    tasks.spawn(async move {
-        let _ = drain_once(runtime.as_ref(), maintenance.as_ref()).await;
-        draining.store(false, Ordering::Release);
-    });
 }
 
 pub(super) fn operation_requests_drain(operation: &WorkerOperation) -> bool {
@@ -445,7 +448,7 @@ async fn handle_connection<S>(
     runtime: &Runtime,
     replay: &Mutex<ReplayGuard>,
     maintenance: &tokio::sync::Mutex<()>,
-    drain_notify: &tokio::sync::Notify,
+    drain_requests: &tokio::sync::mpsc::Sender<()>,
 ) -> Result<bool, WorkerError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -688,6 +691,11 @@ where
             let shutdown = matches!(operation, WorkerOperation::Shutdown);
             let result = dispatch(runtime, operation, maintenance).await;
             let succeeded = result.is_ok();
+            if succeeded && requests_drain {
+                // Durable work is committed at this point. Request its drain before
+                // response I/O so a disconnect cannot suppress scheduling.
+                request_background_drain(drain_requests);
+            }
             let content = match result {
                 Ok(result) => WorkerFrameContent::Complete { result },
                 Err(error) => WorkerFrameContent::Error {
@@ -695,9 +703,6 @@ where
                 },
             };
             write_signed_frame(&mut stream, key, &request_id, 1, content).await?;
-            if succeeded && requests_drain {
-                drain_notify.notify_one();
-            }
             Ok(shutdown && succeeded)
         }
     }
@@ -706,6 +711,51 @@ where
 #[cfg(test)]
 mod shutdown_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn drain_request_during_active_pass_runs_an_immediate_follow_up() {
+        let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let passes = Arc::new(AtomicUsize::new(0));
+        let worker = tokio::spawn(run_background_drains(request_rx, {
+            let passes = Arc::clone(&passes);
+            let release_first = Arc::clone(&release_first);
+            move || {
+                let pass = passes.fetch_add(1, Ordering::AcqRel) + 1;
+                let started = started_tx.clone();
+                let release_first = Arc::clone(&release_first);
+                async move {
+                    started.send(pass).expect("drain observer");
+                    if pass == 1 {
+                        release_first.notified().await;
+                    }
+                }
+            }
+        }));
+
+        request_background_drain(&request_tx);
+        assert_eq!(started_rx.recv().await, Some(1));
+
+        // The first pass has already consumed its token and is still active. This
+        // request must remain pending instead of being discarded as "already draining."
+        request_background_drain(&request_tx);
+        release_first.notify_one();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+                .await
+                .expect("follow-up drain must not wait for the periodic timer"),
+            Some(2)
+        );
+
+        drop(request_tx);
+        tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("drain worker shutdown")
+            .expect("drain worker task");
+        assert_eq!(passes.load(Ordering::Acquire), 2);
+    }
 
     #[tokio::test]
     async fn public_server_shutdown_aborts_after_the_force_close_timeout() {
