@@ -1969,10 +1969,11 @@ fn verify_macos_release_identity(_path: &Path) -> SdkResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ApiMajor, AppPrivateInstanceDir, InstanceId, Sha256Digest, VerifiedExecutable};
+    #[cfg(target_os = "macos")]
     use crate::{
-        ApiMajor, ApiScope, AppPrivateInstanceDir, InstanceId, ManagedAccessProfile,
-        ManagedProviderConfig, ManagedProviderKind, ManagedRuntimeConfig, Sha256Digest,
-        SidecarApplicationGrant, VerifiedExecutable, scopes,
+        ApiScope, ManagedAccessProfile, ManagedProviderConfig, ManagedProviderKind,
+        ManagedRuntimeConfig, SidecarApplicationGrant, scopes,
     };
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     use std::os::unix::process::CommandExt as _;
@@ -1981,6 +1982,7 @@ mod tests {
     const TREE_TEST_MARKER: &str = "COLOSSUS_SIDECAR_TREE_TEST_MARKER";
     const TREE_TEST_PRE_SESSION: &str = "COLOSSUS_SIDECAR_TREE_TEST_PRE_SESSION";
 
+    #[cfg(target_os = "macos")]
     fn lifecycle_test_bootstrap(
         workspace: &Path,
         expected_identity: WorkspaceIdentity,
