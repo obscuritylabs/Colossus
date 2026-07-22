@@ -703,13 +703,21 @@ impl DiscoveryLeafIdentity {
             return Err(SdkError::CloseFailed);
         }
         Ok(Self {
-            device: u64::try_from(stat.st_dev).map_err(|_| SdkError::CloseFailed)?,
+            device: checked_stat_value(stat.st_dev)?,
             inode: stat.st_ino,
-            mode: u32::from(stat.st_mode),
+            mode: checked_stat_value(stat.st_mode)?,
             owner: stat.st_uid,
-            links: u64::from(stat.st_nlink),
+            links: checked_stat_value(stat.st_nlink)?,
         })
     }
+}
+
+#[cfg(unix)]
+fn checked_stat_value<T, U>(value: T) -> SdkResult<U>
+where
+    U: TryFrom<T>,
+{
+    U::try_from(value).map_err(|_| SdkError::CloseFailed)
 }
 
 #[cfg(unix)]
