@@ -4,6 +4,7 @@
   "description": "Only the main bundled WebView may use the narrow Colossus chat commands.",
   "windows": ["main"],
   "permissions": [
+    "allow-desktop-release-channel",
     "allow-initialize-desktop",
     "allow-desktop-status",
     "allow-add-external-target",

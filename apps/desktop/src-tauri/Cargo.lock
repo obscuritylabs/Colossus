@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api-proto"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 dependencies = [
  "prost",
  "prost-types",
@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-contracts"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 dependencies = [
  "colossus-domain",
  "serde",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-darwin-process"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 dependencies = [
  "libc",
 ]
@@ -691,11 +691,11 @@ dependencies = [
 
 [[package]]
 name = "colossus-domain"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 
 [[package]]
 name = "colossus-grpc"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 dependencies = [
  "base64 0.22.1",
  "colossus-api",
@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-ports"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sdk"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 dependencies = [
  "async-trait",
  "colossus-api",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sidecar-protocol"
-version = "0.10.0"
+version = "0.10.1-preview.1"
 dependencies = [
  "serde",
  "serde_json",

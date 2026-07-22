@@ -176,7 +176,11 @@ pub(crate) async fn self_test(
     let bundle = VerifiedBundle::load()?;
     state
         .terminal_manager()
-        .set_verified_colossus_cli(&bundle.cli_path, bundle.cli_sha256)
+        .set_verified_colossus_cli(
+            &bundle.cli_path,
+            bundle.cli_sha256,
+            bundle.macos_code_signing_requirement,
+        )
         .map_err(CommandErrorDto::from_terminal)?;
     let instance_id = InstanceId::from_str(SELF_TEST_INSTANCE_ID).map_err(|_| {
         CommandErrorDto::local_sanitized("internal", "The offline self-test is unavailable.", false)
@@ -297,7 +301,11 @@ async fn start_inner(
         VerifiedBundle::load().map_err(|error| (error, RuntimeFailureCodeDto::Integrity))?;
     state
         .terminal_manager()
-        .set_verified_colossus_cli(&bundle.cli_path, bundle.cli_sha256)
+        .set_verified_colossus_cli(
+            &bundle.cli_path,
+            bundle.cli_sha256,
+            bundle.macos_code_signing_requirement,
+        )
         .map_err(|error| {
             (
                 CommandErrorDto::from_terminal(error),

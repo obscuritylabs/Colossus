@@ -8,6 +8,32 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.1-preview.1] - 2026-07-22
+
+### Added
+
+- Added an explicitly labeled macOS Developer Preview channel so Managed Local can be
+  tested before Apple Developer ID and notarization credentials are available.
+- Added a persistent in-app **Developer Preview** warning sourced from the native
+  compile-time release channel rather than renderer configuration.
+
+### Security
+
+- Developer Preview packaging remains ad-hoc signed, preserves the sealed manifest,
+  exact nested-binary hashes, fixed code identifiers, and strict pre-spawn verification,
+  but makes no Apple publisher-identity or notarization claim. The stable release channel
+  still requires a canonical Apple Team ID, Developer ID signing, and notarization.
+
+### Upgrade Notes
+
+- `v0.10.1-preview.1` is a GitHub prerelease for testing, not the stable `0.10.1`
+  release. Its Desktop archive is named
+  `Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.1-preview.1-aarch64-apple-darwin.zip`.
+- Verify the adjacent SHA-256 sidecar before opening the archive. Because this preview is
+  not Apple-notarized, macOS requires an explicit Control-click **Open** or
+  **System Settings → Privacy & Security → Open Anyway** confirmation. Do not disable
+  Gatekeeper or strip quarantine metadata.
+
 ## [0.10.0] - 2026-07-22
 
 ### Added

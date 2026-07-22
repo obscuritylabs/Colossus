@@ -23,6 +23,7 @@ import {
   configureManagedRuntime,
   connectColossus,
   createRun,
+  desktopReleaseChannel,
   getRun,
   listRuns,
   openTerminal,
@@ -143,6 +144,15 @@ describe("desktop API target routing", () => {
       ["set_terminal_enabled", { enabled: true }],
       ["show_terminal_window", { request: { kind: "colossus_tui" } }],
     ]);
+  });
+
+  it("reads the native compile-time release channel without renderer input", async () => {
+    await desktopReleaseChannel();
+
+    expect(tauri.invoke).toHaveBeenCalledWith(
+      "desktop_release_channel",
+      undefined,
+    );
   });
 
   it("enrolls and removes external targets through opaque native commands", async () => {

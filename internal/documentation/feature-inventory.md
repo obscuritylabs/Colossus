@@ -1077,11 +1077,11 @@ to local or air-gapped operation.
 
 ## 22. Delivery Status
 
-Rust 0.10.0 is the active implementation, and every capability in the Section 5 release
-baseline has executable evidence. The detailed requirement-to-test mapping lives in the
-[Rust Acceptance Matrix](rust-acceptance-matrix.md); test names and source paths belong
-there rather than being repeated in this product contract. Publication still requires
-the explicit platform, security, and artifact release gate.
+Rust 0.10.1-preview.1 is the active Developer Preview candidate, and every capability in
+the Section 5 release baseline has executable evidence. The detailed requirement-to-test
+mapping lives in the [Rust Acceptance Matrix](rust-acceptance-matrix.md); test names and
+source paths belong there rather than being repeated in this product contract.
+Publication still requires the explicit platform, security, and artifact release gate.
 
 Latest published release proof:
 

@@ -11,6 +11,7 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "desktop_release_channel",
     "initialize_desktop",
     "desktop_status",
     "add_external_target",
@@ -39,7 +40,7 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
-    export_expected_release_team_id();
+    export_release_trust_configuration();
     stage_connection_config();
     stage_bundle_manifest();
     tauri_build::try_build(
@@ -49,27 +50,43 @@ fn main() {
     .expect("failed to build the Colossus desktop manifest");
 }
 
-fn export_expected_release_team_id() {
-    const VARIABLE: &str = "COLOSSUS_DESKTOP_TEAM_ID";
+fn export_release_trust_configuration() {
+    const TEAM_VARIABLE: &str = "COLOSSUS_DESKTOP_TEAM_ID";
+    const CHANNEL_VARIABLE: &str = "COLOSSUS_DESKTOP_RELEASE_CHANNEL";
 
-    println!("cargo:rerun-if-env-changed={VARIABLE}");
+    println!("cargo:rerun-if-env-changed={TEAM_VARIABLE}");
+    println!("cargo:rerun-if-env-changed={CHANNEL_VARIABLE}");
     if env::var("PROFILE").as_deref() == Ok("debug") {
+        println!("cargo:rustc-env={CHANNEL_VARIABLE}=development");
         return;
     }
-    let team_id = env::var(VARIABLE).unwrap_or_else(|_| {
+    let team_id = env::var(TEAM_VARIABLE).unwrap_or_else(|_| {
         panic!(
-            "release desktop builds require {VARIABLE}=ADHOC for validation or the canonical Apple Team ID"
+            "release desktop builds require {TEAM_VARIABLE}=ADHOC for a developer preview or the canonical Apple Team ID for stable"
+        )
+    });
+    let release_channel = env::var(CHANNEL_VARIABLE).unwrap_or_else(|_| {
+        panic!(
+            "release desktop builds require {CHANNEL_VARIABLE}=stable, developer_preview, or validation_only"
         )
     });
     let canonical_team = team_id.len() == 10
         && team_id
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit());
-    assert!(
-        team_id == "ADHOC" || canonical_team,
-        "{VARIABLE} must be ADHOC or a canonical 10-character Apple Team ID"
-    );
-    println!("cargo:rustc-env={VARIABLE}={team_id}");
+    match release_channel.as_str() {
+        "stable" => assert!(
+            canonical_team,
+            "stable releases require {TEAM_VARIABLE} to be a canonical 10-character Apple Team ID"
+        ),
+        "developer_preview" | "validation_only" => assert!(
+            team_id == "ADHOC",
+            "developer-preview and validation-only builds require {TEAM_VARIABLE}=ADHOC"
+        ),
+        _ => panic!("{CHANNEL_VARIABLE} must be stable, developer_preview, or validation_only"),
+    }
+    println!("cargo:rustc-env={TEAM_VARIABLE}={team_id}");
+    println!("cargo:rustc-env={CHANNEL_VARIABLE}={release_channel}");
 }
 
 #[derive(Serialize)]
@@ -78,6 +95,7 @@ struct BundleManifest<'a> {
     schema_version: u16,
     target_triple: &'a str,
     profile: &'a str,
+    release_channel: &'a str,
     sidecar: BundledExecutable,
     cli: BundledExecutable,
 }
@@ -94,6 +112,12 @@ struct BundledExecutable {
 fn stage_bundle_manifest() {
     let target = env::var("TARGET").expect("Cargo must provide TARGET");
     let profile = env::var("PROFILE").expect("Cargo must provide PROFILE");
+    let release_channel = if profile == "debug" {
+        "development".to_owned()
+    } else {
+        env::var("COLOSSUS_DESKTOP_RELEASE_CHANNEL")
+            .expect("release trust configuration must provide the release channel")
+    };
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("Cargo must provide CARGO_MANIFEST_DIR"),
     );
@@ -127,9 +151,10 @@ fn stage_bundle_manifest() {
         )
     };
     let manifest = BundleManifest {
-        schema_version: 1,
+        schema_version: 2,
         target_triple: &target,
         profile: manifest_profile,
+        release_channel: &release_channel,
         sidecar,
         cli,
     };

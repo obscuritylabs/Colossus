@@ -13,6 +13,7 @@ const workspace: WorkspaceSummary = {
 
 function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
   return {
+    releaseChannel: "development",
     connection: {
       state: "not_configured",
       message: "Managed Local needs setup.",

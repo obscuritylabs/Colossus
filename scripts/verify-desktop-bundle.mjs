@@ -14,6 +14,11 @@ const MAX_MANIFEST_BYTES = 16 * 1024;
 const MAX_BINARY_BYTES = 512 * 1024 * 1024;
 const TARGET_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
+const RELEASE_CHANNELS = new Set([
+  "stable",
+  "developer_preview",
+  "validation_only",
+]);
 
 function fail(message) {
   process.stderr.write(`verify-desktop-bundle: ${message}\n`);
@@ -31,10 +36,17 @@ function exactKeys(value, expected) {
 }
 
 function parseArguments(argv) {
-  if (argv.length !== 4 || argv[0] !== "--app" || argv[2] !== "--target") {
-    fail("usage: scripts/verify-desktop-bundle.mjs --app PATH --target TRIPLE");
+  if (
+    argv.length !== 6 ||
+    argv[0] !== "--app" ||
+    argv[2] !== "--target" ||
+    argv[4] !== "--release-channel"
+  ) {
+    fail(
+      "usage: scripts/verify-desktop-bundle.mjs --app PATH --target TRIPLE --release-channel CHANNEL",
+    );
   }
-  return { app: argv[1], target: argv[3] };
+  return { app: argv[1], target: argv[3], releaseChannel: argv[5] };
 }
 
 function validateFile(path, executable) {
@@ -61,11 +73,12 @@ async function sha256(path) {
   return digest.digest("hex");
 }
 
-const { app, target } = parseArguments(process.argv.slice(2));
+const { app, target, releaseChannel } = parseArguments(process.argv.slice(2));
 if (
   !isAbsolute(app) ||
   !basename(app).endsWith(".app") ||
-  !TARGET_PATTERN.test(target)
+  !TARGET_PATTERN.test(target) ||
+  !RELEASE_CHANNELS.has(releaseChannel)
 ) {
   fail("application path or target triple is invalid");
 }
@@ -98,12 +111,14 @@ if (
     "schemaVersion",
     "targetTriple",
     "profile",
+    "releaseChannel",
     "sidecar",
     "cli",
   ]) ||
-  manifest.schemaVersion !== 1 ||
+  manifest.schemaVersion !== 2 ||
   manifest.targetTriple !== target ||
-  manifest.profile !== "release"
+  manifest.profile !== "release" ||
+  manifest.releaseChannel !== releaseChannel
 ) {
   fail("bundle manifest envelope is invalid");
 }

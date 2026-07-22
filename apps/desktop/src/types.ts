@@ -64,7 +64,11 @@ export interface ProviderSummary {
   model: string;
 }
 
+export type DesktopReleaseChannel =
+  "development" | "stable" | "developer_preview" | "validation_only";
+
 export interface DesktopStatus {
+  releaseChannel: DesktopReleaseChannel;
   connection: ConnectionStatus;
   targets: RuntimeTarget[];
   selectedTargetId: string | null;

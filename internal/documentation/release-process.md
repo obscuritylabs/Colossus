@@ -10,7 +10,8 @@ replacement:
 
 Colossus releases are built from reviewed commits on `main`. Automation validates and
 packages a release, but creates only a draft GitHub Release; publication remains a human
-decision.
+decision. Stable releases and explicitly approved Developer Previews are distinct
+channels and must never be presented interchangeably.
 
 ## Prepare the release
 
@@ -58,24 +59,52 @@ version mismatches, failed readiness verification, and incomplete artifact sets.
 - macOS x64 and ARM64 native sandbox acceptance and packaging;
 - static Linux-musl x64 and ARM64 native sandbox acceptance and packaging;
 - Windows x64 and ARM64 named-pipe, AppContainer, worker, and packaging acceptance.
-- macOS ARM64 standalone Desktop packaging followed by isolated identity validation,
-  signing, notarization, stapling, and assessment for tag-triggered releases.
+- macOS ARM64 standalone Desktop packaging followed by channel-specific identity
+  validation. Stable tags require Developer ID signing, notarization, stapling, and
+  assessment.
 
 Each job builds with `--locked --release`, produces one archive and SHA-256 sidecar,
 installs into a clean prefix, verifies offline echo and audit behavior, and exercises a
 signed bundle. Linux jobs also prove static linkage and package the AppArmor installer.
 
+### Developer Preview
+
+`vX.Y.Z-preview.N` with `N > 0` is the only credential-free tag path that may produce a
+runnable Desktop. The current release is `v0.10.1-preview.1`; create it from the reviewed
+`main` commit with:
+
+```bash
+git tag -a v0.10.1-preview.1 -m "Colossus v0.10.1-preview.1 - Developer Preview"
+git push origin v0.10.1-preview.1
+```
+
+This tag pattern selects the `developer_preview` channel, `ADHOC` Team ID sentinel, and
+ad-hoc identity without reading Apple secrets. It does not skip CLI release coverage or
+Desktop integrity checks: fixed identifiers, strict code-signature verification, the
+sealed channel-bound manifest, and exact nested sidecar/CLI hashes must still pass. It
+creates a draft marked as a GitHub prerelease with title
+**Colossus vX.Y.Z-preview.N - Developer Preview (Unnotarized)** and Desktop asset
+`Colossus-Desktop-DEVELOPER-PREVIEW-vX.Y.Z-preview.N-aarch64-apple-darwin.zip`.
+
+Before publishing, confirm the warning states that the ad-hoc signature does not prove
+Apple publisher identity and the app is not notarized. Confirm the SHA-256 command and
+the macOS Control-click **Open** / **System Settings → Privacy & Security → Open Anyway**
+instructions are present. Never instruct users to disable Gatekeeper or remove quarantine
+metadata. This exception does not relax the stable channel: a future stable tag still
+requires the canonical Team ID, Developer ID credentials, notarization, stapling, and
+Gatekeeper assessment.
+
 ## Review and publish the draft
 
 Only after `Colossus release gate` succeeds does the final job receive `contents: write`.
-It verifies exactly fourteen files—six CLI archives, six checksum sidecars, the signed
-Desktop archive, and its checksum—then creates or idempotently updates a draft release.
-It never publishes automatically.
+It verifies exactly fourteen files—six CLI archives, six checksum sidecars, the
+channel-specific Desktop archive, and its checksum—then creates or idempotently updates a
+draft release. It never publishes automatically.
 
 Before publishing the draft:
 
-1. Confirm all six CLI targets, the signed Desktop archive, and every checksum sidecar are
-   present.
+1. Confirm all six CLI targets, the correctly named channel-specific Desktop archive, and
+   every checksum sidecar are present.
 2. Test installation on a clean representative host where practical.
 3. Review generated notes, the changelog excerpt, known limitations, and security notes.
 4. Attach any required SBOM or independently generated signature material.

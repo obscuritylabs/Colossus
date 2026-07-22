@@ -50,7 +50,8 @@ pub use colossus_darwin_process::{
     DarwinChild as MacosSuspendedChild, SpawnedTty as MacosSuspendedTty,
 };
 pub use config::{
-    ApiMajor, AppPrivateInstanceDir, InstanceId, Sha256Digest, TlsFingerprint, VerifiedExecutable,
+    ApiMajor, AppPrivateInstanceDir, InstanceId, MacosCodeSigningRequirement, Sha256Digest,
+    TlsFingerprint, VerifiedExecutable,
 };
 #[cfg(feature = "daemon")]
 pub use daemon::{

@@ -16,6 +16,7 @@ import {
   configureManagedRuntime,
   connectColossus,
   createRun,
+  desktopReleaseChannel,
   desktopStatus,
   getRun,
   initializeDesktop,
@@ -38,6 +39,7 @@ import { ContextSidebar } from "./components/ContextSidebar";
 import { OperationsSurface } from "./components/OperationsSurface";
 import { OnboardingSurface } from "./components/OnboardingSurface";
 import { ProductRail } from "./components/ProductRail";
+import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
 import { WorkSidebar } from "./components/WorkSidebar";
@@ -104,6 +106,7 @@ const INITIAL_CONNECTION: ConnectionStatus = FIXTURE_MODE
     };
 
 const INITIAL_DESKTOP: DesktopStatus = {
+  releaseChannel: "development",
   connection: INITIAL_CONNECTION,
   targets: FIXTURE_MODE
     ? [
@@ -331,6 +334,9 @@ export default function App() {
   );
   const chatRef = useRef(chat);
   const [desktop, setDesktop] = useState<DesktopStatus>(INITIAL_DESKTOP);
+  const [releaseChannel, setReleaseChannel] = useState(
+    INITIAL_DESKTOP.releaseChannel,
+  );
   const desktopRef = useRef(desktop);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [surface, setSurface] = useState<WorkspaceSurface>("work");
@@ -522,6 +528,7 @@ export default function App() {
       const previousStatus = desktopRef.current;
       desktopRef.current = status;
       setDesktop(status);
+      setReleaseChannel(status.releaseChannel);
       const requiresOnboarding = managedOnboardingRequired(status);
       setShowOnboarding((current) => current || requiresOnboarding);
       if (
@@ -642,6 +649,15 @@ export default function App() {
     let cancelled = false;
     connectingRef.current = true;
     setConnecting(true);
+    void desktopReleaseChannel()
+      .then((channel) => {
+        if (!cancelled) {
+          setReleaseChannel(channel);
+        }
+      })
+      .catch(() => {
+        // initialize_desktop returns the same native channel when setup succeeds.
+      });
     void initializeDesktop()
       .then(async (status) => {
         if (!cancelled) {
@@ -1440,12 +1456,16 @@ export default function App() {
   );
   const onboardingRequired = managedOnboardingRequired(desktop);
   const onboardingActive = showOnboarding || onboardingRequired;
+  const developerPreview = releaseChannel === "developer_preview";
 
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell${developerPreview ? " app-shell--developer-preview" : ""}`}
+    >
       <a className="skip-link" href="#primary-workspace">
         Skip to workspace
       </a>
+      <ReleaseChannelBanner releaseChannel={releaseChannel} />
       <ProductRail
         surface={surface}
         attentionCount={attentionCount}

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to validate without publishing, for example v0.10.0
+        description: Version to validate without publishing, for example v0.10.0 or v0.10.1-preview.1
         required: true
         type: string
 
@@ -28,6 +28,8 @@ jobs:
       version: ${{ steps.request.outputs.version }}
       tag: ${{ steps.request.outputs.tag }}
       publish_draft: ${{ steps.request.outputs.publish_draft }}
+      release_channel: ${{ steps.request.outputs.release_channel }}
+      prerelease: ${{ steps.request.outputs.prerelease }}
     steps:
       - name: Check out complete release history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,7 +85,22 @@ jobs:
             tag=$DISPATCH_VERSION
             publish_draft=false
           fi
-          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            tag_channel=stable
+            prerelease=false
+          elif [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]]; then
+            tag_channel=developer_preview
+            prerelease=true
+          else
+            echo 'release tag must be vX.Y.Z or vX.Y.Z-preview.N with N greater than zero' >&2
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = push ]; then
+            release_channel=$tag_channel
+          else
+            release_channel=validation_only
+            prerelease=false
+          fi
           version=${tag#v}
           workspace_version=$(cargo metadata --locked --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "colossus-cli") | .version')
@@ -93,6 +110,8 @@ jobs:
             printf 'version=%s\n' "$version"
             printf 'tag=%s\n' "$tag"
             printf 'publish_draft=%s\n' "$publish_draft"
+            printf 'release_channel=%s\n' "$release_channel"
+            printf 'prerelease=%s\n' "$prerelease"
           } >> "$GITHUB_OUTPUT"
 
       - name: Prepare exact-path AppArmor profile for readiness tests
@@ -231,6 +250,7 @@ jobs:
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
       SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -269,12 +289,12 @@ jobs:
           npm ci --ignore-scripts
           npm audit --audit-level=high
 
-      - name: Configure the validation-only code identity
-        if: needs.validate.outputs.publish_draft != 'true'
+      - name: Configure Developer Preview or validation-only code identity
+        if: needs.validate.outputs.release_channel != 'stable'
         run: echo 'COLOSSUS_DESKTOP_TEAM_ID=ADHOC' >> "$GITHUB_ENV"
 
       - name: Configure the public release code identity
-        if: needs.validate.outputs.publish_draft == 'true'
+        if: needs.validate.outputs.release_channel == 'stable'
         shell: bash
         env:
           MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
@@ -314,12 +334,13 @@ jobs:
           retention-days: 1
 
   desktop_macos:
-    name: Sign and notarize Colossus Desktop aarch64-apple-darwin
+    name: Package Colossus Desktop aarch64-apple-darwin
     needs: [validate, desktop_macos_build]
     runs-on: macos-14
     timeout-minutes: 45
     env:
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
     steps:
       - name: Check out signing and verification scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -383,8 +404,8 @@ jobs:
           test ! -L "$app"
           printf 'COLOSSUS_DESKTOP_UNSIGNED_APP=%s\n' "$app" >> "$GITHUB_ENV"
 
-      - name: Configure validation-only ad-hoc signing
-        if: needs.validate.outputs.publish_draft != 'true'
+      - name: Configure Developer Preview or validation-only ad-hoc signing
+        if: needs.validate.outputs.release_channel != 'stable'
         shell: bash
         run: |
           set -euo pipefail
@@ -395,7 +416,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Import Developer ID and notarization credentials
-        if: needs.validate.outputs.publish_draft == 'true'
+        if: needs.validate.outputs.release_channel == 'stable'
         shell: bash
         env:
           DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
@@ -460,29 +481,44 @@ jobs:
             printf 'COLOSSUS_DESKTOP_TEAM_ID=%s\n' "$MACOS_TEAM_ID"
           } >> "$GITHUB_ENV"
 
-      - name: Sign, verify, notarize, and staple without running build tools
+      - name: Sign, verify, notarize, and staple the stable release
+        if: needs.validate.outputs.release_channel == 'stable'
+        run: ./scripts/package-desktop-macos sign "$COLOSSUS_DESKTOP_UNSIGNED_APP"
+
+      - name: Ad-hoc sign and verify the Developer Preview or validation bundle
+        if: needs.validate.outputs.release_channel != 'stable'
         run: ./scripts/package-desktop-macos sign "$COLOSSUS_DESKTOP_UNSIGNED_APP"
 
       - name: Name desktop archive and checksum
         shell: bash
         env:
-          PUBLISH_DRAFT: ${{ needs.validate.outputs.publish_draft }}
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
           source="$RUNNER_TEMP/desktop-sign/Colossus Desktop.zip"
           destination="$RUNNER_TEMP/desktop-release"
-          if [ "$PUBLISH_DRAFT" = true ]; then
-            archive="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip"
-          else
-            archive="Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip"
-          fi
+          case "$RELEASE_CHANNEL" in
+            stable)
+              archive="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              ;;
+            developer_preview)
+              archive="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              ;;
+            validation_only)
+              archive="Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              ;;
+            *)
+              echo "unexpected release channel: $RELEASE_CHANNEL" >&2
+              exit 1
+              ;;
+          esac
           test -f "$source"
           install -d -m 0700 "$destination"
           install -m 0644 "$source" "$destination/$archive"
           (cd "$destination" && shasum -a 256 "$archive" > "$archive.sha256")
 
-      - name: Upload signed Desktop archive and checksum
+      - name: Upload channel-labeled Desktop archive and checksum
         if: needs.validate.outputs.publish_draft == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -503,7 +539,7 @@ jobs:
           retention-days: 14
 
       - name: Remove ephemeral signing material
-        if: always() && needs.validate.outputs.publish_draft == 'true'
+        if: always() && needs.validate.outputs.release_channel == 'stable'
         shell: bash
         run: |
           security delete-keychain "$RUNNER_TEMP/colossus-desktop-signing.keychain-db" || true
@@ -547,11 +583,23 @@ jobs:
       - name: Verify complete release asset set
         shell: bash
         env:
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
           test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 14
-          desktop="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+          case "$RELEASE_CHANNEL" in
+            stable)
+              desktop="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              ;;
+            developer_preview)
+              desktop="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              ;;
+            *)
+              echo "refusing to publish release channel: $RELEASE_CHANNEL" >&2
+              exit 1
+              ;;
+          esac
           test -f "dist/$desktop"
           test -f "dist/$desktop.sha256"
           for checksum in dist/*.sha256; do
@@ -561,18 +609,46 @@ jobs:
       - name: Create or update human-approved draft
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
+          RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
           set -euo pipefail
           existing=$RUNNER_TEMP/existing-release.json
           api_error=$RUNNER_TEMP/existing-release.error
+          case "$RELEASE_CHANNEL" in
+            stable)
+              test "$RELEASE_PRERELEASE" = false
+              release_title="Colossus $RELEASE_TAG"
+              ;;
+            developer_preview)
+              test "$RELEASE_PRERELEASE" = true
+              release_title="Colossus $RELEASE_TAG - Developer Preview (Unnotarized)"
+              ;;
+            *)
+              echo "refusing to create release for channel: $RELEASE_CHANNEL" >&2
+              exit 1
+              ;;
+          esac
           if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
             >"$existing" 2>"$api_error"; then
-            jq -e '.draft == true' "$existing" >/dev/null || {
-              echo "refusing to modify an already published release" >&2
+            jq -e \
+              --argjson prerelease "$RELEASE_PRERELEASE" \
+              '.draft == true and .prerelease == $prerelease' \
+              "$existing" >/dev/null || {
+              echo "refusing to modify a published release or change its release kind" >&2
               exit 1
             }
+            if [ "$RELEASE_CHANNEL" = developer_preview ]; then
+              jq -e \
+                --arg title "$release_title" \
+                '.name == $title and (.body | contains("Developer Preview") and contains("not notarized"))' \
+                "$existing" >/dev/null || {
+                echo "refusing to modify a Developer Preview without its warning" >&2
+                exit 1
+              }
+            fi
             while IFS= read -r existing_asset; do
               test -f "dist/$existing_asset" || {
                 echo "refusing to retain unexpected draft asset: $existing_asset" >&2
@@ -581,9 +657,28 @@ jobs:
             done < <(jq -r '.assets[].name' "$existing")
             gh release upload "$RELEASE_TAG" dist/* --clobber
           elif grep -F '(HTTP 404)' "$api_error" >/dev/null; then
-            gh release create "$RELEASE_TAG" dist/* \
-              --draft --verify-tag --generate-notes \
-              --title "Colossus $RELEASE_TAG"
+            if [ "$RELEASE_CHANNEL" = developer_preview ]; then
+              preview_checksum="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip.sha256"
+              checksum_note=$(printf '%s `%s`.' \
+                'Keep the archive and its `.sha256` file together, then verify it with' \
+                "shasum -a 256 --check $preview_checksum")
+              preview_notes=$(printf '%s\n' \
+                '> [!WARNING]' \
+                '> **Developer Preview (Unnotarized):** This entire release is pre-release software for testing. The macOS Desktop build is ad-hoc signed and not notarized by Apple. macOS will require an explicit user-approved Gatekeeper override. Do not treat it as a stable or production release.' \
+                '' \
+                'The archive name includes `DEVELOPER-PREVIEW`.' \
+                "$checksum_note" \
+                '' \
+                'For first launch, extract the archive, Control-click **Colossus Desktop**, choose **Open**, then confirm **Open**. If macOS still blocks it, use **System Settings > Privacy & Security > Open Anyway**. Do not disable Gatekeeper globally.')
+              gh release create "$RELEASE_TAG" dist/* \
+                --draft --prerelease --verify-tag --generate-notes \
+                --notes "$preview_notes" \
+                --title "$release_title"
+            else
+              gh release create "$RELEASE_TAG" dist/* \
+                --draft --verify-tag --generate-notes \
+                --title "$release_title"
+            fi
           else
             cat "$api_error" >&2
             exit 1

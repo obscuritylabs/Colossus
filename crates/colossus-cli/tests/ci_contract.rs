@@ -308,10 +308,10 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
     let source = fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
         .expect("read release workflow");
     for required in [
-        "needs.validate.outputs.publish_draft != 'true'",
+        "needs.validate.outputs.release_channel != 'stable'",
         "COLOSSUS_DESKTOP_SIGNING_IDENTITY=-",
         "COLOSSUS_DESKTOP_TEAM_ID=ADHOC",
-        "needs.validate.outputs.publish_draft == 'true'",
+        "needs.validate.outputs.release_channel == 'stable'",
         "secrets.MACOS_DEVELOPER_ID_P12_BASE64",
         "secrets.MACOS_DEVELOPER_ID_P12_PASSWORD",
         "secrets.MACOS_NOTARY_API_KEY_BASE64",
@@ -337,6 +337,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "protected_hashes=()",
         "realpathSync(process.execPath)",
         "Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip",
+        "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
         "Upload non-runnable ADHOC validation archive and checksum",

@@ -141,6 +141,37 @@ p {
   background: var(--canvas);
 }
 
+.app-shell--developer-preview {
+  padding-top: 34px;
+}
+
+.release-channel-banner {
+  position: fixed;
+  z-index: 60;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 7px 16px;
+  border-bottom: 1px solid #a96d18;
+  background: #362510;
+  color: #f4c879;
+  font-size: 0.7rem;
+  letter-spacing: 0.01em;
+  text-align: center;
+}
+
+.release-channel-banner strong {
+  color: #ffe2a7;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .product-rail {
   position: relative;
   z-index: 5;

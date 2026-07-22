@@ -65,6 +65,7 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "workspace_version",
         "grep -F \"## [$version]\" CHANGELOG.md",
         "publish_draft=false",
+        "release_channel=validation_only",
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
         "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 14",
@@ -81,6 +82,80 @@ fn tag_validation_and_draft_publication_fail_closed() {
         field(draft, "if")
             .as_str()
             .is_some_and(|condition| condition.contains("publish_draft == 'true'"))
+    );
+}
+
+#[test]
+fn developer_preview_is_explicitly_ad_hoc_labeled_and_prerelease() {
+    let workflow = workflow("release.yml");
+    let release_jobs = jobs(&workflow);
+    let build = job(release_jobs, "desktop_macos_build");
+    let signing = job(release_jobs, "desktop_macos");
+
+    assert_eq!(
+        field(
+            named_step(build, "Configure the public release code identity"),
+            "if"
+        )
+        .as_str(),
+        Some("needs.validate.outputs.release_channel == 'stable'")
+    );
+    assert_eq!(
+        field(
+            named_step(
+                build,
+                "Configure Developer Preview or validation-only code identity"
+            ),
+            "if"
+        )
+        .as_str(),
+        Some("needs.validate.outputs.release_channel != 'stable'")
+    );
+    assert_eq!(
+        field(
+            named_step(signing, "Import Developer ID and notarization credentials"),
+            "if"
+        )
+        .as_str(),
+        Some("needs.validate.outputs.release_channel == 'stable'")
+    );
+    assert_eq!(
+        field(
+            named_step(
+                signing,
+                "Configure Developer Preview or validation-only ad-hoc signing"
+            ),
+            "if"
+        )
+        .as_str(),
+        Some("needs.validate.outputs.release_channel != 'stable'")
+    );
+
+    let source = fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
+        .expect("read release workflow");
+    for required in [
+        "-preview\\.([1-9][0-9]*)$",
+        "tag_channel=developer_preview",
+        "COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}",
+        "Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip",
+        "--draft --prerelease --verify-tag --generate-notes",
+        "Developer Preview (Unnotarized)",
+        "ad-hoc signed and not notarized by Apple",
+        "preview_checksum=\"Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip.sha256\"",
+        "shasum -a 256 --check $preview_checksum",
+        "System Settings > Privacy & Security > Open Anyway",
+        "Do not disable Gatekeeper globally",
+        ".prerelease == $prerelease",
+    ] {
+        assert!(
+            source.contains(required),
+            "Developer Preview contract is missing {required}"
+        );
+    }
+    assert_eq!(
+        source.matches("--prerelease").count(),
+        1,
+        "only the explicit Developer Preview branch may mark a GitHub release as prerelease"
     );
 }
 

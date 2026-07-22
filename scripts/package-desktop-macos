@@ -44,16 +44,30 @@ desktop="$repository/apps/desktop"
 tauri="$desktop/node_modules/.bin/tauri"
 release_version=${COLOSSUS_DESKTOP_RELEASE_VERSION:-}
 team_id=${COLOSSUS_DESKTOP_TEAM_ID:-}
+release_channel=${COLOSSUS_DESKTOP_RELEASE_CHANNEL:-}
 desktop_identifier=com.obscuritylabs.colossus.desktop
 sidecar_identifier=com.obscuritylabs.colossus.desktop.sidecar
 cli_identifier=com.obscuritylabs.colossus.desktop.cli
 
-canonical_team_id() {
+canonical_apple_team_id() {
     value=$1
-    if [ "$value" = ADHOC ]; then
-        return 0
-    fi
     printf '%s\n' "$value" | grep -Eq '^[A-Z0-9]{10}$'
+}
+
+validate_release_trust_configuration() {
+    case "$release_channel" in
+        stable)
+            canonical_apple_team_id "$team_id" ||
+                fail "stable packaging requires COLOSSUS_DESKTOP_TEAM_ID to be the public 10-character Apple Team ID"
+            ;;
+        developer_preview | validation_only)
+            [ "$team_id" = ADHOC ] ||
+                fail "$release_channel packaging requires COLOSSUS_DESKTOP_TEAM_ID=ADHOC"
+            ;;
+        *)
+            fail "COLOSSUS_DESKTOP_RELEASE_CHANNEL must be stable, developer_preview, or validation_only"
+            ;;
+    esac
 }
 
 resolve_target() {
@@ -78,6 +92,7 @@ case "$target" in
     aarch64-apple-darwin | x86_64-apple-darwin) ;;
     *) fail "unsupported macOS target triple: $target" ;;
 esac
+validate_release_trust_configuration
 
 target_dir=${CARGO_TARGET_DIR:-$desktop/src-tauri/target}
 case "$target_dir" in
@@ -156,15 +171,13 @@ build_unsigned_app() {
         [ -z "${NOTARY_ISSUER_ID:-}" ] || fail "build mode rejects notarization credential state"
         [ -z "${NOTARY_KEY_ID:-}" ] || fail "build mode rejects notarization credential state"
     fi
-    canonical_team_id "$team_id" ||
-        fail "build mode requires COLOSSUS_DESKTOP_TEAM_ID=ADHOC or the public 10-character Apple Team ID"
     command -v cargo >/dev/null 2>&1 || fail "cargo is not installed or not on PATH"
     command -v rustc >/dev/null 2>&1 || fail "rustc is not installed or not on PATH"
     command -v node >/dev/null 2>&1 || fail "node is not installed or not on PATH"
     [ -x "$tauri" ] || fail "run npm ci in apps/desktop before packaging"
     if [ -n "$release_version" ]; then
         printf '%s\n' "$release_version" |
-            grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+            grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' ||
             fail "desktop release version must be canonical semantic versioning"
     fi
 
@@ -211,7 +224,7 @@ verify_signed_code() {
         fail "signed desktop code identifier does not match its fixed role"
     if [ "$team_id" = ADHOC ]; then
         [ "$actual_team" = "not set" ] ||
-            fail "validation-only ADHOC code unexpectedly has a TeamIdentifier"
+            fail "ad-hoc signed code unexpectedly has a TeamIdentifier"
     else
         [ "$actual_team" = "$team_id" ] ||
             fail "signed desktop code TeamIdentifier does not match COLOSSUS_DESKTOP_TEAM_ID"
@@ -222,14 +235,17 @@ sign_app() {
     app=$1
     identity=${COLOSSUS_DESKTOP_SIGNING_IDENTITY:-}
     notary_keychain=${COLOSSUS_DESKTOP_NOTARY_KEYCHAIN:-}
-    [ -n "$identity" ] || fail "set COLOSSUS_DESKTOP_SIGNING_IDENTITY to a Developer ID Application identity (or '-' for validation-only ADHOC packaging)"
-    canonical_team_id "$team_id" ||
-        fail "sign mode requires COLOSSUS_DESKTOP_TEAM_ID=ADHOC or the public 10-character Apple Team ID"
-    if [ "$identity" = - ]; then
-        [ "$team_id" = ADHOC ] || fail "ad-hoc signing requires the explicit validation-only ADHOC team sentinel"
-    else
-        [ "$team_id" != ADHOC ] || fail "Developer ID signing requires a canonical Apple Team ID"
-    fi
+    [ -n "$identity" ] || fail "set COLOSSUS_DESKTOP_SIGNING_IDENTITY to a Developer ID Application identity (or '-' for ad-hoc packaging)"
+    case "$release_channel" in
+        stable)
+            [ "$identity" != - ] || fail "stable packaging requires a Developer ID Application identity"
+            ;;
+        developer_preview | validation_only)
+            [ "$identity" = - ] || fail "$release_channel packaging requires the ad-hoc '-' signing identity"
+            [ -z "${COLOSSUS_DESKTOP_NOTARY_PROFILE:-}" ] || fail "$release_channel packaging cannot claim notarization"
+            [ -z "$notary_keychain" ] || fail "$release_channel packaging cannot use a notarization keychain"
+            ;;
+    esac
     command -v codesign >/dev/null 2>&1 || fail "codesign is not installed or not on PATH"
     command -v node >/dev/null 2>&1 || fail "node is not installed or not on PATH"
 
@@ -243,6 +259,7 @@ sign_app() {
     sign_one "$cli" "$cli_identifier"
     node "$script_dir/write-desktop-bundle-manifest.mjs" \
         --target "$target" \
+        --release-channel "$release_channel" \
         --sidecar "$sidecar" \
         --cli "$cli" \
         --output "$manifest"
@@ -259,7 +276,8 @@ sign_app() {
     verify_signed_code "$main" "$desktop_identifier"
     verify_signed_code "$app" "$desktop_identifier"
     codesign --verify --deep --strict --verbose=2 "$app"
-    node "$script_dir/verify-desktop-bundle.mjs" --app "$app" --target "$target"
+    node "$script_dir/verify-desktop-bundle.mjs" \
+        --app "$app" --target "$target" --release-channel "$release_channel"
 
     if [ -n "${COLOSSUS_DESKTOP_NOTARY_PROFILE:-}" ]; then
         [ "$identity" != - ] || fail "notarization requires a Developer ID Application identity"
@@ -292,7 +310,8 @@ sign_app() {
         verify_signed_code "$main" "$desktop_identifier"
         verify_signed_code "$app" "$desktop_identifier"
         codesign --verify --deep --strict --verbose=2 "$app"
-        node "$script_dir/verify-desktop-bundle.mjs" --app "$app" --target "$target"
+        node "$script_dir/verify-desktop-bundle.mjs" \
+            --app "$app" --target "$target" --release-channel "$release_channel"
         spctl --assess --type execute --verbose=2 "$app"
         rm -f "$upload"
     fi
@@ -301,7 +320,9 @@ sign_app() {
     rm -f "$archive"
     /usr/bin/ditto -c -k --keepParent "$app" "$archive"
 
-    if [ "$team_id" = ADHOC ]; then
+    if [ "$release_channel" = developer_preview ]; then
+        printf 'Packaged ad-hoc signed Developer Preview (not notarized): %s\n' "$archive"
+    elif [ "$release_channel" = validation_only ]; then
         printf 'Packaged validation-only ADHOC bundle (Managed Local runtime intentionally rejects it): %s\n' "$archive"
     elif [ -n "${COLOSSUS_DESKTOP_NOTARY_PROFILE:-}" ]; then
         printf 'Packaged signed and notarized Managed Local application: %s\n' "$archive"

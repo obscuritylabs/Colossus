@@ -2,9 +2,10 @@ use crate::{
     AgentRunClient, ApiResult, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
     CreateRunRequest, CreateRunResponse, CredentialProvider, GetRunRequest, GetRunResponse,
     GrpcBackend, GrpcConnectOptions, InteractionAnswer, ListRunsRequest, ListRunsResponse,
-    NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
-    RespondInteractionResponse, RunUpdateStream, SdkError, SdkResult, Secret,
-    SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, TlsFingerprint, WatchRunRequest,
+    MacosCodeSigningRequirement, NativeSidecarFailure, NativeSidecarStatus,
+    RespondInteractionRequest, RespondInteractionResponse, RunUpdateStream, SdkError, SdkResult,
+    Secret, SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, TlsFingerprint,
+    WatchRunRequest,
 };
 #[cfg(test)]
 use crate::{ApiError, ApiErrorReason};
@@ -1793,7 +1794,10 @@ fn verify_executable(
         .flush()
         .and_then(|()| snapshot.seek(SeekFrom::Start(0)).map(drop))
         .map_err(|_| SdkError::IdentityMismatch)?;
-    verify_macos_release_identity(executable.path())?;
+    verify_macos_release_identity(
+        executable.path(),
+        executable.macos_code_signing_requirement(),
+    )?;
     if !identity.matches_path(executable.path()) {
         return Err(SdkError::IdentityMismatch);
     }
@@ -1912,11 +1916,18 @@ fn verify_private_directory(path: &Path) -> SdkResult<PathBuf> {
 }
 
 #[cfg(all(target_os = "macos", not(debug_assertions)))]
-fn verify_macos_release_identity(path: &Path) -> SdkResult<()> {
+fn verify_macos_release_identity(
+    path: &Path,
+    requirement: MacosCodeSigningRequirement,
+) -> SdkResult<()> {
     let parent = std::env::current_exe().map_err(|_| SdkError::IdentityMismatch)?;
     verify_codesign(path)?;
     verify_codesign(&parent)?;
-    if codesign_team_identifier(path)? != codesign_team_identifier(&parent)? {
+    if !matching_code_signing_authority(
+        requirement,
+        &codesign_authority(path)?,
+        &codesign_authority(&parent)?,
+    ) {
         return Err(SdkError::IdentityMismatch);
     }
     Ok(())
@@ -1938,7 +1949,7 @@ fn verify_codesign(path: &Path) -> SdkResult<()> {
 }
 
 #[cfg(all(target_os = "macos", not(debug_assertions)))]
-fn codesign_team_identifier(path: &Path) -> SdkResult<String> {
+fn codesign_authority(path: &Path) -> SdkResult<MacosCodeSigningAuthority> {
     let output = std::process::Command::new("/usr/bin/codesign")
         .env_clear()
         .args(["-d", "--verbose=4"])
@@ -1949,24 +1960,61 @@ fn codesign_team_identifier(path: &Path) -> SdkResult<String> {
         return Err(SdkError::IdentityMismatch);
     }
     let output = std::str::from_utf8(&output.stderr).map_err(|_| SdkError::IdentityMismatch)?;
-    let team = output
-        .lines()
-        .find_map(|line| line.strip_prefix("TeamIdentifier="))
-        .filter(|team| {
-            !team.is_empty()
-                && *team != "not set"
-                && team.len() <= 128
-                && team
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
-        })
-        .ok_or(SdkError::IdentityMismatch)?;
-    Ok(team.to_owned())
+    parse_codesign_authority(output)
 }
 
 #[cfg(any(not(target_os = "macos"), debug_assertions))]
-fn verify_macos_release_identity(_path: &Path) -> SdkResult<()> {
+fn verify_macos_release_identity(
+    _path: &Path,
+    _requirement: MacosCodeSigningRequirement,
+) -> SdkResult<()> {
     Ok(())
+}
+
+#[cfg(any(test, all(target_os = "macos", not(debug_assertions))))]
+#[derive(Debug, Eq, PartialEq)]
+enum MacosCodeSigningAuthority {
+    AppleTeam(String),
+    AdHoc,
+}
+
+#[cfg(any(test, all(target_os = "macos", not(debug_assertions))))]
+fn parse_codesign_authority(details: &str) -> SdkResult<MacosCodeSigningAuthority> {
+    let mut teams = details
+        .lines()
+        .filter_map(|line| line.strip_prefix("TeamIdentifier="));
+    let team = teams.next().ok_or(SdkError::IdentityMismatch)?;
+    if teams.next().is_some() {
+        return Err(SdkError::IdentityMismatch);
+    }
+    if team == "not set" {
+        return Ok(MacosCodeSigningAuthority::AdHoc);
+    }
+    if team.len() == 10
+        && team
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+    {
+        Ok(MacosCodeSigningAuthority::AppleTeam(team.to_owned()))
+    } else {
+        Err(SdkError::IdentityMismatch)
+    }
+}
+
+#[cfg(any(test, all(target_os = "macos", not(debug_assertions))))]
+fn matching_code_signing_authority(
+    requirement: MacosCodeSigningRequirement,
+    child: &MacosCodeSigningAuthority,
+    parent: &MacosCodeSigningAuthority,
+) -> bool {
+    match requirement {
+        MacosCodeSigningRequirement::AppleTeam => {
+            matches!(child, MacosCodeSigningAuthority::AppleTeam(_)) && child == parent
+        }
+        MacosCodeSigningRequirement::AdHocDeveloperPreview => {
+            child == &MacosCodeSigningAuthority::AdHoc && parent == child
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2140,6 +2188,68 @@ mod tests {
                 .expect("idempotency key"),
             response,
         }
+    }
+
+    #[test]
+    fn macos_code_signing_requirement_defaults_to_team_and_preview_is_explicit() {
+        let executable = VerifiedExecutable::new(
+            std::env::current_exe().expect("current test executable"),
+            Sha256Digest::from_bytes([7; 32]),
+        )
+        .expect("portable executable identity");
+        assert_eq!(
+            executable.macos_code_signing_requirement(),
+            MacosCodeSigningRequirement::AppleTeam
+        );
+        assert_eq!(
+            executable
+                .with_macos_code_signing_requirement(
+                    MacosCodeSigningRequirement::AdHocDeveloperPreview,
+                )
+                .macos_code_signing_requirement(),
+            MacosCodeSigningRequirement::AdHocDeveloperPreview
+        );
+
+        let team = MacosCodeSigningAuthority::AppleTeam("A1B2C3D4E5".into());
+        let other_team = MacosCodeSigningAuthority::AppleTeam("F6G7H8I9J0".into());
+        let ad_hoc = MacosCodeSigningAuthority::AdHoc;
+
+        assert!(matching_code_signing_authority(
+            MacosCodeSigningRequirement::AppleTeam,
+            &team,
+            &team
+        ));
+        assert!(!matching_code_signing_authority(
+            MacosCodeSigningRequirement::AppleTeam,
+            &team,
+            &other_team
+        ));
+        assert!(!matching_code_signing_authority(
+            MacosCodeSigningRequirement::AppleTeam,
+            &ad_hoc,
+            &ad_hoc
+        ));
+        assert!(matching_code_signing_authority(
+            MacosCodeSigningRequirement::AdHocDeveloperPreview,
+            &ad_hoc,
+            &ad_hoc
+        ));
+        assert!(!matching_code_signing_authority(
+            MacosCodeSigningRequirement::AdHocDeveloperPreview,
+            &team,
+            &team
+        ));
+
+        assert_eq!(
+            parse_codesign_authority("Identifier=child\nTeamIdentifier=not set\n")
+                .expect("explicit ad-hoc authority"),
+            MacosCodeSigningAuthority::AdHoc
+        );
+        assert!(
+            parse_codesign_authority("TeamIdentifier=A1B2C3D4E5\nTeamIdentifier=A1B2C3D4E5\n")
+                .is_err()
+        );
+        assert!(parse_codesign_authority("TeamIdentifier=not-canonical\n").is_err());
     }
 
     #[cfg(unix)]
