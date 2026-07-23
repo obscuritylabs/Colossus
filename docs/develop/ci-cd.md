@@ -63,6 +63,14 @@ flowchart LR
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
+The four-core `ubuntu-latest-m` larger runner is reserved for the longest CPU-bound x64
+Linux lane in each tier: complete PR validation, live OCI/OPA acceptance, release
+readiness, and the x86_64 Linux release artifact. Short control jobs, documentation,
+dependency inspection, service-backed integration tests, and bounded single-process
+fuzzing stay on standard or slim runners so larger-runner capacity is not spent where it
+does not materially shorten the critical path. The repository's
+`.github/actionlint.yaml` registers the provisioned larger-runner name so local workflow
+linting recognizes it.
 
 ## Steps
 

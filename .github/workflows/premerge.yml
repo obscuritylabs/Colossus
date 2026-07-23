@@ -347,7 +347,7 @@ jobs:
     name: OCI and OPA security acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-m
     timeout-minutes: 40
     steps:
       - name: Check out repository

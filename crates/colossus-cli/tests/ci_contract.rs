@@ -21,6 +21,28 @@ fn workflows_are_split_and_the_catch_all_is_removed() {
 }
 
 #[test]
+fn actionlint_recognizes_the_provisioned_larger_runner() {
+    let path = repository_root().join(".github/actionlint.yaml");
+    let source = fs::read_to_string(&path).expect("read actionlint configuration");
+    let config: serde_json::Value =
+        serde_saphyr::from_str(&source).expect("parse actionlint configuration");
+    let labels = strings(
+        field(
+            mapping(
+                field(
+                    mapping(&config, "actionlint configuration"),
+                    "self-hosted-runner",
+                ),
+                "custom runner configuration",
+            ),
+            "labels",
+        ),
+        "custom runner labels",
+    );
+    assert_eq!(labels, ["ubuntu-latest-m".to_owned()].into_iter().collect());
+}
+
+#[test]
 fn pr_workflow_selects_only_the_required_validation_tier() {
     let workflow = workflow("pr.yml");
     let root = mapping(&workflow, "PR workflow");
@@ -56,7 +78,7 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("ubuntu-latest")
+        Some("ubuntu-latest-m")
     );
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
@@ -246,6 +268,10 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
             "pre-merge tier contains {forbidden}"
         );
     }
+    assert_eq!(
+        field(job(jobs, "live-security"), "runs-on").as_str(),
+        Some("ubuntu-latest-m")
+    );
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
     let native_source =
@@ -270,6 +296,10 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
 fn release_includes_a_signed_notarized_apple_silicon_desktop() {
     let workflow = workflow("release.yml");
     let release_jobs = jobs(&workflow);
+    assert_eq!(
+        field(job(release_jobs, "validate"), "runs-on").as_str(),
+        Some("ubuntu-latest-m")
+    );
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
     assert_eq!(field(desktop_build, "runs-on").as_str(), Some("macos-14"));
@@ -334,6 +364,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
         "Upload non-runnable ADHOC validation archive and checksum",
+        "- runner: ubuntu-latest-m\n            target: x86_64-unknown-linux-musl",
         "shasum -a 256",
         "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
         "desktop_macos=${{ needs.desktop_macos.result }}",
@@ -591,6 +622,17 @@ fn devcontainer_pins_the_supported_cross_language_toolchains() {
 
     let dockerfile = fs::read_to_string(root.join(".devcontainer/Dockerfile"))
         .expect("read dev container Dockerfile");
+    let base_images = dockerfile
+        .lines()
+        .filter(|line| line.starts_with("FROM "))
+        .collect::<Vec<_>>();
+    assert_eq!(base_images.len(), 5);
+    for image in base_images {
+        assert!(
+            image.contains("@sha256:"),
+            "dev container base image must be immutable: {image}"
+        );
+    }
     for required in [
         "node:22.18.0-bookworm-slim",
         "python:3.10.18-slim-bookworm",

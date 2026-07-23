@@ -19,12 +19,12 @@ test loop.
 - A source checkout at the repository root.
 
 The tracked development container is the supported ready-to-build Linux environment.
-It uses the official Debian Bookworm base and Rust feature, selects Clang for native
-dependencies, pins the Rust, Node.js, Python, and Go versions used by CI, includes the
-Tauri system libraries, installs the pinned `actionlint`, `cargo-deny`, and
-`cargo-audit` tools used by the local PR gate, and provides an isolated Docker daemon
-for documentation builds. In Codespaces or VS Code, rebuild the container after
-changing `.devcontainer/`.
+It uses digest-pinned official Debian Bookworm base images and a locked Rust feature,
+selects Clang for native dependencies, pins the Rust, Node.js, Python, and Go versions
+used by CI, includes the Tauri system libraries, installs the pinned `actionlint`,
+`cargo-deny`, and `cargo-audit` tools used by the local PR gate, and provides an isolated
+Docker daemon for documentation builds. In Codespaces or VS Code, rebuild the container
+after changing `.devcontainer/`.
 
 Rust API contract builds use the exact cross-platform `protoc-bin-vendored` workspace
 dependency, so contributors and release runners do not need an ambient `protoc` binary.
