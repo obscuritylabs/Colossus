@@ -6799,6 +6799,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask"
+version = "0.10.1-preview.2"
+
+[[package]]
 name = "yasna"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

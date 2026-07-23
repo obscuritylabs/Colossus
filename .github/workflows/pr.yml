@@ -156,26 +156,9 @@ jobs:
           workspaces: . -> target
           cache-targets: false
 
-      - name: Check formatting and repository structure
-        run: |
-          cargo fmt --all -- --check
-          cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
-          ./scripts/check_crate_roots.sh
-
-      - name: Validate locked metadata
-        run: |
-          cargo metadata --locked --no-deps --format-version 1 >/dev/null
-          cargo metadata --locked --manifest-path fuzz/Cargo.toml --no-deps --format-version 1 >/dev/null
-
-      - name: Run Clippy with warnings denied
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
-
       - name: Test Managed Local sidecar contracts
         if: needs.classify.outputs.desktop_required == 'true'
-        run: >-
-          cargo test --locked
-          --package colossus-sidecar-protocol
-          --package colossus-sidecar
+        run: cargo xtask check sidecar
 
       - name: Prepare exact-path AppArmor profile for workspace tests
         run: |
@@ -186,198 +169,19 @@ jobs:
           sudo release/install-apparmor.sh /usr/local/libexec/colossus-ci/colossus
           echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/local/libexec/colossus-ci/colossus' >> "$GITHUB_ENV"
 
-      - name: Run complete workspace tests
-        run: cargo test --locked --workspace
+      - name: Run complete Rust validation
+        run: cargo xtask check rust
 
-      - name: Lint locked fuzz harnesses on stable
-        run: cargo clippy --locked --manifest-path fuzz/Cargo.toml --bins -- -D warnings
-
-      - name: Install pinned local SDK toolchains
+      - name: Validate public SDKs
         if: needs.classify.outputs.sdk_required == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./sdk/scripts/install-codegen-tools
-          ./sdk/python/.codegen/bin/python -m pip install \
-            --disable-pip-version-check \
-            --no-deps \
-            --requirement sdk/python/requirements-dev.txt
-          ./sdk/python/.codegen/bin/python -m pip check
-
-      - name: Reject hosted schema generators
-        if: needs.classify.outputs.sdk_required == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if grep -Eq '^[[:space:]]*remote:' sdk/buf.gen.yaml; then
-            echo "hosted Buf plugins may not receive the Colossus schema" >&2
-            exit 1
-          fi
-
-      - name: Check public API compatibility with the PR base
-        if: needs.classify.outputs.sdk_required == 'true'
-        shell: bash
         env:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: ./sdk/scripts/check-breaking "$EVENT_BASE_SHA"
-
-      - name: Lint, build, and generate the local Protobuf contract
-        if: needs.classify.outputs.sdk_required == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./sdk/scripts/generate
-          ./sdk/scripts/check-generated
-          generated_status=$(git status --porcelain --untracked-files=all -- \
-            sdk/generated-inputs.sha256 \
-            sdk/go/gen \
-            sdk/go/generated-output.sha256 \
-            sdk/python/generated \
-            sdk/python/generated-output.sha256 \
-            sdk/typescript/src/gen \
-            sdk/typescript/generated-output.sha256)
-          if [ -n "$generated_status" ]; then
-            echo "committed SDK bindings are stale:" >&2
-            echo "$generated_status" >&2
-            exit 1
-          fi
-
-      - name: Check, test, build, and pack the TypeScript SDK
-        if: needs.classify.outputs.sdk_required == 'true'
-        working-directory: sdk/typescript
-        env:
           npm_config_cache: ${{ runner.temp }}/npm-pack-cache
-        run: |
-          npm run check
-          npm test
-          npm run build
-          npm pack --dry-run --json --silent >"${{ runner.temp }}/typescript-pack.json"
-          PACK_JSON="${{ runner.temp }}/typescript-pack.json" node - <<'NODE'
-          const { readFileSync } = require("node:fs");
+        run: cargo xtask check sdk --base "$EVENT_BASE_SHA"
 
-          const reports = JSON.parse(readFileSync(process.env.PACK_JSON, "utf8"));
-          if (!Array.isArray(reports) || reports.length !== 1) {
-            throw new Error("npm pack returned an unexpected report");
-          }
-          const paths = new Set(reports[0].files.map(({ path }) => path));
-          const required = [
-            "LICENSE",
-            "README.md",
-            "package.json",
-            "dist/index.js",
-            "dist/index.d.ts",
-            "dist/error.js",
-            "dist/gen/colossus/api/v1alpha1/agent_run.js",
-            "dist/gen/colossus/api/v1alpha1/agent_run.d.ts",
-            "dist/gen/google/rpc/status.js",
-            "dist/gen/google/rpc/status.d.ts",
-          ];
-          for (const path of required) {
-            if (!paths.has(path)) {
-              throw new Error(`TypeScript package is missing ${path}`);
-            }
-          }
-          for (const path of paths) {
-            if (path.startsWith("src/") || path.startsWith(".test-dist/")) {
-              throw new Error(`TypeScript package contains development source: ${path}`);
-            }
-          }
-          NODE
-
-      - name: Check, test, and build the Python SDK
-        if: needs.classify.outputs.sdk_required == 'true'
-        working-directory: sdk/python
-        shell: bash
-        run: |
-          set -euo pipefail
-          .codegen/bin/ruff format --check .
-          .codegen/bin/ruff check .
-          .codegen/bin/mypy
-          PYTHONPATH=src:generated .codegen/bin/python -m unittest discover -s tests
-          .codegen/bin/python -m build --no-isolation
-
-      - name: Smoke-test the built Python wheel
-        if: needs.classify.outputs.sdk_required == 'true'
-        working-directory: sdk/python
-        shell: bash
-        run: |
-          set -euo pipefail
-          wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
-          test -n "$wheel"
-          WHEEL_PATH="$wheel" .codegen/bin/python - <<'PY'
-          import os
-          import zipfile
-
-          wheel = os.environ["WHEEL_PATH"]
-          with zipfile.ZipFile(wheel) as archive:
-              names = set(archive.namelist())
-          assert any(name.endswith(".dist-info/licenses/LICENSE") for name in names), names
-          assert "colossus/api/v1alpha1/py.typed" in names, names
-          assert not any(name.startswith("google/") for name in names), names
-          PY
-          sdist=$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)
-          test -n "$sdist"
-          SDIST_PATH="$sdist" .codegen/bin/python - <<'PY'
-          import os
-          import tarfile
-
-          with tarfile.open(os.environ["SDIST_PATH"]) as archive:
-              names = set(archive.getnames())
-
-          def contains(suffix: str) -> bool:
-              return any(name.endswith(suffix) for name in names)
-
-          assert contains("/generated-output.sha256"), names
-          assert contains("/generated/colossus/api/v1alpha1/agent_run_pb2.py"), names
-          assert contains("/generated/colossus/api/v1alpha1/py.typed"), names
-          assert not any("/generated/google/" in name for name in names), names
-          PY
-          smoke_root=$(mktemp -d "${RUNNER_TEMP}/colossus-python-wheel.XXXXXX")
-          .codegen/bin/python -m pip install \
-            --disable-pip-version-check \
-            --no-deps \
-            --no-index \
-            --target "$smoke_root" \
-            "$wheel"
-          PYTHONPATH="$smoke_root" .codegen/bin/python - <<'PY'
-          from colossus.api.v1alpha1.agent_run_pb2 import RunResult, RunStateChanged, RunUpdate
-          from colossus_sdk import decode_colossus_rpc_error, is_terminal_run_update
-          from google.rpc.status_pb2 import Status
-
-          assert callable(decode_colossus_rpc_error)
-          assert Status(code=3).code == 3
-          assert is_terminal_run_update(RunUpdate(result=RunResult()))
-          assert not is_terminal_run_update(RunUpdate(state=RunStateChanged()))
-          PY
-
-      - name: Format, test, and vet the Go SDK
-        if: needs.classify.outputs.sdk_required == 'true'
-        working-directory: sdk/go
-        shell: bash
-        run: |
-          set -euo pipefail
-          unformatted=$(find . -name '*.go' -type f -print0 | xargs -0 gofmt -l)
-          if [ -n "$unformatted" ]; then
-            echo "unformatted Go SDK files:" >&2
-            echo "$unformatted" >&2
-            exit 1
-          fi
-          go test -mod=readonly ./...
-          go vet -mod=readonly ./...
-
-      - name: Install locked desktop renderer dependencies
+      - name: Validate desktop renderer
         if: needs.classify.outputs.desktop_required == 'true'
-        working-directory: apps/desktop
-        run: |
-          npm ci --ignore-scripts
-          npm audit --audit-level=high
-
-      - name: Check and build the desktop renderer
-        if: needs.classify.outputs.desktop_required == 'true'
-        working-directory: apps/desktop
-        run: |
-          npm run check
-          npm run build
+        run: cargo xtask check desktop
 
   documentation:
     name: Documentation PR build
@@ -422,23 +226,8 @@ jobs:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2
           fallback: none
 
-      - name: Enforce production and fuzz dependency policy
-        run: |
-          cargo deny --locked check -A license-not-encountered licenses sources bans
-          cargo deny --locked check -D warnings advisories
-          cargo audit -D warnings --file Cargo.lock
-          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
-          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
-          cargo audit --no-fetch -D warnings --file fuzz/Cargo.lock
-
-      - name: Enforce standalone desktop dependency policy
-        run: cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --config deny.toml --locked check -A duplicate -A license-not-encountered licenses sources bans
-
-      - name: Audit standalone desktop vulnerabilities
-        # Tauri's lockfile contains target-specific GTK3 maintenance advisories even
-        # on macOS. cargo-audit still fails on vulnerabilities while reporting those
-        # informational warnings for review.
-        run: cargo audit --no-fetch --file apps/desktop/src-tauri/Cargo.lock
+      - name: Enforce dependency policy
+        run: cargo xtask check dependencies
 
   gate:
     name: Colossus PR gate

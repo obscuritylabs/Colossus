@@ -1,10 +1,33 @@
 {
-  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "name": "Colossus",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "features": {
     "ghcr.io/devcontainers/features/rust:1": {
       "version": "1.96.0",
       "profile": "minimal",
-      "components": "rustfmt,clippy"
+      "components": "rust-analyzer,rust-src,rustfmt,clippy"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:4": {
+      "moby": true,
+      "dockerDashComposeVersion": "v2"
+    }
+  },
+  "containerEnv": {
+    "CC": "clang",
+    "CXX": "clang++"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "dbaeumer.vscode-eslint",
+        "ms-python.python",
+        "golang.Go"
+      ]
     }
   }
 }

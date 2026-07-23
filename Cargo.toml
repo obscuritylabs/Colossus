@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "xtask",
     "crates/colossus-domain",
     "crates/colossus-contracts",
     "crates/colossus-api-proto",

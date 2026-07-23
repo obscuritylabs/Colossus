@@ -149,16 +149,8 @@ jobs:
           workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
           key: premerge-macos-desktop-arm
           cache-targets: false
-      - name: Install locked desktop renderer dependencies
-        working-directory: apps/desktop
-        run: |
-          npm ci --ignore-scripts
-          npm audit --audit-level=high
-      - name: Check and build the desktop renderer
-        working-directory: apps/desktop
-        run: |
-          npm run check
-          npm run build
+      - name: Validate desktop renderer
+        run: cargo xtask check desktop
       - name: Prepare verified debug desktop executables
         run: ./scripts/prepare-desktop-binaries debug
       - name: Check desktop native formatting and lints
@@ -278,21 +270,8 @@ jobs:
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2
           fallback: none
-      - name: Enforce production and fuzz dependency policy
-        run: |
-          cargo deny --locked check -A license-not-encountered licenses sources bans
-          cargo deny --locked check -D warnings advisories
-          cargo audit -D warnings --file Cargo.lock
-          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
-          cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings advisories
-          cargo audit --no-fetch -D warnings --file fuzz/Cargo.lock
-      - name: Enforce standalone desktop dependency policy
-        run: cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --config deny.toml --locked check -A duplicate -A license-not-encountered licenses sources bans
-      - name: Audit standalone desktop vulnerabilities
-        # Tauri's lockfile contains target-specific GTK3 maintenance advisories even
-        # on macOS. cargo-audit still fails on vulnerabilities while reporting those
-        # informational warnings for review.
-        run: cargo audit --no-fetch --file apps/desktop/src-tauri/Cargo.lock
+      - name: Enforce dependency policy
+        run: cargo xtask check dependencies
 
   chroma:
     name: Chroma ${{ matrix.chroma }} compatibility
