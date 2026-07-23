@@ -8,6 +8,20 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.1-preview.2] - 2026-07-22
+
+### Fixed
+
+- Bound the checkout-free draft-release job directly to its GitHub repository so the
+  validated artifacts can be assembled into the human-approved Developer Preview draft.
+
+### Upgrade Notes
+
+- `v0.10.1-preview.2` supersedes `v0.10.1-preview.1` as the current Developer Preview
+  candidate. It remains prerelease software; its Desktop build is ad-hoc signed, is not
+  Apple-notarized, and uses the archive name
+  `Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.1-preview.2-aarch64-apple-darwin.zip`.
+
 ## [0.10.1-preview.1] - 2026-07-22
 
 ### Added

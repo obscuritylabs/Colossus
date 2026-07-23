@@ -406,6 +406,18 @@ test("release compilation and signing authority use separate runners", () => {
   );
 });
 
+test("draft release binds GitHub CLI without checking out tagged sources", () => {
+  const workflow = read(".github/workflows/release.yml");
+  const draftStart = workflow.indexOf("  draft-release:");
+  assert.ok(draftStart >= 0);
+
+  const draftJob = workflow.slice(draftStart);
+  assert.match(draftJob, /GH_REPO: \$\{\{ github\.repository \}\}/u);
+  assert.match(draftJob, /gh release upload "\$RELEASE_TAG" dist\/\*/u);
+  assert.match(draftJob, /gh release create "\$RELEASE_TAG" dist\/\*/u);
+  assert.doesNotMatch(draftJob, /actions\/checkout@/u);
+});
+
 test("release manifest writer emits exact final binary digests", () => {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), "colossus-desktop-contract-")),

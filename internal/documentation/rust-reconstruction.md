@@ -8,7 +8,7 @@ replacement:
 
 # Rust Runtime Status
 
-Rust 0.10.1-preview.1 is the active repository-root Developer Preview candidate. It uses
+Rust 0.10.1-preview.2 is the active repository-root Developer Preview candidate. It uses
 Rust 1.96, edition 2024, strict YAML configuration, and encrypted redb state. It never
 imports Python configuration or SQLite state. Python 0.5 remains frozen at
 `python-v0.5.0` and on the `python-legacy` branch.
@@ -82,7 +82,7 @@ configuration surface.
 
 The repository-root cutover is complete. The 0.10 line adds the authenticated public API
 and language SDKs, the Operations Studio Desktop, and its supervised Managed Local
-runtime to the previously published baseline. `v0.10.1-preview.1` is an explicitly
+runtime to the previously published baseline. `v0.10.1-preview.2` is an explicitly
 unnotarized Developer Preview, not a stable release. Ordinary pull requests use
 classified validation; the full platform, security, CLI, and channel-specific Desktop
 artifact matrix must pass the explicit release gates before it is tagged.

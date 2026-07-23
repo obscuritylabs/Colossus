@@ -70,12 +70,12 @@ signed bundle. Linux jobs also prove static linkage and package the AppArmor ins
 ### Developer Preview
 
 `vX.Y.Z-preview.N` with `N > 0` is the only credential-free tag path that may produce a
-runnable Desktop. The current release is `v0.10.1-preview.1`; create it from the reviewed
+runnable Desktop. The current release is `v0.10.1-preview.2`; create it from the reviewed
 `main` commit with:
 
 ```bash
-git tag -a v0.10.1-preview.1 -m "Colossus v0.10.1-preview.1 - Developer Preview"
-git push origin v0.10.1-preview.1
+git tag -a v0.10.1-preview.2 -m "Colossus v0.10.1-preview.2 - Developer Preview"
+git push origin v0.10.1-preview.2
 ```
 
 This tag pattern selects the `developer_preview` channel, `ADHOC` Team ID sentinel, and

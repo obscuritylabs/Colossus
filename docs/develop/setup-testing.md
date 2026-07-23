@@ -134,7 +134,7 @@ preview channel. Never attach a notary profile to this build:
 
 ```bash
 cd apps/desktop
-COLOSSUS_DESKTOP_RELEASE_VERSION=0.10.1-preview.1 \
+COLOSSUS_DESKTOP_RELEASE_VERSION=0.10.1-preview.2 \
 COLOSSUS_DESKTOP_RELEASE_CHANNEL=developer_preview \
 COLOSSUS_DESKTOP_TEAM_ID=ADHOC \
 COLOSSUS_DESKTOP_SIGNING_IDENTITY=- \
@@ -170,7 +170,7 @@ certificate's Team ID, grant key access only to the macOS signing tools, store t
 profile in that ephemeral keychain, and delete the decoded files and keychain in an
 `always()` cleanup step. Missing or inconsistent configuration fails a stable tag release
 closed. A canonical `vX.Y.Z-preview.N` Developer Preview tag (currently
-`v0.10.1-preview.1`) is the only credential-free runnable tag path: it uses the ad-hoc
+`v0.10.1-preview.2`) is the only credential-free runnable tag path: it uses the ad-hoc
 preview channel, reads no Apple signing secret, and creates a clearly named unnotarized
 Desktop asset. Manual `workflow_dispatch` remains
 validation-only, uses ad-hoc signing,

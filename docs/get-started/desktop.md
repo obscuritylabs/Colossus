@@ -27,14 +27,14 @@ The offline self-test does not require a provider key or network connection.
 
 From a stable release, download
 `Colossus-Desktop-vX.Y.Z-aarch64-apple-darwin.zip` and its adjacent `.sha256` file. For
-the `v0.10.1-preview.1` Developer Preview, use the deliberately different name
-`Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.1-preview.1-aarch64-apple-darwin.zip` and its
+the `v0.10.1-preview.2` Developer Preview, use the deliberately different name
+`Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.1-preview.2-aarch64-apple-darwin.zip` and its
 adjacent `.sha256` file. Keep both files together and verify the archive before opening
 it. For the preview, run:
 
 ```bash
 shasum -a 256 -c \
-  Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.1-preview.1-aarch64-apple-darwin.zip.sha256
+  Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.1-preview.2-aarch64-apple-darwin.zip.sha256
 ```
 
 The check must report success. Expand the zip and move **Colossus Desktop** to
@@ -42,7 +42,7 @@ Applications. A checksum detects damage or substitution after the checksum was p
 it does not by itself authenticate the publisher.
 
 Stable Desktop releases are signed with Developer ID, notarized, stapled, and assessed
-before the draft asset is published. The `v0.10.1-preview.1` Developer Preview is
+before the draft asset is published. The `v0.10.1-preview.2` Developer Preview is
 different: it is ad-hoc signed and is not Apple-notarized. It retains Colossus's sealed
 bundle manifest and exact bundled-binary checks, but its signature does not establish
 Apple publisher identity. The app keeps a **Developer Preview — Ad-hoc signed and not
