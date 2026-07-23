@@ -583,21 +583,24 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
         RunEvent::Provider { .. } => return,
         RunEvent::Phase { .. } | RunEvent::ToolStarted { .. } => return,
     };
-    if let Some(document) =
-        SemanticRenderer::new(state.preferences.clone()).run_event_document(&event, call.as_ref())
-    {
-        state.append_entry(TranscriptEntry {
-            sequence: None,
-            kind,
-            document,
-            temporary: false,
-        });
+    let source = TranscriptRenderSource::RunEvent { event, call };
+    if let Some(document) = source.render(&state.preferences) {
+        state.append_entry_with_source(
+            TranscriptEntry {
+                sequence: None,
+                kind,
+                document,
+                temporary: false,
+            },
+            Some(source),
+        );
     }
 }
 
 pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResult) {
     if result.clear_transcript {
         state.transcript.clear();
+        state.transcript_sources.clear();
         state.end();
     }
     if !result.document.is_empty() {
@@ -610,13 +613,16 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
     }
     if let Some((session_id, page)) = result.session {
         state.session_id = session_id;
-        state.transcript = transcript_from_messages(page.messages, &state.preferences);
+        let (transcript, transcript_sources) =
+            transcript_from_messages(page.messages, &state.preferences);
+        state.transcript = transcript;
+        state.transcript_sources = transcript_sources;
         state.before_sequence = page.before_sequence;
         state.has_more = page.has_more;
         state.end();
     }
     if let Some(preferences) = result.preferences {
-        state.preferences = preferences;
+        state.set_preferences(preferences);
     }
     if let Some(completions) = result.completions {
         state.completions = completions;

@@ -1,20 +1,52 @@
 use super::*;
 
+#[derive(Clone, Debug)]
+pub(super) enum TranscriptRenderSource {
+    RetainedToolResult {
+        title: String,
+        name: Option<String>,
+        output: String,
+    },
+    RunEvent {
+        event: RunEvent,
+        call: Option<colossus_contracts::ToolCall>,
+    },
+}
+
+impl TranscriptRenderSource {
+    pub(super) fn render(&self, preferences: &TerminalPreferences) -> Option<PresentationDocument> {
+        let renderer = SemanticRenderer::new(preferences.clone());
+        match self {
+            Self::RetainedToolResult {
+                title,
+                name,
+                output,
+            } => Some(renderer.retained_tool_result_document(
+                title.clone(),
+                name.as_deref(),
+                output.clone(),
+            )),
+            Self::RunEvent { event, call } => renderer.run_event_document(event, call.as_ref()),
+        }
+    }
+}
+
 pub(super) fn transcript_from_messages(
     messages: Vec<SessionMessage>,
     preferences: &TerminalPreferences,
-) -> Vec<TranscriptEntry> {
+) -> (Vec<TranscriptEntry>, Vec<Option<TranscriptRenderSource>>) {
     let mut entries = Vec::new();
+    let mut sources = Vec::new();
     let mut tool_names = BTreeMap::<String, String>::new();
-    let renderer = SemanticRenderer::new(preferences.clone());
     for record in messages {
-        let (kind, document) = match record.message.role {
+        let (kind, document, source) = match record.message.role {
             ModelMessageRole::System => continue,
             ModelMessageRole::User => (
                 TranscriptKind::User,
                 PresentationDocument::from_block(PresentationBlock::Markdown(
                     record.message.content,
                 )),
+                None,
             ),
             ModelMessageRole::Assistant => {
                 let mut document = PresentationDocument::new();
@@ -32,7 +64,7 @@ pub(super) fn transcript_from_messages(
                         }],
                     });
                 }
-                (TranscriptKind::Assistant, document)
+                (TranscriptKind::Assistant, document, None)
             }
             ModelMessageRole::Tool => {
                 let (title, name) = record.message.tool_call_id.as_ref().map_or_else(
@@ -40,14 +72,19 @@ pub(super) fn transcript_from_messages(
                     |id| {
                         tool_names.get(id).map_or_else(
                             || (format!("Tool result {id}"), None),
-                            |name| (format!("Completed {name}"), Some(name.as_str())),
+                            |name| (format!("Completed {name}"), Some(name.clone())),
                         )
                     },
                 );
-                (
-                    TranscriptKind::Tool,
-                    renderer.retained_tool_result_document(title, name, record.message.content),
-                )
+                let source = TranscriptRenderSource::RetainedToolResult {
+                    title,
+                    name,
+                    output: record.message.content,
+                };
+                let document = source
+                    .render(preferences)
+                    .expect("retained tool results always render");
+                (TranscriptKind::Tool, document, Some(source))
             }
         };
         if !document.is_empty() {
@@ -57,9 +94,10 @@ pub(super) fn transcript_from_messages(
                 document,
                 temporary: false,
             });
+            sources.push(source);
         }
     }
-    entries
+    (entries, sources)
 }
 
 pub(super) fn user_entry(content: &str, kind: TranscriptKind) -> TranscriptEntry {

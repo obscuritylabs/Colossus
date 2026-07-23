@@ -109,6 +109,7 @@ pub struct TuiState {
     pub session_id: String,
     /// Retained visible transcript; system messages are never inserted.
     pub transcript: Vec<TranscriptEntry>,
+    pub(super) transcript_sources: Vec<Option<TranscriptRenderSource>>,
     /// Whether an older canonical page remains available.
     pub has_more: bool,
     /// Cursor for the next older page.
@@ -140,11 +141,12 @@ pub struct TuiState {
 impl TuiState {
     /// Build reducer state from one bounded host snapshot.
     pub fn from_snapshot(snapshot: InteractiveSnapshot) -> Self {
-        let transcript =
+        let (transcript, transcript_sources) =
             transcript_from_messages(snapshot.transcript.messages, &snapshot.preferences);
         Self {
             session_id: snapshot.session_id,
             transcript,
+            transcript_sources,
             has_more: snapshot.transcript.has_more,
             before_sequence: snapshot.transcript.before_sequence,
             preferences: snapshot.preferences,
@@ -192,9 +194,12 @@ impl TuiState {
 
     /// Append an older page without duplicating or exposing system messages.
     pub fn prepend_page(&mut self, page: SessionMessagePage) {
-        let mut older = transcript_from_messages(page.messages, &self.preferences);
+        let (mut older, mut older_sources) =
+            transcript_from_messages(page.messages, &self.preferences);
         older.append(&mut self.transcript);
+        older_sources.append(&mut self.transcript_sources);
         self.transcript = older;
+        self.transcript_sources = older_sources;
         self.has_more = page.has_more;
         self.before_sequence = page.before_sequence;
     }
@@ -223,6 +228,14 @@ impl TuiState {
     }
 
     pub(super) fn append_entry(&mut self, entry: TranscriptEntry) {
+        self.append_entry_with_source(entry, None);
+    }
+
+    pub(super) fn append_entry_with_source(
+        &mut self,
+        entry: TranscriptEntry,
+        source: Option<TranscriptRenderSource>,
+    ) {
         let old_line_count = if self.scroll_from_bottom > 0 {
             transcript_lines(self, self.transcript_width).len()
         } else {
@@ -232,6 +245,25 @@ impl TuiState {
             self.new_items = self.new_items.saturating_add(1);
         }
         self.transcript.push(entry);
+        self.transcript_sources.push(source);
+        if self.scroll_from_bottom > 0 {
+            self.preserve_scroll_after_line_change(old_line_count);
+        }
+    }
+
+    pub(super) fn set_preferences(&mut self, preferences: TerminalPreferences) {
+        let old_line_count = if self.scroll_from_bottom > 0 {
+            transcript_lines(self, self.transcript_width).len()
+        } else {
+            0
+        };
+        debug_assert_eq!(self.transcript.len(), self.transcript_sources.len());
+        for (entry, source) in self.transcript.iter_mut().zip(&self.transcript_sources) {
+            if let Some(source) = source {
+                entry.document = source.render(&preferences).unwrap_or_default();
+            }
+        }
+        self.preferences = preferences;
         if self.scroll_from_bottom > 0 {
             self.preserve_scroll_after_line_change(old_line_count);
         }
