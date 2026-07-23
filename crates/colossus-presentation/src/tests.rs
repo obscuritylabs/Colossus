@@ -352,6 +352,71 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
 }
 
 #[test]
+fn compact_web_fetch_cards_bound_response_bodies_while_verbose_cards_show_them() {
+    let response = format!(
+        "<!doctype html><title>Example</title>{}full-body-tail",
+        "x".repeat(400)
+    );
+    let call = ToolCall {
+        call_id: "call-fetch".into(),
+        name: "web.fetch".into(),
+        arguments: serde_json::json!({"url": "https://example.com/page"}),
+    };
+    let result = ToolResult {
+        call_id: call.call_id.clone(),
+        name: call.name.clone(),
+        output: response.clone(),
+        exit_code: 0,
+    };
+
+    let compact = SemanticRenderer::new(TerminalPreferences::default())
+        .tool_completed_with_call(1, &result, 0.1, 0.2, Some(&call))
+        .expect("render compact fetch")
+        .expect("visible compact fetch");
+    assert!(compact.contains("Completed web.fetch"), "{compact}");
+    assert!(compact.contains("https://example.com/page"), "{compact}");
+    assert!(compact.contains("Response preview"), "{compact}");
+    assert!(compact.contains("preview only"), "{compact}");
+    assert!(compact.contains("<!doctype html>"), "{compact}");
+    assert!(!compact.contains("full-body-tail"), "{compact}");
+
+    let verbose = SemanticRenderer::new(TerminalPreferences {
+        events_mode: EventDisplayMode::Verbose,
+        ..TerminalPreferences::default()
+    })
+    .tool_completed_with_call(1, &result, 0.1, 0.2, Some(&call))
+    .expect("render verbose fetch")
+    .expect("visible verbose fetch");
+    assert!(verbose.contains("full-body-tail"), "{verbose}");
+    assert!(!verbose.contains("preview only"), "{verbose}");
+}
+
+#[test]
+fn compact_raw_network_json_responses_do_not_expand_structured_bodies() {
+    let result = ToolResult {
+        call_id: "call-http".into(),
+        name: "network.http".into(),
+        output: serde_json::json!({
+            "payload": format!("{}must-not-render", "x".repeat(400))
+        })
+        .to_string(),
+        exit_code: 0,
+    };
+
+    let compact = SemanticRenderer::new(TerminalPreferences::default())
+        .run_event(&RunEvent::ToolCompleted {
+            turn: 1,
+            result,
+            duration_seconds: 0.1,
+            elapsed_seconds: 0.2,
+        })
+        .expect("render compact HTTP response")
+        .expect("visible compact HTTP response");
+    assert!(compact.contains("Response preview"), "{compact}");
+    assert!(!compact.contains("must-not-render"), "{compact}");
+}
+
+#[test]
 fn preferences_reconstruct_from_immutable_events_and_validate_schema() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let repository = EventSourcedPresentationRepository::new(Arc::clone(&journal));

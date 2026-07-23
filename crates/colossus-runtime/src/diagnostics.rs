@@ -333,7 +333,7 @@ impl Runtime {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Check a provider profile by exercising its models endpoint through policy.
+    /// Check a provider profile by exercising its catalog and generation endpoints through policy.
     pub async fn provider_doctor(
         &self,
         profile: Option<&str>,
@@ -346,27 +346,73 @@ impl Runtime {
         if provider.profile().kind == ProviderKind::Echo {
             return Ok(readiness);
         }
+        let mut checks = Vec::new();
         match self.provider_models(Some(&provider.profile().name)).await {
             Ok(models) => {
-                readiness.ready = true;
-                readiness.checks = vec![ProviderReadinessCheck {
+                checks.push(ProviderReadinessCheck {
                     name: "models_endpoint".into(),
                     status: "pass".into(),
                     detail: format!(
                         "Reached the configured models endpoint and normalized {} model records.",
                         models.len()
                     ),
-                }];
+                });
             }
             Err(error) => {
-                readiness.ready = false;
-                readiness.checks = vec![ProviderReadinessCheck {
+                checks.push(ProviderReadinessCheck {
                     name: "models_endpoint".into(),
                     status: "fail".into(),
                     detail: error.to_string(),
-                }];
+                });
             }
         }
+        let endpoint = provider.profile().generation_endpoint()?;
+        let mut request = effect_request(
+            system_actor("provider-diagnostics"),
+            provider.profile().kind.generation_action(),
+            endpoint,
+            serde_json::to_value(ProviderEffectInput {
+                profile: provider.profile().name.clone(),
+                request: Some(ModelRequest {
+                    model: provider.profile().model.clone(),
+                    instructions: "This is a provider readiness probe. Reply with exactly: ok"
+                        .into(),
+                    messages: vec![ModelMessage {
+                        role: ModelMessageRole::User,
+                        content: "Reply with exactly: ok".into(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    }],
+                    tools: Vec::new(),
+                }),
+            })
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+        request.capabilities = vec!["provider.call".into()];
+        request.credential_references = provider.credential_reference().into_iter().collect();
+        match self.gateway.execute(request, provider.as_ref()).await {
+            Ok(result) => match serde_json::from_slice::<ProviderTurn>(&result.bytes) {
+                Ok(_) => checks.push(ProviderReadinessCheck {
+                    name: "generation_endpoint".into(),
+                    status: "pass".into(),
+                    detail: "Reached the configured generation endpoint and normalized a bounded probe response."
+                        .into(),
+                }),
+                Err(_) => checks.push(ProviderReadinessCheck {
+                    name: "generation_endpoint".into(),
+                    status: "fail".into(),
+                    detail: "Released provider output violated the normalized turn contract."
+                        .into(),
+                }),
+            },
+            Err(error) => checks.push(ProviderReadinessCheck {
+                name: "generation_endpoint".into(),
+                status: "fail".into(),
+                detail: error.to_string(),
+            }),
+        }
+        readiness.ready = checks.iter().all(|check| check.status == "pass");
+        readiness.checks = checks;
         Ok(readiness)
     }
 }
