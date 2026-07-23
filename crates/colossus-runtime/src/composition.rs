@@ -506,6 +506,18 @@ impl Runtime {
                         restriction.network_destinations.clone(),
                     );
                 }
+                let mut provider_action_timeouts = BTreeMap::<&str, u64>::new();
+                for profile in config.providers.profiles.values() {
+                    for action in [profile.kind.generation_action(), "provider.models"] {
+                        provider_action_timeouts
+                            .entry(action)
+                            .and_modify(|timeout| *timeout = (*timeout).max(profile.timeout_ms))
+                            .or_insert(profile.timeout_ms);
+                    }
+                }
+                for (action, timeout_ms) in provider_action_timeouts {
+                    policy = policy.with_action_timeout(action, timeout_ms);
+                }
                 Arc::new(policy)
             }
             PolicyConfig::Opa {

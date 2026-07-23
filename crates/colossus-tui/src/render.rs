@@ -83,13 +83,18 @@ pub(super) fn render_transcript(frame: &mut Frame<'_>, state: &TuiState, area: R
 pub(super) fn transcript_lines<'a>(state: &'a TuiState, width: usize) -> Vec<Line<'a>> {
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let mut lines = Vec::new();
-    for (index, entry) in state.transcript.iter().enumerate() {
-        if index > 0
+    let mut visible_entries = 0_usize;
+    for entry in &state.transcript {
+        if entry.document.is_empty() {
+            continue;
+        }
+        if visible_entries > 0
             && state.preferences.transcript_density
                 == colossus_contracts::TranscriptDensity::Comfortable
         {
             lines.push(Line::default());
         }
+        visible_entries += 1;
         let (marker, label) = match entry.kind {
             TranscriptKind::User => ("›", "You"),
             TranscriptKind::Assistant => ("●", "Colossus"),
@@ -128,8 +133,10 @@ pub(super) fn transcript_lines<'a>(state: &'a TuiState, width: usize) -> Vec<Lin
                 ),
             ]));
         }
-        let rendered = StyledDocumentRenderer::for_transcript(state.preferences.clone(), width)
-            .render(&entry.document);
+        let content_width = width.saturating_sub(if show_label { 2 } else { 0 }).max(1);
+        let rendered =
+            StyledDocumentRenderer::for_transcript(state.preferences.clone(), content_width)
+                .render(&entry.document);
         lines.extend(rendered.into_iter().map(|mut line| {
             if show_label && !line.spans.is_empty() {
                 line.spans.insert(

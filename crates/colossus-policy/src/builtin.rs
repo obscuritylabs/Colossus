@@ -154,6 +154,17 @@ impl BuiltInPolicy {
         self.action_obligations.insert(action.into(), obligations);
         self
     }
+
+    /// Set one action-specific timeout ceiling while retaining its other obligations.
+    pub fn with_action_timeout(mut self, action: impl Into<String>, timeout_ms: u64) -> Self {
+        let action = action.into();
+        let obligations = self
+            .action_obligations
+            .entry(action)
+            .or_insert_with(|| self.obligations.clone());
+        obligations.timeout_ms = timeout_ms;
+        self
+    }
 }
 
 #[async_trait]

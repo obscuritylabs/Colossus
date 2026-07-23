@@ -272,7 +272,12 @@ impl SemanticRenderer {
                 duration_seconds,
                 ..
             } if self.preferences.events_mode != EventDisplayMode::Off || result.exit_code != 0 => {
-                Some(tool_result_document(result, *duration_seconds, call))
+                Some(tool_result_document_with_mode(
+                    result,
+                    *duration_seconds,
+                    call,
+                    self.preferences.events_mode,
+                ))
             }
             RunEvent::ToolCancelled {
                 turn,
@@ -462,10 +467,11 @@ impl SemanticRenderer {
             summarize_value(&parsed, family.keys())
         };
         if self.preferences.transcript_density == TranscriptDensity::Comfortable {
-            return Ok(Some(self.render_document(tool_result_document(
+            return Ok(Some(self.render_document(tool_result_document_with_mode(
                 result,
                 duration_seconds,
                 call,
+                self.preferences.events_mode,
             ))));
         }
         let rendered = match self.preferences.events_mode {
@@ -532,6 +538,38 @@ impl SemanticRenderer {
         }
         .map_err(|error| PresentationError::Invalid(error.to_string()))
     }
+
+    /// Rebuild one retained tool-result card when live duration and exit metadata are absent.
+    pub fn retained_tool_result_document(
+        &self,
+        title: impl Into<String>,
+        name: Option<&str>,
+        output: String,
+    ) -> PresentationDocument {
+        let compact_unknown = name.is_none() && output.chars().nth(COMPACT_PREVIEW_CHARS).is_some();
+        let output = if self.preferences.events_mode != EventDisplayMode::Verbose
+            && (name.is_some_and(is_raw_web_fetch) || compact_unknown)
+        {
+            compact_response_block(
+                &output,
+                if name.is_some() {
+                    "Response preview"
+                } else {
+                    "Output preview"
+                },
+            )
+        } else {
+            PresentationBlock::Code {
+                language: None,
+                content: output,
+            }
+        };
+        PresentationDocument::from_block(PresentationBlock::Card {
+            title: title.into(),
+            tone: PresentationTone::Tool,
+            body: vec![output],
+        })
+    }
 }
 
 /// Build the canonical semantic card for one released tool result.
@@ -542,6 +580,15 @@ pub fn tool_result_document(
     result: &ToolResult,
     duration_seconds: f64,
     call: Option<&ToolCall>,
+) -> PresentationDocument {
+    tool_result_document_with_mode(result, duration_seconds, call, EventDisplayMode::Verbose)
+}
+
+fn tool_result_document_with_mode(
+    result: &ToolResult,
+    duration_seconds: f64,
+    call: Option<&ToolCall>,
+    events_mode: EventDisplayMode,
 ) -> PresentationDocument {
     let parsed = serde_json::from_str::<Value>(&result.output)
         .unwrap_or_else(|_| Value::String(result.output.clone()));
@@ -572,6 +619,8 @@ pub fn tool_result_document(
     ])];
     if failed && let Some(message) = parsed.pointer("/error/message").and_then(Value::as_str) {
         body.push(PresentationBlock::Markdown(message.into()));
+    } else if is_raw_web_fetch(&result.name) && events_mode != EventDisplayMode::Verbose {
+        body.push(compact_response_block(&result.output, "Response preview"));
     } else {
         body.push(tool_output_block(
             &result.name,
@@ -605,6 +654,31 @@ pub fn tool_result_document(
         },
         body,
     })
+}
+
+fn is_raw_web_fetch(name: &str) -> bool {
+    matches!(name, "web.fetch" | "docs.fetch" | "network.http")
+}
+
+fn compact_response_block(output: &str, title: &str) -> PresentationBlock {
+    let mut body = vec![PresentationBlock::KeyValue(vec![
+        ("Response size".into(), format!("{} bytes", output.len())),
+        (
+            "Display".into(),
+            "preview only; use /events verbose to show the full body".into(),
+        ),
+    ])];
+    if !output.is_empty() {
+        body.push(PresentationBlock::Code {
+            language: Some("preview".into()),
+            content: bounded_text(output, COMPACT_PREVIEW_CHARS),
+        });
+    }
+    PresentationBlock::Card {
+        title: title.into(),
+        tone: PresentationTone::Tool,
+        body,
+    }
 }
 
 /// Build the canonical semantic work-state document for terminal and TUI backends.
