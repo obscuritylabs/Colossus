@@ -18,6 +18,14 @@ test loop.
 - Git and the native build dependencies required by your platform.
 - A source checkout at the repository root.
 
+The tracked development container is the supported ready-to-build Linux environment.
+It uses digest-pinned official Debian Bookworm base images and a locked Rust feature,
+selects Clang for native dependencies, pins the Rust, Node.js, Python, and Go versions
+used by CI, includes the Tauri system libraries, installs the pinned `actionlint`,
+`cargo-deny`, and `cargo-audit` tools used by the local PR gate, and provides an isolated
+Docker daemon for documentation builds. In Codespaces or VS Code, rebuild the container
+after changing `.devcontainer/`.
+
 Rust API contract builds use the exact cross-platform `protoc-bin-vendored` workspace
 dependency, so contributors and release runners do not need an ambient `protoc` binary.
 Language SDK generation remains separate and uses its own pinned local generator
@@ -44,38 +52,44 @@ toolchain under `sdk/`.
     cargo test -p colossus-cli --test config_security
     ```
 
-3. Run all workspace library tests:
+3. Run the fast development tier. It checks the diff, formatting, crate roots, and all
+   workspace library tests:
 
     ```bash
-    cargo test-fast
+    cargo xtask dev
     ```
 
-4. Run the complete suite when the change is ready:
+4. Run the complete Rust gate when the change is ready:
 
     ```bash
-    cargo test-full
+    cargo xtask check rust
     ```
 
-5. Before handoff, run the authoritative gates:
+5. Before opening or updating a pull request, run change-selected validation against
+   the target branch:
 
     ```bash
-    ./scripts/check_crate_roots.sh
-    cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
+    cargo xtask pr --base origin/main
     ```
 
-These local completion gates are distinct from hosted CI tiers. Every pull-request update
-receives selected Linux/documentation validation, while reviewed final heads receive the
-representative macOS, Windows, and live-security tier only when a writer applies
-`ci:full`. Complete x64/ARM64 coverage is reserved for release tags. See
-[Tiered CI/CD](ci-cd.md).
+`cargo xtask pr` always checks workflow contracts and then uses the repository's
+fail-closed path classifier to select Rust, public SDK, Desktop, documentation, and
+dependency-policy components. Component checks are also directly available as
+`cargo xtask check rust`, `sdk`, `desktop`, `docs`, `dependencies`, `sidecar`, and
+`workflows`. The task runner orchestrates repository-owned checks; hosted CI still owns
+trusted-base decisions, runner provisioning, AppArmor installation, artifact upload,
+and platform acceptance.
+
+Every pull-request update receives selected Linux/documentation validation, while
+reviewed final heads receive the representative macOS, Windows, and live-security tier
+only when a writer applies `ci:full`. Complete x64/ARM64 coverage is reserved for release
+tags. See [Tiered CI/CD](ci-cd.md).
 
 For cold builds or work across multiple worktrees, opt into the local compilation cache:
 
 ```bash
 ./scripts/cargo-sccache check -p colossus-runtime
-./scripts/cargo-sccache test-fast
+./scripts/cargo-sccache xtask dev
 sccache --show-stats
 ```
 

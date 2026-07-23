@@ -21,6 +21,28 @@ fn workflows_are_split_and_the_catch_all_is_removed() {
 }
 
 #[test]
+fn actionlint_recognizes_the_provisioned_larger_runner() {
+    let path = repository_root().join(".github/actionlint.yaml");
+    let source = fs::read_to_string(&path).expect("read actionlint configuration");
+    let config: serde_json::Value =
+        serde_saphyr::from_str(&source).expect("parse actionlint configuration");
+    let labels = strings(
+        field(
+            mapping(
+                field(
+                    mapping(&config, "actionlint configuration"),
+                    "self-hosted-runner",
+                ),
+                "custom runner configuration",
+            ),
+            "labels",
+        ),
+        "custom runner labels",
+    );
+    assert_eq!(labels, ["ubuntu-latest-m".to_owned()].into_iter().collect());
+}
+
+#[test]
 fn pr_workflow_selects_only_the_required_validation_tier() {
     let workflow = workflow("pr.yml");
     let root = mapping(&workflow, "PR workflow");
@@ -56,7 +78,7 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
     );
     assert_eq!(
         field(job(jobs, "rust"), "runs-on").as_str(),
-        Some("ubuntu-latest")
+        Some("ubuntu-latest-m")
     );
     assert_eq!(
         field(job(jobs, "documentation"), "if").as_str(),
@@ -74,9 +96,11 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         assert!(!source.contains(forbidden), "PR tier contains {forbidden}");
     }
     for required in [
-        "./scripts/check_crate_roots.sh",
-        "cargo clippy --locked --workspace --all-targets -- -D warnings",
-        "cargo test --locked --workspace",
+        "cargo xtask check rust",
+        "cargo xtask check sidecar",
+        "cargo xtask check sdk --base \"$EVENT_BASE_SHA\"",
+        "cargo xtask check desktop",
+        "cargo xtask check dependencies",
         "release/install-apparmor.sh",
         "ACTIONLINT_VERSION: 1.7.12",
         "ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
@@ -98,16 +122,6 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
         "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0",
         "actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0",
-        "./sdk/scripts/check-breaking \"$EVENT_BASE_SHA\"",
-        "./sdk/scripts/generate",
-        "npm pack --dry-run --json --silent",
-        "go test -mod=readonly ./...",
-        "working-directory: apps/desktop",
-        "npm audit --audit-level=high",
-        "--package colossus-sidecar-protocol",
-        "--package colossus-sidecar",
-        "cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml",
-        "cargo audit --no-fetch --file apps/desktop/src-tauri/Cargo.lock",
         "true:success",
     ] {
         assert!(source.contains(required), "PR tier is missing {required}");
@@ -226,6 +240,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "components: clippy,rustfmt",
         "CARGO_INCREMENTAL: \"0\"",
         "CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target",
+        "cargo xtask check desktop",
         "./scripts/prepare-desktop-binaries debug",
         "npm run tauri:build",
         "npm run tauri:bundle:macos",
@@ -240,8 +255,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
         "test \"$CARGO_TARGET_DIR\" = \"$expected\"",
         "rm -rf \"$expected/debug\"",
-        "cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml",
-        "cargo audit --no-fetch --file apps/desktop/src-tauri/Cargo.lock",
+        "cargo xtask check dependencies",
     ] {
         assert!(
             source.contains(required),
@@ -254,6 +268,10 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
             "pre-merge tier contains {forbidden}"
         );
     }
+    assert_eq!(
+        field(job(jobs, "live-security"), "runs-on").as_str(),
+        Some("ubuntu-latest-m")
+    );
     assert!(!source.contains(">/dev/null 2>&1 || true"));
 
     let native_source =
@@ -278,6 +296,10 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
 fn release_includes_a_signed_notarized_apple_silicon_desktop() {
     let workflow = workflow("release.yml");
     let release_jobs = jobs(&workflow);
+    assert_eq!(
+        field(job(release_jobs, "validate"), "runs-on").as_str(),
+        Some("ubuntu-latest-m")
+    );
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
     assert_eq!(field(desktop_build, "runs-on").as_str(), Some("macos-14"));
@@ -342,6 +364,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
         "Upload non-runnable ADHOC validation archive and checksum",
+        "- runner: ubuntu-latest-m\n            target: x86_64-unknown-linux-musl",
         "shasum -a 256",
         "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
         "desktop_macos=${{ needs.desktop_macos.result }}",
@@ -511,6 +534,7 @@ fn documentation_deployment_no_longer_duplicates_pr_validation() {
 fn local_test_tiers_and_sccache_wrapper_remain_optional() {
     let cargo_config = fs::read_to_string(repository_root().join(".cargo/config.toml"))
         .expect("read Cargo configuration");
+    assert!(cargo_config.contains("xtask = \"run --package xtask --\""));
     assert!(cargo_config.contains("test-fast = \"test --workspace --lib\""));
     assert!(cargo_config.contains("test-full = \"test --workspace\""));
     assert!(!cargo_config.contains("rustc-wrapper"));
@@ -524,6 +548,162 @@ fn local_test_tiers_and_sccache_wrapper_remain_optional() {
     ] {
         assert!(wrapper.contains(required));
     }
+}
+
+#[test]
+fn devcontainer_pins_the_supported_cross_language_toolchains() {
+    let root = repository_root();
+    let config: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".devcontainer/devcontainer.json"))
+            .expect("read dev container configuration"),
+    )
+    .expect("parse dev container configuration");
+    let config = mapping(&config, "dev container configuration");
+    assert_eq!(
+        field(
+            mapping(field(config, "build"), "dev container build"),
+            "dockerfile"
+        )
+        .as_str(),
+        Some("Dockerfile")
+    );
+
+    let features = mapping(field(config, "features"), "dev container features");
+    let rust = mapping(
+        field(features, "ghcr.io/devcontainers/features/rust:1"),
+        "Rust dev container feature",
+    );
+    assert_eq!(field(rust, "version").as_str(), Some("1.96.0"));
+    assert!(features.contains_key("ghcr.io/devcontainers/features/docker-in-docker:4"));
+    assert_eq!(
+        features.len(),
+        2,
+        "language runtimes must not pull unpinned global tool suites through features"
+    );
+
+    let environment = mapping(field(config, "containerEnv"), "dev container environment");
+    assert_eq!(field(environment, "CC").as_str(), Some("clang"));
+    assert_eq!(field(environment, "CXX").as_str(), Some("clang++"));
+
+    let lock: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".devcontainer/devcontainer-lock.json"))
+            .expect("read dev container feature lock"),
+    )
+    .expect("parse dev container feature lock");
+    let locked_features = mapping(
+        field(mapping(&lock, "dev container feature lock"), "features"),
+        "locked dev container features",
+    );
+    assert_eq!(locked_features.len(), features.len());
+    for feature in features.keys() {
+        let locked = mapping(
+            field(locked_features, feature),
+            "locked dev container feature",
+        );
+        let resolved = field(locked, "resolved")
+            .as_str()
+            .expect("locked feature resolution must be a string");
+        let integrity = field(locked, "integrity")
+            .as_str()
+            .expect("locked feature integrity must be a string");
+        assert!(
+            resolved.contains("@sha256:"),
+            "{feature} must resolve to an immutable digest"
+        );
+        let (feature_name, _) = feature
+            .rsplit_once(':')
+            .expect("feature reference must include a major version");
+        assert_eq!(
+            resolved,
+            format!("{feature_name}@{integrity}"),
+            "{feature} resolution and integrity must match"
+        );
+    }
+
+    let dockerfile = fs::read_to_string(root.join(".devcontainer/Dockerfile"))
+        .expect("read dev container Dockerfile");
+    let base_images = dockerfile
+        .lines()
+        .filter(|line| line.starts_with("FROM "))
+        .collect::<Vec<_>>();
+    assert_eq!(base_images.len(), 5);
+    for image in base_images {
+        assert!(
+            image.contains("@sha256:"),
+            "dev container base image must be immutable: {image}"
+        );
+    }
+    for required in [
+        "node:22.18.0-bookworm-slim",
+        "python:3.10.18-slim-bookworm",
+        "golang:1.25.0-bookworm",
+        "rust:1.96.0-bookworm",
+        "mcr.microsoft.com/devcontainers/base:2-bookworm",
+        "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+        "cargo-deny --version 0.20.2 --locked",
+        "cargo-audit --version 0.22.2 --locked",
+        "clang",
+        "libsecret-1-dev",
+        "libwebkit2gtk-4.1-dev",
+        "libayatana-appindicator3-dev",
+    ] {
+        assert!(
+            dockerfile.contains(required),
+            "dev container Dockerfile is missing {required}"
+        );
+    }
+}
+
+#[test]
+fn xtask_centralizes_portable_development_and_ci_checks() {
+    let root = repository_root();
+    let rust = fs::read_to_string(root.join("xtask/src/checks/rust.rs")).expect("read Rust tasks");
+    for required in [
+        "./scripts/check_crate_roots.sh",
+        "\"clippy\"",
+        "\"--workspace\"",
+        "\"--all-targets\"",
+        "\"test\", \"--locked\", \"--workspace\"",
+        "fuzz/Cargo.toml",
+    ] {
+        assert!(rust.contains(required), "Rust xtask is missing {required}");
+    }
+
+    let sdk = fs::read_to_string(root.join("xtask/src/checks/sdk.rs")).expect("read SDK tasks");
+    for required in [
+        "./sdk/scripts/install-codegen-tools",
+        "./sdk/scripts/check-breaking",
+        "./sdk/scripts/generate",
+        "./sdk/scripts/check-generated",
+        "npm",
+        "ruff",
+        "mypy",
+        "gofmt",
+        "\"test\", \"-mod=readonly\", \"./...\"",
+        "\"vet\", \"-mod=readonly\", \"./...\"",
+    ] {
+        assert!(sdk.contains(required), "SDK xtask is missing {required}");
+    }
+
+    let surfaces =
+        fs::read_to_string(root.join("xtask/src/checks/surfaces.rs")).expect("read surface tasks");
+    for required in [
+        "npm",
+        "\"audit\", \"--audit-level=high\"",
+        "scripts/docs-site",
+        "scripts/ci/test-contracts.sh",
+        "actionlint",
+        "apps/desktop/src-tauri/Cargo.lock",
+    ] {
+        assert!(
+            surfaces.contains(required),
+            "surface xtask is missing {required}"
+        );
+    }
+
+    let hook =
+        fs::read_to_string(root.join(".githooks/pre-commit")).expect("read local pre-commit hook");
+    assert!(hook.contains("cargo xtask pre-commit"));
 }
 
 #[test]

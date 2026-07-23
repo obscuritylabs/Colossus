@@ -37,8 +37,21 @@ review.
     - put policy, tool, model, workflow, and state behavior in their owning services;
     - add or update tests for every behavior change.
 
-4. Iterate with the smallest relevant test tier, then run the completion gates described
-   in [Source setup and test tiers](setup-testing.md).
+4. Iterate with the smallest relevant test tier:
+
+    ```bash
+    cargo xtask dev
+    ```
+
+    Before opening or updating a pull request, run the change-selected local PR gate:
+
+    ```bash
+    cargo xtask pr --base origin/main
+    ```
+
+    The task uses the same fail-closed path classifier as hosted PR validation and
+    selects Rust, SDK, Desktop, documentation, and dependency checks. Missing required
+    toolchains fail explicitly instead of silently skipping a selected component.
 
 5. Before requesting full acceptance, inspect every unresolved pull-request review
    thread and required check, including automated ChatGPT/Codex review. Address each
@@ -62,14 +75,12 @@ crate root has absorbed unrelated application logic.
 
 ## Verification
 
-Run the repository completion gates and inspect the final diff:
+Run the repository completion gate and inspect the final diff:
 
 ```bash
 git diff --check
-./scripts/check_crate_roots.sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo xtask check rust
+cargo xtask pr --base origin/main
 ```
 
 ## Failure path

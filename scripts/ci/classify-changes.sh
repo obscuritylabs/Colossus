@@ -51,6 +51,11 @@ for changed_path in "$@"; do
             sdk_required=true
             desktop_required=true
             ;;
+        xtask/*)
+            dependency_required=true
+            sdk_required=true
+            desktop_required=true
+            ;;
     esac
 done
 

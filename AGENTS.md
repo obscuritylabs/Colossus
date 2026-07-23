@@ -22,14 +22,15 @@ This file is the short map. Keep deeper details in `docs/`.
   and redb formats; never silently import the legacy Python state.
 - Use the smallest relevant test tier while iterating:
   - focused: `cargo test -p <changed-crate> --lib` plus directly affected test targets;
-  - fast workspace: `cargo test-fast` (all workspace library tests);
-  - full acceptance: `cargo test-full` (the complete workspace suite).
+  - fast workspace: `cargo xtask dev` (cheap checks plus all workspace library tests);
+  - Rust completion: `cargo xtask check rust`;
+  - pre-PR: `cargo xtask pr --base origin/main` (change-selected Rust, SDK, desktop,
+    documentation, dependency, and workflow checks).
   The focused and fast tiers shorten feedback loops but never replace the full completion
   gate.
 - For cold or cross-worktree builds, any Cargo command may be run through
   `./scripts/cargo-sccache`. Keep this opt-in: ordinary `cargo` must continue to work
   when `sccache` is unavailable.
-- Use `cargo fmt --all -- --check`,
-  `cargo clippy --workspace --all-targets -- -D warnings`, and
-  `cargo test --workspace` from the repository root before declaring implementation
-  complete.
+- Use `cargo xtask check rust` from the repository root before declaring implementation
+  complete. It owns the formatting, structure, locked metadata, Clippy, workspace-test,
+  and fuzz-harness gates used by PR validation.

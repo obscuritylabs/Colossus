@@ -63,6 +63,14 @@ flowchart LR
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
+The four-core `ubuntu-latest-m` larger runner is reserved for the longest CPU-bound x64
+Linux lane in each tier: complete PR validation, live OCI/OPA acceptance, release
+readiness, and the x86_64 Linux release artifact. Short control jobs, documentation,
+dependency inspection, service-backed integration tests, and bounded single-process
+fuzzing stay on standard or slim runners so larger-runner capacity is not spent where it
+does not materially shorten the critical path. The repository's
+`.github/actionlint.yaml` registers the provisioned larger-runner name so local workflow
+linting recognizes it.
 
 ## Steps
 
@@ -85,12 +93,15 @@ predates the SDK or desktop outputs, the workflow appends both selections as `tr
 old base cannot silently skip either component. This prevents a CI-changing PR from
 suppressing validation by weakening its own classifier or gate scripts.
 
-The Rust job combines Conventional Commit validation, formatting, crate-root structure,
-locked metadata, Clippy, exact AppArmor installation, the complete workspace suite, and
-fuzz-harness linting. When selected, it also installs pinned Node.js, Python, and Go
-toolchains for reproducible SDK generation and packaging, or installs the desktop npm
-lockfile to audit, test, and build the renderer. Desktop selection also exercises the
-managed-sidecar protocol and host crates. It does not allocate macOS or Windows runners.
+The Rust job combines Conventional Commit validation, exact AppArmor installation, and
+the repository-owned `cargo xtask` component checks. The Rust component covers
+formatting, crate-root structure, locked metadata, Clippy, the complete workspace suite,
+and fuzz-harness linting. When selected, the SDK component installs pinned Node.js,
+Python, and Go toolchains for reproducible generation and packaging, while the Desktop
+component installs the renderer lockfile to audit, test, and build it. Desktop selection
+also exercises the managed-sidecar protocol and host crates. The workflow retains
+trusted-base classification and runner provisioning, but does not duplicate portable
+check recipes or allocate macOS or Windows runners.
 The aggregate gate accepts a skipped job only when the classifier explicitly marked
 that job unnecessary; the stable seven-argument gate contract remains unchanged.
 
@@ -243,24 +254,19 @@ not part of this topology because they are unavailable for this private Team rep
 
 ## Verification
 
-Run the workflow contracts, linter, documentation build, and local completion gates:
+Run the change-selected local PR gate:
 
 ```bash
-./scripts/ci/test-contracts.sh
-actionlint
-./scripts/docs-site build
-./scripts/check_crate_roots.sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo xtask pr --base origin/main
 ```
 
 ## Local completion versus hosted tiers
 
 Hosted tiering reduces repeated platform spending; it does not weaken the local completion
-contract. Before handoff, run the focused tests needed while iterating and then the
-repository completion gates in [Source setup and test tiers](setup-testing.md). Release
-operators additionally run `./release/verify-release-readiness.sh`.
+contract. Before handoff, run the focused tests needed while iterating, `cargo xtask
+check rust`, and the change-selected `cargo xtask pr` gate described in
+[Source setup and test tiers](setup-testing.md). Release operators additionally run
+`./release/verify-release-readiness.sh`.
 
 ## Next step
 

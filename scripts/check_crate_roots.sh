@@ -12,7 +12,13 @@ while IFS= read -r crate_root; do
       "$crate_root" "$line_count" "$maximum_lines" >&2
     failed=1
   fi
-done < <(git ls-files 'crates/*/src/lib.rs' 'crates/*/src/main.rs')
+done < <(
+  git ls-files \
+    'crates/*/src/lib.rs' \
+    'crates/*/src/main.rs' \
+    'xtask/src/lib.rs' \
+    'xtask/src/main.rs'
+)
 
 if (( failed != 0 )); then
   printf '%s\n' \
