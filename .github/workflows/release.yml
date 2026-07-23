@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to validate without publishing, for example v0.10.0 or v0.10.1-preview.1
+        description: Version to validate without publishing, for example v0.10.0 or v0.10.1-preview.2
         required: true
         type: string
 
@@ -609,6 +609,7 @@ jobs:
       - name: Create or update human-approved draft
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
           RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}

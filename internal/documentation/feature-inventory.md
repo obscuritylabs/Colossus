@@ -1077,7 +1077,7 @@ to local or air-gapped operation.
 
 ## 22. Delivery Status
 
-Rust 0.10.1-preview.1 is the active Developer Preview candidate, and every capability in
+Rust 0.10.1-preview.2 is the active Developer Preview candidate, and every capability in
 the Section 5 release baseline has executable evidence. The detailed requirement-to-test
 mapping lives in the [Rust Acceptance Matrix](rust-acceptance-matrix.md); test names and
 source paths belong there rather than being repeated in this product contract.
