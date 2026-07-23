@@ -221,6 +221,175 @@ fn respond_sse(stream: &mut TcpStream, body: &str) {
     stream.flush().expect("flush response");
 }
 
+fn respond_json(stream: &mut TcpStream, status: &str, body: &str) {
+    let headers = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(headers.as_bytes()).expect("headers");
+    stream.write_all(body.as_bytes()).expect("JSON body");
+    stream.flush().expect("flush response");
+}
+
+fn doctor_server(
+    generation_status: &'static str,
+    generation_body: &'static str,
+) -> (String, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    let address = listener.local_addr().expect("provider address");
+    let task = thread::spawn(move || {
+        let (mut catalog, _) = listener.accept().expect("catalog accept");
+        let catalog_request = read_request(&mut catalog);
+        respond_json(
+            &mut catalog,
+            "200 OK",
+            r#"{"data":[{"id":"terminal-model","object":"model","owned_by":"test"}]}"#,
+        );
+
+        let (mut generation, _) = listener.accept().expect("generation accept");
+        let generation_request = read_request(&mut generation);
+        respond_json(&mut generation, generation_status, generation_body);
+        vec![catalog_request, generation_request]
+    });
+    (format!("http://{address}"), task)
+}
+
+fn write_doctor_config(directory: &Path, origin: &str) -> std::path::PathBuf {
+    let workflows = directory.join("workflows");
+    fs::create_dir_all(&workflows).expect("workflows");
+    let config = directory.join("config.json");
+    let document = json!({
+        "schemaVersion": 1,
+        "storage": {
+            "path": directory.join("state.redb"),
+            "keys": {
+                "kind": "environment",
+                "journal_variable": "COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY",
+                "journal_key_id": "provider-doctor-journal-v1",
+                "signing_variable": "COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY",
+                "anchor_path": directory.join("anchor.json")
+            }
+        },
+        "access": {
+            "profile": "pinned",
+            "tools": {"include": [], "exclude": []},
+            "actions": {
+                "allow": ["provider.models", "provider.openai.chat"],
+                "requireApproval": [],
+                "deny": []
+            }
+        },
+        "policy": {"kind": "built_in", "require_post_effect": true},
+        "workflows": {"repository": workflows, "user": workflows},
+        "providers": {
+            "profiles": {
+                "live": {
+                    "kind": "open_ai_compatible",
+                    "model": "terminal-model",
+                    "baseUrl": format!("{origin}/v1"),
+                    "credentialReference": "env:COLOSSUS_PROVIDER_TERMINAL_API_KEY",
+                    "timeoutMs": 10000
+                }
+            },
+            "roles": {"primary": "live"}
+        },
+        "agent": {"maxTurns": 4},
+        "subagents": {"maxConcurrent": 1},
+        "sandbox": {
+            "backend": "native",
+            "profile": "provider-doctor-v1",
+            "allowBrokerFallback": false,
+            "helperPath": null,
+            "ociRuntime": null,
+            "ociImage": null,
+            "ociProxyImage": null,
+            "filesystem": [],
+            "executables": [],
+            "environment": [],
+            "networkDestinations": [origin],
+            "timeoutMs": 10000,
+            "maxOutputBytes": 1048576,
+            "maxProcesses": 2,
+            "maxMemoryBytes": 67108864,
+            "maxConcurrency": 1
+        }
+    });
+    fs::write(
+        &config,
+        serde_json::to_vec_pretty(&document).expect("config JSON"),
+    )
+    .expect("write config");
+    config
+}
+
+fn write_provider_timeout_config(directory: &Path, origin: &str) -> std::path::PathBuf {
+    let workflows = directory.join("workflows");
+    fs::create_dir_all(&workflows).expect("workflows");
+    let config = directory.join("config.json");
+    let document = json!({
+        "schemaVersion": 1,
+        "storage": {
+            "path": directory.join("state.redb"),
+            "keys": {
+                "kind": "environment",
+                "journal_variable": "COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY",
+                "journal_key_id": "provider-timeout-journal-v1",
+                "signing_variable": "COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY",
+                "anchor_path": directory.join("anchor.json")
+            }
+        },
+        "access": {
+            "profile": "pinned",
+            "tools": {"include": [], "exclude": []},
+            "actions": {
+                "allow": ["provider.openai.chat"],
+                "requireApproval": [],
+                "deny": []
+            }
+        },
+        "policy": {"kind": "built_in", "require_post_effect": true},
+        "workflows": {"repository": workflows, "user": workflows},
+        "providers": {
+            "profiles": {
+                "live": {
+                    "kind": "open_ai_compatible",
+                    "model": "terminal-model",
+                    "baseUrl": format!("{origin}/v1"),
+                    "credentialReference": null,
+                    "timeoutMs": 500
+                }
+            },
+            "roles": {"primary": "live"}
+        },
+        "agent": {"maxTurns": 2},
+        "subagents": {"maxConcurrent": 1},
+        "sandbox": {
+            "backend": "native",
+            "profile": "provider-timeout-v1",
+            "allowBrokerFallback": false,
+            "helperPath": null,
+            "ociRuntime": null,
+            "ociImage": null,
+            "ociProxyImage": null,
+            "filesystem": [],
+            "executables": [],
+            "environment": [],
+            "networkDestinations": [origin],
+            "timeoutMs": 10,
+            "maxOutputBytes": 1048576,
+            "maxProcesses": 2,
+            "maxMemoryBytes": 67108864,
+            "maxConcurrency": 1
+        }
+    });
+    fs::write(
+        &config,
+        serde_json::to_vec_pretty(&document).expect("config JSON"),
+    )
+    .expect("write config");
+    config
+}
+
 fn sse_server(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
     let address = listener.local_addr().expect("provider address");
@@ -234,6 +403,19 @@ fn sse_server(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<S
                 request
             })
             .collect()
+    });
+    (format!("http://{address}"), task)
+}
+
+fn delayed_sse_server(delay: Duration, body: &'static str) -> (String, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    let address = listener.local_addr().expect("provider address");
+    let task = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("provider accept");
+        let request = read_request(&mut stream);
+        thread::sleep(delay);
+        respond_sse(&mut stream, body);
+        request
     });
     (format!("http://{address}"), task)
 }
@@ -464,6 +646,126 @@ data: [DONE]
 
 "#;
     sse_server(vec![first, second, third])
+}
+
+#[test]
+fn provider_doctor_does_not_treat_a_public_catalog_as_credential_readiness() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let (origin, server) = doctor_server(
+        "401 Unauthorized",
+        r#"{"error":{"message":"invalid credential"}}"#,
+    );
+    let config = write_doctor_config(directory.path(), &origin);
+
+    let output = run(binary, &config, &["provider", "doctor", "live"]);
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let readiness: Value = serde_json::from_slice(&output.stdout).expect("readiness JSON");
+    assert_eq!(readiness["ready"], false);
+    assert_eq!(readiness["checks"][0]["name"], "models_endpoint");
+    assert_eq!(readiness["checks"][0]["status"], "pass");
+    assert_eq!(readiness["checks"][1]["name"], "generation_endpoint");
+    assert_eq!(readiness["checks"][1]["status"], "fail");
+    assert!(
+        readiness["checks"][1]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("HTTP 401")),
+        "{readiness}"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("terminal-secret"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("terminal-secret"));
+
+    let requests = server.join().expect("doctor server");
+    assert!(requests[0].starts_with("GET /v1/models "));
+    assert!(requests[1].starts_with("POST /v1/chat/completions "));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.contains("authorization: Bearer terminal-secret"))
+    );
+}
+
+#[test]
+fn provider_doctor_reports_ready_through_worker_after_catalog_and_generation_succeed() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let (origin, server) = doctor_server(
+        "200 OK",
+        r#"{"id":"chat-doctor","choices":[{"message":{"role":"assistant","content":"ok"}}]}"#,
+    );
+    let config = write_doctor_config(directory.path(), &origin);
+
+    let worker = command(binary, &config)
+        .arg("worker")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start worker");
+    let mut worker = ChildGuard(worker);
+    wait_for_worker(binary, &config);
+    let output = run(binary, &config, &["provider", "doctor", "live"]);
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let readiness: Value = serde_json::from_slice(&output.stdout).expect("readiness JSON");
+    assert_eq!(readiness["ready"], true);
+    assert_eq!(readiness["checks"][0]["status"], "pass");
+    assert_eq!(readiness["checks"][1]["name"], "generation_endpoint");
+    assert_eq!(readiness["checks"][1]["status"], "pass");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("\"ok\""));
+
+    let requests = server.join().expect("doctor server");
+    assert!(requests[0].starts_with("GET /v1/models "));
+    assert!(requests[1].starts_with("POST /v1/chat/completions "));
+    assert!(
+        run(binary, &config, &["worker", "--shutdown"])
+            .status
+            .success()
+    );
+    wait_for_exit(&mut worker.0);
+}
+
+#[test]
+fn provider_profile_timeout_is_not_silently_capped_by_the_sandbox_timeout() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let delayed = r#"data: {"id":"chat-delayed","choices":[{"index":0,"delta":{"content":"delayed-ready"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+    let (origin, server) = delayed_sse_server(Duration::from_millis(75), delayed);
+    let config = write_provider_timeout_config(directory.path(), &origin);
+
+    let output = run(
+        binary,
+        &config,
+        &[
+            "run",
+            "Exercise the configured provider timeout.",
+            "--stream",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
+    assert_eq!(result["output"], "delayed-ready");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("delayed-ready"));
+
+    let request = server.join().expect("provider server");
+    assert!(request.starts_with("POST /v1/chat/completions "));
 }
 
 #[test]

@@ -173,6 +173,46 @@ async fn action_restrictions_remove_undeclared_global_network_and_environment_gr
     assert!(decision.obligations.require_post_effect);
 }
 
+#[tokio::test]
+async fn action_timeout_retains_restrictions_without_widening_other_actions() {
+    let policy = BuiltInPolicy::offline_default()
+        .with_limits(30_000, 8_192, 2, 64 * 1024 * 1024, 1)
+        .with_action("provider.openai.chat", DecisionOutcome::Allow)
+        .with_action("network.http", DecisionOutcome::Allow)
+        .with_action_restrictions(
+            "provider.openai.chat",
+            Vec::new(),
+            Vec::new(),
+            vec!["https://openrouter.ai".into()],
+        )
+        .with_action_timeout("provider.openai.chat", 120_000);
+    let provider = policy
+        .decide(&effect_request(
+            system_actor("provider-test"),
+            "provider.openai.chat",
+            "https://openrouter.ai/api/v1/chat/completions",
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("provider decision");
+    assert_eq!(provider.obligations.timeout_ms, 120_000);
+    assert_eq!(
+        provider.obligations.network_destinations,
+        vec!["https://openrouter.ai"]
+    );
+
+    let network = policy
+        .decide(&effect_request(
+            system_actor("network-test"),
+            "network.http",
+            "https://example.com",
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("network decision");
+    assert_eq!(network.obligations.timeout_ms, 30_000);
+}
+
 #[async_trait]
 impl EffectExecutor for CountingExecutor {
     async fn execute(

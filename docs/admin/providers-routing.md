@@ -41,6 +41,11 @@ Connect one model endpoint while keeping credentials late-bound and routing expl
     Use `open_ai_responses` for a Responses-compatible endpoint. Use `echo` for a
     credential-free, network-free smoke route.
 
+    `providers.profiles.NAME.timeoutMs` is the transport ceiling for that profile's
+    catalog and generation requests. With the built-in policy it remains effective even
+    when `sandbox.timeoutMs` is lower; the sandbox timeout continues to bound ordinary
+    sandboxed effects. An external OPA decision may impose a stricter timeout obligation.
+
 2. Export the named credential in the process environment. The YAML stores the
    reference, not its value.
 
@@ -58,6 +63,11 @@ Connect one model endpoint while keeping credentials late-bound and routing expl
     colossus --config .colossus/config.yaml provider doctor primary-model
     colossus --config .colossus/config.yaml provider models primary-model
     ```
+
+For network providers, `provider doctor` checks both the model catalog and one bounded
+generation probe. This verifies that a public catalog endpoint has not masked an invalid
+credential, model identifier, or generation response contract. The probe response is not
+printed. `provider models` remains the catalog-only diagnostic.
 
 Specialized roles include `risk_evaluator`, `context_summarizer`,
 `subagent_default`, `research_planner`, `research_worker`, and

@@ -128,8 +128,10 @@ pub(super) fn transcript_lines<'a>(state: &'a TuiState, width: usize) -> Vec<Lin
                 ),
             ]));
         }
-        let rendered = StyledDocumentRenderer::for_transcript(state.preferences.clone(), width)
-            .render(&entry.document);
+        let content_width = width.saturating_sub(if show_label { 2 } else { 0 }).max(1);
+        let rendered =
+            StyledDocumentRenderer::for_transcript(state.preferences.clone(), content_width)
+                .render(&entry.document);
         lines.extend(rendered.into_iter().map(|mut line| {
             if show_label && !line.spans.is_empty() {
                 line.spans.insert(

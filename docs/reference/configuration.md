@@ -132,6 +132,11 @@ Known specialized roles are `risk_evaluator`, `context_summarizer`,
 `subagent_default`, `research_planner`, `research_worker`, and
 `research_synthesizer`.
 
+With the built-in policy, each provider profile's `timeoutMs` bounds its own catalog and
+generation transport independently of `sandbox.timeoutMs`. The adapter still enforces
+the exact selected profile's timeout. OPA deployments may return a stricter timeout
+obligation.
+
 `host:` references are resolved only by an application-managed runtime through its
 in-memory credential resolver. The standard CLI and daemon composition remain
 environment-backed; they never interpret a `host:` identifier as a secret value.

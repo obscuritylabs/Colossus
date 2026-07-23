@@ -140,7 +140,8 @@ pub struct TuiState {
 impl TuiState {
     /// Build reducer state from one bounded host snapshot.
     pub fn from_snapshot(snapshot: InteractiveSnapshot) -> Self {
-        let transcript = transcript_from_messages(snapshot.transcript.messages);
+        let transcript =
+            transcript_from_messages(snapshot.transcript.messages, &snapshot.preferences);
         Self {
             session_id: snapshot.session_id,
             transcript,
@@ -191,7 +192,7 @@ impl TuiState {
 
     /// Append an older page without duplicating or exposing system messages.
     pub fn prepend_page(&mut self, page: SessionMessagePage) {
-        let mut older = transcript_from_messages(page.messages);
+        let mut older = transcript_from_messages(page.messages, &self.preferences);
         older.append(&mut self.transcript);
         self.transcript = older;
         self.has_more = page.has_more;

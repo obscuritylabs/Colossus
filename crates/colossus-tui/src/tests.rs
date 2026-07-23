@@ -328,6 +328,100 @@ fn historical_tool_results_are_correlated_with_assistant_calls() {
 }
 
 #[test]
+fn historical_web_fetch_results_keep_compact_preview_semantics() {
+    let mut source = snapshot();
+    let body = format!("preview-start\n{}FULL-BODY-TAIL", "line\n".repeat(100));
+    source.transcript.messages = vec![
+        SessionMessage {
+            session_id: "019f-test".into(),
+            run_id: "run".into(),
+            sequence: 1,
+            message: ModelMessage {
+                role: ModelMessageRole::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ModelToolCall {
+                    call_id: "call-fetch".into(),
+                    name: "web.fetch".into(),
+                    arguments: serde_json::json!({"url": "https://example.com"}),
+                }],
+            },
+            created_at: "2026-07-15T00:00:00Z".into(),
+        },
+        SessionMessage {
+            session_id: "019f-test".into(),
+            run_id: "run".into(),
+            sequence: 2,
+            message: ModelMessage {
+                role: ModelMessageRole::Tool,
+                content: body.clone(),
+                tool_call_id: Some("call-fetch".into()),
+                tool_calls: Vec::new(),
+            },
+            created_at: "2026-07-15T00:00:00Z".into(),
+        },
+    ];
+
+    let compact = TuiState::from_snapshot(source.clone());
+    let compact = transcript_lines(&compact, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(compact.contains("Response preview"), "{compact}");
+    assert!(compact.contains("preview only"), "{compact}");
+    assert!(!compact.contains("FULL-BODY-TAIL"), "{compact}");
+
+    source.preferences.events_mode = EventDisplayMode::Verbose;
+    let verbose = TuiState::from_snapshot(source);
+    let verbose = transcript_lines(&verbose, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(verbose.contains("FULL-BODY-TAIL"), "{verbose}");
+}
+
+#[test]
+fn page_boundary_tool_results_remain_bounded_before_their_call_is_loaded() {
+    let mut source = snapshot();
+    let body = format!("preview-start\n{}FULL-BODY-TAIL", "line\n".repeat(100));
+    source.transcript.messages = vec![SessionMessage {
+        session_id: "019f-test".into(),
+        run_id: "run".into(),
+        sequence: 101,
+        message: ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: body.clone(),
+            tool_call_id: Some("call-from-older-page".into()),
+            tool_calls: Vec::new(),
+        },
+        created_at: "2026-07-15T00:00:00Z".into(),
+    }];
+    source.transcript.before_sequence = Some(101);
+    source.transcript.has_more = true;
+
+    let compact = TuiState::from_snapshot(source.clone());
+    let compact = transcript_lines(&compact, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(compact.contains("Output preview"), "{compact}");
+    assert!(compact.contains("preview only"), "{compact}");
+    assert!(!compact.contains("FULL-BODY-TAIL"), "{compact}");
+
+    source.preferences.events_mode = EventDisplayMode::Verbose;
+    let verbose = TuiState::from_snapshot(source);
+    let verbose = transcript_lines(&verbose, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(verbose.contains("FULL-BODY-TAIL"), "{verbose}");
+}
+
+#[test]
 fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.page_up();
@@ -704,4 +798,42 @@ fn transcript_is_borderless_and_uses_distinct_speaker_and_semantic_cues() {
     let screen = terminal.backend().to_string();
     assert!(!screen.contains("┌─Transcript"), "{screen}");
     assert!(screen.contains("Message · Enter sends"), "{screen}");
+}
+
+#[test]
+fn labeled_transcript_content_reserves_its_indent_within_the_viewport() {
+    let mut source = snapshot();
+    source.transcript.messages = vec![SessionMessage {
+        session_id: "019f-test".into(),
+        run_id: "run".into(),
+        sequence: 1,
+        message: ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ModelToolCall {
+                call_id: "call-wide".into(),
+                name: "web.fetch".into(),
+                arguments: serde_json::json!({
+                    "url": "https://example.com/a/long/path/that/exercises/the/full/card/width"
+                }),
+            }],
+        },
+        created_at: "2026-07-15T00:00:00Z".into(),
+    }];
+    let state = TuiState::from_snapshot(source);
+    for width in [40, 60, 80, 112] {
+        let lines = transcript_lines(&state, width);
+        assert!(
+            lines.iter().all(|line| {
+                unicode_width::UnicodeWidthStr::width(line.to_string().as_str()) <= width
+            }),
+            "transcript exceeded {width} columns:\n{}",
+            lines
+                .iter()
+                .map(Line::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
 }

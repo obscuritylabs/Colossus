@@ -610,7 +610,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
     }
     if let Some((session_id, page)) = result.session {
         state.session_id = session_id;
-        state.transcript = transcript_from_messages(page.messages);
+        state.transcript = transcript_from_messages(page.messages, &state.preferences);
         state.before_sequence = page.before_sequence;
         state.has_more = page.has_more;
         state.end();

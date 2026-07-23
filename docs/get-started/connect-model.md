@@ -92,12 +92,16 @@ Merge the fragments into the generated file; keep its other required `sandbox` f
 The origin grant contains only scheme, host, and effective port. The API path remains in
 `baseUrl`.
 
-### 3. Inspect routing without sending a prompt
+### 3. Inspect routing and readiness
 
 ```bash
 colossus --config .colossus/config.yaml models route primary
 colossus --config .colossus/config.yaml provider doctor
 ```
+
+The route command is network-free. For a network provider, `provider doctor` sends one
+bounded readiness probe to the configured generation endpoint in addition to checking
+the model catalog; its response content is not printed.
 
 ### 4. Send one bounded model turn
 

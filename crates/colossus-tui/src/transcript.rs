@@ -1,8 +1,12 @@
 use super::*;
 
-pub(super) fn transcript_from_messages(messages: Vec<SessionMessage>) -> Vec<TranscriptEntry> {
+pub(super) fn transcript_from_messages(
+    messages: Vec<SessionMessage>,
+    preferences: &TerminalPreferences,
+) -> Vec<TranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names = BTreeMap::<String, String>::new();
+    let renderer = SemanticRenderer::new(preferences.clone());
     for record in messages {
         let (kind, document) = match record.message.role {
             ModelMessageRole::System => continue,
@@ -31,25 +35,18 @@ pub(super) fn transcript_from_messages(messages: Vec<SessionMessage>) -> Vec<Tra
                 (TranscriptKind::Assistant, document)
             }
             ModelMessageRole::Tool => {
-                let title = record.message.tool_call_id.as_ref().map_or_else(
-                    || "Tool result".into(),
+                let (title, name) = record.message.tool_call_id.as_ref().map_or_else(
+                    || ("Tool result".into(), None),
                     |id| {
                         tool_names.get(id).map_or_else(
-                            || format!("Tool result {id}"),
-                            |name| format!("Completed {name}"),
+                            || (format!("Tool result {id}"), None),
+                            |name| (format!("Completed {name}"), Some(name.as_str())),
                         )
                     },
                 );
                 (
                     TranscriptKind::Tool,
-                    PresentationDocument::from_block(PresentationBlock::Card {
-                        title,
-                        tone: PresentationTone::Tool,
-                        body: vec![PresentationBlock::Code {
-                            language: None,
-                            content: record.message.content,
-                        }],
-                    }),
+                    renderer.retained_tool_result_document(title, name, record.message.content),
                 )
             }
         };
