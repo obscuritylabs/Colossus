@@ -30,6 +30,21 @@ struct TuiWorkerPromptHandler {
 
 #[async_trait]
 impl WorkerPromptHandler for TuiWorkerPromptHandler {
+    async fn notice(&self, notice: ApprovalReviewNotice) -> Result<(), WorkerError> {
+        let document = match notice {
+            ApprovalReviewNotice::AutomaticApproval { notice } => {
+                automatic_approval_document(&notice)
+            }
+            ApprovalReviewNotice::RiskReviewFallback { notice } => {
+                risk_review_fallback_document(&notice)
+            }
+        };
+        self.sender
+            .send(HostEvent::Notice(document))
+            .await
+            .map_err(|_| WorkerError::Unavailable("interactive client disconnected".into()))
+    }
+
     async fn prompt(&self, prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
         let mut body = vec![PresentationBlock::Markdown(prompt.question.clone())];
         if !prompt.details.is_null() {

@@ -101,10 +101,26 @@ pin DNS results, validate TLS authority, reject ambient proxies and redirects, b
 connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
 
-`risk-auto` is deliberately narrow: only model or child-agent `shell.run` without
-workflow lineage can use a low-risk `allow` recommendation to mint a request-bound
-approval proof. The evaluator has no tools and receives environment names, not values.
-All other cases preserve explicit approval or denial.
+`risk-auto` is deliberately narrow: only model or child-agent `shell.run`,
+`web.search`, and bodyless `network.http` GET effects without workflow lineage can use
+a low-risk `allow` recommendation to mint a request-bound approval proof. The evaluator
+has no tools and receives redacted proposed-effect metadata: network review includes the
+requested URL or search query, while credentials remain references and environment
+values are replaced by names. Non-read-only network methods, workspace mutations,
+dynamic integrations, workflows, system actors, and every non-low-risk assessment
+preserve explicit approval or denial.
+
+After the request-bound automatic proof is durably recorded as `approval.granted.v1`,
+the approval provider may release a bounded `AutomaticApprovalNotice` to an attached
+interface. That best-effort notice is presentation only: delivery failure cannot grant,
+deny, retry, or otherwise change the effect decision. Worker delivery remains inside the
+authenticated run channel.
+
+Unavailable and malformed evaluator results are durably classified before attached
+clients receive a best-effort fallback warning. The released warning contains only the
+failure category and bounded effect display metadata; raw provider diagnostics and
+malformed model output remain internal. A warning never mints proof or changes the
+ordinary explicit-approval requirement.
 
 ## Public application transport
 

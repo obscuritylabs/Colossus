@@ -11,6 +11,14 @@ Start with `colossus` or `colossus tui`. Alternate-screen mode is the default;
 `--no-alt-screen` preserves terminal scrollback. Zellij selects inline mode
 automatically.
 
+With `--approval-mode risk-auto`, successful low-risk reviews appear as non-blocking
+**Automatic approval review** transcript cards. They do not take focus from the composer
+or require a response.
+
+Evaluator outages and invalid assessments appear as non-blocking **Automatic approval
+review failed** cards before the explicit approval overlay opens. These cards contain
+only a sanitized failure category, action, resource, and manual-fallback explanation.
+
 ## Keys
 
 | Key | Context | Action |
@@ -25,9 +33,9 @@ automatically.
 | `PageUp` / `PageDown` | Transcript | Scroll retained output |
 | `End` | Transcript | Return to live output |
 | `Esc` | Menu or overlay | Dismiss or fail closed, depending on the prompt |
-| `Tab` / `Down` | Suggestions | Select the next item |
+| `Down` | Suggestions | Select the next item |
 | `Shift-Tab` / `Up` | Suggestions | Select the previous item |
-| `Right` | Suggestions | Accept the preview |
+| `Tab` / `Right` | Suggestions | Accept the visible suggestion |
 | `Enter` | Explicitly selected suggestion | Accept the selection |
 | `Up` / `Down`, `Enter` | Session picker | Move and resume the selected session |
 

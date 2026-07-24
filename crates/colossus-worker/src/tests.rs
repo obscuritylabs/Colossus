@@ -197,6 +197,41 @@ fn authenticated_frames_cover_exact_serialized_payload_bytes() {
 }
 
 #[test]
+fn worker_frames_round_trip_both_approval_review_notice_kinds() {
+    for notice in [
+        ApprovalReviewNotice::AutomaticApproval {
+            notice: AutomaticApprovalNotice {
+                action: "web.search".into(),
+                resource: "configured search provider".into(),
+                risk_level: colossus_contracts::RiskLevel::Low,
+                reason: "read-only configured search".into(),
+            },
+        },
+        ApprovalReviewNotice::RiskReviewFallback {
+            notice: RiskReviewFallbackNotice {
+                action: "web.search".into(),
+                resource: "configured search provider".into(),
+                failure: colossus_contracts::RiskReviewFailure::InvalidAssessment,
+                reason: "manual approval is required".into(),
+            },
+        },
+    ] {
+        let encoded = serde_json::to_vec(&WorkerFrameContent::Notice {
+            notice: notice.clone(),
+        })
+        .expect("notice frame");
+        let decoded: WorkerFrameContent =
+            serde_json::from_slice(&encoded).expect("decode notice frame");
+        assert!(matches!(
+            decoded,
+            WorkerFrameContent::Notice {
+                notice: decoded_notice
+            } if decoded_notice == notice
+        ));
+    }
+}
+
+#[test]
 fn authentication_detects_tampering_and_replay() {
     let key = [7_u8; 32];
     let mut request =
@@ -292,8 +327,10 @@ fn client_frames_reject_wrong_connection_request_and_replay() {
 #[tokio::test]
 async fn prompt_ids_are_one_use_and_unknown_ids_fail_closed() {
     let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
+    let (notice_tx, _notice_rx) = tokio::sync::mpsc::channel(1);
     let bridge = InteractiveRunBridge {
         prompts: prompt_tx,
+        notices: notice_tx,
         responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
     };
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
@@ -335,8 +372,10 @@ fn test_prompt(id: &str, kind: WorkerPromptKind) -> WorkerPrompt {
 #[tokio::test]
 async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() {
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(4);
+    let (notice_tx, _notice_rx) = tokio::sync::mpsc::channel(1);
     let bridge = InteractiveRunBridge {
         prompts: prompt_tx,
+        notices: notice_tx,
         responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
     };
 
@@ -387,8 +426,10 @@ async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() 
 
     let (disconnected_tx, disconnected_rx) = tokio::sync::mpsc::channel(1);
     drop(disconnected_rx);
+    let (notice_tx, _notice_rx) = tokio::sync::mpsc::channel(1);
     let disconnected = InteractiveRunBridge {
         prompts: disconnected_tx,
+        notices: notice_tx,
         responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
     };
     assert!(matches!(
@@ -417,8 +458,10 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
 
     for (answer, expected_approval) in [("Allow once", true), ("Deny", false)] {
         let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(1);
+        let (notice_tx, _notice_rx) = tokio::sync::mpsc::channel(1);
         let bridge = InteractiveRunBridge {
             prompts: prompt_tx,
+            notices: notice_tx,
             responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         };
         let responder_bridge = bridge.clone();
@@ -444,6 +487,66 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
         responder.await.expect("responder");
         assert_eq!(proof.is_some(), expected_approval);
     }
+}
+
+#[tokio::test]
+async fn interactive_worker_forwards_automatic_approval_notices_without_prompting() {
+    let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
+    let (notice_tx, mut notice_rx) = tokio::sync::mpsc::channel(1);
+    let bridge = InteractiveRunBridge {
+        prompts: prompt_tx,
+        notices: notice_tx,
+        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+    };
+    let provider = WorkerInteractiveApproval {
+        mode: WorkerApprovalMode::RiskAuto,
+    };
+    let notice = AutomaticApprovalNotice {
+        action: "web.search".into(),
+        resource: "configured search provider".into(),
+        risk_level: colossus_contracts::RiskLevel::Low,
+        reason: "read-only configured search".into(),
+    };
+
+    ACTIVE_INTERACTIVE_RUN
+        .scope(bridge, provider.automatic_approval_granted(notice.clone()))
+        .await;
+
+    assert_eq!(
+        notice_rx.recv().await,
+        Some(ApprovalReviewNotice::AutomaticApproval { notice })
+    );
+}
+
+#[tokio::test]
+async fn interactive_worker_forwards_risk_review_fallback_without_prompting() {
+    let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
+    let (notice_tx, mut notice_rx) = tokio::sync::mpsc::channel(1);
+    let bridge = InteractiveRunBridge {
+        prompts: prompt_tx,
+        notices: notice_tx,
+        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+    };
+    let provider = WorkerInteractiveApproval {
+        mode: WorkerApprovalMode::RiskAuto,
+    };
+    let notice = RiskReviewFallbackNotice {
+        action: "web.search".into(),
+        resource: "configured search provider".into(),
+        failure: colossus_contracts::RiskReviewFailure::InvalidAssessment,
+        reason:
+            "The risk evaluator response failed strict validation, so manual approval is required."
+                .into(),
+    };
+
+    ACTIVE_INTERACTIVE_RUN
+        .scope(bridge, provider.risk_review_fallback(notice.clone()))
+        .await;
+
+    assert_eq!(
+        notice_rx.recv().await,
+        Some(ApprovalReviewNotice::RiskReviewFallback { notice })
+    );
 }
 
 #[tokio::test]

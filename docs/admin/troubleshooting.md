@@ -28,6 +28,7 @@ colossus --config .colossus/config.yaml tools list
 | --- | --- | --- | --- |
 | Configuration does not parse | `config show` | Unknown field, missing `access`, removed exact tool/action fields, overlapping access entries, relative security path | Compare with [Configuration fields](../reference/configuration.md); for an incompatible shape, follow [Upgrade and compatibility](../get-started/upgrade-compatibility.md) |
 | Echo works; model fails | `provider doctor PROFILE` | Route, credential reference, origin, TLS, model ID, or response shape | Repair the first failing obligation |
+| Local model returns HTTP 503 | Local endpoint health, then `provider doctor PROFILE` | Model process is still loading | Wait for endpoint readiness and retry the turn; Colossus marks this failure recoverable but never retries it implicitly |
 | Effect is denied | `config effective` | Exact deny or unmet policy obligation | Change the reviewed action decision; approval cannot override deny |
 | Approval never appears | Global option placement | `--approval-mode` placed after subcommand or noninteractive surface | Put the global flag before the subcommand |
 | Tool is missing | `config effective` | Profile exclusion, exact exclude, missing static prerequisite, untrusted extension | Fix selection or prerequisite; do not widen unrelated controls |

@@ -3,8 +3,9 @@
 use super::{ApprovalMode, TERMINAL_HISTORY_CAPACITY, terminal_completion_values};
 use async_trait::async_trait;
 use colossus_contracts::{
-    ApprovalProof, ContextStatus, EffectRequest, MemoryStatus, PolicyDecision, ProviderRoute,
-    ResearchDepth, ResearchSourceKind, RunEventEnvelope, SessionMessagePage, SessionSummary,
+    ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice, ContextStatus, EffectRequest,
+    MemoryStatus, PolicyDecision, ProviderRoute, ResearchDepth, ResearchSourceKind,
+    RiskReviewFallbackNotice, RunEventEnvelope, SessionMessagePage, SessionSummary,
     TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
@@ -14,7 +15,8 @@ use colossus_ports::{
 };
 use colossus_presentation::{
     PresentationBlock, PresentationDocument, PresentationTone, ThemeLibrary, ThemeName,
-    context_status_document, document_from_json, work_state_document,
+    automatic_approval_document, context_status_document, document_from_json,
+    risk_review_fallback_document, work_state_document,
 };
 use colossus_runtime::Runtime;
 use colossus_tui::{

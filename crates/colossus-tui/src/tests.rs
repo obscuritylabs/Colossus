@@ -628,6 +628,28 @@ fn prompt_cancel_is_one_use_and_preserves_the_composer_draft() {
 }
 
 #[test]
+fn policy_notice_appends_to_the_transcript_without_taking_focus() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    let starting = state.transcript.len();
+    handle_host_event(
+        &mut state,
+        HostEvent::Notice(PresentationDocument::from_block(PresentationBlock::Card {
+            title: "Automatic approval review".into(),
+            tone: PresentationTone::Warning,
+            body: vec![PresentationBlock::Text("low-risk effect approved".into())],
+        })),
+    );
+
+    assert_eq!(state.transcript.len(), starting + 1);
+    assert!(state.overlay.is_none());
+    assert!(
+        transcript_lines(&state, 80)
+            .iter()
+            .any(|line| { line.to_string().contains("Automatic approval review") })
+    );
+}
+
+#[test]
 fn prompt_keyboard_selection_returns_the_highlighted_choice() {
     let mut state = TuiState::from_snapshot(snapshot());
     let (response, mut received) = oneshot::channel();

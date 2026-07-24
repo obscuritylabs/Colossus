@@ -5,11 +5,11 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
-    AgentRunOutcome, AgentRunResult, ApprovalProof, DecisionPriority, DecisionStatus,
-    EffectRequest, GoalStatus, IntegrationAuth, MemoryScope, MemoryStatus, PlanStatus, PlanStep,
-    PolicyDecision, ResearchDepth, ResearchSourceKind, RunEventEnvelope, SubagentStatus,
-    TaskStatus, TerminalPreferences, UserPromptRequest, UserPromptResponse,
-    WorkflowScheduleMisfirePolicy,
+    AgentRunOutcome, AgentRunResult, ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice,
+    DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth, MemoryScope,
+    MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ResearchDepth, ResearchSourceKind,
+    RiskReviewFallbackNotice, RunEventEnvelope, SubagentStatus, TaskStatus, TerminalPreferences,
+    UserPromptRequest, UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -34,7 +34,7 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u16 = 4;
+const PROTOCOL_VERSION: u16 = 5;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;

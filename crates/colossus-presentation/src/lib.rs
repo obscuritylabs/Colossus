@@ -1,9 +1,10 @@
 //! Event-sourced presentation preferences and pure semantic terminal rendering.
 
 use colossus_contracts::{
-    Actor, ContextStatus, CustomTheme, EventClassification, ExecutionContext, NewEvent,
-    ProviderEvent, RunEvent, RunEventEnvelope, RunPhase, ThemeColor, ThemeSpinner, ThemeTextStyle,
-    ToolCall, ToolResult, WorkStateSnapshot,
+    Actor, AutomaticApprovalNotice, ContextStatus, CustomTheme, EventClassification,
+    ExecutionContext, NewEvent, ProviderEvent, RiskLevel, RiskReviewFailure,
+    RiskReviewFallbackNotice, RunEvent, RunEventEnvelope, RunPhase, ThemeColor, ThemeSpinner,
+    ThemeTextStyle, ToolCall, ToolResult, WorkStateSnapshot,
 };
 pub use colossus_contracts::{
     EventDisplayMode, StreamDisplayMode, TerminalPreferences, ThemeName, TranscriptDensity,
@@ -50,7 +51,8 @@ pub use document::{
 pub use palette::{RgbColor, TerminalPalette};
 pub use repository::EventSourcedPresentationRepository;
 pub use semantic::{
-    SemanticRenderer, context_status_document, tool_result_document, work_state_document,
+    SemanticRenderer, automatic_approval_document, context_status_document,
+    risk_review_fallback_document, tool_result_document, work_state_document,
 };
 pub use terminal::{StyledDocumentRenderer, TerminalDocumentRenderer};
 pub use themes::{ThemeLibrary, ThemeLibraryStatus, ThemeScaffold, default_user_theme_directory};

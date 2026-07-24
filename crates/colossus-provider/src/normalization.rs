@@ -241,9 +241,25 @@ pub(super) fn chat_tool(tool: &ModelToolDefinition) -> Value {
         "function": {
             "name": tool.name,
             "description": tool.description,
-            "parameters": tool.input_schema,
+            "parameters": compatible_chat_tool_schema(&tool.input_schema),
         }
     })
+}
+
+fn compatible_chat_tool_schema(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .filter(|(key, _)| key.as_str() != "maxLength")
+                .map(|(key, value)| (key.clone(), compatible_chat_tool_schema(value)))
+                .collect(),
+        ),
+        Value::Array(values) => {
+            Value::Array(values.iter().map(compatible_chat_tool_schema).collect())
+        }
+        _ => value.clone(),
+    }
 }
 
 pub(super) fn normalize_responses(

@@ -114,7 +114,9 @@ pub(super) fn handle_key(
         }
         KeyCode::Up => state.previous_history(),
         KeyCode::Down => state.next_history(),
-        KeyCode::Tab => state.advance_completion(),
+        KeyCode::Tab => {
+            state.accept_completion();
+        }
         KeyCode::BackTab => state.previous_completion(),
         KeyCode::PageUp => {
             state.page_up();
@@ -444,6 +446,14 @@ pub(super) fn handle_local_command(
 pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
     match event {
         HostEvent::Run(envelope) => handle_run_event(state, envelope),
+        HostEvent::Notice(document) => {
+            state.append_entry(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document,
+                temporary: false,
+            });
+        }
         HostEvent::Prompt(request) => {
             if state.overlay.is_some() {
                 let _ = request.response.send(PromptResponse::Cancelled);

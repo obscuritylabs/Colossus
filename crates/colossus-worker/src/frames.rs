@@ -27,7 +27,7 @@ pub(super) struct WorkerRequest {
 pub enum WorkerApprovalMode {
     /// Deny approval obligations without prompting.
     Deny,
-    /// Ask an attached protocol-v4 interactive client.
+    /// Ask an attached protocol-v5 interactive client.
     Ask,
     /// Preserve model-assisted low-risk auto-approval and ask otherwise.
     RiskAuto,
@@ -69,6 +69,7 @@ pub struct WorkerPrompt {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum WorkerFrameContent {
     Event { event: RunEventEnvelope },
+    Notice { notice: ApprovalReviewNotice },
     Prompt { prompt: WorkerPrompt },
     Complete { result: Value },
     Error { message: String },

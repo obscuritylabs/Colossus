@@ -147,7 +147,7 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute a model run with protocol-v4 prompts and cooperative cancellation.
+    /// Execute a model run with protocol-v5 prompts, notices, and cooperative cancellation.
     RunModelControlled {
         /// Logical role.
         role: String,

@@ -60,6 +60,13 @@ impl TuiPromptRouter {
         }
     }
 
+    async fn notice(&self, document: PresentationDocument) {
+        let sender = self.sender.lock().ok().and_then(|sender| sender.clone());
+        if let Some(sender) = sender {
+            let _ = sender.send(HostEvent::Notice(document)).await;
+        }
+    }
+
     async fn prompt(
         &self,
         id: String,
@@ -104,6 +111,18 @@ pub(crate) struct TuiApprovalProvider {
 impl ApprovalProvider for TuiApprovalProvider {
     fn risk_auto_enabled(&self) -> bool {
         self.risk_auto
+    }
+
+    async fn automatic_approval_granted(&self, notice: AutomaticApprovalNotice) {
+        self.router
+            .notice(automatic_approval_document(&notice))
+            .await;
+    }
+
+    async fn risk_review_fallback(&self, notice: RiskReviewFallbackNotice) {
+        self.router
+            .notice(risk_review_fallback_document(&notice))
+            .await;
     }
 
     async fn request_approval(

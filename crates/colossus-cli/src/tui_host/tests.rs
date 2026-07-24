@@ -45,3 +45,61 @@ fn resume_picker_excludes_empty_sessions_before_applying_the_limit() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, "first");
 }
+
+#[tokio::test]
+async fn embedded_tui_receives_automatic_approval_as_a_non_blocking_notice() {
+    let router = Arc::new(TuiPromptRouter::default());
+    let (sender, mut events) = mpsc::channel(1);
+    router.install(Some(sender));
+    let provider = TuiApprovalProvider {
+        router,
+        risk_auto: true,
+    };
+
+    provider
+        .automatic_approval_granted(AutomaticApprovalNotice {
+            action: "network.http".into(),
+            resource: "https://example.test/resource".into(),
+            risk_level: colossus_contracts::RiskLevel::Low,
+            reason: "bodyless GET to an exact configured origin".into(),
+        })
+        .await;
+
+    let HostEvent::Notice(document) = events.recv().await.expect("notice") else {
+        panic!("expected a non-blocking notice");
+    };
+    assert!(matches!(
+        document.blocks.first(),
+        Some(PresentationBlock::Card { title, .. }) if title == "Automatic approval review"
+    ));
+}
+
+#[tokio::test]
+async fn embedded_tui_receives_risk_review_failure_before_manual_approval() {
+    let router = Arc::new(TuiPromptRouter::default());
+    let (sender, mut events) = mpsc::channel(1);
+    router.install(Some(sender));
+    let provider = TuiApprovalProvider {
+        router,
+        risk_auto: true,
+    };
+
+    provider
+        .risk_review_fallback(RiskReviewFallbackNotice {
+            action: "web.search".into(),
+            resource: "http://127.0.0.1:8888/search".into(),
+            failure: colossus_contracts::RiskReviewFailure::InvalidAssessment,
+            reason: "The risk evaluator response failed strict validation, so manual approval is required."
+                .into(),
+        })
+        .await;
+
+    let HostEvent::Notice(document) = events.recv().await.expect("notice") else {
+        panic!("expected a non-blocking notice");
+    };
+    assert!(matches!(
+        document.blocks.first(),
+        Some(PresentationBlock::Card { title, .. })
+            if title == "Automatic approval review failed"
+    ));
+}

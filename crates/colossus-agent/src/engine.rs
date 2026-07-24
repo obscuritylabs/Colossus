@@ -310,22 +310,30 @@ impl AgentService {
                 }
                 Err(error) => {
                     let message = error.to_string();
+                    let (code, recoverable) = match &error {
+                        ModelProviderError::Recoverable { code, .. } => (code.clone(), true),
+                        error => (provider_error_code(error).into(), false),
+                    };
                     self.append(
                         &stream_id,
                         &mut stream_version,
                         "error.v1",
                         system_actor(),
                         &context,
-                        json!({"message": &message, "recoverable": false}),
+                        json!({
+                            "code": &code,
+                            "message": &message,
+                            "recoverable": recoverable,
+                        }),
                     )?;
                     emit_run_event(
                         &mut released_observer,
                         &run_id,
                         &session_id,
                         RunEvent::Error {
-                            code: provider_error_code(&error).into(),
+                            code,
                             message,
-                            recoverable: false,
+                            recoverable,
                             turn: Some(turn),
                             elapsed_seconds: started.elapsed().as_secs_f64(),
                         },

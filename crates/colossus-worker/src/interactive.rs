@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone)]
 pub(super) struct InteractiveRunBridge {
     pub(super) prompts: tokio::sync::mpsc::Sender<WorkerPrompt>,
+    pub(super) notices: tokio::sync::mpsc::Sender<ApprovalReviewNotice>,
     pub(super) responses:
         Arc<tokio::sync::Mutex<BTreeMap<String, tokio::sync::oneshot::Sender<Option<String>>>>>,
 }
@@ -79,6 +80,26 @@ pub(super) struct WorkerInteractiveApproval {
 impl ApprovalProvider for WorkerInteractiveApproval {
     fn risk_auto_enabled(&self) -> bool {
         self.mode == WorkerApprovalMode::RiskAuto
+    }
+
+    async fn automatic_approval_granted(&self, notice: AutomaticApprovalNotice) {
+        let Ok(bridge) = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone) else {
+            return;
+        };
+        let _ = bridge
+            .notices
+            .send(ApprovalReviewNotice::AutomaticApproval { notice })
+            .await;
+    }
+
+    async fn risk_review_fallback(&self, notice: RiskReviewFallbackNotice) {
+        let Ok(bridge) = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone) else {
+            return;
+        };
+        let _ = bridge
+            .notices
+            .send(ApprovalReviewNotice::RiskReviewFallback { notice })
+            .await;
     }
 
     async fn request_approval(

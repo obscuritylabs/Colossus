@@ -38,13 +38,20 @@ Use `--session SESSION_ID` for an exact session. The alternate screen is the def
 global `--no-alt-screen` selects an inline viewport, and Zellij selects inline mode
 automatically.
 
-For a development session with eligible low-risk shell review:
+For a development session with eligible low-risk shell and read-only network review:
 
 ```bash
 colossus -w /absolute/path/to/repository \
   --config .colossus/config.yaml \
   --approval-mode risk-auto tui
 ```
+
+Automatic low-risk grants appear inline as warning-toned **Automatic approval review**
+cards. The notice is informational and never opens a modal or interrupts typing.
+
+If the evaluator is unavailable or returns an invalid assessment, an **Automatic
+approval review failed** card explains that Colossus is falling back to manual approval
+before the approval overlay opens.
 
 The canonical workspace is also the worker compatibility identity. A TUI client refuses
 to attach to a worker serving another workspace.
@@ -74,8 +81,8 @@ Unknown slash commands remain in the terminal parser and are not sent to the mod
 
 - Type `/` at the start of a draft for slash-command completion.
 - Type `@` at a skill-token boundary for installed skill completion.
-- Use Tab or Down/Up to move through suggestions, Right Arrow to accept an inline
-  suggestion, and Enter to submit.
+- Use Down/Up or Shift-Tab to move through suggestions, Tab or Right Arrow to accept the
+  visible suggestion, and Enter to submit.
 - Use PageUp/PageDown to read older transcript content and End to return to live output.
 - Use Ctrl-R to search encrypted prompt history.
 - Toggle multiline composition with `/multiline toggle`.

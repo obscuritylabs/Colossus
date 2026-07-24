@@ -5,7 +5,8 @@ use colossus_api::{
     RunUpdateKind,
 };
 use colossus_contracts::{
-    ApprovalProof, EffectRequest, PolicyDecision, UserPromptRequest, UserPromptResponse,
+    ApprovalProof, AutomaticApprovalNotice, EffectRequest, PolicyDecision,
+    RiskReviewFallbackNotice, UserPromptRequest, UserPromptResponse,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{ApprovalProvider, PolicyError, ToolError, UserPromptProvider};
@@ -204,6 +205,16 @@ impl ApprovalProvider for PublicInteractionRouter {
         ACTIVE_PUBLIC_RUN
             .try_with(|_| false)
             .unwrap_or_else(|_| self.fallback_approvals.risk_auto_enabled())
+    }
+
+    async fn automatic_approval_granted(&self, notice: AutomaticApprovalNotice) {
+        self.fallback_approvals
+            .automatic_approval_granted(notice)
+            .await;
+    }
+
+    async fn risk_review_fallback(&self, notice: RiskReviewFallbackNotice) {
+        self.fallback_approvals.risk_review_fallback(notice).await;
     }
 
     async fn request_approval(

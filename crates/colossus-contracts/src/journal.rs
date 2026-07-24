@@ -389,6 +389,60 @@ pub struct RiskAssessment {
     pub reason: String,
 }
 
+/// Policy-released notice that a low-risk approval review completed automatically.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomaticApprovalNotice {
+    /// Canonical effect action reviewed by policy.
+    pub action: String,
+    /// Bounded display resource associated with the effect.
+    pub resource: String,
+    /// Advisory risk level accepted by the gateway.
+    pub risk_level: RiskLevel,
+    /// Short policy-released explanation from the risk review.
+    pub reason: String,
+}
+
+/// Bounded reason an automatic approval review could not produce a decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskReviewFailure {
+    /// The configured evaluator or its provider could not be reached.
+    EvaluatorUnavailable,
+    /// The evaluator response failed the strict assessment contract.
+    InvalidAssessment,
+}
+
+/// Policy-released notice that risk-auto fell back to explicit approval.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RiskReviewFallbackNotice {
+    /// Canonical effect action whose review failed.
+    pub action: String,
+    /// Bounded display resource associated with the effect.
+    pub resource: String,
+    /// Sanitized failure category suitable for an attached user.
+    pub failure: RiskReviewFailure,
+    /// Short policy-released explanation without provider diagnostics.
+    pub reason: String,
+}
+
+/// Non-blocking policy notice transported to an attached interactive client.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ApprovalReviewNotice {
+    /// A low-risk review granted the approval obligation automatically.
+    AutomaticApproval {
+        /// Released automatic approval details.
+        notice: AutomaticApprovalNotice,
+    },
+    /// A failed evaluator review requires explicit operator approval.
+    RiskReviewFallback {
+        /// Released fallback details.
+        notice: RiskReviewFallbackNotice,
+    },
+}
+
 /// A reference to a credential whose value is deliberately absent.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
