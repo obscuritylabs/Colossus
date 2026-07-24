@@ -2761,8 +2761,42 @@ async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() 
             .to_string(),
         }],
     };
+    let fenced = ProviderTurn {
+        profile: "scripted".into(),
+        model_profile: "scripted".into(),
+        provider_profile: "scripted-provider".into(),
+        provider: "test".into(),
+        model: "test-model".into(),
+        response_id: Some("risk-fenced".into()),
+        events: vec![ProviderEvent::FinalOutput {
+            text: concat!(
+                "```json\n",
+                "{\"risk_level\":\"low\",\"recommended_decision\":\"allow\",",
+                "\"reason\":\"bounded local read-only search\"}\n",
+                "```"
+            )
+            .into(),
+        }],
+    };
+    let fenced_with_prose = ProviderTurn {
+        profile: "scripted".into(),
+        model_profile: "scripted".into(),
+        provider_profile: "scripted-provider".into(),
+        provider: "test".into(),
+        model: "test-model".into(),
+        response_id: Some("risk-fenced-prose".into()),
+        events: vec![ProviderEvent::FinalOutput {
+            text: concat!(
+                "Assessment:\n```json\n",
+                "{\"risk_level\":\"low\",\"recommended_decision\":\"allow\",",
+                "\"reason\":\"looks safe\"}\n",
+                "```"
+            )
+            .into(),
+        }],
+    };
     let provider = Arc::new(WorkScriptedProvider {
-        turns: Mutex::new(VecDeque::from([valid, invalid])),
+        turns: Mutex::new(VecDeque::from([valid, fenced, invalid, fenced_with_prose])),
         requests: Mutex::new(Vec::new()),
     });
     let evaluator = GatewayRiskEvaluator {
@@ -2810,6 +2844,20 @@ async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() 
         assert!(disclosed.contains("[REDACTED]"));
     }
 
+    let fenced_assessment = evaluator
+        .evaluate(&request, &decision)
+        .await
+        .expect("single JSON fence");
+    assert_eq!(fenced_assessment.risk_level, RiskLevel::Low);
+    assert_eq!(
+        fenced_assessment.recommended_decision,
+        RiskRecommendation::Allow
+    );
+
+    assert!(matches!(
+        evaluator.evaluate(&request, &decision).await,
+        Err(RiskEvaluationError::InvalidAssessment(_))
+    ));
     assert!(matches!(
         evaluator.evaluate(&request, &decision).await,
         Err(RiskEvaluationError::InvalidAssessment(_))

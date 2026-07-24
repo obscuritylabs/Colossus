@@ -208,6 +208,8 @@ pub struct InteractivePrompt {
 pub enum HostEvent {
     /// Ordered policy-released agent runtime event.
     Run(RunEventEnvelope),
+    /// Policy-released informational notice that does not take focus.
+    Notice(PresentationDocument),
     /// A trusted bridge needs focused operator input.
     Prompt(InteractivePrompt),
     /// The current operation reached a terminal result.

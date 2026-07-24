@@ -169,6 +169,21 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
     );
 }
 
+#[test]
+fn service_unavailable_is_recoverable_without_reclassifying_bad_requests() {
+    assert!(matches!(
+        crate::executor::provider_execution_error(ProviderError::Status { status: 503 }),
+        ExecutionError::Recoverable { ref code, ref message }
+            if code == "provider.temporarily_unavailable"
+                && message.contains("retry after the endpoint reports ready")
+    ));
+    assert!(matches!(
+        crate::executor::provider_execution_error(ProviderError::Status { status: 400 }),
+        ExecutionError::Failed(ref message)
+            if message == "provider endpoint returned HTTP 400"
+    ));
+}
+
 fn model_request() -> ModelRequest {
     ModelRequest {
         instructions: "Be exact.".into(),
@@ -524,6 +539,73 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
     assert_eq!(chat["max_tokens"], 4_096);
     assert_eq!(chat["messages"][1]["tool_calls"][0]["id"], "call-1");
     assert_eq!(chat["messages"][2]["tool_call_id"], "call-1");
+}
+
+#[test]
+fn chat_tool_projection_omits_max_length_but_keeps_the_canonical_schema_strict() {
+    let tool = ModelToolDefinition {
+        name: "workspace.inspect".into(),
+        description: "Inspect bounded workspace paths.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096
+                    }
+                },
+                "environment": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string",
+                        "maxLength": 65536
+                    }
+                }
+            },
+            "required": ["paths"],
+            "additionalProperties": false
+        }),
+    };
+    let request = ModelRequest {
+        instructions: "test".into(),
+        messages: vec![ModelMessage {
+            role: ModelMessageRole::User,
+            content: "inspect".into(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        tools: vec![tool.clone()],
+        max_output_tokens: Some(4_096),
+    };
+
+    let chat = chat_payload(&request, "unit-model", 4_096, false).expect("chat payload");
+    let projected = &chat["tools"][0]["function"]["parameters"];
+    assert!(
+        !serde_json::to_string(projected)
+            .expect("projected schema")
+            .contains("\"maxLength\"")
+    );
+    assert_eq!(projected["properties"]["paths"]["items"]["minLength"], 1);
+    assert_eq!(projected["properties"]["paths"]["maxItems"], 128);
+    assert_eq!(
+        projected["properties"]["environment"]["additionalProperties"]["type"],
+        "string"
+    );
+
+    assert_eq!(
+        tool.input_schema["properties"]["paths"]["items"]["maxLength"],
+        4096
+    );
+    let responses =
+        responses_payload(&request, "unit-model", 4_096, false).expect("Responses payload");
+    assert_eq!(
+        responses["tools"][0]["parameters"]["properties"]["paths"]["items"]["maxLength"],
+        4096
+    );
 }
 
 #[test]

@@ -3,6 +3,11 @@ use super::*;
 /// Client-side handler for authenticated worker approval and input prompts.
 #[async_trait]
 pub trait WorkerPromptHandler: Send + Sync {
+    /// Present one non-blocking policy notice from the active run.
+    async fn notice(&self, _notice: ApprovalReviewNotice) -> Result<(), WorkerError> {
+        Ok(())
+    }
+
     /// Return one bounded answer, or `None` to fail closed.
     async fn prompt(&self, prompt: WorkerPrompt) -> Result<Option<String>, WorkerError>;
 }
@@ -92,6 +97,9 @@ impl WorkerClient {
             WorkerFrameContent::Event { .. } => Err(WorkerError::Protocol(
                 "non-streaming call received a run event".into(),
             )),
+            WorkerFrameContent::Notice { .. } => Err(WorkerError::Protocol(
+                "non-interactive call received a notice".into(),
+            )),
             WorkerFrameContent::Prompt { .. } => Err(WorkerError::Protocol(
                 "non-interactive call received a prompt and failed closed".into(),
             )),
@@ -141,6 +149,11 @@ impl WorkerClient {
                     .observe(event)
                     .await
                     .map_err(|error| WorkerError::Remote(error.to_string()))?,
+                WorkerFrameContent::Notice { .. } => {
+                    return Err(WorkerError::Protocol(
+                        "uncontrolled model call received a notice".into(),
+                    ));
+                }
                 WorkerFrameContent::Complete { result } => {
                     return serde_json::from_value(result).map_err(|error| {
                         WorkerError::Protocol(format!("invalid run result: {error}"))
@@ -156,7 +169,7 @@ impl WorkerClient {
         }
     }
 
-    /// Execute a protocol-v4 run with authenticated prompts and cooperative cancellation.
+    /// Execute a protocol-v5 run with authenticated prompts, notices, and cancellation.
     pub async fn run_model_controlled(
         &self,
         operation: WorkerOperation,
@@ -231,6 +244,7 @@ impl WorkerClient {
                     .observe(event)
                     .await
                     .map_err(|error| WorkerError::Remote(error.to_string()))?,
+                WorkerFrameContent::Notice { notice } => prompts.notice(notice).await?,
                 WorkerFrameContent::Prompt { prompt } => {
                     let prompt_id = prompt.prompt_id.clone();
                     let answer = prompts.prompt(prompt).await?;

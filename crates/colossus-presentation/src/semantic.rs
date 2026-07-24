@@ -585,6 +585,51 @@ pub fn tool_result_document(
     tool_result_document_with_mode(result, duration_seconds, call, EventDisplayMode::Verbose)
 }
 
+/// Build the shared terminal and TUI notice for one durable automatic approval review.
+pub fn automatic_approval_document(notice: &AutomaticApprovalNotice) -> PresentationDocument {
+    let risk = match notice.risk_level {
+        RiskLevel::Low => "low",
+        RiskLevel::Medium => "medium",
+        RiskLevel::High => "high",
+    };
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Automatic approval review".into(),
+        tone: PresentationTone::Warning,
+        body: vec![
+            PresentationBlock::KeyValue(vec![
+                ("Decision".into(), "approved".into()),
+                ("Risk".into(), risk.into()),
+                ("Authorization".into(), "risk-auto".into()),
+                ("Action".into(), notice.action.clone()),
+                ("Resource".into(), notice.resource.clone()),
+            ]),
+            PresentationBlock::Markdown(notice.reason.clone()),
+        ],
+    })
+}
+
+/// Build the shared terminal and TUI warning for a failed risk-auto review.
+pub fn risk_review_fallback_document(notice: &RiskReviewFallbackNotice) -> PresentationDocument {
+    let failure = match notice.failure {
+        RiskReviewFailure::EvaluatorUnavailable => "evaluator unavailable",
+        RiskReviewFailure::InvalidAssessment => "invalid assessment",
+    };
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Automatic approval review failed".into(),
+        tone: PresentationTone::Warning,
+        body: vec![
+            PresentationBlock::KeyValue(vec![
+                ("Outcome".into(), "manual approval required".into()),
+                ("Authorization".into(), "risk-auto".into()),
+                ("Failure".into(), failure.into()),
+                ("Action".into(), notice.action.clone()),
+                ("Resource".into(), notice.resource.clone()),
+            ]),
+            PresentationBlock::Markdown(notice.reason.clone()),
+        ],
+    })
+}
+
 fn tool_result_document_with_mode(
     result: &ToolResult,
     duration_seconds: f64,

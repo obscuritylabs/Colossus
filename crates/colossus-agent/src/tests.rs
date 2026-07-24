@@ -929,6 +929,60 @@ async fn malformed_arguments_retry_twice_without_tool_execution() {
 }
 
 #[tokio::test]
+async fn transient_provider_failure_stays_recoverable_without_implicit_retry() {
+    let provider = Arc::new(ScriptedProvider::new(vec![Err(
+        ModelProviderError::Recoverable {
+            code: "provider.temporarily_unavailable".into(),
+            message: "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
+                .into(),
+        },
+    )]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&[]).expect("empty catalog")),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    let error = service
+        .run_in_session_with_skills_stream(
+            "primary",
+            "test",
+            "recover later",
+            4,
+            None,
+            &[],
+            &mut observer,
+        )
+        .await
+        .expect_err("unavailable provider must stop the current run");
+    assert!(matches!(
+        error,
+        AgentError::Provider(ModelProviderError::Recoverable { ref code, .. })
+            if code == "provider.temporarily_unavailable"
+    ));
+    assert_eq!(provider.requests.lock().expect("requests").len(), 1);
+    assert!(observer.events.iter().any(|envelope| matches!(
+        &envelope.event,
+        RunEvent::Error {
+            code,
+            recoverable: true,
+            ..
+        } if code == "provider.temporarily_unavailable"
+    )));
+    let events = journal.read_global(1, 50).expect("events");
+    let error_event = events
+        .iter()
+        .find(|event| event.event_type == "error.v1")
+        .expect("durable error");
+    let payload = journal.decrypt_payload(error_event).expect("error payload");
+    assert_eq!(payload["code"], "provider.temporarily_unavailable");
+    assert_eq!(payload["recoverable"], true);
+}
+
+#[tokio::test]
 async fn schema_invalid_tool_call_returns_error_without_reaching_executor() {
     let provider = Arc::new(ScriptedProvider::new(vec![
         turn(vec![ProviderEvent::ToolCallRequested {

@@ -163,6 +163,11 @@ and generation transport independently of `sandbox.timeoutMs`. The adapter still
 enforces the exact selected connection's timeout. OPA deployments may return a stricter
 timeout obligation.
 
+For `open_ai_compatible` profiles, provider-facing tool schemas omit `maxLength`
+annotations to interoperate with Chat Completions servers that compile tool definitions
+into bounded grammars. The canonical Colossus tool schema remains unchanged and is
+validated in full before execution.
+
 `host:` references are resolved only by an application-managed runtime through its
 in-memory credential resolver. The standard CLI and daemon composition remain
 environment-backed; they never interpret a `host:` identifier as a secret value.

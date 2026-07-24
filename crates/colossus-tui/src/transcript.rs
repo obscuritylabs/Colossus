@@ -138,7 +138,7 @@ pub(super) fn help_document() -> PresentationDocument {
                 ("Scroll".into(), "PageUp/PageDown; End returns live".into()),
                 (
                     "Complete".into(),
-                    "Type / or @ for suggestions; Tab/Arrows select; Right accepts".into(),
+                    "Type / or @ for suggestions; Up/Down select; Tab or Right accepts".into(),
                 ),
                 (
                     "History".into(),

@@ -7,10 +7,11 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use colossus_access::AccessProfile;
 use colossus_contracts::{
-    ApprovalProof, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth,
-    MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
-    ResearchSourceKind, RunEvent, RunEventEnvelope, SessionSummary, SubagentStatus, TaskStatus,
-    ToolCall, UserPromptRequest, UserPromptResponse, WorkflowScheduleMisfirePolicy,
+    ApprovalProof, AutomaticApprovalNotice, DecisionPriority, DecisionStatus, EffectRequest,
+    GoalStatus, IntegrationAuth, MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision,
+    ProviderEvent, ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEvent,
+    RunEventEnvelope, SessionSummary, SubagentStatus, TaskStatus, ToolCall, UserPromptRequest,
+    UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{
@@ -20,7 +21,8 @@ use colossus_ports::{
 use colossus_presentation::{
     EventDisplayMode, PresentationBlock, PresentationDocument, PresentationTable, SemanticRenderer,
     StreamDisplayMode, TerminalDocumentRenderer, TerminalPalette, TerminalPreferences,
-    ThemeLibrary, ThemeName, TranscriptDensity, document_from_json,
+    ThemeLibrary, ThemeName, TranscriptDensity, automatic_approval_document, document_from_json,
+    risk_review_fallback_document,
 };
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_tui::{BootstrapRequest, ScreenMode, TuiOptions, run_tui};

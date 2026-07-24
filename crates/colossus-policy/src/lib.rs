@@ -3,12 +3,14 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
-    Actor, ActorType, ApprovalProof, DecisionOutcome, EffectPhase, EffectRequest,
-    EventClassification, NewEvent, PolicyDecision, PolicyObligations, QuarantinedEffectResult,
-    RiskLevel, RiskRecommendation, RiskStatus,
+    Actor, ActorType, ApprovalProof, AutomaticApprovalNotice, DecisionOutcome, EffectPhase,
+    EffectRequest, EventClassification, NewEvent, PolicyDecision, PolicyObligations,
+    QuarantinedEffectResult, RiskLevel, RiskRecommendation, RiskReviewFailure,
+    RiskReviewFallbackNotice, RiskStatus,
 };
 use colossus_ports::{
-    ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluator, StoreError,
+    ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
+    RiskEvaluator, StoreError,
 };
 use hmac::{Hmac, Mac};
 use reqwest::{Certificate, Client, Identity, Url};

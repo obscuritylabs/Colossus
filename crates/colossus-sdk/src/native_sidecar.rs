@@ -2450,8 +2450,11 @@ mod tests {
         )
         .expect("options");
         let debug = format!("{options:?}");
-        assert!(!debug.contains("bearer"));
-        assert!(!debug.contains("provider"));
+        // Match debug field names rather than arbitrary path fragments: the verified
+        // executable may legitimately live below a directory such as `provider-tests`.
+        assert!(!debug.contains("bearer:"));
+        assert!(!debug.contains("provider:"));
+        assert!(!debug.contains("provider_credential"));
     }
 
     #[test]

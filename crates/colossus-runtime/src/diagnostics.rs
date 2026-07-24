@@ -388,6 +388,30 @@ impl Runtime {
         let provider = resolved.provider();
         let endpoint = provider.profile().generation_endpoint()?;
         let output_limit = route.limits.max_output_tokens.min(32);
+        let tools = if route.capabilities.tool_calls {
+            vec![ModelToolDefinition {
+                name: "colossus.readiness".into(),
+                description: "Representative tool-schema compatibility probe.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "maxItems": 4,
+                            "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 4096
+                            }
+                        }
+                    },
+                    "required": ["paths"],
+                    "additionalProperties": false
+                }),
+            }]
+        } else {
+            Vec::new()
+        };
         let mut request = effect_request(
             system_actor("model-diagnostics"),
             provider.profile().kind.generation_action(),
@@ -405,7 +429,7 @@ impl Runtime {
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     }],
-                    tools: Vec::new(),
+                    tools,
                     max_output_tokens: Some(output_limit),
                 }),
             })
@@ -422,7 +446,13 @@ impl Runtime {
                     ProviderReadinessCheck {
                         name: "generation".into(),
                         status: "pass".into(),
-                        detail: "Completed and normalized one bounded model generation.".into(),
+                        detail: if route.capabilities.tool_calls {
+                            "Completed and normalized one bounded model generation with a representative tool schema."
+                                .into()
+                        } else {
+                            "Completed and normalized one bounded text-only model generation."
+                                .into()
+                        },
                     }
                 }
                 Ok(_) | Err(_) => ProviderReadinessCheck {

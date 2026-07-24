@@ -38,7 +38,7 @@ pub(super) enum ApprovalMode {
     Deny,
     /// Prompt on the terminal for every approval obligation.
     Ask,
-    /// Auto-approve only low-risk shell effects after model-assisted review.
+    /// Auto-approve eligible low-risk shell and read-only network effects after review.
     RiskAuto,
     /// Grant approval obligations automatically without expanding policy permissions.
     FullAccess,

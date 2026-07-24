@@ -437,6 +437,18 @@ fn sse_server(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<S
     (format!("http://{address}"), task)
 }
 
+fn status_server(status: &'static str, body: &'static str) -> (String, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    let address = listener.local_addr().expect("provider address");
+    let task = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("provider accept");
+        let request = read_request(&mut stream);
+        respond_json(&mut stream, status, body);
+        request
+    });
+    (format!("http://{address}"), task)
+}
+
 fn delayed_sse_server(delay: Duration, body: &'static str) -> (String, thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
     let address = listener.local_addr().expect("provider address");
@@ -727,6 +739,8 @@ fn provider_doctor_does_not_treat_a_public_catalog_as_credential_readiness() {
     let requests = server.join().expect("doctor server");
     assert!(requests[0].starts_with("GET /v1/models "));
     assert!(requests[1].starts_with("POST /v1/chat/completions "));
+    assert!(requests[1].contains(r#""name":"colossus.readiness""#));
+    assert!(!requests[1].contains(r#""maxLength""#));
     assert!(
         requests
             .iter()
@@ -784,6 +798,8 @@ fn provider_doctor_reports_ready_through_worker_after_catalog_and_generation_suc
     let requests = server.join().expect("doctor server");
     assert!(requests[0].starts_with("GET /v1/models "));
     assert!(requests[1].starts_with("POST /v1/chat/completions "));
+    assert!(requests[1].contains(r#""name":"colossus.readiness""#));
+    assert!(!requests[1].contains(r#""maxLength""#));
     assert!(
         run(binary, &config, &["worker", "--shutdown"])
             .status
@@ -825,6 +841,39 @@ data: [DONE]
 
     let request = server.join().expect("provider server");
     assert!(request.starts_with("POST /v1/chat/completions "));
+}
+
+#[test]
+fn service_unavailable_is_visible_as_a_recoverable_provider_error() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let (origin, server) = status_server(
+        "503 Service Unavailable",
+        r#"{"error":{"message":"private local loading detail"}}"#,
+    );
+    let config = write_failure_config(directory.path(), &origin, "echo");
+
+    let output = failed_run(binary, directory.path(), &config, "1");
+    assert!(!output.status.success(), "unavailable provider succeeded");
+    let terminal = String::from_utf8_lossy(&output.stderr);
+    assert!(terminal.contains("Run error"), "{terminal}");
+    assert!(
+        terminal.contains("provider.temporarily_unavailable"),
+        "{terminal}"
+    );
+    assert!(terminal.contains("Recoverable"), "{terminal}");
+    assert!(terminal.contains("yes"), "{terminal}");
+    assert!(terminal.contains("HTTP 503"), "{terminal}");
+    assert!(
+        terminal.contains("retry after the endpoint reports ready"),
+        "{terminal}"
+    );
+    assert!(!terminal.contains("private local loading detail"));
+
+    let request = server.join().expect("provider server");
+    assert!(request.starts_with("POST /v1/chat/completions "));
+    let events = audited_run_events(binary, &config);
+    assert_eq!(event_count(&events, "error.v1"), 1);
 }
 
 #[test]

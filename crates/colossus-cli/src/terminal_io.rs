@@ -113,6 +113,20 @@ impl ApprovalProvider for TerminalApproval {
         self.risk_auto
     }
 
+    async fn automatic_approval_granted(&self, notice: AutomaticApprovalNotice) {
+        let Ok(_guard) = self.lock.lock() else {
+            return;
+        };
+        let _ = write_stderr_document(&automatic_approval_document(&notice));
+    }
+
+    async fn risk_review_fallback(&self, notice: RiskReviewFallbackNotice) {
+        let Ok(_guard) = self.lock.lock() else {
+            return;
+        };
+        let _ = write_stderr_document(&risk_review_fallback_document(&notice));
+    }
+
     async fn request_approval(
         &self,
         request: &EffectRequest,

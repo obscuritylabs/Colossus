@@ -24,12 +24,27 @@ impl RunEventObserver for WorkerChannelObserver {
     }
 }
 
-struct TuiWorkerPromptHandler {
-    sender: mpsc::Sender<HostEvent>,
+pub(super) struct TuiWorkerPromptHandler {
+    pub(super) sender: mpsc::Sender<HostEvent>,
 }
 
 #[async_trait]
 impl WorkerPromptHandler for TuiWorkerPromptHandler {
+    async fn notice(&self, notice: ApprovalReviewNotice) -> Result<(), WorkerError> {
+        let document = match notice {
+            ApprovalReviewNotice::AutomaticApproval { notice } => {
+                automatic_approval_document(&notice)
+            }
+            ApprovalReviewNotice::RiskReviewFallback { notice } => {
+                risk_review_fallback_document(&notice)
+            }
+        };
+        // The worker already durably recorded the review result. Rendering its
+        // notice is best-effort, so a full or closed TUI queue cannot fail the run.
+        let _ = self.sender.try_send(HostEvent::Notice(document));
+        Ok(())
+    }
+
     async fn prompt(&self, prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
         let mut body = vec![PresentationBlock::Markdown(prompt.question.clone())];
         if !prompt.details.is_null() {

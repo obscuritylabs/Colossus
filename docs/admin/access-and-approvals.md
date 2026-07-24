@@ -71,7 +71,7 @@ satisfied:
 | --- | --- |
 | `deny` | Fail closed without prompting |
 | `ask` | Prompt on an interactive terminal |
-| `risk-auto` | Automatically approve only eligible low-risk shell effects after review |
+| `risk-auto` | Automatically approve eligible low-risk shell and read-only network effects after review |
 | `full-access` | Satisfy approval obligations automatically |
 
 Approval modes do not convert policy denials into allows and do not add authority.
@@ -89,10 +89,25 @@ colossus -w /absolute/path/to/repository \
 ```
 
 Use `--approval-mode risk-auto` only when the configured risk evaluator is trusted for
-this role. Automatic proof minting is restricted to model or child-agent `shell.run`
-outside workflow lineage, and only a valid low-risk `allow` assessment qualifies.
-Medium, high, malformed, or unavailable assessments fall back to explicit approval or
-denial. Process output remains quarantined and post-effect authorized.
+this role. Automatic proof minting is restricted to model or child-agent `shell.run`,
+`web.search`, and bodyless `network.http` GET effects outside workflow lineage, and only
+a valid low-risk `allow` assessment qualifies. Other network methods, integrations, MCP
+calls, workspace mutations, and medium, high, malformed, or unavailable assessments
+fall back to explicit approval or denial. Effect output remains quarantined and
+post-effect authorized. The evaluator receives the requested URL or search query as
+redacted effect metadata; credentials remain opaque references.
+
+When an eligible review is approved automatically, attached terminal and TUI clients
+show an **Automatic approval review** notice with the action, resource, low-risk result,
+`risk-auto` authorization, and released reason. This is an informational emission after
+the durable `approval.granted.v1` record; it never replaces audit evidence.
+
+If the evaluator is unavailable or its response fails strict validation, attached clients
+first show an **Automatic approval review failed** warning with a sanitized failure
+category. Colossus then falls back to the ordinary explicit approval prompt; provider
+diagnostics and malformed model output are not released in the warning. A valid medium-
+or high-risk assessment proceeds directly to explicit approval because the review itself
+completed successfully.
 
 `full-access` satisfies approval requirements without a prompt; it is not a sandbox
 bypass. Prefer it only in bounded disposable environments.

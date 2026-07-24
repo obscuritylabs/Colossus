@@ -3,17 +3,36 @@ use super::{
     PresentationBlock, PresentationDocument, PresentationTable, PresentationTone, SemanticRenderer,
     StreamDisplayMode, StyledDocumentRenderer, TerminalDocumentRenderer, TerminalPalette,
     TerminalPreferences, ThemeLibrary, ThemeName, TranscriptDensity, display_width,
-    document_from_json,
+    document_from_json, risk_review_fallback_document,
 };
 use colossus_contracts::{
-    Actor, ActorType, ProviderEvent, ProviderUsage, RunEvent, RunEventEnvelope, RunPhase, ToolCall,
-    ToolResult, WorkStateSnapshot,
+    Actor, ActorType, ProviderEvent, ProviderUsage, RiskReviewFailure, RiskReviewFallbackNotice,
+    RunEvent, RunEventEnvelope, RunPhase, ToolCall, ToolResult, WorkStateSnapshot,
 };
 use colossus_ports::{EventJournal, PresentationRepository, ToolRegistry};
 use colossus_testkit::{InMemoryEventJournal, assert_presentation_repository_conformance};
 use colossus_tools::{StaticToolRegistry, builtin_names};
 use std::{fs, path::PathBuf, sync::Arc};
 use tempfile::tempdir;
+
+#[test]
+fn risk_review_fallback_is_an_explicit_sanitized_warning() {
+    let document = risk_review_fallback_document(&RiskReviewFallbackNotice {
+        action: "web.search".into(),
+        resource: "http://127.0.0.1:8888/search".into(),
+        failure: RiskReviewFailure::InvalidAssessment,
+        reason:
+            "The risk evaluator response failed strict validation, so manual approval is required."
+                .into(),
+    });
+    let rendered =
+        TerminalDocumentRenderer::new(TerminalPreferences::default(), 100).render(&document);
+
+    assert!(rendered.contains("Automatic approval review failed"));
+    assert!(rendered.contains("manual approval required"));
+    assert!(rendered.contains("invalid assessment"));
+    assert!(rendered.contains("web.search"));
+}
 
 #[test]
 fn terminal_documents_render_markdown_tables_cards_and_diff_within_width() {

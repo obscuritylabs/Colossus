@@ -4,18 +4,19 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ApprovalProof, AuditEvidence, ContextSnapshot, DecisionStatus, EffectRequest,
-    EventEnvelope, ExecutionContext, ExternalWorkRetryState, GoalRecord, GoalStatus,
+    Actor, ApprovalProof, AuditEvidence, AutomaticApprovalNotice, ContextSnapshot, DecisionStatus,
+    EffectRequest, EventEnvelope, ExecutionContext, ExternalWorkRetryState, GoalRecord, GoalStatus,
     IntegrationConnection, KeyDecision, MemoryRecord, ModelMessage, ModelRequest, ModelRoute,
     ModelToolDefinition, NewEvent, PackInstallation, PackStatus, PlanRecord, PlanStatus,
     PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderEvent,
-    ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun, ResearchSource, RunEventEnvelope,
-    SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SessionMessage,
-    SessionMessagePage, SessionSummary, SignedCheckpoint, SkillDuplicate, SkillRecord,
-    SkillResourceEntry, SkillResourceRead, SubagentJob, SubagentStatus, TaskRecord, TaskStatus,
-    TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest, UserPromptResponse,
-    WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowSubscription,
-    WorkflowSubscriptionDelivery, WorkflowWebhook, WorkflowWebhookDelivery,
+    ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun, ResearchSource,
+    RiskReviewFallbackNotice, RunEventEnvelope, SearchProfileSummary, SearchRequest,
+    SearchResponse, SearchRoute, SessionMessage, SessionMessagePage, SessionSummary,
+    SignedCheckpoint, SkillDuplicate, SkillRecord, SkillResourceEntry, SkillResourceRead,
+    SubagentJob, SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences, ToolCall, ToolResult,
+    ToolSpec, UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun,
+    WorkflowSchedule, WorkflowSubscription, WorkflowSubscriptionDelivery, WorkflowWebhook,
+    WorkflowWebhookDelivery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -56,11 +56,9 @@ mod tests {
 
     #[test]
     fn finds_the_repository_from_the_xtask_source_tree() {
-        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = manifest.join("src");
         let root = find_root(&source).expect("repository root");
-        assert_eq!(
-            root.file_name().and_then(|name| name.to_str()),
-            Some("Colossus")
-        );
+        assert_eq!(root, manifest.parent().expect("xtask repository parent"));
     }
 }
