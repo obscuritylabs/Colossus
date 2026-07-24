@@ -383,7 +383,26 @@ impl Runtime {
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     }],
-                    tools: Vec::new(),
+                    tools: vec![ModelToolDefinition {
+                        name: "colossus.readiness".into(),
+                        description: "Representative tool-schema compatibility probe.".into(),
+                        input_schema: json!({
+                            "type": "object",
+                            "properties": {
+                                "paths": {
+                                    "type": "array",
+                                    "maxItems": 4,
+                                    "items": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 4096
+                                    }
+                                }
+                            },
+                            "required": ["paths"],
+                            "additionalProperties": false
+                        }),
+                    }],
                 }),
             })
             .map_err(|error| RuntimeError::Config(error.to_string()))?,
@@ -395,7 +414,7 @@ impl Runtime {
                 Ok(_) => checks.push(ProviderReadinessCheck {
                     name: "generation_endpoint".into(),
                     status: "pass".into(),
-                    detail: "Reached the configured generation endpoint and normalized a bounded probe response."
+                    detail: "Reached the configured generation endpoint with a representative tool schema and normalized a bounded probe response."
                         .into(),
                 }),
                 Err(_) => checks.push(ProviderReadinessCheck {

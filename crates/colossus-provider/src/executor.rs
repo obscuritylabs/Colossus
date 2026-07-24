@@ -221,11 +221,16 @@ impl EffectExecutor for ProviderExecutor {
     }
 }
 
-fn provider_execution_error(error: ProviderError) -> ExecutionError {
+pub(super) fn provider_execution_error(error: ProviderError) -> ExecutionError {
     match error {
         ProviderError::Transport(message) => ExecutionError::OutcomeUnknown(format!(
             "provider transport failed after execution began; outcome is unknown: {message}"
         )),
+        ProviderError::Status { status: 503 } => ExecutionError::Recoverable {
+            code: "provider.temporarily_unavailable".into(),
+            message: "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
+                .into(),
+        },
         ProviderError::Malformed(message) if invalid_tool_argument_message(&message) => {
             ExecutionError::Recoverable {
                 code: "provider.invalid_tool_arguments".into(),

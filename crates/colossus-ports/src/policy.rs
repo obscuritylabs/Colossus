@@ -52,10 +52,16 @@ pub trait PolicyDecisionPoint: Send + Sync {
 /// Interactive or application-supplied approval handler.
 #[async_trait]
 pub trait ApprovalProvider: Send + Sync {
-    /// Whether eligible approval-required shell effects should receive risk review.
+    /// Whether eligible approval-required effects should receive risk review.
     fn risk_auto_enabled(&self) -> bool {
         false
     }
+
+    /// Best-effort release of a durable automatic low-risk approval notice.
+    async fn automatic_approval_granted(&self, _notice: AutomaticApprovalNotice) {}
+
+    /// Best-effort warning that risk-auto fell back to explicit approval.
+    async fn risk_review_fallback(&self, _notice: RiskReviewFallbackNotice) {}
 
     /// Request a proof bound to the canonical request hash and initial decision.
     async fn request_approval(

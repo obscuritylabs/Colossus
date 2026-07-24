@@ -194,7 +194,7 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
 }
 
 #[test]
-fn typing_and_resize_never_erase_visible_transcript_rows() {
+fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -230,6 +230,11 @@ fn typing_and_resize_never_erase_visible_transcript_rows() {
     let mut writer = pair.master.take_writer().expect("PTY writer");
 
     wait_for_screen(&output, 24, 80, "durable-row-01");
+    writer.write_all(b"/to\t").expect("type completion");
+    writer.flush().expect("flush completion");
+    wait_for_screen(&output, 24, 80, "/tools");
+    writer.write_all(&[3]).expect("clear completed draft");
+    writer.flush().expect("flush clear");
     for character in "typing-preserves-history".chars() {
         writer
             .write_all(character.to_string().as_bytes())

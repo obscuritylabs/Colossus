@@ -45,3 +45,123 @@ fn resume_picker_excludes_empty_sessions_before_applying_the_limit() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, "first");
 }
+
+#[tokio::test]
+async fn embedded_tui_receives_automatic_approval_as_a_non_blocking_notice() {
+    let router = Arc::new(TuiPromptRouter::default());
+    let (sender, mut events) = mpsc::channel(1);
+    router.install(Some(sender));
+    let provider = TuiApprovalProvider {
+        router,
+        risk_auto: true,
+    };
+
+    provider
+        .automatic_approval_granted(AutomaticApprovalNotice {
+            action: "network.http".into(),
+            resource: "https://example.test/resource".into(),
+            risk_level: colossus_contracts::RiskLevel::Low,
+            reason: "bodyless GET to an exact configured origin".into(),
+        })
+        .await;
+
+    let HostEvent::Notice(document) = events.recv().await.expect("notice") else {
+        panic!("expected a non-blocking notice");
+    };
+    assert!(matches!(
+        document.blocks.first(),
+        Some(PresentationBlock::Card { title, .. }) if title == "Automatic approval review"
+    ));
+}
+
+#[tokio::test]
+async fn embedded_tui_drops_automatic_approval_when_notice_queue_is_full() {
+    let router = Arc::new(TuiPromptRouter::default());
+    let (sender, mut events) = mpsc::channel(1);
+    sender
+        .try_send(HostEvent::Notice(PresentationDocument::new()))
+        .expect("fill notice queue");
+    router.install(Some(sender));
+    let provider = TuiApprovalProvider {
+        router,
+        risk_auto: true,
+    };
+
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        provider.automatic_approval_granted(AutomaticApprovalNotice {
+            action: "web.search".into(),
+            resource: "configured search provider".into(),
+            risk_level: colossus_contracts::RiskLevel::Low,
+            reason: "read-only configured search".into(),
+        }),
+    )
+    .await
+    .expect("a best-effort notice must not wait for queue capacity");
+
+    assert!(matches!(events.recv().await, Some(HostEvent::Notice(_))));
+    assert!(matches!(
+        events.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn embedded_tui_receives_risk_review_failure_before_manual_approval() {
+    let router = Arc::new(TuiPromptRouter::default());
+    let (sender, mut events) = mpsc::channel(1);
+    router.install(Some(sender));
+    let provider = TuiApprovalProvider {
+        router,
+        risk_auto: true,
+    };
+
+    provider
+        .risk_review_fallback(RiskReviewFallbackNotice {
+            action: "web.search".into(),
+            resource: "http://127.0.0.1:8888/search".into(),
+            failure: colossus_contracts::RiskReviewFailure::InvalidAssessment,
+            reason: "The risk evaluator response failed strict validation, so manual approval is required."
+                .into(),
+        })
+        .await;
+
+    let HostEvent::Notice(document) = events.recv().await.expect("notice") else {
+        panic!("expected a non-blocking notice");
+    };
+    assert!(matches!(
+        document.blocks.first(),
+        Some(PresentationBlock::Card { title, .. })
+            if title == "Automatic approval review failed"
+    ));
+}
+
+#[tokio::test]
+async fn worker_tui_drops_approval_review_notice_when_event_queue_is_full() {
+    let (sender, mut events) = mpsc::channel(1);
+    sender
+        .try_send(HostEvent::Notice(PresentationDocument::new()))
+        .expect("fill event queue");
+    let handler = worker::TuiWorkerPromptHandler { sender };
+
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        handler.notice(ApprovalReviewNotice::AutomaticApproval {
+            notice: AutomaticApprovalNotice {
+                action: "network.http".into(),
+                resource: "https://example.test/resource".into(),
+                risk_level: colossus_contracts::RiskLevel::Low,
+                reason: "bodyless GET to an exact configured origin".into(),
+            },
+        }),
+    )
+    .await
+    .expect("a worker notice must not wait for queue capacity")
+    .expect("dropping a best-effort notice must not fail the run");
+
+    assert!(matches!(events.recv().await, Some(HostEvent::Notice(_))));
+    assert!(matches!(
+        events.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}

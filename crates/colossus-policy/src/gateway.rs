@@ -33,6 +33,21 @@ enum StreamSinkFailure {
     Denied(String),
 }
 
+fn risk_auto_eligible(request: &EffectRequest) -> bool {
+    match request.action.as_str() {
+        "shell.run" | "web.search" => true,
+        "network.http" => {
+            request
+                .content
+                .get("method")
+                .and_then(Value::as_str)
+                .is_some_and(|method| method.eq_ignore_ascii_case("GET"))
+                && request.content.get("body_base64").is_none()
+        }
+        _ => false,
+    }
+}
+
 impl StreamSinkFailure {
     fn execution_error(&self) -> ExecutionError {
         match self {
@@ -186,7 +201,7 @@ impl EffectGateway {
         request: &mut EffectRequest,
         decision: &PolicyDecision,
     ) -> Result<bool, GatewayError> {
-        if request.action != "shell.run"
+        if !risk_auto_eligible(request)
             || !self.approvals.risk_auto_enabled()
             || !matches!(
                 request.actor.actor_type,
@@ -213,30 +228,49 @@ impl EffectGateway {
             .as_ref()
             .and_then(Weak::upgrade);
         let Some(evaluator) = evaluator else {
+            let reason =
+                "The configured risk evaluator was unavailable, so manual approval is required.";
             request.risk.status = RiskStatus::Unavailable;
             request.risk.level = None;
-            request.risk.reason = Some("risk evaluator is not available".into());
+            request.risk.reason = Some(reason.into());
             self.event(
                 request,
                 "risk.review.unavailable.v1",
                 EventClassification::Policy,
-                json!({"reason": "risk evaluator is not available"}),
+                json!({"failure": RiskReviewFailure::EvaluatorUnavailable}),
             )?;
+            self.approvals
+                .risk_review_fallback(RiskReviewFallbackNotice {
+                    action: request.action.clone(),
+                    resource: request.resource.clone(),
+                    failure: RiskReviewFailure::EvaluatorUnavailable,
+                    reason: reason.into(),
+                })
+                .await;
             return Ok(false);
         };
         match evaluator.evaluate(request, decision).await {
             Ok(assessment) => {
                 let reason = assessment.reason.trim();
                 if reason.is_empty() || reason.chars().count() > 1_000 {
+                    let reason = "The risk evaluator response failed strict validation, so manual approval is required.";
                     request.risk.status = RiskStatus::Unavailable;
                     request.risk.level = None;
-                    request.risk.reason = Some("risk evaluator returned an invalid reason".into());
+                    request.risk.reason = Some(reason.into());
                     self.event(
                         request,
                         "risk.review.unavailable.v1",
                         EventClassification::Policy,
-                        json!({"reason": "risk evaluator returned an invalid reason"}),
+                        json!({"failure": RiskReviewFailure::InvalidAssessment}),
                     )?;
+                    self.approvals
+                        .risk_review_fallback(RiskReviewFallbackNotice {
+                            action: request.action.clone(),
+                            resource: request.resource.clone(),
+                            failure: RiskReviewFailure::InvalidAssessment,
+                            reason: reason.into(),
+                        })
+                        .await;
                     return Ok(false);
                 }
                 request.risk.status = RiskStatus::Available;
@@ -264,17 +298,33 @@ impl EffectGateway {
                     && assessment.recommended_decision == RiskRecommendation::Allow)
             }
             Err(error) => {
-                let message = error.to_string();
-                let bounded = message.chars().take(1_000).collect::<String>();
+                let (failure, reason) = match error {
+                    RiskEvaluationError::Unavailable(_) => (
+                        RiskReviewFailure::EvaluatorUnavailable,
+                        "The configured risk evaluator was unavailable, so manual approval is required.",
+                    ),
+                    RiskEvaluationError::InvalidAssessment(_) => (
+                        RiskReviewFailure::InvalidAssessment,
+                        "The risk evaluator response failed strict validation, so manual approval is required.",
+                    ),
+                };
                 request.risk.status = RiskStatus::Unavailable;
                 request.risk.level = None;
-                request.risk.reason = Some(bounded.clone());
+                request.risk.reason = Some(reason.into());
                 self.event(
                     request,
                     "risk.review.unavailable.v1",
                     EventClassification::Policy,
-                    json!({"reason": bounded}),
+                    json!({"failure": failure}),
                 )?;
+                self.approvals
+                    .risk_review_fallback(RiskReviewFallbackNotice {
+                        action: request.action.clone(),
+                        resource: request.resource.clone(),
+                        failure,
+                        reason: reason.into(),
+                    })
+                    .await;
                 Ok(false)
             }
         }
@@ -545,6 +595,18 @@ impl EffectGateway {
                     "request_hash": proof.request_hash,
                 }),
             )?;
+            if risk_auto_approved {
+                self.approvals
+                    .automatic_approval_granted(AutomaticApprovalNotice {
+                        action: request.action.clone(),
+                        resource: request.resource.clone(),
+                        risk_level: RiskLevel::Low,
+                        reason: request.risk.reason.clone().unwrap_or_else(|| {
+                            "automatic low-risk review approved the effect".into()
+                        }),
+                    })
+                    .await;
+            }
             request.approval = Some(proof);
             decision = self.decide(&request).await?;
         }

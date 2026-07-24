@@ -234,11 +234,10 @@ pub(super) fn render_completion_menu(frame: &mut Frame<'_>, state: &TuiState, ar
     };
     frame.render_widget(Clear, menu_area);
     frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {label} · {} matches · Tab/↓ ", candidates.len())),
-        ),
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(format!(
+            " {label} · {} matches · ↑/↓ select · Tab accept ",
+            candidates.len()
+        ))),
         menu_area,
     );
 }

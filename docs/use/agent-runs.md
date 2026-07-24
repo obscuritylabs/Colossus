@@ -53,9 +53,15 @@ colossus -w /absolute/path/to/repository \
   "Inspect the failing tests, implement the smallest fix, and verify it"
 ```
 
-`risk-auto` can produce a request-bound proof only for a low-risk `shell.run` outside
-workflow lineage. It does not apply to workspace mutations as a general class, other
-actions, workflows, or system actors.
+`risk-auto` can produce a request-bound proof for a low-risk `shell.run`, `web.search`,
+or bodyless `network.http` GET outside workflow lineage. It does not apply to workspace
+mutations, non-read-only network methods, integrations, MCP calls, workflows, or system
+actors.
+When it grants a proof, Colossus emits an **Automatic approval review** notice with the
+reviewed action, resource, low-risk result, authorization mode, and reason.
+If the evaluator is unavailable or returns an invalid assessment, Colossus emits an
+**Automatic approval review failed** warning and then requests explicit approval. The
+warning is sanitized and does not echo raw provider output.
 
 ### 3. Stream released progress
 

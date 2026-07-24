@@ -62,6 +62,28 @@ fn respond_sse(stream: &mut TcpStream, body: &str) {
     stream.flush().expect("flush response");
 }
 
+fn respond_text(stream: &mut TcpStream, body: &str) {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .expect("text response");
+    stream.flush().expect("flush response");
+}
+
+fn respond_json(stream: &mut TcpStream, body: &str) {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .expect("JSON response");
+    stream.flush().expect("flush response");
+}
+
 fn tool_server(
     relative_path: &str,
     expected_requests: usize,
@@ -139,6 +161,97 @@ fn tool_server(
     (format!("http://{address}"), task)
 }
 
+fn risk_auto_network_server(invalid_assessment: bool) -> (String, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let address = listener.local_addr().expect("provider address");
+    let origin = format!("http://{address}");
+    let arguments = json!({"url": format!("{origin}/resource")}).to_string();
+    let tool_call = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({
+            "id": "network-tool",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "network-call",
+                        "type": "function",
+                        "function": {
+                            "name": "web.fetch",
+                            "arguments": arguments
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })
+    );
+    let assessment = if invalid_assessment {
+        "not a valid risk assessment".into()
+    } else {
+        json!({
+            "risk_level": "low",
+            "recommended_decision": "allow",
+            "reason": "bodyless GET to an exact configured loopback origin"
+        })
+        .to_string()
+    };
+    let risk_answer = json!({
+        "id": "risk-answer",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": assessment},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let final_answer = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({
+            "id": "network-final",
+            "choices": [{
+                "index": 0,
+                "delta": {"content": "network-finished"},
+                "finish_reason": "stop"
+            }]
+        })
+    );
+    let task = thread::spawn(move || {
+        let expected_requests = if invalid_assessment { 2 } else { 4 };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut requests = Vec::new();
+        while requests.len() < expected_requests && Instant::now() < deadline {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("provider accept: {error}"),
+            };
+            stream
+                .set_nonblocking(false)
+                .expect("blocking provider stream");
+            let request = read_request(&mut stream);
+            match requests.len() {
+                0 => respond_sse(&mut stream, &tool_call),
+                1 => respond_json(&mut stream, &risk_answer),
+                2 => respond_text(&mut stream, "fetched"),
+                3 => respond_sse(&mut stream, &final_answer),
+                _ => unreachable!("bounded request sequence"),
+            }
+            requests.push(request);
+        }
+        assert_eq!(requests.len(), expected_requests, "provider request count");
+        requests
+    });
+    (origin, task)
+}
+
 fn write_tool_config(
     directory: &Path,
     origin: &str,
@@ -201,6 +314,74 @@ fn write_tool_config(
             "ociImage": null,
             "ociProxyImage": null,
             "filesystem": [{"root": directory, "mode": "write"}],
+            "executables": [],
+            "environment": [],
+            "networkDestinations": [origin],
+            "timeoutMs": 5000,
+            "maxOutputBytes": 1048576,
+            "maxProcesses": 2,
+            "maxMemoryBytes": 67108864,
+            "maxConcurrency": 1
+        }
+    });
+    fs::write(
+        &config,
+        serde_json::to_vec_pretty(&document).expect("config JSON"),
+    )
+    .expect("write config");
+    config
+}
+
+fn write_network_config(directory: &Path, origin: &str) -> std::path::PathBuf {
+    let workflows = directory.join("workflows");
+    fs::create_dir_all(&workflows).expect("workflows");
+    let config = directory.join("config.json");
+    let document = json!({
+        "schemaVersion": 1,
+        "storage": {
+            "path": directory.join("state.redb"),
+            "keys": {
+                "kind": "environment",
+                "journal_variable": "COLOSSUS_APPROVAL_TEST_JOURNAL_KEY",
+                "journal_key_id": "approval-network-journal-v1",
+                "signing_variable": "COLOSSUS_APPROVAL_TEST_SIGNING_KEY",
+                "anchor_path": directory.join("anchor.json")
+            }
+        },
+        "access": {
+            "profile": "pinned",
+            "tools": {"include": ["web.fetch"], "exclude": []},
+            "actions": {
+                "allow": ["provider.openai.chat"],
+                "requireApproval": ["network.http"],
+                "deny": []
+            }
+        },
+        "policy": {"kind": "built_in", "require_post_effect": true},
+        "workflows": {"repository": workflows, "user": workflows},
+        "providers": {
+            "profiles": {
+                "loopback": {
+                    "kind": "open_ai_compatible",
+                    "model": "approval-network-model",
+                    "baseUrl": format!("{origin}/v1"),
+                    "credentialReference": null,
+                    "timeoutMs": 5000
+                }
+            },
+            "roles": {"primary": "loopback"}
+        },
+        "agent": {"maxTurns": 4},
+        "subagents": {"maxConcurrent": 1},
+        "sandbox": {
+            "backend": "native",
+            "profile": "approval-network-v1",
+            "allowBrokerFallback": false,
+            "helperPath": null,
+            "ociRuntime": null,
+            "ociImage": null,
+            "ociProxyImage": null,
+            "filesystem": [],
             "executables": [],
             "environment": [],
             "networkDestinations": [origin],
@@ -380,6 +561,111 @@ sandbox:
             .count(),
         2
     );
+}
+
+#[test]
+fn risk_auto_reviews_read_only_network_tools_without_prompting() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let (origin, server) = risk_auto_network_server(false);
+    let config = write_network_config(directory.path(), &origin);
+    let output = command(binary, &config)
+        .current_dir(directory.path())
+        .args([
+            "--approval-mode",
+            "risk-auto",
+            "run",
+            "Fetch the configured test resource.",
+            "--max-turns",
+            "4",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("risk-auto network run");
+
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("approval required"), "{stderr}");
+    let notice = stderr.to_ascii_lowercase();
+    assert!(notice.contains("automatic approval review"), "{stderr}");
+    assert!(
+        notice.contains("decision") && notice.contains("approved"),
+        "{stderr}"
+    );
+    assert!(
+        notice.contains("risk") && notice.contains("low"),
+        "{stderr}"
+    );
+    assert!(
+        notice.contains("authorization") && notice.contains("risk-auto"),
+        "{stderr}"
+    );
+    assert!(notice.contains("network.http"), "{stderr}");
+    assert!(
+        notice.contains("bodyless get to an exact configured loopback origin"),
+        "{stderr}"
+    );
+    let requests = server.join().expect("network provider");
+    assert!(requests[0].starts_with("POST /v1/chat/completions "));
+    assert!(requests[0].contains(r#""name":"web.fetch""#));
+    assert!(requests[1].contains("risk_level"));
+    assert!(requests[2].starts_with("GET /resource "));
+    assert!(requests[3].contains(r#""tool_call_id":"network-call""#));
+}
+
+#[test]
+fn risk_auto_warns_when_invalid_evaluator_output_requires_manual_approval() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let (origin, server) = risk_auto_network_server(true);
+    let config = write_network_config(directory.path(), &origin);
+    let output = command(binary, &config)
+        .current_dir(directory.path())
+        .args([
+            "--approval-mode",
+            "risk-auto",
+            "run",
+            "Fetch the configured test resource.",
+            "--max-turns",
+            "4",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .expect("approval stdin")
+                .write_all(b"n\n")?;
+            child.wait_with_output()
+        })
+        .expect("risk-auto fallback run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let warning = stderr.to_ascii_lowercase();
+    assert!(
+        warning.contains("automatic approval review failed"),
+        "{stderr}"
+    );
+    assert!(
+        warning.contains("invalid assessment")
+            && warning.contains("manual approval required")
+            && warning.contains("approval required"),
+        "{stderr}"
+    );
+    assert!(!warning.contains("not a valid risk assessment"), "{stderr}");
+    let requests = server.join().expect("network provider");
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].contains(r#""name":"web.fetch""#));
+    assert!(requests[1].contains("risk_level"));
 }
 
 #[test]

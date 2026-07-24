@@ -41,9 +41,16 @@ executed in-process default to `deny`; when an active worker handles a command, 
 worker's configured approval mode applies. Approval mode satisfies an existing approval
 obligation—it never changes an access or policy decision.
 
-`risk-auto` is eligible only for model and child-agent `shell.run` outside workflows. A
-low-risk `allow` recommendation produces a request-bound proof; every other assessment
-falls back to explicit approval or denial.
+`risk-auto` is eligible only for model and child-agent `shell.run`, `web.search`, and
+bodyless `network.http` GET effects outside workflows. A low-risk `allow`
+recommendation produces a request-bound proof; other network methods and every
+non-low-risk assessment fall back to explicit approval or denial.
+Each automatic grant emits a human-readable **Automatic approval review** notice on the
+attached terminal or TUI without opening an approval prompt.
+An unavailable evaluator or invalid assessment emits an **Automatic approval review
+failed** warning before Colossus falls back to explicit approval. The warning identifies
+the sanitized failure category without printing raw provider diagnostics or malformed
+model output.
 
 ## Command groups
 

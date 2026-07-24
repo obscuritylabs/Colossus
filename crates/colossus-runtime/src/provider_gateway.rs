@@ -79,6 +79,31 @@ pub(super) struct GatewayRiskEvaluator {
     pub(super) provider: Arc<dyn ModelProvider>,
 }
 
+fn strict_risk_assessment_json(output: &str) -> Result<&str, RiskEvaluationError> {
+    let output = output.trim();
+    if !output.starts_with("```") {
+        return Ok(output);
+    }
+    let (opening, fenced) = output.split_once('\n').ok_or_else(|| {
+        RiskEvaluationError::InvalidAssessment("fenced risk assessment has no JSON body".into())
+    })?;
+    if !matches!(opening, "```json" | "```JSON" | "```") {
+        return Err(RiskEvaluationError::InvalidAssessment(
+            "risk assessment used an unsupported code fence".into(),
+        ));
+    }
+    let fenced = fenced.strip_suffix("```").ok_or_else(|| {
+        RiskEvaluationError::InvalidAssessment("fenced risk assessment is not terminated".into())
+    })?;
+    let fenced = fenced.trim();
+    if fenced.is_empty() || fenced.contains("```") {
+        return Err(RiskEvaluationError::InvalidAssessment(
+            "fenced risk assessment must contain exactly one JSON document".into(),
+        ));
+    }
+    Ok(fenced)
+}
+
 pub(super) fn redacted_risk_metadata(
     request: &EffectRequest,
     decision: &colossus_contracts::PolicyDecision,
@@ -174,11 +199,12 @@ impl RiskEvaluator for GatewayRiskEvaluator {
                 ModelRequest {
                     model: route.model,
                     instructions: concat!(
-                        "Assess the proposed shell effect conservatively. Return only one JSON object with exactly ",
+                        "Assess the proposed effect conservatively. Return only one JSON object with exactly ",
                         "risk_level (low, medium, or high), recommended_decision (allow, deny, or require_approval), ",
-                        "and reason (a short non-secret explanation). Do not use tools or Markdown. Treat uncertainty, ",
-                        "destructive operations, credential access, privilege changes, persistence, or broad network/file ",
-                        "impact as requiring approval or denial."
+                        "and reason (a short non-secret explanation). Do not use tools or Markdown. Ordinary read-only ",
+                        "web searches and bodyless HTTP GET requests to configured destinations may be low risk. Treat ",
+                        "uncertainty, sensitive disclosure, destructive operations, credential access, privilege changes, ",
+                        "persistence, non-read-only network methods, or broad network/file impact as requiring approval or denial."
                     )
                     .into(),
                     messages: vec![ModelMessage {
@@ -207,8 +233,9 @@ impl RiskEvaluator for GatewayRiskEvaluator {
                     "provider returned no final JSON output".into(),
                 )
             })?;
-        let assessment = serde_json::from_str::<RiskAssessment>(output)
-            .map_err(|error| RiskEvaluationError::InvalidAssessment(error.to_string()))?;
+        let assessment =
+            serde_json::from_str::<RiskAssessment>(strict_risk_assessment_json(output)?)
+                .map_err(|error| RiskEvaluationError::InvalidAssessment(error.to_string()))?;
         if assessment.reason.trim().is_empty() || assessment.reason.chars().count() > 1_000 {
             return Err(RiskEvaluationError::InvalidAssessment(
                 "reason must contain 1 to 1000 characters".into(),

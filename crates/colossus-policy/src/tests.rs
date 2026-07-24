@@ -6,8 +6,9 @@ use super::{
 };
 use async_trait::async_trait;
 use colossus_contracts::{
-    Actor, ActorType, DecisionOutcome, QuarantinedEffectResult, RiskAssessment, RiskLevel,
-    RiskRecommendation, RiskStatus,
+    Actor, ActorType, ApprovalReviewNotice, AutomaticApprovalNotice, DecisionOutcome,
+    QuarantinedEffectResult, RiskAssessment, RiskLevel, RiskRecommendation, RiskReviewFailure,
+    RiskReviewFallbackNotice, RiskStatus,
 };
 use colossus_ports::{
     ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
@@ -31,12 +32,27 @@ struct CountingExecutor {
 
 struct RiskAutoApproval {
     prompts: AtomicUsize,
+    notices: Mutex<Vec<ApprovalReviewNotice>>,
 }
 
 #[async_trait]
 impl ApprovalProvider for RiskAutoApproval {
     fn risk_auto_enabled(&self) -> bool {
         true
+    }
+
+    async fn automatic_approval_granted(&self, notice: AutomaticApprovalNotice) {
+        self.notices
+            .lock()
+            .expect("notices")
+            .push(ApprovalReviewNotice::AutomaticApproval { notice });
+    }
+
+    async fn risk_review_fallback(&self, notice: RiskReviewFallbackNotice) {
+        self.notices
+            .lock()
+            .expect("notices")
+            .push(ApprovalReviewNotice::RiskReviewFallback { notice });
     }
 
     async fn request_approval(
@@ -55,6 +71,10 @@ struct StaticRiskEvaluator {
     assessment: Option<RiskAssessment>,
 }
 
+struct InvalidRiskEvaluator {
+    calls: AtomicUsize,
+}
+
 #[async_trait]
 impl RiskEvaluator for StaticRiskEvaluator {
     async fn evaluate(
@@ -66,6 +86,20 @@ impl RiskEvaluator for StaticRiskEvaluator {
         self.assessment
             .clone()
             .ok_or_else(|| RiskEvaluationError::Unavailable("test evaluator unavailable".into()))
+    }
+}
+
+#[async_trait]
+impl RiskEvaluator for InvalidRiskEvaluator {
+    async fn evaluate(
+        &self,
+        _request: &colossus_contracts::EffectRequest,
+        _decision: &colossus_contracts::PolicyDecision,
+    ) -> Result<RiskAssessment, RiskEvaluationError> {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        Err(RiskEvaluationError::InvalidAssessment(
+            "private provider diagnostic must not be released".into(),
+        ))
     }
 }
 
@@ -139,6 +173,20 @@ fn shell_request(
         }),
     );
     request.capabilities = vec!["shell.run".into()];
+    request
+}
+
+fn network_request(action: &str, content: serde_json::Value) -> colossus_contracts::EffectRequest {
+    let mut request = effect_request(
+        Actor {
+            actor_type: ActorType::Model,
+            id: "risk-network-test".into(),
+        },
+        action,
+        "https://example.test/resource",
+        content,
+    );
+    request.capabilities = vec![action.into()];
     request
 }
 
@@ -738,6 +786,7 @@ async fn low_allow_risk_review_auto_approves_and_reaches_policy_as_advisory_inpu
         .expect("canonical executable");
     let approvals = Arc::new(RiskAutoApproval {
         prompts: AtomicUsize::new(0),
+        notices: Mutex::new(Vec::new()),
     });
     let evaluator = Arc::new(StaticRiskEvaluator {
         calls: AtomicUsize::new(0),
@@ -775,6 +824,17 @@ async fn low_allow_risk_review_auto_approves_and_reaches_policy_as_advisory_inpu
 
     assert_eq!(evaluator.calls.load(Ordering::Acquire), 1);
     assert_eq!(approvals.prompts.load(Ordering::Acquire), 0);
+    assert_eq!(
+        *approvals.notices.lock().expect("notices"),
+        vec![ApprovalReviewNotice::AutomaticApproval {
+            notice: AutomaticApprovalNotice {
+                action: "shell.run".into(),
+                resource: executable.display().to_string(),
+                risk_level: RiskLevel::Low,
+                reason: "read-only version inspection".into(),
+            },
+        }]
+    );
     assert_eq!(policy.saw_available_risk.load(Ordering::Acquire), 2);
     assert_eq!(executor.calls.load(Ordering::Acquire), 1);
     let events = journal.read_global(1, 30).expect("events");
@@ -792,6 +852,114 @@ async fn low_allow_risk_review_auto_approves_and_reaches_policy_as_advisory_inpu
 }
 
 #[tokio::test]
+async fn low_risk_read_only_network_review_auto_approves_without_prompting() {
+    for (action, content) in [
+        (
+            "network.http",
+            serde_json::json!({"method": "GET", "headers": {"accept": "*/*"}}),
+        ),
+        (
+            "web.search",
+            serde_json::json!({"profile": "test", "request": {"query": "rust", "limit": 3}}),
+        ),
+    ] {
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+            notices: Mutex::new(Vec::new()),
+        });
+        let evaluator = Arc::new(StaticRiskEvaluator {
+            calls: AtomicUsize::new(0),
+            assessment: Some(RiskAssessment {
+                risk_level: RiskLevel::Low,
+                recommended_decision: RiskRecommendation::Allow,
+                reason: "read-only configured network request".into(),
+            }),
+        });
+        let policy = Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action(action, DecisionOutcome::RequireApproval)
+                .with_network_destination("https://example.test")
+                .with_post_effect(true),
+        );
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            policy as Arc<dyn PolicyDecisionPoint>,
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new([action.into()]),
+            [46_u8; 32],
+        );
+        let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+        gateway
+            .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+            .expect("bind evaluator");
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+
+        gateway
+            .execute(network_request(action, content), &executor)
+            .await
+            .expect("low-risk network effect");
+
+        assert_eq!(evaluator.calls.load(Ordering::Acquire), 1, "{action}");
+        assert_eq!(approvals.prompts.load(Ordering::Acquire), 0, "{action}");
+        assert_eq!(approvals.notices.lock().expect("notices").len(), 1);
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1, "{action}");
+    }
+}
+
+#[tokio::test]
+async fn non_read_only_network_effects_still_require_explicit_approval() {
+    for content in [
+        serde_json::json!({"method": "POST"}),
+        serde_json::json!({"method": "GET", "body_base64": "d3JpdGU="}),
+    ] {
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+            notices: Mutex::new(Vec::new()),
+        });
+        let evaluator = Arc::new(StaticRiskEvaluator {
+            calls: AtomicUsize::new(0),
+            assessment: Some(RiskAssessment {
+                risk_level: RiskLevel::Low,
+                recommended_decision: RiskRecommendation::Allow,
+                reason: "test evaluator would allow if invoked".into(),
+            }),
+        });
+        let policy = Arc::new(
+            BuiltInPolicy::offline_default()
+                .with_action("network.http", DecisionOutcome::RequireApproval)
+                .with_network_destination("https://example.test")
+                .with_post_effect(true),
+        );
+        let gateway = EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            policy as Arc<dyn PolicyDecisionPoint>,
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new(["network.http".into()]),
+            [47_u8; 32],
+        );
+        let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+        gateway
+            .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+            .expect("bind evaluator");
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+
+        gateway
+            .execute(network_request("network.http", content), &executor)
+            .await
+            .expect("operator-approved network effect");
+
+        assert_eq!(evaluator.calls.load(Ordering::Acquire), 0);
+        assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+        assert!(approvals.notices.lock().expect("notices").is_empty());
+        assert_eq!(executor.calls.load(Ordering::Acquire), 1);
+    }
+}
+
+#[tokio::test]
 async fn unavailable_or_non_low_risk_review_requires_explicit_approval() {
     for assessment in [
         None,
@@ -806,6 +974,7 @@ async fn unavailable_or_non_low_risk_review_requires_explicit_approval() {
             reason: "destructive command".into(),
         }),
     ] {
+        let expects_failure_notice = assessment.is_none();
         let directory = tempfile::tempdir().expect("directory");
         let executable = std::env::current_exe()
             .expect("current executable")
@@ -813,6 +982,7 @@ async fn unavailable_or_non_low_risk_review_requires_explicit_approval() {
             .expect("canonical executable");
         let approvals = Arc::new(RiskAutoApproval {
             prompts: AtomicUsize::new(0),
+            notices: Mutex::new(Vec::new()),
         });
         let evaluator = Arc::new(StaticRiskEvaluator {
             calls: AtomicUsize::new(0),
@@ -845,8 +1015,73 @@ async fn unavailable_or_non_low_risk_review_requires_explicit_approval() {
 
         assert_eq!(evaluator.calls.load(Ordering::Acquire), 1);
         assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+        let notices = approvals.notices.lock().expect("notices");
+        if expects_failure_notice {
+            assert!(matches!(
+                notices.as_slice(),
+                [ApprovalReviewNotice::RiskReviewFallback {
+                    notice: RiskReviewFallbackNotice {
+                        failure: RiskReviewFailure::EvaluatorUnavailable,
+                        ..
+                    }
+                }]
+            ));
+        } else {
+            assert!(notices.is_empty());
+        }
         assert_eq!(executor.calls.load(Ordering::Acquire), 1);
     }
+}
+
+#[tokio::test]
+async fn invalid_risk_review_warns_with_a_sanitized_manual_fallback() {
+    let directory = tempfile::tempdir().expect("directory");
+    let executable = std::env::current_exe()
+        .expect("current executable")
+        .canonicalize()
+        .expect("canonical executable");
+    let approvals = Arc::new(RiskAutoApproval {
+        prompts: AtomicUsize::new(0),
+        notices: Mutex::new(Vec::new()),
+    });
+    let evaluator = Arc::new(InvalidRiskEvaluator {
+        calls: AtomicUsize::new(0),
+    });
+    let policy = Arc::new(RiskRecordingPolicy {
+        executable: executable.display().to_string(),
+        cwd: directory.path().display().to_string(),
+        saw_available_risk: AtomicUsize::new(0),
+    });
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        policy as Arc<dyn PolicyDecisionPoint>,
+        Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+        SafetyKernel::new(["shell.run".into()]),
+        [48_u8; 32],
+    );
+    let evaluator_port: Arc<dyn RiskEvaluator> = evaluator.clone();
+    gateway
+        .bind_risk_evaluator(Arc::downgrade(&evaluator_port))
+        .expect("bind evaluator");
+    let executor = CountingExecutor {
+        calls: AtomicUsize::new(0),
+    };
+
+    gateway
+        .execute(shell_request(&executable, directory.path()), &executor)
+        .await
+        .expect("operator-approved effect");
+
+    assert_eq!(evaluator.calls.load(Ordering::Acquire), 1);
+    assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+    let notices = approvals.notices.lock().expect("notices");
+    let [ApprovalReviewNotice::RiskReviewFallback { notice }] = notices.as_slice() else {
+        panic!("expected one risk review fallback notice");
+    };
+    assert_eq!(notice.failure, RiskReviewFailure::InvalidAssessment);
+    assert!(notice.reason.contains("strict validation"));
+    assert!(!notice.reason.contains("private provider diagnostic"));
+    assert_eq!(executor.calls.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]
@@ -858,6 +1093,7 @@ async fn workflow_lineage_never_receives_risk_auto_approval() {
         .expect("canonical executable");
     let approvals = Arc::new(RiskAutoApproval {
         prompts: AtomicUsize::new(0),
+        notices: Mutex::new(Vec::new()),
     });
     let evaluator = Arc::new(StaticRiskEvaluator {
         calls: AtomicUsize::new(0),
@@ -897,6 +1133,7 @@ async fn workflow_lineage_never_receives_risk_auto_approval() {
 
     assert_eq!(evaluator.calls.load(Ordering::Acquire), 0);
     assert_eq!(approvals.prompts.load(Ordering::Acquire), 1);
+    assert!(approvals.notices.lock().expect("notices").is_empty());
     assert_eq!(executor.calls.load(Ordering::Acquire), 1);
 }
 
@@ -982,6 +1219,7 @@ fn public_network_wildcard_excludes_non_public_and_metadata_origins() {
 async fn deterministic_deny_never_invokes_risk_review_or_approval() {
     let approvals = Arc::new(RiskAutoApproval {
         prompts: AtomicUsize::new(0),
+        notices: Mutex::new(Vec::new()),
     });
     let evaluator = Arc::new(StaticRiskEvaluator {
         calls: AtomicUsize::new(0),

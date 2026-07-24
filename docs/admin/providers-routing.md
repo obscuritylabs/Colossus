@@ -65,9 +65,28 @@ Connect one model endpoint while keeping credentials late-bound and routing expl
     ```
 
 For network providers, `provider doctor` checks both the model catalog and one bounded
-generation probe. This verifies that a public catalog endpoint has not masked an invalid
-credential, model identifier, or generation response contract. The probe response is not
-printed. `provider models` remains the catalog-only diagnostic.
+generation probe carrying a representative tool schema. This verifies that a public
+catalog endpoint has not masked an invalid credential, model identifier, generation
+response contract, or tool-schema incompatibility. The probe response is not printed.
+`provider models` remains the catalog-only diagnostic.
+
+The Chat Completions adapter omits `maxLength` annotations from the provider-facing tool
+schema because grammar-compiling compatible servers can reject otherwise valid large
+string bounds before generation. Colossus retains the canonical schema and enforces every
+original bound before a tool can execute; this projection changes provider guidance, not
+runtime authority or validation.
+
+For `risk_evaluator`, Colossus expects the same strict three-field JSON assessment from
+every provider. Local compatible models that wrap that single object in one whole-output
+`json` code fence are accepted as a narrow transport compatibility case. Surrounding
+prose, multiple fences, unknown fields, malformed JSON, and unsupported values still fail
+closed and fall back to the configured approval behavior.
+
+Some local servers return HTTP 503 while a model is loading. Colossus reports that status
+as `provider.temporarily_unavailable` with `Recoverable: yes` and does not retry the turn
+implicitly. Wait until the endpoint reports ready, run `provider doctor` again, and then
+resubmit the turn. Other client errors, including HTTP 400 schema rejection, remain
+terminal so configuration and compatibility failures are not mislabeled as startup delay.
 
 Specialized roles include `risk_evaluator`, `context_summarizer`,
 `subagent_default`, `research_planner`, `research_worker`, and

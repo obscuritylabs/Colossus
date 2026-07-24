@@ -61,7 +61,7 @@ impl WorkerServer {
         })
     }
 
-    /// Open a worker whose protocol-v4 attached clients own prompts and cancellation.
+    /// Open a worker whose protocol-v5 attached clients own prompts, notices, and cancellation.
     pub fn open_with_mode(
         config: &RuntimeConfig,
         approval_mode: WorkerApprovalMode,
@@ -508,9 +508,11 @@ where
         } => {
             let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
             let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(16);
+            let (notice_tx, mut notice_rx) = tokio::sync::mpsc::channel(16);
             let responses = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
             let bridge = InteractiveRunBridge {
                 prompts: prompt_tx,
+                notices: notice_tx,
                 responses,
             };
             let control = RunControl::default();
@@ -583,6 +585,17 @@ where
                             &request_id,
                             sequence,
                             WorkerFrameContent::Event { event },
+                        ).await?;
+                    }
+                    notice = notice_rx.recv() => {
+                        let Some(notice) = notice else { continue; };
+                        sequence = sequence.saturating_add(1);
+                        write_signed_frame(
+                            &mut writer,
+                            key,
+                            &request_id,
+                            sequence,
+                            WorkerFrameContent::Notice { notice },
                         ).await?;
                     }
                     prompt = prompt_rx.recv() => {
