@@ -174,6 +174,7 @@ impl BoundTerminalWorkspace {
 
     #[cfg(not(target_os = "macos"))]
     fn revalidate(&self) -> Result<(), TerminalError> {
+        let _ = self;
         Err(TerminalError::InvalidWorkspace)
     }
 
@@ -645,7 +646,7 @@ impl TerminalManager {
         ),
         TerminalError,
     > {
-        let _ = (slave, master, program, arguments, workspace);
+        let _ = (self, slave, master, program, arguments, workspace);
         // Managed Desktop is macOS-first. Other platforms must gain an equally
         // strong pre-instruction executable binding before receiving worker keys.
         Err(TerminalError::ProgramUnavailable)

@@ -5,7 +5,7 @@ use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
@@ -37,6 +37,15 @@ const PROVIDER_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.provi
 pub(crate) const EXTERNAL_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.external";
 const WORKSPACE_PARTITION_DOMAIN: &[u8] = b"colossus-desktop-managed-workspace-v1\0";
 const WORKSPACE_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-managed-instance-v1\0";
+const MODEL_ROLES: [&str; 7] = [
+    "primary",
+    "risk_evaluator",
+    "context_summarizer",
+    "subagent_default",
+    "research_planner",
+    "research_worker",
+    "research_synthesizer",
+];
 pub(crate) const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub(crate) const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
@@ -553,7 +562,34 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
     {
         return Err(storage_error());
     }
-    let mut target_ids = std::collections::HashSet::with_capacity(settings.external_targets.len());
+    let target_ids = validate_external_targets(settings)?;
+    if settings
+        .selected_target_id
+        .as_deref()
+        .is_some_and(|value| value != "managed-local" && !target_ids.contains(value))
+        || settings.workspace.as_ref().is_some_and(invalid_workspace)
+        || settings.access_profile == AccessProfileSetting::LegacyAllowAll
+    {
+        return Err(storage_error());
+    }
+    let credential_ids = validate_managed_configuration(settings)?;
+    let mut cleanup_ids = HashSet::new();
+    if settings
+        .pending_provider_cleanup_ids
+        .iter()
+        .any(|credential_id| {
+            !valid_opaque_id(credential_id)
+                || !cleanup_ids.insert(credential_id)
+                || credential_ids.contains(credential_id.as_str())
+        })
+    {
+        return Err(storage_error());
+    }
+    Ok(())
+}
+
+fn validate_external_targets(settings: &DesktopSettings) -> Result<HashSet<&str>, CommandErrorDto> {
+    let mut target_ids = HashSet::with_capacity(settings.external_targets.len());
     for target in &settings.external_targets {
         let expected_account =
             external_credential_account(&target.instance_id, &target.certificate_sha256);
@@ -576,36 +612,25 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
             return Err(storage_error());
         }
     }
-    if settings
-        .selected_target_id
-        .as_deref()
-        .is_some_and(|value| value != "managed-local" && !target_ids.contains(value))
-    {
-        return Err(storage_error());
-    }
-    if let Some(workspace) = settings.workspace.as_ref()
-        && (!valid_opaque_id(&workspace.id)
-            || !workspace.path.is_absolute()
-            || workspace
-                .identity
-                .as_ref()
-                .is_none_or(|identity| identity.validate_current().is_err())
-            || workspace.display_name.is_empty()
-            || workspace.display_name.len() > 255
-            || workspace.display_path.is_empty()
-            || workspace.display_path.len() > 2_048)
-    {
-        return Err(storage_error());
-    }
-    const ROLES: [&str; 7] = [
-        "primary",
-        "risk_evaluator",
-        "context_summarizer",
-        "subagent_default",
-        "research_planner",
-        "research_worker",
-        "research_synthesizer",
-    ];
+    Ok(target_ids)
+}
+
+fn invalid_workspace(workspace: &WorkspaceSetting) -> bool {
+    !valid_opaque_id(&workspace.id)
+        || !workspace.path.is_absolute()
+        || workspace
+            .identity
+            .as_ref()
+            .is_none_or(|identity| identity.validate_current().is_err())
+        || workspace.display_name.is_empty()
+        || workspace.display_name.len() > 255
+        || workspace.display_path.is_empty()
+        || workspace.display_path.len() > 2_048
+}
+
+fn validate_managed_configuration(
+    settings: &DesktopSettings,
+) -> Result<BTreeSet<&str>, CommandErrorDto> {
     if settings.providers.len() > MAX_MANAGED_PROVIDERS
         || settings.models.len() > MAX_MANAGED_MODELS
         || settings.providers.is_empty() != settings.models.is_empty()
@@ -651,26 +676,11 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
         }
     }
     if settings.model_roles.iter().any(|(role, profile)| {
-        !ROLES.contains(&role.as_str()) || !model_profiles.contains(profile.as_str())
+        !MODEL_ROLES.contains(&role.as_str()) || !model_profiles.contains(profile.as_str())
     }) {
         return Err(storage_error());
     }
-    if settings.access_profile == AccessProfileSetting::LegacyAllowAll {
-        return Err(storage_error());
-    }
-    let mut cleanup_ids = std::collections::HashSet::new();
-    if settings
-        .pending_provider_cleanup_ids
-        .iter()
-        .any(|credential_id| {
-            !valid_opaque_id(credential_id)
-                || !cleanup_ids.insert(credential_id)
-                || credential_ids.contains(credential_id.as_str())
-        })
-    {
-        return Err(storage_error());
-    }
-    Ok(())
+    Ok(credential_ids)
 }
 
 fn valid_profile_name(value: &str) -> bool {

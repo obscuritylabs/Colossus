@@ -77,12 +77,13 @@ async fn kill_and_reap(child: &mut tokio::process::Child) {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) async fn request_provider_secret() -> Result<Zeroizing<String>, CommandErrorDto> {
-    Err(CommandErrorDto::local_sanitized(
+pub(crate) fn request_provider_secret()
+-> impl std::future::Future<Output = Result<Zeroizing<String>, CommandErrorDto>> {
+    std::future::ready(Err(CommandErrorDto::local_sanitized(
         "provider_enrollment_unsupported",
         "Native provider enrollment is unavailable on this platform.",
         false,
-    ))
+    )))
 }
 
 #[cfg(target_os = "macos")]

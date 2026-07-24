@@ -427,6 +427,60 @@ pub(crate) async fn apply_managed_model_configuration(
     let store = settings_store()?;
     let mut settings = store.load()?;
     cleanup_pending_provider_credentials(&store, &mut settings)?;
+    confirm_managed_model_configuration(&app, &state, &settings, &request).await?;
+
+    let previous_settings = settings.clone();
+    let credentials = plan_provider_credentials(&settings, &request)?;
+    stage_provider_credentials(
+        &store,
+        &mut settings,
+        &previous_settings,
+        &credentials.fresh_ids,
+    )
+    .await?;
+    settings.providers = request.providers_with_credentials(&credentials.by_profile);
+    settings.models = request.model_settings();
+    settings.model_roles = request.roles.clone();
+    settings.access_profile = request.access_profile;
+    settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
+    settings
+        .pending_provider_cleanup_ids
+        .retain(|credential_id| !credentials.fresh_ids.contains(credential_id));
+    for credential_id in &credentials.retired_ids {
+        if !settings
+            .pending_provider_cleanup_ids
+            .contains(credential_id)
+        {
+            settings
+                .pending_provider_cleanup_ids
+                .push(credential_id.clone());
+        }
+    }
+    if let Err(error) = store.save(&settings) {
+        rollback_staged_provider_credentials(
+            &store,
+            &mut settings,
+            previous_settings,
+            &credentials.fresh_ids,
+        )?;
+        return Err(error);
+    }
+    restart_after_model_configuration(
+        &state,
+        &store,
+        &mut settings,
+        previous_settings,
+        &credentials,
+    )
+    .await
+}
+
+async fn confirm_managed_model_configuration(
+    app: &AppHandle,
+    state: &AppState,
+    settings: &DesktopSettings,
+    request: &ApplyManagedModelConfigurationInput,
+) -> Result<(), CommandErrorDto> {
     let workspace = settings.workspace.as_ref().ok_or_else(|| {
         CommandErrorDto::invalid(
             "workspaceId",
@@ -440,13 +494,13 @@ pub(crate) async fn apply_managed_model_configuration(
         ));
     }
     revalidate_workspace(workspace)?;
-    reject_active_managed_runs(&state).await?;
+    reject_active_managed_runs(state).await?;
 
     if request.access_profile == crate::desktop_settings::AccessProfileSetting::Development
         && (!settings.managed_configured()
             || settings.access_profile
                 != crate::desktop_settings::AccessProfileSetting::Development)
-        && !confirm_development_access(&app).await?
+        && !confirm_development_access(app).await?
     {
         return Err(CommandErrorDto::local_sanitized(
             "access_profile_confirmation",
@@ -466,21 +520,32 @@ pub(crate) async fn apply_managed_model_configuration(
         })
         .map(|provider| format!("{}: {}", provider.profile, provider.base_url))
         .collect::<Vec<_>>();
-    if !changed_origins.is_empty() && !confirm_provider_origins(&app, &changed_origins).await? {
+    if !changed_origins.is_empty() && !confirm_provider_origins(app, &changed_origins).await? {
         return Err(CommandErrorDto::local_sanitized(
             "provider_origin_confirmation",
             "The model provider origin change was not approved.",
             false,
         ));
     }
+    Ok(())
+}
 
-    let previous_settings = settings.clone();
+struct ProviderCredentialPlan {
+    by_profile: BTreeMap<String, Option<String>>,
+    fresh_ids: Vec<String>,
+    retired_ids: Vec<String>,
+}
+
+fn plan_provider_credentials(
+    settings: &DesktopSettings,
+    request: &ApplyManagedModelConfigurationInput,
+) -> Result<ProviderCredentialPlan, CommandErrorDto> {
     let old_credentials = settings
         .providers
         .iter()
         .map(|provider| (provider.profile.clone(), provider.credential_id.clone()))
         .collect::<BTreeMap<_, _>>();
-    let mut credentials = BTreeMap::new();
+    let mut by_profile = BTreeMap::new();
     let mut fresh_ids = Vec::new();
     for provider in &request.providers {
         let credential_id = match provider.credential_action {
@@ -505,20 +570,19 @@ pub(crate) async fn apply_managed_model_configuration(
                 Some(credential_id)
             }
         };
-        credentials.insert(provider.profile.clone(), credential_id);
+        by_profile.insert(provider.profile.clone(), credential_id);
     }
-
-    let referenced_credentials = credentials
+    let referenced_credentials = by_profile
         .values()
         .filter_map(Option::as_deref)
         .collect::<BTreeSet<_>>();
-    let retired_ids = previous_settings
+    let retired_ids = settings
         .provider_credential_ids()
         .into_iter()
         .filter(|credential_id| !referenced_credentials.contains(credential_id))
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    if previous_settings
+    if settings
         .pending_provider_cleanup_ids
         .len()
         .saturating_add(fresh_ids.len())
@@ -529,62 +593,65 @@ pub(crate) async fn apply_managed_model_configuration(
             "Pending provider credential cleanup must finish before applying this configuration.",
         ));
     }
+    Ok(ProviderCredentialPlan {
+        by_profile,
+        fresh_ids,
+        retired_ids,
+    })
+}
 
+async fn stage_provider_credentials(
+    store: &SettingsStore,
+    settings: &mut DesktopSettings,
+    previous_settings: &DesktopSettings,
+    fresh_ids: &[String],
+) -> Result<(), CommandErrorDto> {
     // Persist cleanup intent before creating any native keychain entries. A crash
     // during enrollment can therefore be repaired on the next Desktop startup.
     settings
         .pending_provider_cleanup_ids
         .extend(fresh_ids.iter().cloned());
-    store.save(&settings)?;
-    for credential_id in &fresh_ids {
+    store.save(settings)?;
+    for credential_id in fresh_ids {
         let enrollment = provider_enrollment::request_provider_secret().await;
         let result = enrollment.and_then(|secret| store_provider_secret(credential_id, &secret));
         if let Err(error) = result {
             rollback_staged_provider_credentials(
-                &store,
-                &mut settings,
+                store,
+                settings,
                 previous_settings.clone(),
-                &fresh_ids,
+                fresh_ids,
             )?;
             return Err(error);
         }
     }
+    Ok(())
+}
 
-    settings.providers = request.providers_with_credentials(&credentials);
-    settings.models = request.model_settings();
-    settings.model_roles = request.roles.clone();
-    settings.access_profile = request.access_profile;
-    settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
-    settings
-        .pending_provider_cleanup_ids
-        .retain(|credential_id| !fresh_ids.contains(credential_id));
-    for credential_id in &retired_ids {
-        if !settings
-            .pending_provider_cleanup_ids
-            .contains(credential_id)
-        {
-            settings
-                .pending_provider_cleanup_ids
-                .push(credential_id.clone());
-        }
-    }
-    if let Err(error) = store.save(&settings) {
-        rollback_staged_provider_credentials(&store, &mut settings, previous_settings, &fresh_ids)?;
-        return Err(error);
-    }
-
+async fn restart_after_model_configuration(
+    state: &AppState,
+    store: &SettingsStore,
+    settings: &mut DesktopSettings,
+    previous_settings: DesktopSettings,
+    credentials: &ProviderCredentialPlan,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
     state
         .select_target(Some(MANAGED_TARGET_ID.to_owned()))
         .await;
-    if let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await {
-        rollback_staged_provider_credentials(&store, &mut settings, previous_settings, &fresh_ids)?;
-        restore_managed_after_rollback(&state, &store, &settings).await?;
+    if let Err(start_error) = managed_runtime::start(state, store, settings, true).await {
+        rollback_staged_provider_credentials(
+            store,
+            settings,
+            previous_settings,
+            &credentials.fresh_ids,
+        )?;
+        restore_managed_after_rollback(state, store, settings).await?;
         return Err(start_error);
     }
-    for credential_id in retired_ids {
-        retire_pending_provider_credential(&store, &mut settings, &credential_id)?;
+    for credential_id in &credentials.retired_ids {
+        retire_pending_provider_credential(store, settings, credential_id)?;
     }
-    desktop_status_from(&state, &settings).await
+    desktop_status_from(state, settings).await
 }
 
 fn rollback_staged_provider_credentials(

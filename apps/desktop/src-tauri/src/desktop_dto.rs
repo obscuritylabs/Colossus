@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use colossus_sdk::{
-    validate_managed_model_identifier, validate_managed_provider_base_url,
-};
+use colossus_sdk::{validate_managed_model_identifier, validate_managed_provider_base_url};
 use serde::{Deserialize, Serialize};
 
 use crate::{

@@ -334,17 +334,7 @@ async fn start_inner(
         ApiMajor::new(1).map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Internal))?,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
-    let mut host_credentials = Vec::new();
-    for credential_id in settings.provider_credential_ids() {
-        let credential = load_provider_secret(credential_id)
-            .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?;
-        let provider_secret = Secret::new(credential.to_vec())
-            .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?;
-        host_credentials.push(
-            SidecarHostCredential::new(credential_id, provider_secret)
-                .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?,
-        );
-    }
+    let host_credentials = provider_host_credentials(settings)?;
     let approval_broker_grant = approval_broker_grant()
         .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
     let worker_authentication = TerminalWorkerAuthentication::random().map_err(|error| {
@@ -380,6 +370,23 @@ async fn start_inner(
         settings.terminal_enabled,
     )
     .await
+}
+
+fn provider_host_credentials(
+    settings: &DesktopSettings,
+) -> Result<Vec<SidecarHostCredential>, (CommandErrorDto, RuntimeFailureCodeDto)> {
+    settings
+        .provider_credential_ids()
+        .into_iter()
+        .map(|credential_id| {
+            let credential = load_provider_secret(credential_id)
+                .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?;
+            let provider_secret = Secret::new(credential.to_vec())
+                .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?;
+            SidecarHostCredential::new(credential_id, provider_secret)
+                .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))
+        })
+        .collect()
 }
 
 fn managed_bootstrap(
