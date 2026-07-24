@@ -9,9 +9,9 @@ use colossus_contracts::{
     ProviderEvent, RunEvent, RunEventEnvelope, RunPhase, ToolCall, ToolResult,
 };
 use colossus_ports::{
-    ContextError, ContextPreparer, EventJournal, ModelProvider, ModelProviderError,
-    ProviderEventObserver, RunControl, RunEventObserver, SessionRepository, StoreError, ToolError,
-    ToolExecutor, ToolRegistry,
+    ContextError, ContextPreparationRequest, ContextPreparer, EventJournal, ModelProvider,
+    ModelProviderError, ProviderEventObserver, RunControl, RunEventObserver, SessionRepository,
+    StoreError, ToolError, ToolExecutor, ToolRegistry,
 };
 use colossus_tools::model_definitions;
 use serde_json::{Value, json};

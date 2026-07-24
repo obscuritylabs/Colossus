@@ -72,12 +72,13 @@ impl SemanticRenderer {
     /// Render context budget and compaction state.
     pub fn context_status(&self, status: &ContextStatus) -> String {
         let summary = format!(
-            "{} session={} messages={} tokens={}/{} compacted={} snapshot={}",
+            "{} session={} model_profile={} messages={} input_tokens={}/{} compacted={} snapshot={}",
             self.label("context"),
             status.session_id,
+            status.model_profile,
             status.message_count,
             status.token_estimate,
-            status.context_window_tokens,
+            status.input_budget_tokens,
             status.compacted,
             status.active_snapshot_id.as_deref().unwrap_or("none")
         );
@@ -796,13 +797,23 @@ pub fn context_status_document(status: &ContextStatus) -> PresentationDocument {
         },
         body: vec![PresentationBlock::KeyValue(vec![
             ("Session".into(), status.session_id.clone()),
+            ("Model profile".into(), status.model_profile.clone()),
             ("Messages".into(), status.message_count.to_string()),
             (
                 "Tokens".into(),
-                format!(
-                    "{} / {}",
-                    status.token_estimate, status.context_window_tokens
-                ),
+                format!("{} / {}", status.token_estimate, status.input_budget_tokens),
+            ),
+            (
+                "Context window".into(),
+                status.context_window_tokens.to_string(),
+            ),
+            (
+                "Output reserve".into(),
+                status.max_output_tokens.to_string(),
+            ),
+            (
+                "Safety reserve".into(),
+                status.safety_margin_tokens.to_string(),
             ),
             (
                 "Compacted".into(),

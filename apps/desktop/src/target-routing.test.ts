@@ -94,6 +94,7 @@ function status(): DesktopStatus {
       kind: "openai_responses",
       model: "gpt",
     },
+    managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
     terminalEnabled: false,
   };
@@ -208,6 +209,8 @@ describe("watchDurableRun", () => {
               result: {
                 output: "done",
                 profile: "development",
+                modelProfile: "development",
+                providerProfile: "test-provider",
                 model: "test",
                 elapsedSeconds: 1,
               },

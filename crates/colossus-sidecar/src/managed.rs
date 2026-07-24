@@ -6,8 +6,9 @@ use colossus_grpc::{TlsIdentity, TlsKeySeed};
 use colossus_ports::StoreError;
 use colossus_provider::ProviderKind;
 use colossus_runtime::{
-    HostCredentialResolver, KeyConfig, ProviderProfileConfig, ProvidersConfig, RuntimeConfig,
-    RuntimeError, RuntimeOpenOptions, WorkspaceIdentityToken,
+    HostCredentialResolver, KeyConfig, ModelCapabilities, ModelProfileConfig, ModelsConfig,
+    ProviderProfileConfig, ProvidersConfig, RuntimeConfig, RuntimeError, RuntimeOpenOptions,
+    WorkspaceIdentityToken,
 };
 use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, BootstrapGrant, BootstrapRequest, ChildFrame, FailureCode,
@@ -20,8 +21,10 @@ use colossus_worker::{
     ApplicationGrant, PublicApiAuthenticationKey, PublicApiDeploymentMode, PublicApiHostOptions,
     WorkerApprovalMode, WorkerAuthenticationKey, WorkerServer,
 };
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::{
-    collections::BTreeMap,
+    collections::BTreeSet,
     fs::{File, OpenOptions},
     io::{Read as _, Write as _},
     net::{Ipv4Addr, SocketAddr},
@@ -42,7 +45,6 @@ const PUBLIC_API_DIRECTORY: &str = "public-api";
 const DESCRIPTOR_FILENAME: &str = "endpoint.json";
 const CERTIFICATE_FILENAME: &str = "certificate.pem";
 const MANAGED_CONFIG_FILENAME: &str = "managed-config.yaml";
-const MANAGED_PROVIDER_PROFILE: &str = "managed";
 const MANAGED_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.managed-runtime";
 
 pub(crate) fn main_entry() -> ExitCode {
@@ -358,36 +360,65 @@ fn managed_runtime_config(
     ) {
         config.set_sandbox_profile("workspace-development");
     }
-    let provider_kind = match managed.provider.kind {
-        ManagedProviderKind::Echo => ProviderKind::Echo,
-        ManagedProviderKind::OpenAiResponses => ProviderKind::OpenAiResponses,
-        ManagedProviderKind::OpenAiCompatible => ProviderKind::OpenAiCompatible,
-    };
-    let credential_reference = managed
-        .provider
-        .credential_id
-        .as_ref()
-        .map(|identifier| format!("host:{identifier}"));
     config.providers = ProvidersConfig {
-        profiles: BTreeMap::from([(
-            MANAGED_PROVIDER_PROFILE.into(),
-            ProviderProfileConfig {
-                kind: provider_kind,
-                model: managed.provider.model.clone(),
-                base_url: managed.provider.base_url.clone(),
-                credential_reference,
-                timeout_ms: 120_000,
-            },
-        )]),
-        roles: BTreeMap::from([("primary".into(), MANAGED_PROVIDER_PROFILE.into())]),
+        profiles: managed
+            .providers
+            .iter()
+            .map(|provider| {
+                let kind = match provider.kind {
+                    ManagedProviderKind::Echo => ProviderKind::Echo,
+                    ManagedProviderKind::OpenAiResponses => ProviderKind::OpenAiResponses,
+                    ManagedProviderKind::OpenAiCompatible => ProviderKind::OpenAiCompatible,
+                };
+                (
+                    provider.profile.clone(),
+                    ProviderProfileConfig {
+                        kind,
+                        base_url: provider.base_url.clone(),
+                        credential_reference: provider
+                            .credential_id
+                            .as_ref()
+                            .map(|identifier| format!("host:{identifier}")),
+                        timeout_ms: provider.timeout_ms,
+                    },
+                )
+            })
+            .collect(),
     };
-    if let Some(base_url) = managed.provider.base_url.as_deref() {
-        let origin = url::Url::parse(base_url)
-            .map_err(|_| FailureCode::InvalidConfiguration)?
-            .origin()
-            .ascii_serialization();
-        config.sandbox.network_destinations = vec![origin];
-    }
+    config.models = ModelsConfig {
+        profiles: managed
+            .models
+            .iter()
+            .map(|model| {
+                (
+                    model.profile.clone(),
+                    ModelProfileConfig {
+                        provider_profile: model.provider_profile.clone(),
+                        model: model.model.clone(),
+                        context_window_tokens: model.context_window_tokens,
+                        max_output_tokens: model.max_output_tokens,
+                        capabilities: ModelCapabilities {
+                            tool_calls: model.capabilities.tool_calls,
+                            streaming: model.capabilities.streaming,
+                        },
+                    },
+                )
+            })
+            .collect(),
+        roles: managed.roles.clone(),
+    };
+    config.sandbox.network_destinations = managed
+        .providers
+        .iter()
+        .filter_map(|provider| provider.base_url.as_deref())
+        .map(|base_url| {
+            url::Url::parse(base_url)
+                .map_err(|_| FailureCode::InvalidConfiguration)
+                .map(|url| url.origin().ascii_serialization())
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?
+        .into_iter()
+        .collect();
     config.memory.index_path = Some(instance_dir.join("memory-index"));
     config.workflows.user = instance_dir.join("workflows");
     config.skills.user = instance_dir.join("skills");
@@ -900,12 +931,25 @@ mod tests {
         let instance = tempfile::tempdir().expect("instance");
         let managed = ManagedRuntimeConfig {
             access_profile: ManagedAccessProfile::Development,
-            provider: ManagedProviderConfig {
+            providers: vec![ManagedProviderConfig {
+                profile: "openrouter".into(),
                 kind: ManagedProviderKind::OpenAiCompatible,
-                model: "deepseek/deepseek-v4-flash".into(),
                 base_url: Some("https://openrouter.ai/api/v1".into()),
                 credential_id: Some("provider-main".into()),
-            },
+                timeout_ms: 120_000,
+            }],
+            models: vec![colossus_sidecar_protocol::ManagedModelConfig {
+                profile: "main".into(),
+                provider_profile: "openrouter".into(),
+                model: "deepseek/deepseek-v4-flash".into(),
+                context_window_tokens: 64_000,
+                max_output_tokens: 8_000,
+                capabilities: colossus_sidecar_protocol::ManagedModelCapabilities {
+                    tool_calls: true,
+                    streaming: true,
+                },
+            }],
+            roles: BTreeMap::from([("primary".into(), "main".into())]),
         };
         let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path())
             .expect("managed config");

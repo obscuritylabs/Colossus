@@ -11,6 +11,7 @@ import type { FormEvent } from "react";
 import {
   CommandFailure,
   addExternalTarget,
+  applyManagedModelConfiguration,
   cancelRun,
   chooseWorkspace,
   configureManagedRuntime,
@@ -73,6 +74,7 @@ import {
 } from "./target-routing";
 import type { TargetRoute } from "./target-routing";
 import type {
+  ApplyManagedModelConfigurationRequest,
   CommandError,
   ConfigureManagedRuntimeRequest,
   ConnectionStatus,
@@ -143,6 +145,32 @@ const INITIAL_DESKTOP: DesktopStatus = {
         model: "fixture",
       }
     : { configured: false, kind: null, model: "" },
+  managedModelConfiguration: {
+    providers: FIXTURE_MODE
+      ? [
+          {
+            profile: "primary-provider",
+            providerKind: "openai_compatible",
+            baseUrl: "https://openrouter.ai/api/v1",
+            hasCredential: false,
+            timeoutMs: 120_000,
+          },
+        ]
+      : [],
+    models: FIXTURE_MODE
+      ? [
+          {
+            profile: "primary",
+            providerProfile: "primary-provider",
+            model: "fixture",
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 16_000,
+            capabilities: { toolCalls: true, streaming: true },
+          },
+        ]
+      : [],
+    roles: FIXTURE_MODE ? { primary: "primary" } : {},
+  },
   accessProfile: "development",
   terminalEnabled: false,
 };
@@ -869,6 +897,8 @@ export default function App() {
               output:
                 "Showcase response: the request was accepted by the local Operations Studio fixture. Live builds send this through the scoped native command boundary.",
               profile: "desktop-showcase",
+              modelProfile: "desktop-showcase",
+              providerProfile: "fixture-provider",
               model: "fixture",
               elapsedSeconds: 0.2,
             },
@@ -1147,6 +1177,67 @@ export default function App() {
         return true;
       }
       const status = await configureManagedRuntime(request);
+      await acceptDesktopStatus(status, true);
+      setShowOnboarding(false);
+      return status.connection.state === "connected";
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+      return false;
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleApplyManagedModelConfiguration(
+    request: ApplyManagedModelConfigurationRequest,
+  ): Promise<boolean> {
+    if (connectingRef.current || submitInFlight.current) {
+      return false;
+    }
+    connectingRef.current = true;
+    if (!FIXTURE_MODE) {
+      invalidateTargetRoute();
+    }
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        const primaryProfile = request.roles.primary;
+        const primaryModel = request.models.find(
+          (model) => model.profile === primaryProfile,
+        );
+        const primaryProvider = request.providers.find(
+          (provider) => provider.profile === primaryModel?.providerProfile,
+        );
+        setDesktop((current) => ({
+          ...current,
+          provider: {
+            configured:
+              primaryModel !== undefined && primaryProvider !== undefined,
+            kind: primaryProvider?.providerKind ?? null,
+            model: primaryModel?.model ?? "",
+          },
+          managedModelConfiguration: {
+            providers: request.providers.map((provider) => ({
+              profile: provider.profile,
+              providerKind: provider.providerKind,
+              baseUrl: provider.baseUrl,
+              hasCredential: provider.credentialAction !== "none",
+              timeoutMs: provider.timeoutMs,
+            })),
+            models: request.models,
+            roles: request.roles,
+          },
+          accessProfile: request.accessProfile,
+        }));
+        setShowOnboarding(false);
+        return true;
+      }
+      const status = await applyManagedModelConfiguration(request);
       await acceptDesktopStatus(status, true);
       setShowOnboarding(false);
       return status.connection.state === "connected";
@@ -1522,6 +1613,7 @@ export default function App() {
           error={actionError?.message ?? ""}
           onChooseWorkspace={handleChooseWorkspace}
           onConfigure={handleConfigureManaged}
+          onApplyConfiguration={handleApplyManagedModelConfiguration}
           onRunSelfTest={handleManagedSelfTest}
           onUseExternal={async () => {
             await handleAddExternalTarget();

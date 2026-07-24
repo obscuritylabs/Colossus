@@ -1005,7 +1005,7 @@ workspace and reject mismatched clients. Fresh development configuration selects
 `workspace-development` sandbox profile unless explicitly overridden; other access
 profiles default to `offline-default`.
 
-`schemaVersion: 1` remains active, but removed exact tool/action lists are rejected.
+`schemaVersion: 2` remains active, but removed exact tool/action lists are rejected.
 Before 1.0, configuration changes are applied by directly updating the strict YAML or
 generating a fresh configuration; there is no automatic configuration migration command.
 Effective diagnostics MUST be bounded and credential-free.

@@ -1,14 +1,22 @@
 use super::*;
-use colossus_contracts::{ProviderRoute, ProviderTurn};
+use colossus_contracts::{ModelCapabilities, ModelLimits, ProviderRoute, ProviderTurn};
 use colossus_ports::ModelProviderError;
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
 use colossus_work::{EventSourcedWorkRepository, WorkService};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 struct SummaryProvider {
     output: Option<String>,
     calls: AtomicUsize,
+}
+
+struct BudgetSummaryProvider {
+    summary_route: ProviderRoute,
+    requests: Mutex<Vec<ModelRequest>>,
 }
 
 struct StaticMemories(Vec<MemoryRecord>);
@@ -36,12 +44,7 @@ type Fixture = (
 #[async_trait]
 impl ModelProvider for SummaryProvider {
     fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
-        Ok(ProviderRoute {
-            role: role.into(),
-            profile: "summary".into(),
-            provider: "test".into(),
-            model: "summary-model".into(),
-        })
+        Ok(model_route(role))
     }
 
     async fn turn(
@@ -56,6 +59,8 @@ impl ModelProvider for SummaryProvider {
             |output| {
                 Ok(ProviderTurn {
                     profile: "summary".into(),
+                    model_profile: "summary".into(),
+                    provider_profile: "summary-provider".into(),
                     provider: "test".into(),
                     model: "summary-model".into(),
                     response_id: None,
@@ -65,6 +70,70 @@ impl ModelProvider for SummaryProvider {
                 })
             },
         )
+    }
+}
+
+#[async_trait]
+impl ModelProvider for BudgetSummaryProvider {
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+        if role == "context_summarizer" {
+            Ok(self.summary_route.clone())
+        } else {
+            Ok(model_route(role))
+        }
+    }
+
+    async fn turn(
+        &self,
+        _role: &str,
+        request: ModelRequest,
+        _context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        self.requests.lock().expect("requests").push(request);
+        Ok(ProviderTurn {
+            profile: self.summary_route.model_profile.clone(),
+            model_profile: self.summary_route.model_profile.clone(),
+            provider_profile: self.summary_route.provider_profile.clone(),
+            provider: self.summary_route.provider.clone(),
+            model: self.summary_route.model.clone(),
+            response_id: None,
+            events: vec![ProviderEvent::FinalOutput {
+                text: "budgeted model summary".into(),
+            }],
+        })
+    }
+}
+
+fn model_route(role: &str) -> ProviderRoute {
+    ProviderRoute {
+        role: role.into(),
+        profile: "summary".into(),
+        model_profile: "summary".into(),
+        provider_profile: "summary-provider".into(),
+        provider: "test".into(),
+        model: "summary-model".into(),
+        limits: ModelLimits {
+            context_window_tokens: 4_096,
+            max_output_tokens: 512,
+            safety_margin_tokens: 512,
+            input_budget_tokens: 3_072,
+        },
+        capabilities: ModelCapabilities {
+            tool_calls: true,
+            streaming: true,
+        },
+    }
+}
+
+fn preparation_request(messages: Vec<ModelMessage>, force: bool) -> ContextPreparationRequest {
+    ContextPreparationRequest {
+        session_id: "session-1".into(),
+        instructions: "test".into(),
+        messages,
+        tools: Vec::new(),
+        route: model_route("primary"),
+        context: execution_context(),
+        force,
     }
 }
 
@@ -112,7 +181,6 @@ async fn automatic_compaction_preserves_recent_tail_and_raw_history() {
         calls: AtomicUsize::new(0),
     });
     let config = ContextConfig {
-        context_window_tokens: 1_024,
         compact_at_percent: 50,
         target_percent: 30,
         preserve_recent_messages: 2,
@@ -123,7 +191,7 @@ async fn automatic_compaction_preserves_recent_tail_and_raw_history() {
     let messages = vec![
         message(
             ModelMessageRole::User,
-            format!("Please implement durable context. {}", "x".repeat(4_000)),
+            format!("Please implement durable context. {}", "x".repeat(6_000)),
         ),
         message(ModelMessageRole::Assistant, "work completed"),
         message(ModelMessageRole::User, "recent request"),
@@ -136,14 +204,7 @@ async fn automatic_compaction_preserves_recent_tail_and_raw_history() {
     }
 
     let prepared = service
-        .prepare(
-            "session-1",
-            "test",
-            messages.clone(),
-            &[],
-            execution_context(),
-            false,
-        )
+        .prepare(preparation_request(messages.clone(), false))
         .await
         .expect("prepared");
 
@@ -167,14 +228,7 @@ async fn below_threshold_does_not_create_snapshot() {
     let (_journal, _sessions, snapshots, service) = fixture(ContextConfig::default(), provider);
     let messages = vec![message(ModelMessageRole::User, "short")];
     let prepared = service
-        .prepare(
-            "session-1",
-            "test",
-            messages.clone(),
-            &[],
-            execution_context(),
-            false,
-        )
+        .prepare(preparation_request(messages.clone(), false))
         .await
         .expect("prepared");
     assert_eq!(prepared.messages, messages);
@@ -214,6 +268,91 @@ async fn model_summary_is_used_and_failure_falls_back_deterministically() {
             assert_eq!(snapshot.summary, "assisted durable summary");
         }
     }
+}
+
+#[tokio::test]
+async fn model_summary_prompt_obeys_the_summarizer_models_effective_input_budget() {
+    let mut route = model_route("context_summarizer");
+    route.limits.input_budget_tokens = 256;
+    let provider = Arc::new(BudgetSummaryProvider {
+        summary_route: route.clone(),
+        requests: Mutex::new(Vec::new()),
+    });
+    let (_journal, sessions, snapshots, service) = fixture(
+        ContextConfig::default(),
+        provider.clone() as Arc<dyn ModelProvider>,
+    );
+    for index in 0..12 {
+        sessions
+            .append_message(
+                "session-1",
+                "run-1",
+                message(
+                    ModelMessageRole::User,
+                    format!("history-{index}: {}", "x".repeat(1_000)),
+                ),
+                user_actor(),
+            )
+            .expect("message");
+    }
+
+    let prepared = service
+        .compact("session-1", "budget test", &[])
+        .await
+        .expect("compact");
+
+    assert_eq!(prepared.strategy.as_deref(), Some("hybrid_model"));
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert!(
+        estimate_tokens(&request.instructions, &request.messages, &request.tools)
+            <= route.limits.input_budget_tokens
+    );
+    assert!(request.messages[0].content.len() <= MAX_SUMMARY_PROMPT_BYTES);
+    assert!(
+        request.messages[0]
+            .content
+            .contains("Additional source messages omitted")
+    );
+    assert_eq!(
+        snapshots
+            .active("session-1")
+            .expect("active")
+            .expect("snapshot")
+            .summary,
+        "budgeted model summary"
+    );
+}
+
+#[tokio::test]
+async fn model_summary_skips_provider_when_fixed_prompt_exceeds_the_summarizer_budget() {
+    let mut route = model_route("context_summarizer");
+    route.limits.input_budget_tokens = 1;
+    let provider = Arc::new(BudgetSummaryProvider {
+        summary_route: route,
+        requests: Mutex::new(Vec::new()),
+    });
+    let (_journal, sessions, _snapshots, service) = fixture(
+        ContextConfig::default(),
+        provider.clone() as Arc<dyn ModelProvider>,
+    );
+    sessions
+        .append_message(
+            "session-1",
+            "run-1",
+            message(ModelMessageRole::User, "important requirement"),
+            user_actor(),
+        )
+        .expect("message");
+
+    let prepared = service
+        .compact("session-1", "budget test", &[])
+        .await
+        .expect("compact");
+
+    assert_eq!(prepared.strategy.as_deref(), Some("deterministic"));
+    assert!(provider.requests.lock().expect("requests").is_empty());
 }
 
 #[tokio::test]
@@ -302,14 +441,7 @@ async fn active_decisions_are_binding_context_before_snapshots() {
     let service = service.with_work_repository(Arc::clone(&work));
 
     let compacted = service
-        .prepare(
-            "session-1",
-            "test",
-            vec![message],
-            &[],
-            execution_context(),
-            true,
-        )
+        .prepare(preparation_request(vec![message], true))
         .await
         .expect("prepared");
     assert!(
@@ -333,19 +465,15 @@ async fn active_decisions_are_binding_context_before_snapshots() {
         .archive_decision(&decision.id, user_actor())
         .expect("archive");
     let after_archive = service
-        .prepare(
-            "session-1",
-            "test",
+        .prepare(preparation_request(
             sessions
                 .list_messages("session-1")
                 .expect("messages")
                 .into_iter()
                 .map(|record| record.message)
                 .collect(),
-            &[],
-            execution_context(),
             false,
-        )
+        ))
         .await
         .expect("prepared after archive");
     assert!(
@@ -402,14 +530,7 @@ async fn relevant_memories_follow_decisions_and_precede_snapshots() {
         .with_work_repository(work)
         .with_memory_retriever(memories);
     let prepared = service
-        .prepare(
-            "session-1",
-            "test",
-            vec![message],
-            &[],
-            execution_context(),
-            true,
-        )
+        .prepare(preparation_request(vec![message], true))
         .await
         .expect("prepare");
     assert!(

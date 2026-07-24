@@ -507,6 +507,8 @@ fn proto_result(value: colossus_api::RunResult) -> RunResult {
         profile: value.profile,
         model: value.model,
         elapsed_seconds: value.elapsed_seconds,
+        model_profile: value.model_profile,
+        provider_profile: value.provider_profile,
     }
 }
 

@@ -7,8 +7,14 @@ const MAX_HOST_CREDENTIALS: usize = 64;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderEffectInput {
-    /// Profile selected by routing.
-    pub profile: String,
+    /// Provider connection profile selected by routing.
+    pub provider_profile: String,
+    /// Model profile selected by routing. Absent only for provider diagnostics.
+    pub model_profile: Option<String>,
+    /// Exact provider model identifier. Absent only for provider diagnostics.
+    pub model: Option<String>,
+    /// Resolved output ceiling. Absent only for provider diagnostics.
+    pub max_output_tokens: Option<u64>,
     /// Full logical model request. Absent only for model-catalog diagnostics.
     pub request: Option<ModelRequest>,
 }
@@ -253,7 +259,7 @@ impl StreamingEffectExecutor for ProviderExecutor {
             serde_json::from_value(effect.content.clone()).map_err(|error| {
                 provider_execution_error(ProviderError::Malformed(error.to_string()))
             })?;
-        if input.profile != self.profile.name {
+        if input.provider_profile != self.profile.name {
             return Err(provider_execution_error(ProviderError::Configuration(
                 "provider effect profile does not match its adapter".into(),
             )));
@@ -264,12 +270,15 @@ impl StreamingEffectExecutor for ProviderExecutor {
                 "streaming provider adapter received an unsupported action".into(),
             )));
         }
+        let (model_profile, model, max_output_tokens) =
+            generation_metadata(&input).map_err(provider_execution_error)?;
         let model_request = input.request.ok_or_else(|| {
             provider_execution_error(ProviderError::Configuration(
                 "provider generation request is absent".into(),
             ))
         })?;
-        validate_model_request(&model_request, &self.profile).map_err(provider_execution_error)?;
+        validate_model_request(&model_request, max_output_tokens)
+            .map_err(provider_execution_error)?;
         let endpoint = self
             .profile
             .generation_endpoint()
@@ -307,9 +316,11 @@ impl StreamingEffectExecutor for ProviderExecutor {
             .await?;
             return emit_stream_item(
                 ProviderStreamItem::Completed {
-                    profile: self.profile.name.clone(),
+                    profile: model_profile.clone(),
+                    model_profile,
+                    provider_profile: self.profile.name.clone(),
                     provider: self.profile.kind.as_str().into(),
-                    model: self.profile.model.clone(),
+                    model,
                     response_id: None,
                 },
                 &permit,
@@ -320,13 +331,24 @@ impl StreamingEffectExecutor for ProviderExecutor {
         self.validate_resource(effect, &endpoint, &permit)
             .map_err(provider_execution_error)?;
         let payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses => responses_payload(&model_request, true),
-            ProviderKind::OpenAiCompatible => chat_payload(&model_request, true),
+            ProviderKind::OpenAiResponses => {
+                responses_payload(&model_request, &model, max_output_tokens, true)
+            }
+            ProviderKind::OpenAiCompatible => {
+                chat_payload(&model_request, &model, max_output_tokens, true)
+            }
             ProviderKind::Echo => unreachable!("handled above"),
         }
         .map_err(provider_execution_error)?;
-        self.stream_generation(&endpoint, payload, &permit, observer)
-            .await
+        self.stream_generation(
+            &endpoint,
+            payload,
+            &model_profile,
+            &model,
+            &permit,
+            observer,
+        )
+        .await
     }
 }
 
@@ -359,14 +381,19 @@ impl ProviderExecutor {
     ) -> Result<QuarantinedEffectResult, ProviderError> {
         let input: ProviderEffectInput = serde_json::from_value(effect.content.clone())
             .map_err(|error| ProviderError::Malformed(error.to_string()))?;
-        if input.profile != self.profile.name {
+        if input.provider_profile != self.profile.name {
             return Err(ProviderError::Configuration(
                 "provider effect profile does not match its adapter".into(),
             ));
         }
         validate_credential_disclosure(effect, &self.profile)?;
         if effect.action == "provider.models" {
-            if input.request.is_some() || self.profile.kind == ProviderKind::Echo {
+            if input.request.is_some()
+                || input.model_profile.is_some()
+                || input.model.is_some()
+                || input.max_output_tokens.is_some()
+                || self.profile.kind == ProviderKind::Echo
+            {
                 return Err(ProviderError::Configuration(
                     "model catalog effect is invalid for this provider".into(),
                 ));
@@ -385,10 +412,11 @@ impl ProviderExecutor {
                 "provider adapter received an unsupported action".into(),
             ));
         }
+        let (model_profile, model, max_output_tokens) = generation_metadata(&input)?;
         let model_request = input.request.ok_or_else(|| {
             ProviderError::Configuration("provider generation request is absent".into())
         })?;
-        validate_model_request(&model_request, &self.profile)?;
+        validate_model_request(&model_request, max_output_tokens)?;
         let endpoint = self.profile.generation_endpoint()?;
         if self.profile.kind == ProviderKind::Echo {
             if effect.resource != endpoint {
@@ -403,9 +431,11 @@ impl ProviderExecutor {
                 .ok_or_else(|| ProviderError::Malformed("echo request has no message".into()))?;
             return bounded_result(
                 &ProviderTurn {
-                    profile: self.profile.name.clone(),
+                    profile: model_profile.clone(),
+                    model_profile,
+                    provider_profile: self.profile.name.clone(),
                     provider: self.profile.kind.as_str().into(),
-                    model: self.profile.model.clone(),
+                    model,
                     response_id: None,
                     events: vec![
                         ProviderEvent::ModelDelta { text: text.clone() },
@@ -417,14 +447,22 @@ impl ProviderExecutor {
         }
         self.validate_resource(effect, &endpoint, permit)?;
         let payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses => responses_payload(&model_request, false),
-            ProviderKind::OpenAiCompatible => chat_payload(&model_request, false),
+            ProviderKind::OpenAiResponses => {
+                responses_payload(&model_request, &model, max_output_tokens, false)
+            }
+            ProviderKind::OpenAiCompatible => {
+                chat_payload(&model_request, &model, max_output_tokens, false)
+            }
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
         let bytes = self.request_json(&endpoint, Some(payload), permit).await?;
         let turn = match self.profile.kind {
-            ProviderKind::OpenAiResponses => normalize_responses(&self.profile, &bytes),
-            ProviderKind::OpenAiCompatible => normalize_chat(&self.profile, &bytes),
+            ProviderKind::OpenAiResponses => {
+                normalize_responses(&self.profile, &model_profile, &model, &bytes)
+            }
+            ProviderKind::OpenAiCompatible => {
+                normalize_chat(&self.profile, &model_profile, &model, &bytes)
+            }
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
         bounded_result(&turn, permit)
@@ -552,6 +590,8 @@ impl ProviderExecutor {
         &self,
         endpoint: &str,
         payload: Value,
+        model_profile: &str,
+        model: &str,
         permit: &ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
@@ -614,9 +654,11 @@ impl ProviderExecutor {
         let response_id = state.response_id().map(str::to_owned);
         emit_stream_item(
             ProviderStreamItem::Completed {
-                profile: self.profile.name.clone(),
+                profile: model_profile.into(),
+                model_profile: model_profile.into(),
+                provider_profile: self.profile.name.clone(),
                 provider: self.profile.kind.as_str().into(),
-                model: self.profile.model.clone(),
+                model: model.into(),
                 response_id,
             },
             permit,
@@ -624,4 +666,26 @@ impl ProviderExecutor {
         )
         .await
     }
+}
+
+fn generation_metadata(
+    input: &ProviderEffectInput,
+) -> Result<(String, String, u64), ProviderError> {
+    let model_profile = input
+        .model_profile
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| ProviderError::Configuration("model profile is absent".into()))?;
+    let model = input
+        .model
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| ProviderError::Configuration("model identifier is absent".into()))?;
+    let max_output_tokens = input
+        .max_output_tokens
+        .filter(|value| *value > 0)
+        .ok_or_else(|| ProviderError::Configuration("model output limit is absent".into()))?;
+    Ok((model_profile, model, max_output_tokens))
 }

@@ -9,7 +9,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use sha2::{Digest as _, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     io::{Read, Write},
     path::{Component, Path},
@@ -20,7 +20,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Exact bootstrap protocol version.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 /// Exact desktop-to-TUI inherited-channel protocol version.
 pub const DESKTOP_TUI_PROTOCOL_VERSION: u16 = 2;
 /// Fixed child descriptor from which the bundled TUI reads native authentication.
@@ -31,6 +31,10 @@ pub const DESKTOP_TUI_AUTH_OUTPUT_FD: i32 = 4;
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 /// Maximum host-provided credentials accepted by one managed runtime.
 pub const MAX_HOST_CREDENTIALS: usize = 64;
+/// Maximum provider connections in one app-managed runtime.
+pub const MAX_MANAGED_PROVIDERS: usize = 16;
+/// Maximum explicit model profiles in one app-managed runtime.
+pub const MAX_MANAGED_MODELS: usize = 64;
 const MAX_SECRET_BYTES: usize = 64 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 256;
 const MAX_AUTHORIZATION_ITEMS: usize = 512;
@@ -296,30 +300,34 @@ pub enum ManagedProviderKind {
     OpenAiCompatible,
 }
 
-/// Compact provider settings that contain references but never credential values.
+/// Compact provider connection settings that contain references but never credential values.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManagedProviderConfig {
+    /// Stable provider connection profile.
+    pub profile: String,
     /// Selected first-party adapter.
     pub kind: ManagedProviderKind,
-    /// Exact model identifier.
-    pub model: String,
     /// API-version base URL for a network provider.
     pub base_url: Option<String>,
     /// Opaque host credential identifier without the `host:` prefix.
     pub credential_id: Option<String>,
+    /// Per-request transport timeout.
+    pub timeout_ms: u64,
 }
 
 impl ManagedProviderConfig {
     /// Validate compact provider settings without resolving a secret or network name.
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if !valid_token(&self.model) || self.base_url.as_ref().is_some_and(|url| url.len() > 2_048)
+        if !valid_token(&self.profile)
+            || self.timeout_ms == 0
+            || self.base_url.as_ref().is_some_and(|url| url.len() > 2_048)
         {
             return Err(ProtocolError::InvalidFrame);
         }
         match self.kind {
             ManagedProviderKind::Echo => {
-                if self.base_url.is_some() || self.credential_id.is_some() || self.model != "echo" {
+                if self.base_url.is_some() || self.credential_id.is_some() {
                     return Err(ProtocolError::InvalidFrame);
                 }
             }
@@ -331,13 +339,70 @@ impl ManagedProviderConfig {
                     || self
                         .credential_id
                         .as_deref()
-                        .is_none_or(|credential_id| !valid_host_identifier(credential_id))
+                        .is_some_and(|credential_id| !valid_host_identifier(credential_id))
                 {
                     return Err(ProtocolError::InvalidFrame);
                 }
             }
         }
         Ok(())
+    }
+}
+
+/// Explicit request-shaping capabilities for an app-managed model.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedModelCapabilities {
+    /// Whether the model receives tools and structured tool history.
+    pub tool_calls: bool,
+    /// Whether the model uses provider streaming.
+    pub streaming: bool,
+}
+
+/// Compact explicit model metadata without provider credentials.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedModelConfig {
+    /// Stable model profile.
+    pub profile: String,
+    /// Referenced provider connection profile.
+    pub provider_profile: String,
+    /// Exact model identifier.
+    pub model: String,
+    /// Total provider context window.
+    pub context_window_tokens: u64,
+    /// Maximum output allocation.
+    pub max_output_tokens: u64,
+    /// Explicit model capabilities.
+    pub capabilities: ManagedModelCapabilities,
+}
+
+impl ManagedModelConfig {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        let safety = self.context_window_tokens.div_ceil(10).max(512);
+        if !valid_token(&self.profile)
+            || !valid_token(&self.provider_profile)
+            || validate_managed_model_identifier(&self.model).is_err()
+            || self.context_window_tokens < 1_024
+            || self.max_output_tokens == 0
+            || self
+                .context_window_tokens
+                .checked_sub(self.max_output_tokens)
+                .and_then(|remaining| remaining.checked_sub(safety))
+                .is_none_or(|input| input == 0)
+        {
+            return Err(ProtocolError::InvalidFrame);
+        }
+        Ok(())
+    }
+}
+
+/// Validate an exact model identifier accepted by an app-managed runtime.
+pub fn validate_managed_model_identifier(value: &str) -> Result<(), ProtocolError> {
+    if valid_token(value) {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidFrame)
     }
 }
 
@@ -384,14 +449,88 @@ pub fn validate_managed_provider_base_url(value: &str) -> Result<(), ProtocolErr
 pub struct ManagedRuntimeConfig {
     /// Access and policy preset.
     pub access_profile: ManagedAccessProfile,
-    /// Primary model provider.
-    pub provider: ManagedProviderConfig,
+    /// Bounded provider connection profiles.
+    pub providers: Vec<ManagedProviderConfig>,
+    /// Bounded explicit model profiles.
+    pub models: Vec<ManagedModelConfig>,
+    /// Logical roles mapped to model profiles.
+    pub roles: BTreeMap<String, String>,
 }
 
 impl ManagedRuntimeConfig {
+    /// Construct the deterministic credential-free managed runtime.
+    pub fn echo(access_profile: ManagedAccessProfile) -> Self {
+        Self {
+            access_profile,
+            providers: vec![ManagedProviderConfig {
+                profile: "echo".into(),
+                kind: ManagedProviderKind::Echo,
+                base_url: None,
+                credential_id: None,
+                timeout_ms: 120_000,
+            }],
+            models: vec![ManagedModelConfig {
+                profile: "echo".into(),
+                provider_profile: "echo".into(),
+                model: "echo".into(),
+                context_window_tokens: 32_768,
+                max_output_tokens: 4_096,
+                capabilities: ManagedModelCapabilities {
+                    tool_calls: true,
+                    streaming: true,
+                },
+            }],
+            roles: BTreeMap::from([("primary".into(), "echo".into())]),
+        }
+    }
+
     /// Validate the compact configuration.
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        self.provider.validate()
+        const ROLES: [&str; 7] = [
+            "primary",
+            "risk_evaluator",
+            "context_summarizer",
+            "subagent_default",
+            "research_planner",
+            "research_worker",
+            "research_synthesizer",
+        ];
+        if self.providers.is_empty()
+            || self.providers.len() > MAX_MANAGED_PROVIDERS
+            || self.models.is_empty()
+            || self.models.len() > MAX_MANAGED_MODELS
+            || !self.roles.contains_key("primary")
+            || self
+                .roles
+                .keys()
+                .any(|role| !ROLES.contains(&role.as_str()))
+        {
+            return Err(ProtocolError::InvalidFrame);
+        }
+        let mut providers = BTreeSet::new();
+        for provider in &self.providers {
+            provider.validate()?;
+            if !providers.insert(provider.profile.as_str()) {
+                return Err(ProtocolError::InvalidFrame);
+            }
+        }
+        let mut models = BTreeSet::new();
+        for model in &self.models {
+            model.validate()?;
+            if !models.insert(model.profile.as_str())
+                || !providers.contains(model.provider_profile.as_str())
+            {
+                return Err(ProtocolError::InvalidFrame);
+            }
+        }
+        if self
+            .roles
+            .iter()
+            .any(|(role, model)| !valid_token(role) || !models.contains(model.as_str()))
+        {
+            return Err(ProtocolError::InvalidFrame);
+        }
+        Ok(())
     }
 }
 
@@ -495,10 +634,12 @@ impl BootstrapRequest {
                 return Err(ProtocolError::InvalidFrame);
             }
         }
-        if let Some(credential_id) = self.runtime.provider.credential_id.as_deref()
-            && !ids.contains(credential_id)
-        {
-            return Err(ProtocolError::InvalidFrame);
+        for provider in &self.runtime.providers {
+            if let Some(credential_id) = provider.credential_id.as_deref()
+                && !ids.contains(credential_id)
+            {
+                return Err(ProtocolError::InvalidFrame);
+            }
         }
         if let Some(authentication) = &self.worker_ipc_authentication {
             decode_worker_authentication(authentication)?;
@@ -969,12 +1110,25 @@ mod tests {
             workspace_identity: WorkspaceIdentity::from_unix_parts(42, 84),
             runtime: ManagedRuntimeConfig {
                 access_profile: ManagedAccessProfile::Development,
-                provider: ManagedProviderConfig {
+                providers: vec![ManagedProviderConfig {
+                    profile: "provider-main".into(),
                     kind: ManagedProviderKind::OpenAiCompatible,
-                    model: "model-v1".into(),
                     base_url: Some("https://provider.example/v1".into()),
                     credential_id: Some("provider-main".into()),
-                },
+                    timeout_ms: 120_000,
+                }],
+                models: vec![ManagedModelConfig {
+                    profile: "main".into(),
+                    provider_profile: "provider-main".into(),
+                    model: "model-v1".into(),
+                    context_window_tokens: 32_768,
+                    max_output_tokens: 4_096,
+                    capabilities: ManagedModelCapabilities {
+                        tool_calls: true,
+                        streaming: true,
+                    },
+                }],
+                roles: BTreeMap::from([("primary".into(), "main".into())]),
             },
             grant: BootstrapGrant {
                 application_id: "app:desktop".into(),
@@ -1187,6 +1341,19 @@ mod tests {
         ] {
             validate_managed_provider_base_url(valid)
                 .unwrap_or_else(|error| panic!("rejected {valid}: {error}"));
+        }
+    }
+
+    #[test]
+    fn managed_model_identifiers_are_bounded_renderer_safe_tokens() {
+        for valid in ["gpt-5.2", "openai/gpt-oss-120b", "vendor:model_v1"] {
+            assert!(validate_managed_model_identifier(valid).is_ok());
+        }
+        for invalid in ["", "model with spaces", "model\nforged", "模型"] {
+            assert_eq!(
+                validate_managed_model_identifier(invalid),
+                Err(ProtocolError::InvalidFrame),
+            );
         }
     }
 

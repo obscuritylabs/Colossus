@@ -765,13 +765,20 @@ fn terminal_from_proto(value: run::Terminal) -> ApiResult<RunTerminal> {
 fn run_result_from_proto(value: proto::RunResult) -> ApiResult<RunResult> {
     validate_text(&value.output, MAX_VISIBLE_TEXT_BYTES)?;
     validate_identifier(&value.profile)?;
+    validate_identifier(&value.model_profile)?;
+    validate_identifier(&value.provider_profile)?;
     validate_identifier(&value.model)?;
-    if !value.elapsed_seconds.is_finite() || value.elapsed_seconds < 0.0 {
+    if value.profile != value.model_profile
+        || !value.elapsed_seconds.is_finite()
+        || value.elapsed_seconds < 0.0
+    {
         return Err(protocol_error());
     }
     Ok(RunResult {
         output: value.output,
         profile: value.profile,
+        model_profile: value.model_profile,
+        provider_profile: value.provider_profile,
         model: value.model,
         elapsed_seconds: value.elapsed_seconds,
     })
@@ -1662,6 +1669,8 @@ mod tests {
             terminal: Some(run::Terminal::Result(proto::RunResult {
                 output: "unexpected".into(),
                 profile: "default".into(),
+                model_profile: "default".into(),
+                provider_profile: "provider".into(),
                 model: "model".into(),
                 elapsed_seconds: 1.0,
             })),
@@ -1672,6 +1681,21 @@ mod tests {
             run_from_proto(run).expect_err("mismatch").reason,
             ApiErrorReason::InternalInvariant
         );
+    }
+
+    #[test]
+    fn proto_run_result_rejects_compatibility_profile_mismatch() {
+        let error = run_result_from_proto(proto::RunResult {
+            output: "answer".into(),
+            profile: "legacy-alias".into(),
+            model_profile: "different-model-profile".into(),
+            provider_profile: "provider".into(),
+            model: "model".into(),
+            elapsed_seconds: 1.0,
+        })
+        .expect_err("profile mismatch");
+
+        assert_eq!(error.reason, ApiErrorReason::InternalInvariant);
     }
 
     #[test]

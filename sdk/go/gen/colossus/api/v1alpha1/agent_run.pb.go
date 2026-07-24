@@ -402,14 +402,18 @@ type RunResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// output is the complete visible assistant text.
 	Output string `protobuf:"bytes,1,opt,name=output,proto3" json:"output,omitempty"`
-	// profile is the credential-free provider profile name.
+	// profile is the deprecated compatibility alias populated with model_profile.
 	Profile string `protobuf:"bytes,2,opt,name=profile,proto3" json:"profile,omitempty"`
 	// model is the provider model identifier.
 	Model string `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
 	// elapsed_seconds is the finite non-negative wall time for the completed run.
 	ElapsedSeconds float64 `protobuf:"fixed64,4,opt,name=elapsed_seconds,json=elapsedSeconds,proto3" json:"elapsed_seconds,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// model_profile is the credential-free configured model profile.
+	ModelProfile string `protobuf:"bytes,5,opt,name=model_profile,json=modelProfile,proto3" json:"model_profile,omitempty"`
+	// provider_profile is the credential-free provider connection profile.
+	ProviderProfile string `protobuf:"bytes,6,opt,name=provider_profile,json=providerProfile,proto3" json:"provider_profile,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RunResult) Reset() {
@@ -468,6 +472,20 @@ func (x *RunResult) GetElapsedSeconds() float64 {
 		return x.ElapsedSeconds
 	}
 	return 0
+}
+
+func (x *RunResult) GetModelProfile() string {
+	if x != nil {
+		return x.ModelProfile
+	}
+	return ""
+}
+
+func (x *RunResult) GetProviderProfile() string {
+	if x != nil {
+		return x.ProviderProfile
+	}
+	return ""
 }
 
 // RunFailure contains a bounded user-safe terminal failure.
@@ -2839,12 +2857,14 @@ var File_colossus_api_v1alpha1_agent_run_proto protoreflect.FileDescriptor
 
 const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\n" +
-	"%colossus/api/v1alpha1/agent_run.proto\x12\x15colossus.api.v1alpha1\x1a\"colossus/api/v1alpha1/common.proto\x1a#colossus/api/v1alpha1/session.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"|\n" +
+	"%colossus/api/v1alpha1/agent_run.proto\x12\x15colossus.api.v1alpha1\x1a\"colossus/api/v1alpha1/common.proto\x1a#colossus/api/v1alpha1/session.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcc\x01\n" +
 	"\tRunResult\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x18\n" +
 	"\aprofile\x18\x02 \x01(\tR\aprofile\x12\x14\n" +
 	"\x05model\x18\x03 \x01(\tR\x05model\x12'\n" +
-	"\x0felapsed_seconds\x18\x04 \x01(\x01R\x0eelapsedSeconds\"\x94\x01\n" +
+	"\x0felapsed_seconds\x18\x04 \x01(\x01R\x0eelapsedSeconds\x12#\n" +
+	"\rmodel_profile\x18\x05 \x01(\tR\fmodelProfile\x12)\n" +
+	"\x10provider_profile\x18\x06 \x01(\tR\x0fproviderProfile\"\x94\x01\n" +
 	"\n" +
 	"RunFailure\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x18\n" +

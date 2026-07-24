@@ -774,6 +774,8 @@ impl RuntimeAgentRunApi {
                 result: RunResult {
                     output: result.output,
                     profile: result.profile,
+                    model_profile: result.model_profile,
+                    provider_profile: result.provider_profile,
                     model: result.model,
                     elapsed_seconds: result.elapsed_seconds,
                 },

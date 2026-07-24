@@ -205,8 +205,19 @@ pub(super) fn estimate_tokens(
         .len()
         .saturating_add(message_bytes)
         .saturating_add(tool_bytes);
-    u64::try_from(total.saturating_add(3) / 4)
+    u64::try_from(total.div_ceil(3))
         .unwrap_or(u64::MAX)
+        .saturating_add(16)
+        .saturating_add(
+            u64::try_from(messages.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(8),
+        )
+        .saturating_add(
+            u64::try_from(tools.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(16),
+        )
         .max(1)
 }
 

@@ -18,6 +18,7 @@ const COMMANDS: &[&str] = &[
     "remove_external_target",
     "choose_workspace",
     "configure_managed_runtime",
+    "apply_managed_model_configuration",
     "run_managed_self_test",
     "restart_managed_runtime",
     "select_target",

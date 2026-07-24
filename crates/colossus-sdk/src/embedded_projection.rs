@@ -239,6 +239,8 @@ fn run_result(value: core::RunResult) -> RunResult {
     RunResult {
         output: value.output,
         profile: value.profile,
+        model_profile: value.model_profile,
+        provider_profile: value.provider_profile,
         model: value.model,
         elapsed_seconds: value.elapsed_seconds,
     }

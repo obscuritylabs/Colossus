@@ -133,13 +133,12 @@ impl Runtime {
 
     /// Resolve one role to bounded provider metadata without making a network request.
     pub fn provider_route(&self, role: &str) -> Result<ProviderRoute, RuntimeError> {
-        let provider = self.providers.resolve(role)?;
-        Ok(ProviderRoute {
-            role: role.into(),
-            profile: provider.profile().name.clone(),
-            provider: provider.profile().kind.as_str().into(),
-            model: provider.profile().model.clone(),
-        })
+        Ok(self.providers.resolve(role)?.route())
+    }
+
+    /// Safe configured model profiles with explicit provider, limits, and capabilities.
+    pub fn model_profiles(&self) -> Vec<ModelRoute> {
+        self.providers.models()
     }
 
     /// Safe configured search profile metadata without resolving credentials.
@@ -301,16 +300,21 @@ impl Runtime {
         &self,
         profile: Option<&str>,
     ) -> Result<Vec<ProviderModelInfo>, RuntimeError> {
-        let provider = profile.map_or_else(
-            || self.providers.resolve("primary"),
-            |profile| self.providers.profile(profile),
-        )?;
+        let provider = match profile {
+            Some(profile) => self.providers.profile(profile)?,
+            None => self.providers.resolve("primary")?.provider().clone(),
+        };
         if provider.profile().kind == ProviderKind::Echo {
-            return Ok(vec![ProviderModelInfo {
-                id: provider.profile().model.clone(),
-                object: Some("model".into()),
-                owned_by: Some("colossus".into()),
-            }]);
+            return Ok(self
+                .providers
+                .models_for_provider(&provider.profile().name)
+                .into_iter()
+                .map(|model| ProviderModelInfo {
+                    id: model.model,
+                    object: Some("model".into()),
+                    owned_by: Some("colossus".into()),
+                })
+                .collect());
         }
         let endpoint = provider
             .profile()
@@ -321,7 +325,10 @@ impl Runtime {
             "provider.models",
             endpoint,
             serde_json::to_value(ProviderEffectInput {
-                profile: provider.profile().name.clone(),
+                provider_profile: provider.profile().name.clone(),
+                model_profile: None,
+                model: None,
+                max_output_tokens: None,
                 request: None,
             })
             .map_err(|error| RuntimeError::Config(error.to_string()))?,
@@ -333,15 +340,15 @@ impl Runtime {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
-    /// Check a provider profile by exercising its catalog and generation endpoints through policy.
+    /// Check a provider connection profile by exercising its catalog endpoint through policy.
     pub async fn provider_doctor(
         &self,
         profile: Option<&str>,
     ) -> Result<ProviderReadiness, RuntimeError> {
-        let provider = profile.map_or_else(
-            || self.providers.resolve("primary"),
-            |profile| self.providers.profile(profile),
-        )?;
+        let provider = match profile {
+            Some(profile) => self.providers.profile(profile)?,
+            None => self.providers.resolve("primary")?.provider().clone(),
+        };
         let mut readiness = provider.static_readiness();
         if provider.profile().kind == ProviderKind::Echo {
             return Ok(readiness);
@@ -366,72 +373,112 @@ impl Runtime {
                 });
             }
         }
+        readiness.ready = checks.iter().all(|check| check.status == "pass");
+        readiness.checks = checks;
+        Ok(readiness)
+    }
+
+    /// Check one explicit model profile by exercising a bounded generation through policy.
+    pub async fn model_doctor(&self, profile: Option<&str>) -> Result<Value, RuntimeError> {
+        let resolved = match profile {
+            Some(profile) => self.providers.model(profile)?,
+            None => self.providers.resolve("primary")?,
+        };
+        let route = resolved.route();
+        let provider = resolved.provider();
         let endpoint = provider.profile().generation_endpoint()?;
+        let output_limit = route.limits.max_output_tokens.min(32);
+        let tools = if route.capabilities.tool_calls {
+            vec![ModelToolDefinition {
+                name: "colossus.readiness".into(),
+                description: "Representative tool-schema compatibility probe.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "maxItems": 4,
+                            "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 4096
+                            }
+                        }
+                    },
+                    "required": ["paths"],
+                    "additionalProperties": false
+                }),
+            }]
+        } else {
+            Vec::new()
+        };
         let mut request = effect_request(
-            system_actor("provider-diagnostics"),
+            system_actor("model-diagnostics"),
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
-                profile: provider.profile().name.clone(),
+                provider_profile: route.provider_profile.clone(),
+                model_profile: Some(route.model_profile.clone()),
+                model: Some(route.model.clone()),
+                max_output_tokens: Some(output_limit),
                 request: Some(ModelRequest {
-                    model: provider.profile().model.clone(),
-                    instructions: "This is a provider readiness probe. Reply with exactly: ok"
-                        .into(),
+                    instructions: "This is a model readiness probe. Reply with exactly: ok".into(),
                     messages: vec![ModelMessage {
                         role: ModelMessageRole::User,
                         content: "Reply with exactly: ok".into(),
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     }],
-                    tools: vec![ModelToolDefinition {
-                        name: "colossus.readiness".into(),
-                        description: "Representative tool-schema compatibility probe.".into(),
-                        input_schema: json!({
-                            "type": "object",
-                            "properties": {
-                                "paths": {
-                                    "type": "array",
-                                    "maxItems": 4,
-                                    "items": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 4096
-                                    }
-                                }
-                            },
-                            "required": ["paths"],
-                            "additionalProperties": false
-                        }),
-                    }],
+                    tools,
+                    max_output_tokens: Some(output_limit),
                 }),
             })
             .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
         request.capabilities = vec!["provider.call".into()];
         request.credential_references = provider.credential_reference().into_iter().collect();
-        match self.gateway.execute(request, provider.as_ref()).await {
+        let generation = match self.gateway.execute(request, provider.as_ref()).await {
             Ok(result) => match serde_json::from_slice::<ProviderTurn>(&result.bytes) {
-                Ok(_) => checks.push(ProviderReadinessCheck {
-                    name: "generation_endpoint".into(),
-                    status: "pass".into(),
-                    detail: "Reached the configured generation endpoint with a representative tool schema and normalized a bounded probe response."
-                        .into(),
-                }),
-                Err(_) => checks.push(ProviderReadinessCheck {
-                    name: "generation_endpoint".into(),
+                Ok(turn)
+                    if turn.model_profile == route.model_profile
+                        && turn.provider_profile == route.provider_profile =>
+                {
+                    ProviderReadinessCheck {
+                        name: "generation".into(),
+                        status: "pass".into(),
+                        detail: if route.capabilities.tool_calls {
+                            "Completed and normalized one bounded model generation with a representative tool schema."
+                                .into()
+                        } else {
+                            "Completed and normalized one bounded text-only model generation."
+                                .into()
+                        },
+                    }
+                }
+                Ok(_) | Err(_) => ProviderReadinessCheck {
+                    name: "generation".into(),
                     status: "fail".into(),
-                    detail: "Released provider output violated the normalized turn contract."
+                    detail: "Released generation metadata violated the selected model route."
                         .into(),
-                }),
+                },
             },
-            Err(error) => checks.push(ProviderReadinessCheck {
-                name: "generation_endpoint".into(),
+            Err(error) => ProviderReadinessCheck {
+                name: "generation".into(),
                 status: "fail".into(),
                 detail: error.to_string(),
-            }),
-        }
-        readiness.ready = checks.iter().all(|check| check.status == "pass");
-        readiness.checks = checks;
-        Ok(readiness)
+            },
+        };
+        Ok(json!({
+            "ready": generation.status == "pass",
+            "route": route,
+            "checks": [
+                {
+                    "name": "metadata",
+                    "status": "pass",
+                    "detail": "Explicit limits and capabilities are valid."
+                },
+                generation,
+            ],
+        }))
     }
 }

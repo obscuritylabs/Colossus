@@ -50,7 +50,7 @@ fn write_failure_config(directory: &Path, origin: &str, tool: &str) -> std::path
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -76,10 +76,20 @@ fn write_failure_config(directory: &Path, origin: &str, tool: &str) -> std::path
             "profiles": {
                 "failure": {
                     "kind": "open_ai_compatible",
-                    "model": "failure-model",
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": null,
                     "timeoutMs": 5000
+                }
+            }
+        },
+        "models": {
+            "profiles": {
+                "failure": {
+                    "providerProfile": "failure",
+                    "model": "failure-model",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": {"toolCalls": true, "streaming": true}
                 }
             },
             "roles": {"primary": "failure"}
@@ -259,7 +269,7 @@ fn write_doctor_config(directory: &Path, origin: &str) -> std::path::PathBuf {
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -285,10 +295,20 @@ fn write_doctor_config(directory: &Path, origin: &str) -> std::path::PathBuf {
             "profiles": {
                 "live": {
                     "kind": "open_ai_compatible",
-                    "model": "terminal-model",
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": "env:COLOSSUS_PROVIDER_TERMINAL_API_KEY",
                     "timeoutMs": 10000
+                }
+            }
+        },
+        "models": {
+            "profiles": {
+                "live": {
+                    "providerProfile": "live",
+                    "model": "terminal-model",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": {"toolCalls": true, "streaming": true}
                 }
             },
             "roles": {"primary": "live"}
@@ -327,7 +347,7 @@ fn write_provider_timeout_config(directory: &Path, origin: &str) -> std::path::P
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -353,10 +373,20 @@ fn write_provider_timeout_config(directory: &Path, origin: &str) -> std::path::P
             "profiles": {
                 "live": {
                     "kind": "open_ai_compatible",
-                    "model": "terminal-model",
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": null,
                     "timeoutMs": 500
+                }
+            }
+        },
+        "models": {
+            "profiles": {
+                "live": {
+                    "providerProfile": "live",
+                    "model": "terminal-model",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": {"toolCalls": true, "streaming": true}
                 }
             },
             "roles": {"primary": "live"}
@@ -677,17 +707,31 @@ fn provider_doctor_does_not_treat_a_public_catalog_as_credential_readiness() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let readiness: Value = serde_json::from_slice(&output.stdout).expect("readiness JSON");
-    assert_eq!(readiness["ready"], false);
-    assert_eq!(readiness["checks"][0]["name"], "models_endpoint");
-    assert_eq!(readiness["checks"][0]["status"], "pass");
-    assert_eq!(readiness["checks"][1]["name"], "generation_endpoint");
-    assert_eq!(readiness["checks"][1]["status"], "fail");
+    let provider_readiness: Value =
+        serde_json::from_slice(&output.stdout).expect("provider readiness JSON");
+    assert_eq!(provider_readiness["ready"], true);
+    assert_eq!(provider_readiness["checks"][0]["name"], "models_endpoint");
+    assert_eq!(provider_readiness["checks"][0]["status"], "pass");
+
+    let output = run(binary, &config, &["models", "doctor", "live"]);
     assert!(
-        readiness["checks"][1]["detail"]
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let model_readiness: Value =
+        serde_json::from_slice(&output.stdout).expect("model readiness JSON");
+    assert_eq!(model_readiness["ready"], false);
+    assert_eq!(model_readiness["checks"][0]["name"], "metadata");
+    assert_eq!(model_readiness["checks"][0]["status"], "pass");
+    assert_eq!(model_readiness["checks"][1]["name"], "generation");
+    assert_eq!(model_readiness["checks"][1]["status"], "fail");
+    assert!(
+        model_readiness["checks"][1]["detail"]
             .as_str()
             .is_some_and(|detail| detail.contains("HTTP 401")),
-        "{readiness}"
+        "{model_readiness}"
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("terminal-secret"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("terminal-secret"));
@@ -729,11 +773,26 @@ fn provider_doctor_reports_ready_through_worker_after_catalog_and_generation_suc
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let readiness: Value = serde_json::from_slice(&output.stdout).expect("readiness JSON");
-    assert_eq!(readiness["ready"], true);
-    assert_eq!(readiness["checks"][0]["status"], "pass");
-    assert_eq!(readiness["checks"][1]["name"], "generation_endpoint");
-    assert_eq!(readiness["checks"][1]["status"], "pass");
+    let provider_readiness: Value =
+        serde_json::from_slice(&output.stdout).expect("provider readiness JSON");
+    assert_eq!(provider_readiness["ready"], true);
+    assert_eq!(provider_readiness["checks"][0]["name"], "models_endpoint");
+    assert_eq!(provider_readiness["checks"][0]["status"], "pass");
+
+    let output = run(binary, &config, &["models", "doctor", "live"]);
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let model_readiness: Value =
+        serde_json::from_slice(&output.stdout).expect("model readiness JSON");
+    assert_eq!(model_readiness["ready"], true);
+    assert_eq!(model_readiness["checks"][0]["name"], "metadata");
+    assert_eq!(model_readiness["checks"][0]["status"], "pass");
+    assert_eq!(model_readiness["checks"][1]["name"], "generation");
+    assert_eq!(model_readiness["checks"][1]["status"], "pass");
     assert!(!String::from_utf8_lossy(&output.stdout).contains("\"ok\""));
 
     let requests = server.join().expect("doctor server");
@@ -830,7 +889,7 @@ fn compatible_provider_streams_tool_use_and_tui_output_through_terminal_surfaces
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -858,10 +917,19 @@ providers:
   profiles:
     live:
       kind: open_ai_compatible
-      model: terminal-model
       baseUrl: {origin}/v1
       credentialReference: null
       timeoutMs: 10000
+models:
+  profiles:
+    live:
+      providerProfile: live
+      model: terminal-model
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: live
 agent:
@@ -1032,7 +1100,7 @@ fn model_delegation_runs_the_child_before_agent_result_in_the_same_turn() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -1060,10 +1128,19 @@ providers:
   profiles:
     delegated:
       kind: open_ai_compatible
-      model: delegated-model
       baseUrl: {origin}/v1
       credentialReference: null
       timeoutMs: 10000
+models:
+  profiles:
+    delegated:
+      providerProfile: delegated
+      model: delegated-model
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: delegated
     subagent_default: delegated
@@ -1149,7 +1226,7 @@ fn responses_provider_keeps_credentials_out_of_streamed_tool_terminal_output() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -1177,10 +1254,19 @@ providers:
   profiles:
     responses:
       kind: open_ai_responses
-      model: responses-model
       baseUrl: {origin}/v1
       credentialReference: env:COLOSSUS_PROVIDER_TERMINAL_API_KEY
       timeoutMs: 10000
+models:
+  profiles:
+    responses:
+      providerProfile: responses
+      model: responses-model
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: responses
 agent:
@@ -1304,7 +1390,7 @@ fn malformed_provider_tool_arguments_retry_twice_without_executing_the_tool() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -1332,10 +1418,19 @@ providers:
   profiles:
     malformed:
       kind: open_ai_compatible
-      model: malformed-tool-model
       baseUrl: {origin}/v1
       credentialReference: null
       timeoutMs: 10000
+models:
+  profiles:
+    malformed:
+      providerProfile: malformed
+      model: malformed-tool-model
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: malformed
 agent:

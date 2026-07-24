@@ -102,7 +102,7 @@ fn native_connectors_are_hidden_typed_credential_brokered_and_post_gated() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:

@@ -25,6 +25,7 @@ function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
       selectedWorkspace === null ? "needs_workspace" : "needs_provider",
     workspace: selectedWorkspace,
     provider: { configured: false, kind: null, model: "" },
+    managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
     terminalEnabled: false,
   };
@@ -42,6 +43,7 @@ function renderOnboarding(
       error: "",
       onChooseWorkspace: vi.fn(),
       onConfigure: vi.fn(),
+      onApplyConfiguration: vi.fn(),
       onRunSelfTest: vi.fn(),
       onUseExternal: vi.fn(),
       dismissible,

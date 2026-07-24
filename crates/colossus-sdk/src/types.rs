@@ -74,8 +74,12 @@ pub struct CreateRunRequest {
 pub struct RunResult {
     /// Complete visible assistant output.
     pub output: String,
-    /// Credential-free provider profile.
+    /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
+    /// Credential-free model profile.
+    pub model_profile: String,
+    /// Credential-free provider connection profile.
+    pub provider_profile: String,
     /// Provider model identifier.
     pub model: String,
     /// Finite non-negative elapsed wall time.

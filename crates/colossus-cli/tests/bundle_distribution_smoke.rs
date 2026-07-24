@@ -79,7 +79,7 @@ fn trusted_bundle_is_built_verified_installed_and_executed_without_network() {
     fs::write(
         root.join("config.yaml"),
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -107,10 +107,19 @@ providers:
   profiles:
     echo:
       kind: echo
-      model: echo
       baseUrl: null
       credentialReference: null
       timeoutMs: 5000
+models:
+  profiles:
+    echo:
+      providerProfile: echo
+      model: echo
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: echo
 agent:

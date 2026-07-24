@@ -36,10 +36,13 @@ impl EmbeddedInteractiveHost {
             .ok_or_else(|| format!("session not found: {session_id}"))?;
         Ok(FooterState {
             role: route.role,
-            route: format!("{}@{}", route.model, route.profile),
+            route: format!(
+                "{}@{} via {}",
+                route.model, route.model_profile, route.provider_profile
+            ),
             context: context
                 .as_ref()
-                .map(|context| (context.token_estimate, context.context_window_tokens)),
+                .map(|context| (context.token_estimate, context.input_budget_tokens)),
             message_count: summary.message_count,
             status: status.into(),
             approval_mode: self.approval_mode.as_str().into(),

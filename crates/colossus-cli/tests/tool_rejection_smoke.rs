@@ -158,7 +158,7 @@ fn write_config(
     let config = directory.join("config.json");
     let executable = std::env::current_exe().expect("current test executable");
     let document = json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -184,10 +184,20 @@ fn write_config(
             "profiles": {
                 "rejection": {
                     "kind": "open_ai_compatible",
-                    "model": "tool-rejection-model",
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": null,
                     "timeoutMs": 5000
+                }
+            }
+        },
+        "models": {
+            "profiles": {
+                "rejection": {
+                    "providerProfile": "rejection",
+                    "model": "tool-rejection-model",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": {"toolCalls": true, "streaming": true}
                 }
             },
             "roles": {"primary": "rejection"}

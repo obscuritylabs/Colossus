@@ -66,6 +66,16 @@ impl AgentService {
             .into_iter()
             .map(|record| record.message)
             .collect::<Vec<_>>();
+        if !route.capabilities.tool_calls
+            && messages.iter().any(|message| {
+                message.role == ModelMessageRole::Tool || !message.tool_calls.is_empty()
+            })
+        {
+            return Err(AgentError::Configuration(format!(
+                "model profile {} does not support tool calls and cannot continue a session containing structured tool history",
+                route.model_profile
+            )));
+        }
         let user_message = ModelMessage {
             role: ModelMessageRole::User,
             content: prompt.into(),
@@ -93,6 +103,9 @@ impl AgentService {
                     .allowed_tools
                     .is_none_or(|allowed| allowed.contains(&definition.name))
         });
+        if !route.capabilities.tool_calls {
+            definitions.clear();
+        }
         let offered_tools = definitions
             .iter()
             .map(|definition| definition.name.as_str())
@@ -108,8 +121,15 @@ impl AgentService {
             json!({
                 "role": role,
                 "profile": route.profile,
+                "model_profile": route.model_profile,
+                "provider_profile": route.provider_profile,
                 "provider": route.provider,
                 "model": route.model,
+                "context_window_tokens": route.limits.context_window_tokens,
+                "max_output_tokens": route.limits.max_output_tokens,
+                "input_budget_tokens": route.limits.input_budget_tokens,
+                "tool_calls": route.capabilities.tool_calls,
+                "streaming": route.capabilities.streaming,
                 "max_turns": max_turns,
                 "active_skills": scope.active_skills,
             }),
@@ -158,14 +178,15 @@ impl AgentService {
             }
             let prepared = if let Some(preparer) = &self.context_preparer {
                 let prepared = preparer
-                    .prepare(
-                        &session_id,
-                        instructions,
-                        messages.clone(),
-                        &definitions,
-                        context.clone(),
-                        false,
-                    )
+                    .prepare(ContextPreparationRequest {
+                        session_id: session_id.clone(),
+                        instructions: instructions.into(),
+                        messages: messages.clone(),
+                        tools: definitions.clone(),
+                        route: route.clone(),
+                        context: context.clone(),
+                        force: false,
+                    })
                     .await?;
                 self.append(
                     &stream_id,
@@ -178,6 +199,10 @@ impl AgentService {
                         "original_token_estimate": prepared.original_token_estimate,
                         "token_estimate": prepared.token_estimate,
                         "context_window_tokens": prepared.context_window_tokens,
+                        "model_profile": prepared.model_profile,
+                        "max_output_tokens": prepared.max_output_tokens,
+                        "safety_margin_tokens": prepared.safety_margin_tokens,
+                        "input_budget_tokens": prepared.input_budget_tokens,
                         "threshold_tokens": prepared.threshold_tokens,
                         "target_tokens": prepared.target_tokens,
                         "snapshot_id": prepared.snapshot_id,
@@ -206,10 +231,10 @@ impl AgentService {
                     .await;
             }
             let request = ModelRequest {
-                model: route.model.clone(),
                 instructions: instructions.into(),
                 messages: prepared,
                 tools: definitions.clone(),
+                max_output_tokens: None,
             };
             self.append(
                 &stream_id,
@@ -221,6 +246,8 @@ impl AgentService {
                     "turn": turn,
                     "role": role,
                     "profile": route.profile,
+                    "model_profile": route.model_profile,
+                    "provider_profile": route.provider_profile,
                     "provider": route.provider,
                     "model": route.model,
                     "message_count": request.messages.len(),
@@ -249,7 +276,7 @@ impl AgentService {
                     journal: self.journal.as_ref(),
                     stream_id: &stream_id,
                     stream_version: &mut stream_version,
-                    actor_id: &route.profile,
+                    actor_id: &route.model_profile,
                     context: &context,
                     downstream,
                     started: &started,
@@ -392,7 +419,7 @@ impl AgentService {
                         },
                         Actor {
                             actor_type: ActorType::Model,
-                            id: route.profile.clone(),
+                            id: route.model_profile.clone(),
                         },
                     )?;
                     let elapsed_seconds = started.elapsed().as_secs_f64();
@@ -424,7 +451,9 @@ impl AgentService {
                         run_id,
                         session_id: Some(session_id),
                         role: role.into(),
-                        profile: route.profile,
+                        profile: route.model_profile.clone(),
+                        model_profile: route.model_profile,
+                        provider_profile: route.provider_profile,
                         model: route.model,
                         output,
                         event_count: stream_version,
@@ -475,7 +504,7 @@ impl AgentService {
                 assistant_message.clone(),
                 Actor {
                     actor_type: ActorType::Model,
-                    id: route.profile.clone(),
+                    id: route.model_profile.clone(),
                 },
             )?;
             messages.push(assistant_message);

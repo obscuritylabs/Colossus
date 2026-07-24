@@ -1,9 +1,10 @@
 use colossus_sdk::{
     ApiMajor, ApiScope, AppPrivateInstanceDir, Colossus, CreateRunRequest, GetRunRequest,
-    IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedProviderConfig,
-    ManagedProviderKind, ManagedRuntimeConfig, NativeSidecarLifecycle, RunMode, RunStatus,
-    SdkError, Secret, SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
-    SidecarHostCredential, SidecarOptions, WorkspaceIdentity, scopes,
+    IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedModelCapabilities,
+    ManagedModelConfig, ManagedProviderConfig, ManagedProviderKind, ManagedRuntimeConfig,
+    NativeSidecarLifecycle, RunMode, RunStatus, SdkError, Secret, SidecarApplicationGrant,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarHostCredential, SidecarOptions,
+    WorkspaceIdentity, scopes,
 };
 use std::{path::Path, str::FromStr as _};
 
@@ -192,15 +193,7 @@ pub(crate) async fn self_test(
         ApiMajor::new(1).map_err(CommandErrorDto::from_sdk)?,
     )
     .map_err(CommandErrorDto::from_sdk)?;
-    let runtime = ManagedRuntimeConfig {
-        access_profile: ManagedAccessProfile::Minimal,
-        provider: ManagedProviderConfig {
-            kind: ManagedProviderKind::Echo,
-            model: "echo".into(),
-            base_url: None,
-            credential_id: None,
-        },
-    };
+    let runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal);
     let bootstrap = SidecarBootstrapConfig::new(
         canonical_workspace,
         runtime,
@@ -290,7 +283,13 @@ async fn start_inner(
             RuntimeFailureCodeDto::Configuration,
         )
     })?;
-    let provider = configured_provider(settings)?;
+    if !settings.managed_configured() {
+        return Err(classified(
+            "provider_required",
+            "Configure at least one provider and a primary model before starting Managed Local.",
+            RuntimeFailureCodeDto::Provider,
+        ));
+    }
     let canonical_workspace = revalidate_workspace(workspace)
         .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?;
     let workspace_identity = expected_workspace_identity(workspace)?;
@@ -335,12 +334,7 @@ async fn start_inner(
         ApiMajor::new(1).map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Internal))?,
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
-    let credential = load_provider_secret(&provider.credential_id)
-        .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?;
-    let provider_secret = Secret::new(credential.to_vec())
-        .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?;
-    let host_credential = SidecarHostCredential::new(&provider.credential_id, provider_secret)
-        .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?;
+    let host_credentials = provider_host_credentials(settings)?;
     let approval_broker_grant = approval_broker_grant()
         .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
     let worker_authentication = TerminalWorkerAuthentication::random().map_err(|error| {
@@ -354,8 +348,7 @@ async fn start_inner(
         &canonical_workspace,
         workspace_identity.clone(),
         settings,
-        provider,
-        host_credential,
+        host_credentials,
         approval_broker_grant,
         worker_bootstrap_secret.as_ref(),
     )
@@ -379,23 +372,60 @@ async fn start_inner(
     .await
 }
 
+fn provider_host_credentials(
+    settings: &DesktopSettings,
+) -> Result<Vec<SidecarHostCredential>, (CommandErrorDto, RuntimeFailureCodeDto)> {
+    settings
+        .provider_credential_ids()
+        .into_iter()
+        .map(|credential_id| {
+            let credential = load_provider_secret(credential_id)
+                .map_err(|error| (error, RuntimeFailureCodeDto::Provider))?;
+            let provider_secret = Secret::new(credential.to_vec())
+                .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))?;
+            SidecarHostCredential::new(credential_id, provider_secret)
+                .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Provider))
+        })
+        .collect()
+}
+
 fn managed_bootstrap(
     workspace: &Path,
     workspace_identity: WorkspaceIdentity,
     settings: &DesktopSettings,
-    provider: &crate::desktop_settings::ProviderSetting,
-    host_credential: SidecarHostCredential,
+    host_credentials: Vec<SidecarHostCredential>,
     approval_broker_grant: SidecarApprovalBrokerGrant,
     worker_authentication: &[u8],
 ) -> Result<SidecarBootstrapConfig, SdkError> {
     let runtime = ManagedRuntimeConfig {
         access_profile: access_profile(settings.access_profile),
-        provider: ManagedProviderConfig {
-            kind: provider_kind(provider.kind),
-            model: provider.model.clone(),
-            base_url: Some(provider.base_url.clone()),
-            credential_id: Some(provider.credential_id.clone()),
-        },
+        providers: settings
+            .providers
+            .iter()
+            .map(|provider| ManagedProviderConfig {
+                profile: provider.profile.clone(),
+                kind: provider_kind(provider.kind),
+                base_url: Some(provider.base_url.clone()),
+                credential_id: provider.credential_id.clone(),
+                timeout_ms: provider.timeout_ms,
+            })
+            .collect(),
+        models: settings
+            .models
+            .iter()
+            .map(|model| ManagedModelConfig {
+                profile: model.profile.clone(),
+                provider_profile: model.provider_profile.clone(),
+                model: model.model.clone(),
+                context_window_tokens: model.context_window_tokens,
+                max_output_tokens: model.max_output_tokens,
+                capabilities: ManagedModelCapabilities {
+                    tool_calls: model.capabilities.tool_calls,
+                    streaming: model.capabilities.streaming,
+                },
+            })
+            .collect(),
+        roles: settings.model_roles.clone(),
     };
     SidecarBootstrapConfig::new(
         workspace,
@@ -404,7 +434,7 @@ fn managed_bootstrap(
     )?
     .with_expected_workspace_identity(workspace_identity)?
     .with_approval_broker_grant(approval_broker_grant)?
-    .with_host_credentials(vec![host_credential])?
+    .with_host_credentials(host_credentials)?
     .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)
 }
 
@@ -416,18 +446,6 @@ fn expected_workspace_identity(
             "workspace_required",
             "Choose the workspace again before starting Managed Local.",
             RuntimeFailureCodeDto::Permission,
-        )
-    })
-}
-
-fn configured_provider(
-    settings: &DesktopSettings,
-) -> Result<&crate::desktop_settings::ProviderSetting, (CommandErrorDto, RuntimeFailureCodeDto)> {
-    settings.provider.as_ref().ok_or_else(|| {
-        classified(
-            "provider_required",
-            "Configure a provider before starting Managed Local.",
-            RuntimeFailureCodeDto::Provider,
         )
     })
 }

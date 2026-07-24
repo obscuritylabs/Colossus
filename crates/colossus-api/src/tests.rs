@@ -543,6 +543,8 @@ fn released_updates_replay_in_sequence_and_reconstruct_after_restart() {
                 result: RunResult {
                     output: "Done".into(),
                     profile: "default".into(),
+                    model_profile: "default".into(),
+                    provider_profile: "default-provider".into(),
                     model: "model".into(),
                     elapsed_seconds: 1.0,
                 },
@@ -851,6 +853,8 @@ fn terminal_cancellation_no_op_claims_its_idempotency_key() {
                 result: RunResult {
                     output: "done".into(),
                     profile: "default".into(),
+                    model_profile: "default".into(),
+                    provider_profile: "default-provider".into(),
                     model: "model".into(),
                     elapsed_seconds: 1.0,
                 },

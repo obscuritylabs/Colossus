@@ -299,6 +299,8 @@ describe("selectOperationalActivity", () => {
         result: {
           output: "private terminal output",
           profile: "private-profile",
+          modelProfile: "private-profile",
+          providerProfile: "private-provider",
           model: "private-model",
           elapsedSeconds: 1.25,
         },

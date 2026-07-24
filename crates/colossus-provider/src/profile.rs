@@ -39,8 +39,6 @@ pub struct ProviderProfile {
     pub name: String,
     /// Adapter kind.
     pub kind: ProviderKind,
-    /// Default model identifier.
-    pub model: String,
     /// Base URL ending at the API version prefix, without a trailing slash.
     pub base_url: Option<String>,
     /// Credential reference such as `env:OPENAI_API_KEY`.
@@ -54,16 +52,14 @@ impl ProviderProfile {
     pub fn new(
         name: impl Into<String>,
         kind: ProviderKind,
-        model: impl Into<String>,
         base_url: Option<String>,
         credential_reference: Option<String>,
         timeout_ms: u64,
     ) -> Result<Self, ProviderError> {
         let name = name.into();
-        let model = model.into();
-        if name.is_empty() || model.is_empty() || timeout_ms == 0 {
+        if name.is_empty() || timeout_ms == 0 {
             return Err(ProviderError::Configuration(
-                "provider name, model, and timeout must be nonempty/nonzero".into(),
+                "provider name and timeout must be nonempty/nonzero".into(),
             ));
         }
         if let Some(reference) = credential_reference.as_deref()
@@ -90,15 +86,9 @@ impl ProviderProfile {
                 Some(normalize_base_url(&raw)?)
             }
         };
-        if kind == ProviderKind::OpenAiResponses && credential_reference.is_none() {
-            return Err(ProviderError::Configuration(
-                "OpenAI Responses profiles require a credential reference".into(),
-            ));
-        }
         Ok(Self {
             name,
             kind,
-            model,
             base_url,
             credential_reference,
             timeout_ms,
@@ -141,5 +131,69 @@ impl ProviderProfile {
             .as_ref()
             .map(|base| format!("{base}/{suffix}"))
             .ok_or_else(|| ProviderError::Configuration("provider has no base URL".into()))
+    }
+}
+
+/// One explicit model profile routed through a provider connection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelProfile {
+    /// Stable model-profile name.
+    pub name: String,
+    /// Referenced provider connection profile.
+    pub provider_profile: String,
+    /// Exact provider model identifier.
+    pub model: String,
+    /// Declared and effective token limits.
+    pub limits: ModelLimits,
+    /// Explicit request-shaping capabilities.
+    pub capabilities: ModelCapabilities,
+}
+
+impl ModelProfile {
+    /// Validate one explicit model profile and derive its conservative input budget.
+    pub fn new(
+        name: impl Into<String>,
+        provider_profile: impl Into<String>,
+        model: impl Into<String>,
+        context_window_tokens: u64,
+        max_output_tokens: u64,
+        capabilities: ModelCapabilities,
+    ) -> Result<Self, ProviderError> {
+        let name = name.into();
+        let provider_profile = provider_profile.into();
+        let model = model.into();
+        let safety_margin_tokens = context_window_tokens.div_ceil(10).max(512);
+        let input_budget_tokens = context_window_tokens
+            .checked_sub(max_output_tokens)
+            .and_then(|remaining| remaining.checked_sub(safety_margin_tokens))
+            .ok_or_else(|| {
+                ProviderError::Configuration(format!(
+                    "model profile {name} output and safety reservations exhaust its context window"
+                ))
+            })?;
+        if name.is_empty()
+            || provider_profile.is_empty()
+            || model.is_empty()
+            || context_window_tokens < 1_024
+            || max_output_tokens == 0
+            || input_budget_tokens == 0
+        {
+            return Err(ProviderError::Configuration(
+                "model profile names, model identifiers, and limits must be nonempty; context windows must be at least 1024"
+                    .into(),
+            ));
+        }
+        Ok(Self {
+            name,
+            provider_profile,
+            model,
+            limits: ModelLimits {
+                context_window_tokens,
+                max_output_tokens,
+                safety_margin_tokens,
+                input_budget_tokens,
+            },
+            capabilities,
+        })
     }
 }

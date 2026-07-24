@@ -499,6 +499,8 @@ impl From<RunStatus> for RunStatusDto {
 pub(crate) struct RunResultDto {
     pub(crate) output: String,
     pub(crate) profile: String,
+    pub(crate) model_profile: String,
+    pub(crate) provider_profile: String,
     pub(crate) model: String,
     pub(crate) elapsed_seconds: f64,
 }
@@ -508,6 +510,8 @@ impl From<RunResult> for RunResultDto {
         Self {
             output: value.output,
             profile: value.profile,
+            model_profile: value.model_profile,
+            provider_profile: value.provider_profile,
             model: value.model,
             elapsed_seconds: value.elapsed_seconds,
         }

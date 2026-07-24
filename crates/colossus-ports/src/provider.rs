@@ -4,7 +4,7 @@ use super::*;
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
     /// Resolve role metadata without performing an effect.
-    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError>;
+    fn route(&self, role: &str) -> Result<ModelRoute, ModelProviderError>;
 
     /// Execute one normalized provider turn through the effect boundary.
     async fn turn(

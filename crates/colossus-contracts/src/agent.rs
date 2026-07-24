@@ -190,14 +190,38 @@ pub struct UserPromptResponse {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelRequest {
-    /// Selected model identifier.
-    pub model: String,
     /// Trusted instructions supplied separately from conversation messages.
     pub instructions: String,
     /// Ordered conversation messages.
     pub messages: Vec<ModelMessage>,
     /// Strict tools available for this turn.
     pub tools: Vec<ModelToolDefinition>,
+    /// Optional caller ceiling which may only narrow the configured model maximum.
+    pub max_output_tokens: Option<u64>,
+}
+
+/// Explicit model capabilities used to shape a request before provider execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelCapabilities {
+    /// Whether this model may receive tools and continue structured tool history.
+    pub tool_calls: bool,
+    /// Whether this model should use the provider's streaming transport.
+    pub streaming: bool,
+}
+
+/// Declared and effective token limits for one configured model profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelLimits {
+    /// Total provider context window.
+    pub context_window_tokens: u64,
+    /// Maximum configured output allocation.
+    pub max_output_tokens: u64,
+    /// Conservative reserve held outside both input and output allocations.
+    pub safety_margin_tokens: u64,
+    /// Effective provider-visible input budget after output and safety reservations.
+    pub input_budget_tokens: u64,
 }
 
 /// Provider-neutral token accounting for one model turn.
@@ -262,8 +286,12 @@ pub enum ProviderStreamItem {
     },
     /// Terminal metadata proving the provider stream completed normally.
     Completed {
-        /// Configured profile name.
+        /// Deprecated compatibility alias populated with the model profile.
         profile: String,
+        /// Configured model profile.
+        model_profile: String,
+        /// Configured provider connection profile.
+        provider_profile: String,
         /// Provider adapter kind.
         provider: String,
         /// Model identifier used by the request.
@@ -277,8 +305,12 @@ pub enum ProviderStreamItem {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderTurn {
-    /// Configured profile name.
+    /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
+    /// Configured model profile.
+    pub model_profile: String,
+    /// Configured provider connection profile.
+    pub provider_profile: String,
     /// Provider adapter kind.
     pub provider: String,
     /// Model identifier used by the request.
@@ -289,19 +321,30 @@ pub struct ProviderTurn {
     pub events: Vec<ProviderEvent>,
 }
 
-/// Resolved provider route metadata without credentials.
+/// Resolved model route metadata without credentials.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProviderRoute {
+pub struct ModelRoute {
     /// Requested logical role.
     pub role: String,
-    /// Resolved profile name.
+    /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
+    /// Resolved model profile.
+    pub model_profile: String,
+    /// Resolved provider connection profile.
+    pub provider_profile: String,
     /// Provider adapter kind.
     pub provider: String,
     /// Configured model identifier.
     pub model: String,
+    /// Declared and effective token limits.
+    pub limits: ModelLimits,
+    /// Explicit request-shaping capabilities.
+    pub capabilities: ModelCapabilities,
 }
+
+/// Compatibility name retained for callers compiled against the provider-centric route API.
+pub type ProviderRoute = ModelRoute;
 
 /// Provider-neutral bounded web-search request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -421,8 +464,12 @@ pub struct AgentRunResult {
     pub session_id: Option<String>,
     /// Selected model role.
     pub role: String,
-    /// Resolved provider profile.
+    /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
+    /// Resolved model profile.
+    pub model_profile: String,
+    /// Resolved provider connection profile.
+    pub provider_profile: String,
     /// Model used for the turn.
     pub model: String,
     /// Complete visible assistant output.

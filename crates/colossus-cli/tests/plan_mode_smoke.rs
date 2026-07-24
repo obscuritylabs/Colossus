@@ -138,7 +138,7 @@ data: [DONE]
     fs::write(
         &config,
         serde_json::to_vec_pretty(&json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "storage": {
                 "path": directory.path().join("state.redb"),
                 "keys": {
@@ -170,10 +170,20 @@ data: [DONE]
                 "profiles": {
                     "test": {
                         "kind": "open_ai_compatible",
-                        "model": "plan-test",
                         "baseUrl": format!("{origin}/v1"),
                         "credentialReference": null,
                         "timeoutMs": 5000
+                    }
+                }
+            },
+            "models": {
+                "profiles": {
+                    "test": {
+                        "providerProfile": "test",
+                        "model": "plan-test",
+                        "contextWindowTokens": 32768,
+                        "maxOutputTokens": 4096,
+                        "capabilities": {"toolCalls": true, "streaming": true}
                     }
                 },
                 "roles": {"primary": "test"}

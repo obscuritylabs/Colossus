@@ -127,9 +127,19 @@ impl Runtime {
 
     /// Show active context budget and canonical-history size for one session.
     pub async fn context_status(&self, session_id: &str) -> Result<ContextStatus, RuntimeError> {
+        self.context_status_for_role(session_id, "primary").await
+    }
+
+    /// Show active context budget for one session and logical model role.
+    pub async fn context_status_for_role(
+        &self,
+        session_id: &str,
+        role: &str,
+    ) -> Result<ContextStatus, RuntimeError> {
         serde_json::from_value(
             self.execute_context_operation(ContextOperation::Show {
                 session_id: session_id.into(),
+                role: role.into(),
             })
             .await?,
         )
@@ -152,9 +162,19 @@ impl Runtime {
 
     /// Force a new context snapshot while preserving every canonical message.
     pub async fn compact_context(&self, session_id: &str) -> Result<PreparedContext, RuntimeError> {
+        self.compact_context_for_role(session_id, "primary").await
+    }
+
+    /// Force a context snapshot using one logical role's model budget.
+    pub async fn compact_context_for_role(
+        &self,
+        session_id: &str,
+        role: &str,
+    ) -> Result<PreparedContext, RuntimeError> {
         serde_json::from_value(
             self.execute_context_operation(ContextOperation::Compact {
                 session_id: session_id.into(),
+                role: role.into(),
             })
             .await?,
         )

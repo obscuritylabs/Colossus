@@ -50,6 +50,7 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
       kind: "openai_compatible",
       model: "deepseek/deepseek-v4-flash",
     },
+    managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
     terminalEnabled: false,
     ...overrides,

@@ -52,6 +52,8 @@ function recentRun(
           result: {
             output: "",
             profile: "desktop",
+            modelProfile: "desktop",
+            providerProfile: "fixture-provider",
             model: "openrouter/auto",
             elapsedSeconds: 74,
           },

@@ -195,8 +195,7 @@ impl GatewayResearchModel {
         prompt: String,
         run: &ResearchRun,
     ) -> Result<String, String> {
-        let route = self
-            .provider
+        self.provider
             .route(role)
             .map_err(|error| error.to_string())?;
         let turn = self
@@ -204,7 +203,6 @@ impl GatewayResearchModel {
             .turn(
                 role,
                 ModelRequest {
-                    model: route.model,
                     instructions: instructions.into(),
                     messages: vec![ModelMessage {
                         role: ModelMessageRole::User,
@@ -213,6 +211,7 @@ impl GatewayResearchModel {
                         tool_calls: Vec::new(),
                     }],
                     tools: Vec::new(),
+                    max_output_tokens: None,
                 },
                 ExecutionContext {
                     correlation_id: format!("research:{}", run.id),

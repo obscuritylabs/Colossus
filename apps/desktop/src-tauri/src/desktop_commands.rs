@@ -1,5 +1,8 @@
-use colossus_sdk::{ApiErrorCode, ListRunsRequest, PageRequest};
-use std::time::Duration;
+use colossus_sdk::{ApiErrorCode, ListRunsRequest, PageRequest, RunStatus};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 use tauri::{AppHandle, Manager as _, State};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use uuid::Uuid;
@@ -7,15 +10,17 @@ use uuid::Uuid;
 use crate::{
     connection,
     desktop_dto::{
-        ConfigureManagedRuntimeInput, DesktopReleaseChannelDto, DesktopStatusDto,
+        ApplyManagedModelConfigurationInput, ConfigureManagedRuntimeInput, CredentialActionInput,
+        DesktopReleaseChannelDto, DesktopStatusDto, ManagedModelConfigurationDto,
         ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto, RuntimeTargetKindDto,
         WorkspaceSummaryDto,
     },
     desktop_settings::{
         DesktopSettings, ExternalTargetSetting, MAX_EXTERNAL_TARGETS,
-        MAX_PENDING_PROVIDER_CLEANUPS, ProviderSetting, SettingsStore, WorkspaceSetting,
-        application_support_root, delete_provider_secret, load_provider_secret, provider_base_url,
-        revalidate_workspace, store_provider_secret, validate_workspace,
+        MAX_PENDING_PROVIDER_CLEANUPS, ModelCapabilitiesSetting, ModelSetting, ProviderSetting,
+        SettingsStore, WorkspaceSetting, application_support_root, delete_provider_secret,
+        load_provider_secret, provider_base_url, revalidate_workspace, store_provider_secret,
+        validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto},
     managed_runtime, provider_enrollment,
@@ -231,7 +236,7 @@ pub(crate) async fn remove_external_target(
         .external_targets
         .retain(|target| target.target_id != target_id);
     if settings.selected_target_id.as_deref() == Some(target_id.as_str()) {
-        settings.selected_target_id = if settings.provider.is_some() {
+        settings.selected_target_id = if settings.managed_configured() {
             Some(MANAGED_TARGET_ID.to_owned())
         } else {
             None
@@ -268,7 +273,7 @@ pub(crate) async fn choose_workspace(
         persist_workspace_change(&mut settings, workspace.clone(), |settings| {
             store.save(settings)
         })?;
-    if settings.provider.is_some() {
+    if settings.managed_configured() {
         let selected = settings
             .selected_target_id
             .clone()
@@ -304,7 +309,7 @@ fn persist_workspace_change(
 ) -> Result<DesktopSettings, CommandErrorDto> {
     let previous = settings.clone();
     settings.workspace = Some(workspace);
-    if settings.provider.is_some() && settings.selected_target_id.is_none() {
+    if settings.managed_configured() && settings.selected_target_id.is_none() {
         settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
     }
     if let Err(error) = save_settings(settings) {
@@ -341,6 +346,7 @@ pub(crate) async fn configure_managed_runtime(
             "Choose a workspace before configuring a provider.",
         )
     })?;
+    reject_active_managed_runs(&state).await?;
     if workspace.id != request.workspace_id {
         return Err(CommandErrorDto::invalid(
             "workspaceId",
@@ -379,7 +385,7 @@ pub(crate) async fn configure_managed_runtime(
         return desktop_status_from(&state, &settings).await;
     }
     let previous_settings = settings.clone();
-    let secret = provider_enrollment::request_provider_secret(request.provider_kind).await?;
+    let secret = provider_enrollment::request_provider_secret().await?;
     let rotation = persist_provider_rotation(
         &mut settings,
         &mut request,
@@ -410,14 +416,330 @@ pub(crate) async fn configure_managed_runtime(
     desktop_status_from(&state, &settings).await
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn apply_managed_model_configuration(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: ApplyManagedModelConfigurationInput,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    request.validate()?;
+    let _guard = connect_guard(&state)?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    cleanup_pending_provider_credentials(&store, &mut settings)?;
+    confirm_managed_model_configuration(&app, &state, &settings, &request).await?;
+
+    let previous_settings = settings.clone();
+    let credentials = plan_provider_credentials(&settings, &request)?;
+    stage_provider_credentials(
+        &store,
+        &mut settings,
+        &previous_settings,
+        &credentials.fresh_ids,
+    )
+    .await?;
+    settings.providers = request.providers_with_credentials(&credentials.by_profile);
+    settings.models = request.model_settings();
+    settings.model_roles = request.roles.clone();
+    settings.access_profile = request.access_profile;
+    settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
+    settings
+        .pending_provider_cleanup_ids
+        .retain(|credential_id| !credentials.fresh_ids.contains(credential_id));
+    for credential_id in &credentials.retired_ids {
+        if !settings
+            .pending_provider_cleanup_ids
+            .contains(credential_id)
+        {
+            settings
+                .pending_provider_cleanup_ids
+                .push(credential_id.clone());
+        }
+    }
+    if let Err(error) = store.save(&settings) {
+        rollback_staged_provider_credentials(
+            &store,
+            &mut settings,
+            previous_settings,
+            &credentials.fresh_ids,
+        )?;
+        return Err(error);
+    }
+    restart_after_model_configuration(
+        &state,
+        &store,
+        &mut settings,
+        previous_settings,
+        &credentials,
+    )
+    .await
+}
+
+async fn confirm_managed_model_configuration(
+    app: &AppHandle,
+    state: &AppState,
+    settings: &DesktopSettings,
+    request: &ApplyManagedModelConfigurationInput,
+) -> Result<(), CommandErrorDto> {
+    let workspace = settings.workspace.as_ref().ok_or_else(|| {
+        CommandErrorDto::invalid(
+            "workspaceId",
+            "Choose a workspace before configuring model providers.",
+        )
+    })?;
+    if workspace.id != request.workspace_id {
+        return Err(CommandErrorDto::invalid(
+            "workspaceId",
+            "The workspace selection changed. Review it and retry.",
+        ));
+    }
+    revalidate_workspace(workspace)?;
+    reject_active_managed_runs(state).await?;
+
+    if request.access_profile == crate::desktop_settings::AccessProfileSetting::Development
+        && (!settings.managed_configured()
+            || settings.access_profile
+                != crate::desktop_settings::AccessProfileSetting::Development)
+        && !confirm_development_access(app).await?
+    {
+        return Err(CommandErrorDto::local_sanitized(
+            "access_profile_confirmation",
+            "Development access was not enabled.",
+            false,
+        ));
+    }
+    let changed_origins = request
+        .providers
+        .iter()
+        .filter(|provider| {
+            settings
+                .providers
+                .iter()
+                .find(|current| current.profile == provider.profile)
+                .is_none_or(|current| current.base_url != provider.base_url)
+        })
+        .map(|provider| format!("{}: {}", provider.profile, provider.base_url))
+        .collect::<Vec<_>>();
+    if !changed_origins.is_empty() && !confirm_provider_origins(app, &changed_origins).await? {
+        return Err(CommandErrorDto::local_sanitized(
+            "provider_origin_confirmation",
+            "The model provider origin change was not approved.",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+struct ProviderCredentialPlan {
+    by_profile: BTreeMap<String, Option<String>>,
+    fresh_ids: Vec<String>,
+    retired_ids: Vec<String>,
+}
+
+fn plan_provider_credentials(
+    settings: &DesktopSettings,
+    request: &ApplyManagedModelConfigurationInput,
+) -> Result<ProviderCredentialPlan, CommandErrorDto> {
+    let old_credentials = settings
+        .providers
+        .iter()
+        .map(|provider| (provider.profile.clone(), provider.credential_id.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut by_profile = BTreeMap::new();
+    let mut fresh_ids = Vec::new();
+    for provider in &request.providers {
+        let credential_id = match provider.credential_action {
+            CredentialActionInput::None => None,
+            CredentialActionInput::Reuse => {
+                let credential_id = old_credentials
+                    .get(&provider.profile)
+                    .cloned()
+                    .flatten()
+                    .ok_or_else(|| {
+                        CommandErrorDto::invalid(
+                            "credentialAction",
+                            "A provider without a stored credential cannot reuse one.",
+                        )
+                    })?;
+                drop(load_provider_secret(&credential_id)?);
+                Some(credential_id)
+            }
+            CredentialActionInput::Replace => {
+                let credential_id = Uuid::now_v7().to_string();
+                fresh_ids.push(credential_id.clone());
+                Some(credential_id)
+            }
+        };
+        by_profile.insert(provider.profile.clone(), credential_id);
+    }
+    let referenced_credentials = by_profile
+        .values()
+        .filter_map(Option::as_deref)
+        .collect::<BTreeSet<_>>();
+    let retired_ids = settings
+        .provider_credential_ids()
+        .into_iter()
+        .filter(|credential_id| !referenced_credentials.contains(credential_id))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if settings
+        .pending_provider_cleanup_ids
+        .len()
+        .saturating_add(fresh_ids.len())
+        .saturating_add(retired_ids.len())
+        > MAX_PENDING_PROVIDER_CLEANUPS
+    {
+        return Err(CommandErrorDto::busy(
+            "Pending provider credential cleanup must finish before applying this configuration.",
+        ));
+    }
+    Ok(ProviderCredentialPlan {
+        by_profile,
+        fresh_ids,
+        retired_ids,
+    })
+}
+
+async fn stage_provider_credentials(
+    store: &SettingsStore,
+    settings: &mut DesktopSettings,
+    previous_settings: &DesktopSettings,
+    fresh_ids: &[String],
+) -> Result<(), CommandErrorDto> {
+    // Persist cleanup intent before creating any native keychain entries. A crash
+    // during enrollment can therefore be repaired on the next Desktop startup.
+    settings
+        .pending_provider_cleanup_ids
+        .extend(fresh_ids.iter().cloned());
+    store.save(settings)?;
+    for credential_id in fresh_ids {
+        let enrollment = provider_enrollment::request_provider_secret().await;
+        let result = enrollment.and_then(|secret| store_provider_secret(credential_id, &secret));
+        if let Err(error) = result {
+            rollback_staged_provider_credentials(
+                store,
+                settings,
+                previous_settings.clone(),
+                fresh_ids,
+            )?;
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+async fn restart_after_model_configuration(
+    state: &AppState,
+    store: &SettingsStore,
+    settings: &mut DesktopSettings,
+    previous_settings: DesktopSettings,
+    credentials: &ProviderCredentialPlan,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    state
+        .select_target(Some(MANAGED_TARGET_ID.to_owned()))
+        .await;
+    if let Err(start_error) = managed_runtime::start(state, store, settings, true).await {
+        rollback_staged_provider_credentials(
+            store,
+            settings,
+            previous_settings,
+            &credentials.fresh_ids,
+        )?;
+        restore_managed_after_rollback(state, store, settings).await?;
+        return Err(start_error);
+    }
+    for credential_id in &credentials.retired_ids {
+        retire_pending_provider_credential(store, settings, credential_id)?;
+    }
+    desktop_status_from(state, settings).await
+}
+
+fn rollback_staged_provider_credentials(
+    store: &SettingsStore,
+    settings: &mut DesktopSettings,
+    mut previous: DesktopSettings,
+    fresh_ids: &[String],
+) -> Result<(), CommandErrorDto> {
+    previous
+        .pending_provider_cleanup_ids
+        .extend(fresh_ids.iter().cloned());
+    previous.pending_provider_cleanup_ids.sort();
+    previous.pending_provider_cleanup_ids.dedup();
+    store.save(&previous)?;
+    *settings = previous;
+    for credential_id in fresh_ids {
+        retire_pending_provider_credential(store, settings, credential_id)?;
+    }
+    Ok(())
+}
+
+async fn reject_active_managed_runs(state: &AppState) -> Result<(), CommandErrorDto> {
+    let Some(target) = state.target(MANAGED_TARGET_ID).await else {
+        return Ok(());
+    };
+    let runs = target
+        .client
+        .list_runs(ListRunsRequest {
+            session_id: None,
+            statuses: vec![
+                RunStatus::Queued,
+                RunStatus::Running,
+                RunStatus::Waiting,
+                RunStatus::Cancelling,
+            ],
+            page: Some(PageRequest {
+                page_size: 1,
+                page_token: String::new(),
+            }),
+        })
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    if runs.runs.is_empty() {
+        Ok(())
+    } else {
+        Err(CommandErrorDto::busy(
+            "Finish or cancel active Managed Local runs before changing model configuration.",
+        ))
+    }
+}
+
+async fn confirm_provider_origins(
+    app: &AppHandle,
+    origins: &[String],
+) -> Result<bool, CommandErrorDto> {
+    let message = format!(
+        "Managed Local will send model requests to these provider endpoints:\n\n{}\n\nApprove these native network destinations?",
+        origins.join("\n")
+    );
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(message)
+            .title("Approve model provider origins")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Approve origins".into(),
+                "Cancel".into(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| {
+        CommandErrorDto::local_sanitized(
+            "provider_origin_confirmation",
+            "The native provider-origin confirmation could not be opened.",
+            true,
+        )
+    })
+}
+
 fn reusable_provider_credential(
     settings: &DesktopSettings,
     request: &ConfigureManagedRuntimeInput,
 ) -> bool {
     !request.replace_credential
         && settings
-            .provider
-            .as_ref()
+            .primary_provider()
             .is_some_and(|provider| provider.kind == request.provider_kind)
 }
 
@@ -426,7 +748,7 @@ fn development_access_elevation(
     request: &ConfigureManagedRuntimeInput,
 ) -> bool {
     request.access_profile == crate::desktop_settings::AccessProfileSetting::Development
-        && (settings.provider.is_none()
+        && (!settings.managed_configured()
             || settings.access_profile
                 != crate::desktop_settings::AccessProfileSetting::Development)
 }
@@ -436,9 +758,8 @@ fn verify_reused_provider_credential(
     load: impl FnOnce(&str) -> Result<zeroize::Zeroizing<Vec<u8>>, CommandErrorDto>,
 ) -> Result<(), CommandErrorDto> {
     let credential_id = settings
-        .provider
-        .as_ref()
-        .map(|provider| provider.credential_id.as_str())
+        .primary_provider()
+        .and_then(|provider| provider.credential_id.as_deref())
         .ok_or_else(CommandErrorDto::not_configured)?;
     drop(load(credential_id)?);
     Ok(())
@@ -475,15 +796,30 @@ fn persist_reused_provider_configuration(
     save_settings: impl FnOnce(&DesktopSettings) -> Result<(), CommandErrorDto>,
 ) -> Result<DesktopSettings, CommandErrorDto> {
     let previous = settings.clone();
+    let provider_profile = settings
+        .primary_provider()
+        .filter(|provider| provider.kind == request.provider_kind)
+        .map(|provider| provider.profile.clone())
+        .ok_or_else(CommandErrorDto::not_configured)?;
+    let model_profile = settings
+        .primary_model()
+        .map(|model| model.profile.clone())
+        .ok_or_else(CommandErrorDto::not_configured)?;
     let provider = settings
-        .provider
-        .as_mut()
+        .providers
+        .iter_mut()
+        .find(|provider| provider.profile == provider_profile)
         .ok_or_else(CommandErrorDto::not_configured)?;
     if provider.kind != request.provider_kind {
         return Err(CommandErrorDto::not_configured());
     }
-    provider.model = std::mem::take(&mut request.model);
     provider_base_url(provider.kind).clone_into(&mut provider.base_url);
+    settings
+        .models
+        .iter_mut()
+        .find(|model| model.profile == model_profile)
+        .ok_or_else(CommandErrorDto::not_configured)?
+        .model = std::mem::take(&mut request.model);
     settings.access_profile = request.access_profile;
     settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
     if let Err(error) = save_settings(settings) {
@@ -515,9 +851,8 @@ fn persist_provider_rotation(
         ));
     }
     let previous_credential_id = settings
-        .provider
-        .as_ref()
-        .map(|provider| provider.credential_id.clone());
+        .primary_provider()
+        .and_then(|provider| provider.credential_id.clone());
     // Never overwrite a credential still referenced by durable settings. If a later
     // persistence step fails, the old provider continues to resolve only its old key.
     let credential_id = Uuid::now_v7().to_string();
@@ -531,12 +866,25 @@ fn persist_provider_rotation(
     }
     let cleanup_staged = settings.clone();
     store_secret(&credential_id, secret)?;
-    settings.provider = Some(ProviderSetting {
+    settings.providers = vec![ProviderSetting {
+        profile: "primary-provider".into(),
         kind: request.provider_kind,
-        model: std::mem::take(&mut request.model),
         base_url: provider_base_url(request.provider_kind).to_owned(),
-        credential_id: credential_id.clone(),
-    });
+        credential_id: Some(credential_id.clone()),
+        timeout_ms: 120_000,
+    }];
+    settings.models = vec![ModelSetting {
+        profile: "primary".into(),
+        provider_profile: "primary-provider".into(),
+        model: std::mem::take(&mut request.model),
+        context_window_tokens: 128_000,
+        max_output_tokens: 16_000,
+        capabilities: ModelCapabilitiesSetting {
+            tool_calls: true,
+            streaming: true,
+        },
+    }];
+    settings.model_roles = std::collections::BTreeMap::from([("primary".into(), "primary".into())]);
     settings.access_profile = request.access_profile;
     settings.selected_target_id = Some(MANAGED_TARGET_ID.to_owned());
     settings
@@ -649,7 +997,7 @@ async fn restore_managed_after_rollback(
 }
 
 fn has_managed_configuration(settings: &DesktopSettings) -> bool {
-    settings.workspace.is_some() && settings.provider.is_some()
+    settings.workspace.is_some() && settings.managed_configured()
 }
 
 #[tauri::command]
@@ -684,7 +1032,7 @@ pub(crate) async fn select_target(
     let mut settings = store.load()?;
     validate_target(&settings, &target_id)?;
     if target_id == MANAGED_TARGET_ID {
-        if !state.connected(MANAGED_TARGET_ID).await && settings.provider.is_some() {
+        if !state.connected(MANAGED_TARGET_ID).await && settings.managed_configured() {
             managed_runtime::start(&state, &store, &settings, false).await?;
         }
     } else {
@@ -982,7 +1330,7 @@ async fn set_unstarted_health(state: &AppState, settings: &DesktopSettings) {
     }
     let health = if settings.workspace.is_none() {
         ManagedHealth::default()
-    } else if settings.provider.is_none() {
+    } else if !settings.managed_configured() {
         ManagedHealth {
             state: ManagedRuntimeStateDto::NeedsProvider,
             message: "Configure a provider to start Managed Local.".into(),
@@ -1071,6 +1419,7 @@ async fn desktop_status_from(
         managed_state,
         workspace,
         provider: ProviderSummaryDto::from_settings(settings),
+        managed_model_configuration: ManagedModelConfigurationDto::from_settings(settings),
         access_profile: settings.access_profile,
         terminal_enabled: settings.terminal_enabled,
     })
@@ -1257,12 +1606,25 @@ mod tests {
 
     fn settings_with_provider(credential_id: &str) -> DesktopSettings {
         DesktopSettings {
-            provider: Some(ProviderSetting {
+            providers: vec![ProviderSetting {
+                profile: "primary-provider".into(),
                 kind: crate::desktop_settings::ProviderKindSetting::OpenAiCompatible,
-                model: "old-model".into(),
                 base_url: crate::desktop_settings::OPENROUTER_BASE_URL.into(),
-                credential_id: credential_id.into(),
-            }),
+                credential_id: Some(credential_id.into()),
+                timeout_ms: 120_000,
+            }],
+            models: vec![ModelSetting {
+                profile: "primary".into(),
+                provider_profile: "primary-provider".into(),
+                model: "old-model".into(),
+                context_window_tokens: 128_000,
+                max_output_tokens: 16_000,
+                capabilities: ModelCapabilitiesSetting {
+                    tool_calls: true,
+                    streaming: true,
+                },
+            }],
+            model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
             ..DesktopSettings::default()
         }
     }
@@ -1408,7 +1770,7 @@ mod tests {
     #[test]
     fn managed_initialize_requires_workspace_provider_and_disconnected_runtime() {
         let mut settings = settings_with_provider(&Uuid::now_v7().to_string());
-        assert!(settings.provider.is_some());
+        assert!(settings.primary_provider().is_some());
         assert!(!has_managed_configuration(&settings));
         assert!(!should_start_managed_on_initialize(
             has_managed_configuration(&settings),
@@ -1444,7 +1806,9 @@ mod tests {
             display_path: "/tmp/previous-workspace".into(),
         });
         assert!(has_managed_configuration(&settings));
-        settings.provider = None;
+        settings.providers.clear();
+        settings.models.clear();
+        settings.model_roles.clear();
         assert!(!has_managed_configuration(&settings));
     }
 
@@ -1503,9 +1867,15 @@ mod tests {
             persist_reused_provider_configuration(&mut settings, &mut request, |_| Ok(()))
                 .expect("reuse provider configuration");
         assert_eq!(previous, original);
-        let provider = settings.provider.as_ref().expect("provider");
-        assert_eq!(provider.credential_id, credential_id);
-        assert_eq!(provider.model, "updated-model");
+        let provider = settings.primary_provider().expect("provider");
+        assert_eq!(
+            provider.credential_id.as_deref(),
+            Some(credential_id.as_str())
+        );
+        assert_eq!(
+            settings.primary_model().expect("model").model,
+            "updated-model"
+        );
         assert_eq!(
             settings.access_profile,
             crate::desktop_settings::AccessProfileSetting::Minimal,
@@ -1538,9 +1908,8 @@ mod tests {
         assert_eq!(settings, original);
         assert_eq!(
             settings
-                .provider
-                .as_ref()
-                .map(|provider| provider.credential_id.as_str()),
+                .primary_provider()
+                .and_then(|provider| provider.credential_id.as_deref()),
             Some(credential_id.as_str()),
         );
     }
@@ -1589,11 +1958,11 @@ mod tests {
         assert_eq!(settings.pending_provider_cleanup_ids, [old_id]);
         assert_eq!(
             settings
-                .provider
-                .as_ref()
+                .primary_provider()
                 .expect("new provider")
-                .credential_id,
-            stored.borrow()[0]
+                .credential_id
+                .as_deref(),
+            Some(stored.borrow()[0].as_str())
         );
     }
 
@@ -1633,11 +2002,11 @@ mod tests {
         assert_ne!(stored.borrow().as_str(), old_id);
         assert_eq!(
             settings
-                .provider
-                .as_ref()
+                .primary_provider()
                 .expect("old provider")
-                .credential_id,
-            old_id
+                .credential_id
+                .as_deref(),
+            Some(old_id.as_str())
         );
         assert_eq!(
             settings.pending_provider_cleanup_ids,
@@ -1669,11 +2038,11 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             settings
-                .provider
-                .as_ref()
+                .primary_provider()
                 .expect("old provider")
-                .credential_id,
-            old_id
+                .credential_id
+                .as_deref(),
+            Some(old_id.as_str())
         );
         assert_eq!(settings.pending_provider_cleanup_ids.len(), 1);
     }
@@ -1781,7 +2150,7 @@ mod tests {
         )
         .expect("durable rollback");
 
-        assert_eq!(settings.provider, original.provider);
+        assert_eq!(settings.providers, original.providers);
         assert_eq!(
             settings.pending_provider_cleanup_ids,
             [rotation.fresh_credential_id]

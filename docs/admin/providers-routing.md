@@ -9,7 +9,8 @@ type: how-to
 
 ## Goal
 
-Connect one model endpoint while keeping credentials late-bound and routing explicit.
+Connect a provider endpoint, define its model limits and capabilities, and keep role
+routing explicit while credentials remain late-bound.
 
 ## Prerequisites
 
@@ -20,17 +21,27 @@ Connect one model endpoint while keeping credentials late-bound and routing expl
 
 ## Steps
 
-1. Add a named provider profile. For an OpenAI-compatible endpoint:
+1. Add a named provider connection and a separate model profile. For an
+   OpenAI-compatible endpoint:
 
     ```yaml
     providers:
       profiles:
-        primary-model:
+        primary-provider:
           kind: open_ai_compatible
-          model: example-model
           baseUrl: https://models.example.com/v1
           credentialReference: env:COLOSSUS_MODEL_TOKEN
           timeoutMs: 120000
+    models:
+      profiles:
+        primary-model:
+          providerProfile: primary-provider
+          model: example-model
+          contextWindowTokens: 131072
+          maxOutputTokens: 16384
+          capabilities:
+            toolCalls: true
+            streaming: true
       roles:
         primary: primary-model
     sandbox:
@@ -41,7 +52,7 @@ Connect one model endpoint while keeping credentials late-bound and routing expl
     Use `open_ai_responses` for a Responses-compatible endpoint. Use `echo` for a
     credential-free, network-free smoke route.
 
-    `providers.profiles.NAME.timeoutMs` is the transport ceiling for that profile's
+    `providers.profiles.NAME.timeoutMs` is the transport ceiling for that connection's
     catalog and generation requests. With the built-in policy it remains effective even
     when `sandbox.timeoutMs` is lower; the sandbox timeout continues to bound ordinary
     sandboxed effects. An external OPA decision may impose a stricter timeout obligation.
@@ -53,6 +64,7 @@ Connect one model endpoint while keeping credentials late-bound and routing expl
 
     ```bash
     colossus --config .colossus/config.yaml provider profiles
+    colossus --config .colossus/config.yaml models profiles
     colossus --config .colossus/config.yaml models routes
     colossus --config .colossus/config.yaml models route primary
     ```
@@ -60,15 +72,17 @@ Connect one model endpoint while keeping credentials late-bound and routing expl
 4. Diagnose the selected profile:
 
     ```bash
-    colossus --config .colossus/config.yaml provider doctor primary-model
-    colossus --config .colossus/config.yaml provider models primary-model
+    colossus --config .colossus/config.yaml provider doctor primary-provider
+    colossus --config .colossus/config.yaml provider models primary-provider
+    colossus --config .colossus/config.yaml models doctor primary-model
     ```
 
-For network providers, `provider doctor` checks both the model catalog and one bounded
-generation probe carrying a representative tool schema. This verifies that a public
-catalog endpoint has not masked an invalid credential, model identifier, generation
-response contract, or tool-schema incompatibility. The probe response is not printed.
-`provider models` remains the catalog-only diagnostic.
+`provider doctor` checks the connection and catalog boundary. `models doctor` makes one
+bounded generation probe using the selected model profile and its configured limits and
+capabilities. Tool-enabled profiles carry a representative tool schema so a public catalog
+endpoint cannot mask a generation or tool-schema incompatibility. Text-only profiles omit
+tools. Probe response content is not printed. This separation distinguishes connection
+failures from an invalid model ID, generation response contract, or capability mismatch.
 
 The Chat Completions adapter omits `maxLength` annotations from the provider-facing tool
 schema because grammar-compiling compatible servers can reject otherwise valid large
@@ -84,7 +98,7 @@ closed and fall back to the configured approval behavior.
 
 Some local servers return HTTP 503 while a model is loading. Colossus reports that status
 as `provider.temporarily_unavailable` with `Recoverable: yes` and does not retry the turn
-implicitly. Wait until the endpoint reports ready, run `provider doctor` again, and then
+implicitly. Wait until the endpoint reports ready, run `models doctor` again, and then
 resubmit the turn. Other client errors, including HTTP 400 schema rejection, remain
 terminal so configuration and compatibility failures are not mislabeled as startup delay.
 
@@ -128,9 +142,9 @@ colossus --config .colossus/config.yaml --approval-mode ask \
 
 ## Expected result
 
-The route command identifies `primary-model`, the doctor command confirms the endpoint
-contract, search roles resolve to their selected profiles, and no diagnostic output
-includes a credential value.
+The route command identifies both `primary-model` and `primary-provider`; the two doctor
+commands confirm their respective boundaries, search roles resolve to their selected
+profiles, and no diagnostic output includes a credential value.
 
 ## Verification
 

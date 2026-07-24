@@ -39,7 +39,7 @@ fn automatic_compaction_is_visible_deterministic_and_preserves_raw_history() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -67,10 +67,19 @@ providers:
   profiles:
     echo:
       kind: echo
-      model: echo
       baseUrl: null
       credentialReference: null
       timeoutMs: 5000
+models:
+  profiles:
+    echo:
+      providerProfile: echo
+      model: echo
+      contextWindowTokens: 2048
+      maxOutputTokens: 256
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: echo
 agent:
@@ -79,7 +88,6 @@ subagents:
   maxConcurrent: 1
 context:
   autoCompaction: true
-  contextWindowTokens: 1024
   compactAtPercent: 50
   targetPercent: 30
   preserveRecentMessages: 2
@@ -155,9 +163,12 @@ sandbox:
     assert_eq!(status["message_count"], 6);
     assert_eq!(status["auto_compaction"], true);
     assert_eq!(status["compacted"], true);
-    assert_eq!(status["context_window_tokens"], 1024);
-    assert_eq!(status["threshold_tokens"], 512);
-    assert_eq!(status["target_tokens"], 307);
+    assert_eq!(status["context_window_tokens"], 2048);
+    assert_eq!(status["max_output_tokens"], 256);
+    assert_eq!(status["safety_margin_tokens"], 512);
+    assert_eq!(status["input_budget_tokens"], 1280);
+    assert_eq!(status["threshold_tokens"], 640);
+    assert_eq!(status["target_tokens"], 384);
     assert!(status["active_snapshot_id"].as_str().is_some());
     assert!(
         status["raw_token_estimate"]

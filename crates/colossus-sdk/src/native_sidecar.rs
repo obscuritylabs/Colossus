@@ -2040,15 +2040,7 @@ mod tests {
     ) -> SidecarBootstrapConfig {
         SidecarBootstrapConfig::new(
             workspace,
-            ManagedRuntimeConfig {
-                access_profile: ManagedAccessProfile::Minimal,
-                provider: ManagedProviderConfig {
-                    kind: ManagedProviderKind::Echo,
-                    model: "echo".into(),
-                    base_url: None,
-                    credential_id: None,
-                },
-            },
+            ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal),
             SidecarApplicationGrant::new(
                 "app:lifecycle-test",
                 [ApiScope::new(scopes::RUNS_READ).expect("scope")],

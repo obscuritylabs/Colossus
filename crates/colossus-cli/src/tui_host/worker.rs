@@ -161,6 +161,7 @@ impl WorkerInteractiveHost {
         let context = serde_json::from_value::<ContextStatus>(
             self.value(WorkerOperation::ContextStatus {
                 session_id: session_id.into(),
+                role: "primary".into(),
             })
             .await?,
         )
@@ -174,8 +175,11 @@ impl WorkerInteractiveHost {
         .map_err(|error| error.to_string())?;
         Ok(FooterState {
             role: route.role,
-            route: format!("{}@{}", route.model, route.profile),
-            context: context.map(|context| (context.token_estimate, context.context_window_tokens)),
+            route: format!(
+                "{}@{} via {}",
+                route.model, route.model_profile, route.provider_profile
+            ),
+            context: context.map(|context| (context.token_estimate, context.input_budget_tokens)),
             message_count: session.message_count,
             status: status.into(),
             approval_mode: self.approval_mode.as_str().into(),
@@ -642,6 +646,7 @@ impl WorkerInteractiveHost {
                     let status = serde_json::from_value::<ContextStatus>(
                         self.value(WorkerOperation::ContextStatus {
                             session_id: session_id.into(),
+                            role: "primary".into(),
                         })
                         .await?,
                     )
@@ -656,6 +661,7 @@ impl WorkerInteractiveHost {
                     },
                     "compact" => WorkerOperation::ContextCompact {
                         session_id: session_id.into(),
+                        role: "primary".into(),
                     },
                     value if value.starts_with("restore ") => WorkerOperation::ContextRestore {
                         session_id: session_id.into(),

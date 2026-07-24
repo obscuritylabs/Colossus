@@ -36,7 +36,7 @@ fn configured_mcp_is_allowlisted_permit_bound_redacted_and_research_capable() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:

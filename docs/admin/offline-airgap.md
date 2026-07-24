@@ -63,8 +63,9 @@ verifiable state.
     colossus --config .colossus/config.yaml audit anchor-status
     ```
 
-For a local OpenAI-compatible model, grant only its loopback origin and route
-`providers.roles.primary` to the local profile.
+For a local OpenAI-compatible model, grant only its loopback origin, define a provider
+connection plus a model profile with explicit limits/capabilities, and route
+`models.roles.primary` to that model profile.
 
 `workspace-development` may still be used for a physically disconnected developer
 workstation, but it supplies workspace writes and a shell. `offline-default` remains the

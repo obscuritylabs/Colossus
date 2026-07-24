@@ -3,6 +3,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   CancelRunRequest,
   CommandError,
+  ApplyManagedModelConfigurationRequest,
   ConfigureManagedRuntimeRequest,
   ConnectionStatus,
   CreateRunRequest,
@@ -134,6 +135,12 @@ export function configureManagedRuntime(
   request: ConfigureManagedRuntimeRequest,
 ): Promise<DesktopStatus> {
   return call("configure_managed_runtime", { request });
+}
+
+export function applyManagedModelConfiguration(
+  request: ApplyManagedModelConfigurationRequest,
+): Promise<DesktopStatus> {
+  return call("apply_managed_model_configuration", { request });
 }
 
 export function restartManagedRuntime(): Promise<DesktopStatus> {

@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ApprovalProof, AuditEvidence, AutomaticApprovalNotice, ContextSnapshot, DecisionStatus,
     EffectRequest, EventEnvelope, ExecutionContext, ExternalWorkRetryState, GoalRecord, GoalStatus,
-    IntegrationConnection, KeyDecision, MemoryRecord, ModelMessage, ModelRequest,
+    IntegrationConnection, KeyDecision, MemoryRecord, ModelMessage, ModelRequest, ModelRoute,
     ModelToolDefinition, NewEvent, PackInstallation, PackStatus, PlanRecord, PlanStatus,
     PolicyDecision, PreparedContext, ProjectionBatch, ProjectionWorkItem, ProviderEvent,
-    ProviderRoute, ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun, ResearchSource,
+    ProviderTurn, PublisherTrust, ResearchClaim, ResearchRun, ResearchSource,
     RiskReviewFallbackNotice, RunEventEnvelope, SearchProfileSummary, SearchRequest,
     SearchResponse, SearchRoute, SessionMessage, SessionMessagePage, SessionSummary,
     SignedCheckpoint, SkillDuplicate, SkillRecord, SkillResourceEntry, SkillResourceRead,

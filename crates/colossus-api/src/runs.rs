@@ -106,8 +106,12 @@ pub enum RunMode {
 pub struct RunResult {
     /// Complete released assistant output.
     pub output: String,
-    /// Resolved provider profile.
+    /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
+    /// Resolved model profile.
+    pub model_profile: String,
+    /// Resolved provider connection profile.
+    pub provider_profile: String,
     /// Resolved model identifier.
     pub model: String,
     /// Elapsed wall time in fractional seconds.

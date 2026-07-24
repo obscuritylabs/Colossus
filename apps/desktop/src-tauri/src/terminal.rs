@@ -174,6 +174,7 @@ impl BoundTerminalWorkspace {
 
     #[cfg(not(target_os = "macos"))]
     fn revalidate(&self) -> Result<(), TerminalError> {
+        let _ = self;
         Err(TerminalError::InvalidWorkspace)
     }
 
@@ -369,6 +370,8 @@ impl TerminalManager {
         if sha256_file(&path)? != sha256 {
             return Err(TerminalError::ProgramUnavailable);
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = macos_code_signing_requirement;
         #[cfg(target_os = "macos")]
         let macos_identity = colossus_sdk::verify_macos_executable_identity(
             &colossus_sdk::VerifiedExecutable::new(
@@ -645,7 +648,7 @@ impl TerminalManager {
         ),
         TerminalError,
     > {
-        let _ = (slave, master, program, arguments, workspace);
+        let _ = (self, slave, master, program, arguments, workspace);
         // Managed Desktop is macOS-first. Other platforms must gain an equally
         // strong pre-instruction executable binding before receiving worker keys.
         Err(TerminalError::ProgramUnavailable)

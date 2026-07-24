@@ -4,10 +4,10 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    CredentialReference, EffectRequest, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelToolCall, ModelToolDefinition, ProviderEvent, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderStreamItem, ProviderTurn, ProviderUsage,
-    QuarantinedEffectResult,
+    CredentialReference, EffectRequest, ModelCapabilities, ModelLimits, ModelMessage,
+    ModelMessageRole, ModelRequest, ModelRoute, ModelToolCall, ModelToolDefinition, ProviderEvent,
+    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderStreamItem, ProviderTurn,
+    ProviderUsage, QuarantinedEffectResult,
 };
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,

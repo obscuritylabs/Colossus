@@ -8,13 +8,18 @@ import {
 import { useState } from "react";
 import type { FormEvent } from "react";
 
-import type { ConfigureManagedRuntimeRequest, DesktopStatus } from "../types";
+import type {
+  ApplyManagedModelConfigurationRequest,
+  ConfigureManagedRuntimeRequest,
+  DesktopStatus,
+} from "../types";
 import {
   INITIAL_MANAGED_SELF_TEST_STATUS,
   managedProviderDefaults,
   runOfflineSelfTest,
   submitManagedRuntimeConfiguration,
 } from "../onboarding";
+import { ModelConfigurationEditor } from "./ModelConfigurationEditor";
 
 interface OnboardingSurfaceProps {
   desktop: DesktopStatus;
@@ -22,6 +27,9 @@ interface OnboardingSurfaceProps {
   error: string;
   onChooseWorkspace: () => Promise<void>;
   onConfigure: (request: ConfigureManagedRuntimeRequest) => Promise<boolean>;
+  onApplyConfiguration: (
+    request: ApplyManagedModelConfigurationRequest,
+  ) => Promise<boolean>;
   onRunSelfTest: () => Promise<void>;
   onUseExternal: () => Promise<void>;
   dismissible: boolean;
@@ -34,6 +42,7 @@ export function OnboardingSurface({
   error,
   onChooseWorkspace,
   onConfigure,
+  onApplyConfiguration,
   onRunSelfTest,
   onUseExternal,
   dismissible,
@@ -56,6 +65,7 @@ export function OnboardingSurface({
     ConfigureManagedRuntimeRequest["accessProfile"]
   >(desktop.accessProfile);
   const [replaceCredential, setReplaceCredential] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [selfTest, setSelfTest] = useState(INITIAL_MANAGED_SELF_TEST_STATUS);
   const providerChanged =
     desktop.provider.configured && desktop.provider.kind !== providerKind;
@@ -147,6 +157,13 @@ export function OnboardingSurface({
               <IconArrowRight size={16} stroke={1.8} aria-hidden="true" />
             </button>
           </div>
+        ) : showAdvanced ? (
+          <ModelConfigurationEditor
+            desktop={desktop}
+            busy={busy}
+            onApply={onApplyConfiguration}
+            onBack={() => setShowAdvanced(false)}
+          />
         ) : (
           <form
             className="provider-setup-form"
@@ -250,6 +267,16 @@ export function OnboardingSurface({
                   : "The existing provider key remains in the OS keychain. Only the model and access policy cross this WebView boundary."}
               </p>
             </div>
+
+            <button
+              className="text-button"
+              type="button"
+              disabled={busy}
+              onClick={() => setShowAdvanced(true)}
+            >
+              Configure multiple providers, model limits, capabilities, and role
+              routing
+            </button>
 
             {error !== "" ? (
               <p className="page-error" role="alert">

@@ -1,8 +1,11 @@
-use colossus_sdk::WorkspaceIdentity;
+use colossus_sdk::{
+    WorkspaceIdentity, validate_managed_model_identifier, validate_managed_provider_base_url,
+};
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
@@ -15,7 +18,7 @@ use crate::dto::CommandErrorDto;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-const SETTINGS_SCHEMA_VERSION: u16 = 1;
+const SETTINGS_SCHEMA_VERSION: u16 = 2;
 const SETTINGS_FILE: &str = "desktop-settings.json";
 const MANAGED_DIRECTORY: &str = "managed-local";
 const SELF_TEST_DIRECTORY: &str = "offline-self-test";
@@ -27,11 +30,22 @@ pub(crate) const MAX_EXTERNAL_TARGETS: usize = 32;
 const MAX_EXTERNAL_LABEL_BYTES: usize = 80;
 const MAX_CONNECTION_PATH_BYTES: usize = 2_048;
 const MAX_CONNECTION_VALUE_BYTES: usize = 256;
-pub(crate) const MAX_PENDING_PROVIDER_CLEANUPS: usize = 8;
+pub(crate) const MAX_PENDING_PROVIDER_CLEANUPS: usize = 64;
+pub(crate) const MAX_MANAGED_PROVIDERS: usize = 16;
+pub(crate) const MAX_MANAGED_MODELS: usize = 64;
 const PROVIDER_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.provider";
 pub(crate) const EXTERNAL_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.desktop.external";
 const WORKSPACE_PARTITION_DOMAIN: &[u8] = b"colossus-desktop-managed-workspace-v1\0";
 const WORKSPACE_INSTANCE_DOMAIN: &[u8] = b"colossus-desktop-managed-instance-v1\0";
+const MODEL_ROLES: [&str; 7] = [
+    "primary",
+    "risk_evaluator",
+    "context_summarizer",
+    "subagent_default",
+    "research_planner",
+    "research_worker",
+    "research_synthesizer",
+];
 pub(crate) const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub(crate) const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
@@ -76,10 +90,29 @@ pub(crate) struct WorkspaceSetting {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProviderSetting {
+    pub(crate) profile: String,
     pub(crate) kind: ProviderKindSetting,
-    pub(crate) model: String,
     pub(crate) base_url: String,
-    pub(crate) credential_id: String,
+    pub(crate) credential_id: Option<String>,
+    pub(crate) timeout_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelCapabilitiesSetting {
+    pub(crate) tool_calls: bool,
+    pub(crate) streaming: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ModelSetting {
+    pub(crate) profile: String,
+    pub(crate) provider_profile: String,
+    pub(crate) model: String,
+    pub(crate) context_window_tokens: u64,
+    pub(crate) max_output_tokens: u64,
+    pub(crate) capabilities: ModelCapabilitiesSetting,
 }
 
 pub(crate) struct SelfTestStorage {
@@ -116,7 +149,12 @@ pub(crate) struct DesktopSettings {
     pub(crate) schema_version: u16,
     pub(crate) managed_instance_id: String,
     pub(crate) workspace: Option<WorkspaceSetting>,
-    pub(crate) provider: Option<ProviderSetting>,
+    #[serde(default)]
+    pub(crate) providers: Vec<ProviderSetting>,
+    #[serde(default)]
+    pub(crate) models: Vec<ModelSetting>,
+    #[serde(default)]
+    pub(crate) model_roles: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) pending_provider_cleanup_ids: Vec<String>,
     pub(crate) access_profile: AccessProfileSetting,
@@ -128,13 +166,45 @@ pub(crate) struct DesktopSettings {
     pub(crate) legacy_connection_migrated: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyDesktopSettingsV1 {
+    schema_version: u16,
+    managed_instance_id: String,
+    workspace: Option<WorkspaceSetting>,
+    provider: Option<LegacyProviderSettingV1>,
+    #[serde(default)]
+    pending_provider_cleanup_ids: Vec<String>,
+    access_profile: AccessProfileSetting,
+    terminal_enabled: bool,
+    selected_target_id: Option<String>,
+    #[serde(default)]
+    external_targets: Vec<ExternalTargetSetting>,
+    #[serde(default)]
+    legacy_connection_migrated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyProviderSettingV1 {
+    #[serde(rename = "kind")]
+    _kind: ProviderKindSetting,
+    #[serde(rename = "model")]
+    _model: String,
+    #[serde(rename = "baseUrl")]
+    _base_url: String,
+    credential_id: String,
+}
+
 impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             managed_instance_id: Uuid::now_v7().to_string(),
             workspace: None,
-            provider: None,
+            providers: Vec::new(),
+            models: Vec::new(),
+            model_roles: BTreeMap::new(),
             pending_provider_cleanup_ids: Vec::new(),
             access_profile: AccessProfileSetting::Development,
             terminal_enabled: false,
@@ -142,6 +212,31 @@ impl Default for DesktopSettings {
             external_targets: Vec::new(),
             legacy_connection_migrated: false,
         }
+    }
+}
+
+impl DesktopSettings {
+    pub(crate) fn managed_configured(&self) -> bool {
+        self.primary_model().is_some() && self.primary_provider().is_some()
+    }
+
+    pub(crate) fn primary_model(&self) -> Option<&ModelSetting> {
+        let profile = self.model_roles.get("primary")?;
+        self.models.iter().find(|model| &model.profile == profile)
+    }
+
+    pub(crate) fn primary_provider(&self) -> Option<&ProviderSetting> {
+        let model = self.primary_model()?;
+        self.providers
+            .iter()
+            .find(|provider| provider.profile == model.provider_profile)
+    }
+
+    pub(crate) fn provider_credential_ids(&self) -> BTreeSet<&str> {
+        self.providers
+            .iter()
+            .filter_map(|provider| provider.credential_id.as_deref())
+            .collect()
     }
 }
 
@@ -184,8 +279,25 @@ impl SettingsStore {
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_SETTINGS_BYTES {
             return Err(storage_error());
         }
-        let mut settings: DesktopSettings =
-            serde_json::from_slice(&bytes).map_err(|_| storage_error())?;
+        let schema_version = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("schemaVersion")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .and_then(|value| u16::try_from(value).ok())
+            .ok_or_else(storage_error)?;
+        let (mut settings, migrated_provider_config) = if schema_version == 1 {
+            let legacy: LegacyDesktopSettingsV1 =
+                serde_json::from_slice(&bytes).map_err(|_| storage_error())?;
+            (migrate_v1_settings(legacy)?, true)
+        } else {
+            (
+                serde_json::from_slice(&bytes).map_err(|_| storage_error())?,
+                false,
+            )
+        };
         let legacy_workspace_requires_reselection =
             settings.workspace.as_ref().is_some_and(|workspace| {
                 workspace
@@ -215,18 +327,11 @@ impl SettingsStore {
                 target.requires_credential_enrollment = true;
             }
         }
-        // Older preview builds accepted a renderer-supplied provider origin and an
-        // approval-bypassing profile. They are never honored after load: bind the
-        // credential to its native provider preset and narrow legacy Allow All to the
-        // reviewed Development ceiling before validation or runtime construction.
-        if let Some(provider) = &mut settings.provider {
-            provider_base_url(provider.kind).clone_into(&mut provider.base_url);
-        }
         if settings.access_profile == AccessProfileSetting::LegacyAllowAll {
             settings.access_profile = AccessProfileSetting::Development;
         }
         validate_settings(&settings)?;
-        if migrated_legacy_workspace {
+        if migrated_legacy_workspace || migrated_provider_config {
             self.save(&settings)?;
         }
         Ok(settings)
@@ -408,6 +513,47 @@ pub(crate) fn delete_provider_secret(credential_id: &str) -> Result<(), CommandE
     }
 }
 
+fn migrate_v1_settings(
+    legacy: LegacyDesktopSettingsV1,
+) -> Result<DesktopSettings, CommandErrorDto> {
+    if legacy.schema_version != 1 {
+        return Err(storage_error());
+    }
+    let mut pending = legacy.pending_provider_cleanup_ids;
+    if let Some(provider) = legacy.provider {
+        let LegacyProviderSettingV1 {
+            _kind: _,
+            _model: _,
+            _base_url: _,
+            credential_id,
+        } = provider;
+        if !pending.contains(&credential_id) {
+            pending.push(credential_id);
+        }
+    }
+    pending.sort();
+    pending.dedup();
+    if pending.len() > MAX_PENDING_PROVIDER_CLEANUPS {
+        return Err(storage_error());
+    }
+    Ok(DesktopSettings {
+        schema_version: SETTINGS_SCHEMA_VERSION,
+        managed_instance_id: legacy.managed_instance_id,
+        workspace: legacy.workspace,
+        providers: Vec::new(),
+        models: Vec::new(),
+        model_roles: BTreeMap::new(),
+        pending_provider_cleanup_ids: pending,
+        access_profile: legacy.access_profile,
+        terminal_enabled: legacy.terminal_enabled,
+        selected_target_id: legacy
+            .selected_target_id
+            .filter(|target| target != "managed-local"),
+        external_targets: legacy.external_targets,
+        legacy_connection_migrated: legacy.legacy_connection_migrated,
+    })
+}
+
 fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> {
     if settings.schema_version != SETTINGS_SCHEMA_VERSION
         || !Uuid::parse_str(&settings.managed_instance_id).is_ok_and(|value| !value.is_nil())
@@ -416,7 +562,34 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
     {
         return Err(storage_error());
     }
-    let mut target_ids = std::collections::HashSet::with_capacity(settings.external_targets.len());
+    let target_ids = validate_external_targets(settings)?;
+    if settings
+        .selected_target_id
+        .as_deref()
+        .is_some_and(|value| value != "managed-local" && !target_ids.contains(value))
+        || settings.workspace.as_ref().is_some_and(invalid_workspace)
+        || settings.access_profile == AccessProfileSetting::LegacyAllowAll
+    {
+        return Err(storage_error());
+    }
+    let credential_ids = validate_managed_configuration(settings)?;
+    let mut cleanup_ids = HashSet::new();
+    if settings
+        .pending_provider_cleanup_ids
+        .iter()
+        .any(|credential_id| {
+            !valid_opaque_id(credential_id)
+                || !cleanup_ids.insert(credential_id)
+                || credential_ids.contains(credential_id.as_str())
+        })
+    {
+        return Err(storage_error());
+    }
+    Ok(())
+}
+
+fn validate_external_targets(settings: &DesktopSettings) -> Result<HashSet<&str>, CommandErrorDto> {
+    let mut target_ids = HashSet::with_capacity(settings.external_targets.len());
     for target in &settings.external_targets {
         let expected_account =
             external_credential_account(&target.instance_id, &target.certificate_sha256);
@@ -439,54 +612,83 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
             return Err(storage_error());
         }
     }
-    if settings
-        .selected_target_id
-        .as_deref()
-        .is_some_and(|value| value != "managed-local" && !target_ids.contains(value))
+    Ok(target_ids)
+}
+
+fn invalid_workspace(workspace: &WorkspaceSetting) -> bool {
+    !valid_opaque_id(&workspace.id)
+        || !workspace.path.is_absolute()
+        || workspace
+            .identity
+            .as_ref()
+            .is_none_or(|identity| identity.validate_current().is_err())
+        || workspace.display_name.is_empty()
+        || workspace.display_name.len() > 255
+        || workspace.display_path.is_empty()
+        || workspace.display_path.len() > 2_048
+}
+
+fn validate_managed_configuration(
+    settings: &DesktopSettings,
+) -> Result<BTreeSet<&str>, CommandErrorDto> {
+    if settings.providers.len() > MAX_MANAGED_PROVIDERS
+        || settings.models.len() > MAX_MANAGED_MODELS
+        || settings.providers.is_empty() != settings.models.is_empty()
+        || settings.models.is_empty() != settings.model_roles.is_empty()
+        || (!settings.models.is_empty() && !settings.model_roles.contains_key("primary"))
     {
         return Err(storage_error());
     }
-    if let Some(workspace) = settings.workspace.as_ref()
-        && (!valid_opaque_id(&workspace.id)
-            || !workspace.path.is_absolute()
-            || workspace
-                .identity
-                .as_ref()
-                .is_none_or(|identity| identity.validate_current().is_err())
-            || workspace.display_name.is_empty()
-            || workspace.display_name.len() > 255
-            || workspace.display_path.is_empty()
-            || workspace.display_path.len() > 2_048)
-    {
+    let mut provider_profiles = BTreeSet::new();
+    let mut credential_ids = BTreeSet::new();
+    for provider in &settings.providers {
+        if !valid_profile_name(&provider.profile)
+            || !provider_profiles.insert(provider.profile.as_str())
+            || provider.timeout_ms == 0
+            || validate_managed_provider_base_url(&provider.base_url).is_err()
+            || provider
+                .credential_id
+                .as_deref()
+                .is_some_and(|id| !valid_opaque_id(id))
+        {
+            return Err(storage_error());
+        }
+        if let Some(id) = provider.credential_id.as_deref() {
+            credential_ids.insert(id);
+        }
+    }
+    let mut model_profiles = BTreeSet::new();
+    for model in &settings.models {
+        let safety = model.context_window_tokens.div_ceil(10).max(512);
+        if !valid_profile_name(&model.profile)
+            || !model_profiles.insert(model.profile.as_str())
+            || !provider_profiles.contains(model.provider_profile.as_str())
+            || validate_managed_model_identifier(&model.model).is_err()
+            || model.context_window_tokens < 1_024
+            || model.max_output_tokens == 0
+            || model
+                .context_window_tokens
+                .checked_sub(model.max_output_tokens)
+                .and_then(|remaining| remaining.checked_sub(safety))
+                .is_none_or(|input| input == 0)
+        {
+            return Err(storage_error());
+        }
+    }
+    if settings.model_roles.iter().any(|(role, profile)| {
+        !MODEL_ROLES.contains(&role.as_str()) || !model_profiles.contains(profile.as_str())
+    }) {
         return Err(storage_error());
     }
-    if let Some(provider) = settings.provider.as_ref()
-        && (provider.model.is_empty()
-            || provider.model.len() > 256
-            || provider.base_url != provider_base_url(provider.kind)
-            || !valid_opaque_id(&provider.credential_id))
-    {
-        return Err(storage_error());
-    }
-    if settings.access_profile == AccessProfileSetting::LegacyAllowAll {
-        return Err(storage_error());
-    }
-    let mut cleanup_ids = std::collections::HashSet::new();
-    if settings
-        .pending_provider_cleanup_ids
-        .iter()
-        .any(|credential_id| {
-            !valid_opaque_id(credential_id)
-                || !cleanup_ids.insert(credential_id)
-                || settings
-                    .provider
-                    .as_ref()
-                    .is_some_and(|provider| provider.credential_id == credential_id.as_str())
-        })
-    {
-        return Err(storage_error());
-    }
-    Ok(())
+    Ok(credential_ids)
+}
+
+fn valid_profile_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn valid_opaque_id(value: &str) -> bool {
@@ -691,6 +893,35 @@ fn credential_error() -> CommandErrorDto {
 mod tests {
     use super::*;
 
+    fn configured_settings(
+        kind: ProviderKindSetting,
+        base_url: &str,
+        credential_id: Option<String>,
+    ) -> DesktopSettings {
+        DesktopSettings {
+            providers: vec![ProviderSetting {
+                profile: "primary-provider".into(),
+                kind,
+                base_url: base_url.into(),
+                credential_id,
+                timeout_ms: 120_000,
+            }],
+            models: vec![ModelSetting {
+                profile: "primary".into(),
+                provider_profile: "primary-provider".into(),
+                model: "test-model".into(),
+                context_window_tokens: 128_000,
+                max_output_tokens: 16_000,
+                capabilities: ModelCapabilitiesSetting {
+                    tool_calls: true,
+                    streaming: true,
+                },
+            }],
+            model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
+            ..DesktopSettings::default()
+        }
+    }
+
     #[test]
     fn provider_kind_wire_values_match_renderer_and_accept_preview_aliases() {
         assert_eq!(
@@ -725,20 +956,16 @@ mod tests {
 
     #[test]
     fn preview_provider_kind_is_loaded_and_rewritten_canonically() {
-        let settings = DesktopSettings {
-            provider: Some(ProviderSetting {
-                kind: ProviderKindSetting::OpenAiCompatible,
-                model: "test-model".into(),
-                base_url: OPENROUTER_BASE_URL.into(),
-                credential_id: Uuid::now_v7().to_string(),
-            }),
-            ..DesktopSettings::default()
-        };
+        let settings = configured_settings(
+            ProviderKindSetting::OpenAiCompatible,
+            OPENROUTER_BASE_URL,
+            Some(Uuid::now_v7().to_string()),
+        );
         let canonical = serde_json::to_string(&settings).expect("canonical settings");
         let preview = canonical.replace("openai_compatible", "open_ai_compatible");
         let decoded: DesktopSettings = serde_json::from_str(&preview).expect("preview settings");
 
-        assert_eq!(decoded.provider, settings.provider);
+        assert_eq!(decoded.providers, settings.providers);
         let rewritten = serde_json::to_string(&decoded).expect("rewritten settings");
         assert!(rewritten.contains(r#""kind":"openai_compatible""#));
         assert!(!rewritten.contains("open_ai_compatible"));
@@ -751,19 +978,73 @@ mod tests {
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
         let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
         let store = SettingsStore::open(canonical_root.clone()).expect("store");
-        let settings = DesktopSettings {
-            provider: Some(ProviderSetting {
-                kind: ProviderKindSetting::OpenAiCompatible,
-                model: "test-model".into(),
-                base_url: OPENROUTER_BASE_URL.into(),
-                credential_id: Uuid::now_v7().to_string(),
-            }),
-            ..DesktopSettings::default()
-        };
+        let settings = configured_settings(
+            ProviderKindSetting::OpenAiCompatible,
+            OPENROUTER_BASE_URL,
+            Some(Uuid::now_v7().to_string()),
+        );
         store.save(&settings).expect("save");
         assert_eq!(store.load().expect("load"), settings);
         let bytes = fs::read(canonical_root.join(SETTINGS_FILE)).expect("settings");
         assert!(!String::from_utf8_lossy(&bytes).contains("provider-secret"));
+    }
+
+    #[test]
+    fn settings_reject_renderer_visible_model_controls() {
+        let mut settings = configured_settings(
+            ProviderKindSetting::OpenAiCompatible,
+            OPENROUTER_BASE_URL,
+            None,
+        );
+        settings.models[0].model = "model\nforged-status".into();
+
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn v1_provider_configuration_is_cleared_and_credential_is_queued_for_deletion() {
+        let root = tempfile::tempdir().expect("root");
+        #[cfg(unix)]
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
+        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
+        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let credential_id = Uuid::now_v7().to_string();
+        let encoded = serde_json::json!({
+            "schemaVersion": 1,
+            "managedInstanceId": Uuid::now_v7().to_string(),
+            "workspace": null,
+            "provider": {
+                "kind": "openai_compatible",
+                "model": "legacy-model",
+                "baseUrl": OPENROUTER_BASE_URL,
+                "credentialId": credential_id,
+            },
+            "pendingProviderCleanupIds": [],
+            "accessProfile": "minimal",
+            "terminalEnabled": true,
+            "selectedTargetId": "managed-local",
+            "externalTargets": [],
+            "legacyConnectionMigrated": true,
+        });
+        let path = canonical_root.join(SETTINGS_FILE);
+        fs::write(
+            &path,
+            serde_json::to_vec(&encoded).expect("legacy settings"),
+        )
+        .expect("settings");
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("permissions");
+
+        let migrated = store.load().expect("migrate settings");
+        assert_eq!(migrated.schema_version, 2);
+        assert!(migrated.providers.is_empty());
+        assert!(migrated.models.is_empty());
+        assert!(migrated.model_roles.is_empty());
+        assert_eq!(migrated.pending_provider_cleanup_ids, [credential_id]);
+        assert_eq!(migrated.access_profile, AccessProfileSetting::Minimal);
+        assert!(migrated.terminal_enabled);
+        assert!(migrated.selected_target_id.is_none());
+        assert!(migrated.legacy_connection_migrated);
     }
 
     #[cfg(target_os = "macos")]
@@ -822,25 +1103,22 @@ mod tests {
         fs::create_dir(&workspace).expect("workspace");
         let store = SettingsStore::open(root.clone()).expect("store");
         let old_seed = Uuid::now_v7().to_string();
-        let provider = ProviderSetting {
-            kind: ProviderKindSetting::OpenAiCompatible,
-            model: "test-model".into(),
-            base_url: OPENROUTER_BASE_URL.into(),
-            credential_id: Uuid::now_v7().to_string(),
-        };
-        let legacy = DesktopSettings {
-            managed_instance_id: old_seed.clone(),
-            workspace: Some(WorkspaceSetting {
-                id: Uuid::now_v7().to_string(),
-                path: workspace.clone(),
-                identity: None,
-                display_name: "workspace".into(),
-                display_path: workspace.display().to_string(),
-            }),
-            provider: Some(provider.clone()),
-            selected_target_id: Some("managed-local".into()),
-            ..DesktopSettings::default()
-        };
+        let mut legacy = configured_settings(
+            ProviderKindSetting::OpenAiCompatible,
+            OPENROUTER_BASE_URL,
+            Some(Uuid::now_v7().to_string()),
+        );
+        legacy.managed_instance_id = old_seed.clone();
+        legacy.workspace = Some(WorkspaceSetting {
+            id: Uuid::now_v7().to_string(),
+            path: workspace.clone(),
+            identity: None,
+            display_name: "workspace".into(),
+            display_path: workspace.display().to_string(),
+        });
+        legacy.selected_target_id = Some("managed-local".into());
+        let expected_providers = legacy.providers.clone();
+        let expected_models = legacy.models.clone();
         let path = root.join(SETTINGS_FILE);
         fs::write(&path, serde_json::to_vec(&legacy).expect("legacy JSON"))
             .expect("legacy settings");
@@ -853,7 +1131,8 @@ mod tests {
         let migrated = store.load().expect("migrate settings");
         assert_ne!(migrated.managed_instance_id, old_seed);
         assert!(migrated.workspace.is_none());
-        assert_eq!(migrated.provider, Some(provider));
+        assert_eq!(migrated.providers, expected_providers);
+        assert_eq!(migrated.models, expected_models);
         assert!(migrated.selected_target_id.is_none());
         assert_eq!(store.load().expect("persisted migration"), migrated);
     }

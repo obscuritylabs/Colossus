@@ -3,20 +3,20 @@ use super::{
     AuditExporterConfig, ContextEffectExecutor, ContextToolExecutor, DiscoverableToolExecutor,
     GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
     InteractiveToolExecutor, JournalExternalWorkQueue, MemoryEffectExecutor, MemoryEmbeddingConfig,
-    MemoryOperation, PackProcessDeclaration, PackProcessExecutor, PackToolEffectInput,
-    PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig, ResearchSearchConfig,
-    RuntimeConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillEffectExecutor,
-    SkillOperation, SkillScaffoldResult, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
-    configure_shell_environment, goal_objective_from_plan, recover_interrupted_subagents,
-    recover_unknown_effects, reject_reserved_shell_environment, reject_shell_startup_profiles,
-    shell_command_arguments, terminal_actor,
+    MemoryOperation, ModelCapabilities, ModelProfileConfig, PackProcessDeclaration,
+    PackProcessExecutor, PackToolEffectInput, PresentationEffectExecutor, PresentationOperation,
+    ProviderProfileConfig, ResearchSearchConfig, RuntimeConfig, SearchConfig, SearchProfileConfig,
+    SemanticMemoryConfig, SkillEffectExecutor, SkillOperation, SkillScaffoldResult, StorageAdapter,
+    TraceToolExecutor, WorkEffectExecutor, configure_shell_environment, goal_objective_from_plan,
+    recover_interrupted_subagents, recover_unknown_effects, reject_reserved_shell_environment,
+    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
 };
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
     EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus,
-    ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus, PlanStep,
-    PolicyDecision, ProviderEvent, ProviderRoute, ProviderTurn, QuarantinedEffectResult, RiskLevel,
-    RiskRecommendation, SubagentStatus, TaskStatus, TerminalPreferences, ToolCall,
+    ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus,
+    PlanStep, PolicyDecision, ProviderEvent, ProviderRoute, ProviderTurn, QuarantinedEffectResult,
+    RiskLevel, RiskRecommendation, SubagentStatus, TaskStatus, TerminalPreferences, ToolCall,
 };
 use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
 use colossus_policy::{
@@ -46,6 +46,28 @@ use tempfile::tempdir;
 fn external_work_queue(journal: Arc<dyn EventJournal>) -> Arc<dyn ExternalWorkQueue> {
     let store: Arc<dyn ProjectionStore> = Arc::new(InMemoryProjectionStore::default());
     Arc::new(JournalExternalWorkQueue::new(journal, store))
+}
+
+fn configure_primary_model(
+    config: &mut RuntimeConfig,
+    profile: &str,
+    provider_profile: &str,
+    model: &str,
+) {
+    config.models.profiles.insert(
+        profile.into(),
+        ModelProfileConfig {
+            provider_profile: provider_profile.into(),
+            model: model.into(),
+            context_window_tokens: 32_768,
+            max_output_tokens: 4_096,
+            capabilities: ModelCapabilities {
+                tool_calls: true,
+                streaming: true,
+            },
+        },
+    );
+    config.models.roles.insert("primary".into(), profile.into());
 }
 
 struct SecretEchoProcess;
@@ -507,7 +529,7 @@ impl colossus_policy::EffectExecutor for PrivateOutputProcess {
 #[test]
 fn strict_config_rejects_unknown_fields() {
     let yaml = r#"
-schemaVersion: 1
+schemaVersion: 2
 access:
   profile: development
   tools:
@@ -533,6 +555,24 @@ workflows:
 surprise: true
 "#;
     assert!(RuntimeConfig::from_yaml(yaml).is_err());
+}
+
+#[test]
+fn schema_v1_is_rejected_with_model_profile_regeneration_guidance() {
+    let legacy = r#"
+schemaVersion: 1
+providers:
+  profiles:
+    echo:
+      kind: echo
+      model: echo
+  roles:
+    primary: echo
+"#;
+    let error = RuntimeConfig::from_yaml(legacy).expect_err("schema v1 must fail");
+    let message = error.to_string();
+    assert!(message.contains("provider connections and model profiles are now separate"));
+    assert!(message.contains("config init"));
 }
 
 #[test]
@@ -670,16 +710,12 @@ fn public_wildcard_config_allows_public_origins_but_not_loopback_routes() {
         "public".into(),
         ProviderProfileConfig {
             kind: ProviderKind::OpenAiCompatible,
-            model: "test".into(),
             base_url: Some("https://api.example.com/v1".into()),
             credential_reference: None,
             timeout_ms: 30_000,
         },
     );
-    config
-        .providers
-        .roles
-        .insert("primary".into(), "public".into());
+    configure_primary_model(&mut config, "public", "public", "test");
     config.sandbox.network_destinations = vec!["*".into()];
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
 
@@ -1076,16 +1112,12 @@ fn provider_config_requires_secure_origin_grants_and_known_roles() {
         "local".into(),
         ProviderProfileConfig {
             kind: ProviderKind::OpenAiCompatible,
-            model: "local-model".into(),
             base_url: Some("http://127.0.0.1:12434/v1".into()),
             credential_reference: None,
             timeout_ms: 5_000,
         },
     );
-    config
-        .providers
-        .roles
-        .insert("primary".into(), "local".into());
+    configure_primary_model(&mut config, "local", "local", "local-model");
     assert!(
         RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
         "provider origin without a sandbox grant was accepted"
@@ -1101,7 +1133,7 @@ fn provider_config_requires_secure_origin_grants_and_known_roles() {
     );
 
     config
-        .providers
+        .models
         .roles
         .insert("surprise".into(), "local".into());
     assert!(
@@ -1111,22 +1143,18 @@ fn provider_config_requires_secure_origin_grants_and_known_roles() {
 }
 
 #[test]
-fn remote_provider_http_and_responses_without_credentials_fail_closed() {
+fn remote_provider_http_fails_closed_and_responses_credentials_are_optional() {
     let mut config = RuntimeConfig::offline_template("state.redb");
     config.providers.profiles.insert(
         "remote".into(),
         ProviderProfileConfig {
             kind: ProviderKind::OpenAiCompatible,
-            model: "remote-model".into(),
             base_url: Some("http://example.com/v1".into()),
             credential_reference: None,
             timeout_ms: 5_000,
         },
     );
-    config
-        .providers
-        .roles
-        .insert("primary".into(), "remote".into());
+    configure_primary_model(&mut config, "remote", "remote", "remote-model");
     config
         .sandbox
         .network_destinations
@@ -1140,16 +1168,16 @@ fn remote_provider_http_and_responses_without_credentials_fail_closed() {
         "remote".into(),
         ProviderProfileConfig {
             kind: ProviderKind::OpenAiResponses,
-            model: "gpt-test".into(),
             base_url: Some("https://api.openai.com/v1".into()),
             credential_reference: None,
             timeout_ms: 5_000,
         },
     );
     config.sandbox.network_destinations = vec!["https://api.openai.com".into()];
+    configure_primary_model(&mut config, "remote", "remote", "gpt-test");
     assert!(
-        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err(),
-        "OpenAI Responses profile without a credential reference was accepted"
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok(),
+        "OpenAI Responses profile without a credential reference was rejected"
     );
 
     config
@@ -2666,8 +2694,20 @@ impl ModelProvider for WorkScriptedProvider {
         Ok(ProviderRoute {
             role: role.into(),
             profile: "scripted".into(),
+            model_profile: "scripted".into(),
+            provider_profile: "scripted-provider".into(),
             provider: "test".into(),
             model: "test-model".into(),
+            limits: ModelLimits {
+                context_window_tokens: 32_768,
+                max_output_tokens: 4_096,
+                safety_margin_tokens: 3_276,
+                input_budget_tokens: 25_396,
+            },
+            capabilities: ModelCapabilities {
+                tool_calls: true,
+                streaming: true,
+            },
         })
     }
 
@@ -2690,6 +2730,8 @@ impl ModelProvider for WorkScriptedProvider {
 async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() {
     let valid = ProviderTurn {
         profile: "scripted".into(),
+        model_profile: "scripted".into(),
+        provider_profile: "scripted-provider".into(),
         provider: "test".into(),
         model: "test-model".into(),
         response_id: Some("risk-valid".into()),
@@ -2704,6 +2746,8 @@ async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() 
     };
     let invalid = ProviderTurn {
         profile: "scripted".into(),
+        model_profile: "scripted".into(),
+        provider_profile: "scripted-provider".into(),
         provider: "test".into(),
         model: "test-model".into(),
         response_id: Some("risk-invalid".into()),
@@ -2719,6 +2763,8 @@ async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() 
     };
     let fenced = ProviderTurn {
         profile: "scripted".into(),
+        model_profile: "scripted".into(),
+        provider_profile: "scripted-provider".into(),
         provider: "test".into(),
         model: "test-model".into(),
         response_id: Some("risk-fenced".into()),
@@ -2734,6 +2780,8 @@ async fn risk_evaluator_uses_strict_json_tools_disabled_and_redacted_metadata() 
     };
     let fenced_with_prose = ProviderTurn {
         profile: "scripted".into(),
+        model_profile: "scripted".into(),
+        provider_profile: "scripted-provider".into(),
         provider: "test".into(),
         model: "test-model".into(),
         response_id: Some("risk-fenced-prose".into()),
@@ -2864,6 +2912,8 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
         turns: Mutex::new(VecDeque::from([
             ProviderTurn {
                 profile: "scripted".into(),
+                model_profile: "scripted".into(),
+                provider_profile: "scripted-provider".into(),
                 provider: "test".into(),
                 model: "test-model".into(),
                 response_id: None,
@@ -2879,6 +2929,8 @@ async fn decision_created_by_one_model_turn_binds_the_next_turn_context() {
             },
             ProviderTurn {
                 profile: "scripted".into(),
+                model_profile: "scripted".into(),
+                provider_profile: "scripted-provider".into(),
                 provider: "test".into(),
                 model: "test-model".into(),
                 response_id: None,
@@ -3012,6 +3064,8 @@ async fn memory_created_by_one_model_turn_is_retrieved_for_the_next_turn() {
         turns: Mutex::new(VecDeque::from([
             ProviderTurn {
                 profile: "scripted".into(),
+                model_profile: "scripted".into(),
+                provider_profile: "scripted-provider".into(),
                 provider: "test".into(),
                 model: "test-model".into(),
                 response_id: None,
@@ -3028,6 +3082,8 @@ async fn memory_created_by_one_model_turn_is_retrieved_for_the_next_turn() {
             },
             ProviderTurn {
                 profile: "scripted".into(),
+                model_profile: "scripted".into(),
+                provider_profile: "scripted-provider".into(),
                 provider: "test".into(),
                 model: "test-model".into(),
                 response_id: None,
@@ -3177,6 +3233,8 @@ async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() 
         turns: Mutex::new(VecDeque::from([
             ProviderTurn {
                 profile: "scripted".into(),
+                model_profile: "scripted".into(),
+                provider_profile: "scripted-provider".into(),
                 provider: "test".into(),
                 model: "test-model".into(),
                 response_id: None,
@@ -3191,6 +3249,8 @@ async fn goal_update_is_bound_to_active_goal_context_and_stops_future_updates() 
             },
             ProviderTurn {
                 profile: "scripted".into(),
+                model_profile: "scripted".into(),
+                provider_profile: "scripted-provider".into(),
                 provider: "test".into(),
                 model: "test-model".into(),
                 response_id: None,
