@@ -364,12 +364,14 @@ impl TerminalManager {
         &self,
         path: &Path,
         sha256: [u8; 32],
-        _macos_code_signing_requirement: colossus_sdk::MacosCodeSigningRequirement,
+        macos_code_signing_requirement: colossus_sdk::MacosCodeSigningRequirement,
     ) -> Result<(), TerminalError> {
         let path = validate_executable(path)?;
         if sha256_file(&path)? != sha256 {
             return Err(TerminalError::ProgramUnavailable);
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = macos_code_signing_requirement;
         #[cfg(target_os = "macos")]
         let macos_identity = colossus_sdk::verify_macos_executable_identity(
             &colossus_sdk::VerifiedExecutable::new(
@@ -377,7 +379,7 @@ impl TerminalManager {
                 colossus_sdk::Sha256Digest::from_bytes(sha256),
             )
             .map_err(|_| TerminalError::ProgramUnavailable)?
-            .with_macos_code_signing_requirement(_macos_code_signing_requirement),
+            .with_macos_code_signing_requirement(macos_code_signing_requirement),
         )
         .map_err(|_| TerminalError::ProgramUnavailable)?;
         *self
