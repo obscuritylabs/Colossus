@@ -60,10 +60,12 @@ impl TuiPromptRouter {
         }
     }
 
-    async fn notice(&self, document: PresentationDocument) {
+    fn notice(&self, document: PresentationDocument) {
         let sender = self.sender.lock().ok().and_then(|sender| sender.clone());
         if let Some(sender) = sender {
-            let _ = sender.send(HostEvent::Notice(document)).await;
+            // Approval-review notices are presentation-only and must never hold up
+            // the permit path when the renderer is paused or disconnected.
+            let _ = sender.try_send(HostEvent::Notice(document));
         }
     }
 
@@ -114,15 +116,11 @@ impl ApprovalProvider for TuiApprovalProvider {
     }
 
     async fn automatic_approval_granted(&self, notice: AutomaticApprovalNotice) {
-        self.router
-            .notice(automatic_approval_document(&notice))
-            .await;
+        self.router.notice(automatic_approval_document(&notice));
     }
 
     async fn risk_review_fallback(&self, notice: RiskReviewFallbackNotice) {
-        self.router
-            .notice(risk_review_fallback_document(&notice))
-            .await;
+        self.router.notice(risk_review_fallback_document(&notice));
     }
 
     async fn request_approval(

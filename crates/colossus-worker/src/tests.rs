@@ -550,6 +550,53 @@ async fn interactive_worker_forwards_risk_review_fallback_without_prompting() {
 }
 
 #[tokio::test]
+async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
+    let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
+    let (notice_tx, mut notice_rx) = tokio::sync::mpsc::channel(1);
+    let queued = ApprovalReviewNotice::AutomaticApproval {
+        notice: AutomaticApprovalNotice {
+            action: "web.search".into(),
+            resource: "first configured search".into(),
+            risk_level: colossus_contracts::RiskLevel::Low,
+            reason: "first read-only configured search".into(),
+        },
+    };
+    notice_tx
+        .try_send(queued.clone())
+        .expect("fill worker notice queue");
+    let bridge = InteractiveRunBridge {
+        prompts: prompt_tx,
+        notices: notice_tx.clone(),
+        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+    };
+    let provider = WorkerInteractiveApproval {
+        mode: WorkerApprovalMode::RiskAuto,
+    };
+
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        ACTIVE_INTERACTIVE_RUN.scope(
+            bridge,
+            provider.risk_review_fallback(RiskReviewFallbackNotice {
+                action: "web.search".into(),
+                resource: "second configured search".into(),
+                failure: colossus_contracts::RiskReviewFailure::EvaluatorUnavailable,
+                reason: "The risk evaluator was unavailable, so manual approval is required."
+                    .into(),
+            }),
+        ),
+    )
+    .await
+    .expect("a best-effort worker notice must not wait for queue capacity");
+
+    assert_eq!(notice_rx.recv().await, Some(queued));
+    assert!(matches!(
+        notice_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
     let key = [13_u8; 32];
     let mut frame =

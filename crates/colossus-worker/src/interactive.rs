@@ -88,8 +88,7 @@ impl ApprovalProvider for WorkerInteractiveApproval {
         };
         let _ = bridge
             .notices
-            .send(ApprovalReviewNotice::AutomaticApproval { notice })
-            .await;
+            .try_send(ApprovalReviewNotice::AutomaticApproval { notice });
     }
 
     async fn risk_review_fallback(&self, notice: RiskReviewFallbackNotice) {
@@ -98,8 +97,7 @@ impl ApprovalProvider for WorkerInteractiveApproval {
         };
         let _ = bridge
             .notices
-            .send(ApprovalReviewNotice::RiskReviewFallback { notice })
-            .await;
+            .try_send(ApprovalReviewNotice::RiskReviewFallback { notice });
     }
 
     async fn request_approval(

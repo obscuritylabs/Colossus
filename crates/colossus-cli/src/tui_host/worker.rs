@@ -24,8 +24,8 @@ impl RunEventObserver for WorkerChannelObserver {
     }
 }
 
-struct TuiWorkerPromptHandler {
-    sender: mpsc::Sender<HostEvent>,
+pub(super) struct TuiWorkerPromptHandler {
+    pub(super) sender: mpsc::Sender<HostEvent>,
 }
 
 #[async_trait]
@@ -39,10 +39,10 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
                 risk_review_fallback_document(&notice)
             }
         };
-        self.sender
-            .send(HostEvent::Notice(document))
-            .await
-            .map_err(|_| WorkerError::Unavailable("interactive client disconnected".into()))
+        // The worker already durably recorded the review result. Rendering its
+        // notice is best-effort, so a full or closed TUI queue cannot fail the run.
+        let _ = self.sender.try_send(HostEvent::Notice(document));
+        Ok(())
     }
 
     async fn prompt(&self, prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
