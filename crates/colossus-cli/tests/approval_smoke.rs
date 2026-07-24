@@ -347,7 +347,7 @@ fn write_network_config(directory: &Path, origin: &str) -> std::path::PathBuf {
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -373,10 +373,20 @@ fn write_network_config(directory: &Path, origin: &str) -> std::path::PathBuf {
             "profiles": {
                 "loopback": {
                     "kind": "open_ai_compatible",
-                    "model": "approval-network-model",
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": null,
                     "timeoutMs": 5000
+                }
+            }
+        },
+        "models": {
+            "profiles": {
+                "loopback": {
+                    "providerProfile": "loopback",
+                    "model": "approval-network-model",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": {"toolCalls": true, "streaming": true}
                 }
             },
             "roles": {"primary": "loopback"}
