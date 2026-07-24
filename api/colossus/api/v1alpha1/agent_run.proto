@@ -82,7 +82,7 @@ message RunResult {
   // output is the complete visible assistant text.
   string output = 1;
 
-  // profile is the credential-free provider profile name.
+  // profile is the deprecated compatibility alias populated with model_profile.
   string profile = 2;
 
   // model is the provider model identifier.
@@ -90,6 +90,12 @@ message RunResult {
 
   // elapsed_seconds is the finite non-negative wall time for the completed run.
   double elapsed_seconds = 4;
+
+  // model_profile is the credential-free configured model profile.
+  string model_profile = 5;
+
+  // provider_profile is the credential-free provider connection profile.
+  string provider_profile = 6;
 }
 
 // RunFailure contains a bounded user-safe terminal failure.

@@ -43,6 +43,19 @@ impl ContextService {
 
     /// Return budget status for the active canonical session history.
     pub fn status(&self, session_id: &str) -> Result<ContextStatus, ContextError> {
+        self.status_for_role(session_id, "primary")
+    }
+
+    /// Return budget status using the model profile resolved for one logical role.
+    pub fn status_for_role(
+        &self,
+        session_id: &str,
+        role: &str,
+    ) -> Result<ContextStatus, ContextError> {
+        let budget = self
+            .provider
+            .route(role)
+            .map_err(|error| ContextError::Configuration(error.to_string()))?;
         let records = self.sessions.list_messages(session_id)?;
         let messages = records
             .iter()
@@ -63,9 +76,15 @@ impl ContextService {
             message_count: records.len().try_into().unwrap_or(u64::MAX),
             raw_token_estimate: raw,
             token_estimate: estimate_tokens("", &prepared, &[]),
-            context_window_tokens: self.config.context_window_tokens,
-            threshold_tokens: self.config.threshold_tokens(),
-            target_tokens: self.config.target_tokens(),
+            model_profile: budget.model_profile,
+            context_window_tokens: budget.limits.context_window_tokens,
+            max_output_tokens: budget.limits.max_output_tokens,
+            safety_margin_tokens: budget.limits.safety_margin_tokens,
+            input_budget_tokens: budget.limits.input_budget_tokens,
+            threshold_tokens: self
+                .config
+                .threshold_tokens(budget.limits.input_budget_tokens),
+            target_tokens: self.config.target_tokens(budget.limits.input_budget_tokens),
             active_snapshot_id: active.as_ref().map(|snapshot| snapshot.id.clone()),
             compacted: active.is_some(),
             auto_compaction: self.config.auto_compaction,
@@ -105,8 +124,9 @@ impl ContextService {
         instructions: &str,
         tools: &[ModelToolDefinition],
     ) -> Result<PreparedContext, ContextError> {
-        self.compact_with_context(
+        self.compact_for_role_with_context(
             session_id,
+            "primary",
             instructions,
             tools,
             ExecutionContext {
@@ -126,6 +146,23 @@ impl ContextService {
         tools: &[ModelToolDefinition],
         context: ExecutionContext,
     ) -> Result<PreparedContext, ContextError> {
+        self.compact_for_role_with_context(session_id, "primary", instructions, tools, context)
+            .await
+    }
+
+    /// Force a snapshot using the budget resolved for one logical model role.
+    pub async fn compact_for_role_with_context(
+        &self,
+        session_id: &str,
+        role: &str,
+        instructions: &str,
+        tools: &[ModelToolDefinition],
+        context: ExecutionContext,
+    ) -> Result<PreparedContext, ContextError> {
+        let budget = self
+            .provider
+            .route(role)
+            .map_err(|error| ContextError::Configuration(error.to_string()))?;
         let records = self.sessions.list_messages(session_id)?;
         if records.is_empty() {
             return Err(ContextError::Configuration(format!(
@@ -133,8 +170,16 @@ impl ContextService {
             )));
         }
         let messages = records.into_iter().map(|record| record.message).collect();
-        self.prepare(session_id, instructions, messages, tools, context, true)
-            .await
+        self.prepare(ContextPreparationRequest {
+            session_id: session_id.into(),
+            instructions: instructions.into(),
+            messages,
+            tools: tools.to_vec(),
+            route: budget,
+            context,
+            force: true,
+        })
+        .await
     }
 
     async fn create_snapshot(
@@ -229,7 +274,7 @@ impl ContextService {
         source: &[ModelMessage],
         context: ExecutionContext,
     ) -> Option<String> {
-        let route = self.provider.route("context_summarizer").ok()?;
+        self.provider.route("context_summarizer").ok()?;
         let mut history = String::new();
         for (index, message) in source.iter().enumerate() {
             let item = format!(
@@ -249,7 +294,6 @@ impl ContextService {
             .turn(
                 "context_summarizer",
                 ModelRequest {
-                    model: route.model,
                     instructions: SUMMARY_INSTRUCTIONS.into(),
                     messages: vec![ModelMessage {
                         role: ModelMessageRole::User,
@@ -260,6 +304,7 @@ impl ContextService {
                         tool_calls: Vec::new(),
                     }],
                     tools: Vec::new(),
+                    max_output_tokens: None,
                 },
                 context,
             )
@@ -287,27 +332,33 @@ impl ContextService {
 impl ContextPreparer for ContextService {
     async fn prepare(
         &self,
-        session_id: &str,
-        instructions: &str,
-        messages: Vec<ModelMessage>,
-        tools: &[ModelToolDefinition],
-        context: ExecutionContext,
-        force: bool,
+        request: ContextPreparationRequest,
     ) -> Result<PreparedContext, ContextError> {
+        let ContextPreparationRequest {
+            session_id,
+            instructions,
+            messages,
+            tools,
+            route: budget,
+            context,
+            force,
+        } = request;
         let bindings = self
-            .binding_messages(session_id, &messages, context.clone())
+            .binding_messages(&session_id, &messages, context.clone())
             .await?;
         let original_messages = prepend_bindings(bindings.clone(), messages.clone());
-        let original = estimate_tokens(instructions, &original_messages, tools);
-        let threshold = self.config.threshold_tokens();
-        let target = self.config.target_tokens();
-        let active = self.snapshots.active(session_id)?;
+        let original = estimate_tokens(&instructions, &original_messages, &tools);
+        let threshold = self
+            .config
+            .threshold_tokens(budget.limits.input_budget_tokens);
+        let target = self.config.target_tokens(budget.limits.input_budget_tokens);
+        let active = self.snapshots.active(&session_id)?;
         let active_messages = active.as_ref().map_or_else(
             || messages.clone(),
             |snapshot| apply_snapshot(snapshot, &messages),
         );
         let active_messages = prepend_bindings(bindings.clone(), active_messages);
-        let active_estimate = estimate_tokens(instructions, &active_messages, tools);
+        let active_estimate = estimate_tokens(&instructions, &active_messages, &tools);
         let should_create = force
             || (self.config.auto_compaction
                 && original > threshold
@@ -317,7 +368,11 @@ impl ContextPreparer for ContextService {
                 messages: active_messages,
                 token_estimate: active_estimate,
                 original_token_estimate: original,
-                context_window_tokens: self.config.context_window_tokens,
+                model_profile: budget.model_profile.clone(),
+                context_window_tokens: budget.limits.context_window_tokens,
+                max_output_tokens: budget.limits.max_output_tokens,
+                safety_margin_tokens: budget.limits.safety_margin_tokens,
+                input_budget_tokens: budget.limits.input_budget_tokens,
                 threshold_tokens: threshold,
                 target_tokens: target,
                 snapshot_id: active.as_ref().map(|snapshot| snapshot.id.clone()),
@@ -335,17 +390,21 @@ impl ContextPreparer for ContextService {
             source_end = messages.len();
         }
         if source_end == 0 {
-            if original > self.config.context_window_tokens {
+            if original > budget.limits.input_budget_tokens {
                 return Err(ContextError::Configuration(format!(
-                    "the newest logical turn requires {original} estimated tokens, exceeding the {} token context window and cannot be compacted without violating recent-message preservation",
-                    self.config.context_window_tokens
+                    "the newest logical turn requires {original} estimated tokens, exceeding the {} token effective input budget for model profile {} and cannot be compacted without violating recent-message preservation",
+                    budget.limits.input_budget_tokens, budget.model_profile
                 )));
             }
             return Ok(PreparedContext {
                 messages: original_messages,
                 token_estimate: original,
                 original_token_estimate: original,
-                context_window_tokens: self.config.context_window_tokens,
+                model_profile: budget.model_profile.clone(),
+                context_window_tokens: budget.limits.context_window_tokens,
+                max_output_tokens: budget.limits.max_output_tokens,
+                safety_margin_tokens: budget.limits.safety_margin_tokens,
+                input_budget_tokens: budget.limits.input_budget_tokens,
                 threshold_tokens: threshold,
                 target_tokens: target,
                 snapshot_id: active.as_ref().map(|snapshot| snapshot.id.clone()),
@@ -355,31 +414,35 @@ impl ContextPreparer for ContextService {
             });
         }
         let preserved = prepend_bindings(bindings.clone(), messages[source_end..].to_vec());
-        let preserved_estimate = estimate_tokens(instructions, &preserved, tools);
-        if preserved_estimate.saturating_add(64) > self.config.context_window_tokens {
+        let preserved_estimate = estimate_tokens(&instructions, &preserved, &tools);
+        if preserved_estimate.saturating_add(64) > budget.limits.input_budget_tokens {
             return Err(ContextError::Configuration(format!(
-                "preserved recent messages require at least {preserved_estimate} estimated tokens plus snapshot metadata, exceeding the {} token context window",
-                self.config.context_window_tokens
+                "preserved recent messages require at least {preserved_estimate} estimated tokens plus snapshot metadata, exceeding the {} token effective input budget for model profile {}",
+                budget.limits.input_budget_tokens, budget.model_profile
             )));
         }
         let snapshot = self
-            .create_snapshot(session_id, &messages, source_end, context)
+            .create_snapshot(&session_id, &messages, source_end, context)
             .await?;
         let mut prepared = apply_snapshot(&snapshot, &messages);
         prepared = prepend_bindings(bindings, prepared);
-        bound_summary_to_target(instructions, &mut prepared, tools, target);
-        let estimate = estimate_tokens(instructions, &prepared, tools);
-        if estimate > self.config.context_window_tokens {
+        bound_summary_to_target(&instructions, &mut prepared, &tools, target);
+        let estimate = estimate_tokens(&instructions, &prepared, &tools);
+        if estimate > budget.limits.input_budget_tokens {
             return Err(ContextError::Configuration(format!(
-                "preserved recent messages require {estimate} estimated tokens, exceeding the {} token context window",
-                self.config.context_window_tokens
+                "preserved recent messages require {estimate} estimated tokens, exceeding the {} token effective input budget for model profile {}",
+                budget.limits.input_budget_tokens, budget.model_profile
             )));
         }
         Ok(PreparedContext {
             messages: prepared,
             token_estimate: estimate,
             original_token_estimate: original,
-            context_window_tokens: self.config.context_window_tokens,
+            model_profile: budget.model_profile,
+            context_window_tokens: budget.limits.context_window_tokens,
+            max_output_tokens: budget.limits.max_output_tokens,
+            safety_margin_tokens: budget.limits.safety_margin_tokens,
+            input_budget_tokens: budget.limits.input_budget_tokens,
             threshold_tokens: threshold,
             target_tokens: target,
             snapshot_id: Some(snapshot.id),

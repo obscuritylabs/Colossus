@@ -47,9 +47,16 @@ pub(super) struct ModelsCommand {
 
 #[derive(Subcommand)]
 pub(super) enum ModelsAction {
-    /// Show role-to-profile mappings.
+    /// Show configured model profiles, limits, capabilities, and provider connections.
+    Profiles,
+    /// Check one configured model profile with a bounded generation.
+    Doctor {
+        /// Optional exact model profile; defaults to the primary role.
+        profile: Option<String>,
+    },
+    /// Show role-to-model-profile mappings.
     Routes,
-    /// Resolve one role to bounded profile/model metadata.
+    /// Resolve one role to bounded model and provider metadata.
     Route {
         #[arg(default_value = "primary")]
         role: String,
@@ -98,11 +105,21 @@ pub(super) struct ContextCommand {
 #[derive(Subcommand)]
 pub(super) enum ContextAction {
     /// Show the active context budget and snapshot.
-    Status { session_id: String },
+    Status {
+        session_id: String,
+        /// Logical model role whose effective budget is displayed.
+        #[arg(long, default_value = "primary")]
+        role: String,
+    },
     /// List immutable snapshots for one session.
     List { session_id: String },
     /// Force a new snapshot without deleting canonical messages.
-    Compact { session_id: String },
+    Compact {
+        session_id: String,
+        /// Logical model role whose effective budget is applied.
+        #[arg(long, default_value = "primary")]
+        role: String,
+    },
     /// Activate an existing snapshot for future turns.
     Restore {
         session_id: String,

@@ -108,7 +108,14 @@ pub enum WorkerOperation {
         /// Optional exact profile.
         profile: Option<String>,
     },
-    /// Show role-to-profile routing.
+    /// Show configured explicit model profiles.
+    ModelProfiles,
+    /// Exercise one explicit model generation diagnostic.
+    ModelDoctor {
+        /// Optional exact model profile.
+        profile: Option<String>,
+    },
+    /// Show role-to-model-profile routing.
     ProviderRoutes,
     /// Resolve one role to bounded provider metadata without network access.
     ProviderRoute {
@@ -243,6 +250,8 @@ pub enum WorkerOperation {
     ContextStatus {
         /// Exact session identifier.
         session_id: String,
+        /// Logical model role.
+        role: String,
     },
     /// List immutable context snapshots.
     ContextList {
@@ -253,6 +262,8 @@ pub enum WorkerOperation {
     ContextCompact {
         /// Exact session identifier.
         session_id: String,
+        /// Logical model role.
+        role: String,
     },
     /// Activate one context snapshot.
     ContextRestore {

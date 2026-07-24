@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use portable_pty::ChildKiller;
 #[cfg(target_os = "macos")]
-use portable_pty::ExitStatus;
-use portable_pty::{Child, ChildKiller};
+use portable_pty::{Child, ExitStatus};
 #[cfg(target_os = "macos")]
 use std::io;
 

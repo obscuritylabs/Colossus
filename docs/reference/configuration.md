@@ -13,13 +13,18 @@ base for relative config and workspace-owned paths. Unknown fields, invalid enum
 unsafe paths, incomplete profiles, and inconsistent grants fail before runtime
 construction. Field names are case-sensitive.
 
+The current schema is exactly `2`. Schema `1` configurations are rejected rather than
+silently migrated because provider connections and model profiles now have separate
+authority and metadata; generate a fresh configuration with `colossus --config PATH
+config init` and reapply the intended settings explicitly.
+
 ## Complete baseline
 
 This credential-free baseline is parser-backed by the documentation contract:
 
 <!-- rust-config-example:start -->
 ```yaml
-schemaVersion: 1
+schemaVersion: 2
 access:
   profile: development
   tools:
@@ -47,10 +52,19 @@ providers:
   profiles:
     echo:
       kind: echo
-      model: echo
       baseUrl: null
       credentialReference: null
       timeoutMs: 120000
+models:
+  profiles:
+    echo:
+      providerProfile: echo
+      model: echo
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: echo
 agent:
@@ -89,7 +103,8 @@ process launch. YAML contains names and identities, never the values.
 | `storage` | Yes | Journal adapter, key provider, and anchor |
 | `policy` | Yes | Built-in or OPA action decisions |
 | `workflows` | Yes | Repository and user workflow roots |
-| `providers` | No | Named model profiles and role routes; defaults to `echo` |
+| `providers` | No | Named provider connections; defaults to `echo` |
+| `models` | No | Named model limits/capabilities and role routes; defaults to `echo` |
 | `agent` | No | Agent turn bound; defaults to `24` |
 | `subagents` | No | Child concurrency bound; defaults to `10` |
 | `sandbox` | No | Resource obligations and platform isolation defaults |
@@ -116,26 +131,37 @@ process launch. YAML contains names and identities, never the values.
 Include/exclude entries cannot overlap. The three action lists cannot overlap. With
 `policy.kind: opa`, all action override lists are empty.
 
-## Providers and roles
+## Providers, models, and roles
 
 | Field | Values / constraint |
 | --- | --- |
 | `providers.profiles.NAME.kind` | `echo`, `open_ai_responses`, `open_ai_compatible` |
-| `.model` | Non-empty provider model identifier |
 | `.baseUrl` | URL including API path; remote endpoints use HTTPS |
 | `.credentialReference` | `env:VARIABLE`, injected `host:IDENTIFIER`, or `null` when supported |
 | `.timeoutMs` | Positive bounded duration |
-| `providers.roles.primary` | Required profile name |
+| `models.profiles.NAME.providerProfile` | Existing provider connection profile |
+| `.model` | Non-empty provider model identifier |
+| `.contextWindowTokens` | Total model context window; at least `1024` |
+| `.maxOutputTokens` | Positive output reservation smaller than the effective window |
+| `.capabilities.toolCalls` | Whether tool definitions/history may be sent |
+| `.capabilities.streaming` | Whether the adapter uses streaming transport |
+| `models.roles.primary` | Required model profile name |
 | Other role fields | Optional profile name; fall back to `primary` |
 
 Known specialized roles are `risk_evaluator`, `context_summarizer`,
 `subagent_default`, `research_planner`, `research_worker`, and
 `research_synthesizer`.
 
-With the built-in policy, each provider profile's `timeoutMs` bounds its own catalog and
-generation transport independently of `sandbox.timeoutMs`. The adapter still enforces
-the exact selected profile's timeout. OPA deployments may return a stricter timeout
-obligation.
+The effective input budget is the context window minus the output reservation and a
+safety reserve of `max(10% of the context window, 512 tokens)`. Colossus uses a
+conservative byte-based estimator and compacts against this model-specific input
+budget. A request may only narrow `maxOutputTokens`; it cannot enlarge the configured
+limit.
+
+With the built-in policy, each provider connection's `timeoutMs` bounds its own catalog
+and generation transport independently of `sandbox.timeoutMs`. The adapter still
+enforces the exact selected connection's timeout. OPA deployments may return a stricter
+timeout obligation.
 
 `host:` references are resolved only by an application-managed runtime through its
 in-memory credential resolver. The standard CLI and daemon composition remain
@@ -243,7 +269,6 @@ no redirects, bounded connections, and private-address rejection.
 ```yaml
 context:
   autoCompaction: true
-  contextWindowTokens: 32768
   compactAtPercent: 70
   targetPercent: 45
   preserveRecentMessages: 8
@@ -328,13 +353,22 @@ providers:
   profiles:
     openrouter:
       kind: open_ai_compatible
-      model: openrouter/free
       baseUrl: https://openrouter.ai/api/v1
       credentialReference: env:OPENROUTER_API_KEY
       timeoutMs: 120000
+models:
+  profiles:
+    openrouter-primary:
+      providerProfile: openrouter
+      model: openrouter/free
+      contextWindowTokens: 131072
+      maxOutputTokens: 16384
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
-    primary: openrouter
-    risk_evaluator: openrouter
+    primary: openrouter-primary
+    risk_evaluator: openrouter-primary
 search:
   profiles:
     local:
@@ -406,7 +440,8 @@ least 1,024 bytes.
 | --- | --- |
 | `agent.maxTurns` | `1..=100`; default `24` |
 | `subagents.maxConcurrent` | At least `1`; default `10` |
-| `context.contextWindowTokens` | At least `1024` |
+| `models.profiles.*.contextWindowTokens` | At least `1024` |
+| `models.profiles.*.maxOutputTokens` | Positive and leaves room for the safety reserve and input |
 | `context.targetPercent` | `1..99` and below `compactAtPercent` |
 | `context.compactAtPercent` | `1..99` |
 | `context.preserveRecentMessages` | At most `1024` |

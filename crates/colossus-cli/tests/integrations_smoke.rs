@@ -64,7 +64,7 @@ fn openapi_connections_are_durable_hidden_until_connected_and_gateway_bound() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:

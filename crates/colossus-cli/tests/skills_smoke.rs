@@ -50,7 +50,7 @@ fn skill_activation_and_resources_are_durable_policy_bound_and_data_only() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:

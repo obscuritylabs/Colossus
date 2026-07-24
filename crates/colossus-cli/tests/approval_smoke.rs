@@ -156,7 +156,7 @@ fn write_tool_config(
         .unwrap_or_default();
     let config = directory.join("config.json");
     let document = json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "storage": {
             "path": directory.join("state.redb"),
             "keys": {
@@ -182,10 +182,20 @@ fn write_tool_config(
             "profiles": {
                 "loopback": {
                     "kind": "open_ai_compatible",
-                    "model": "approval-tool-model",
                     "baseUrl": format!("{origin}/v1"),
                     "credentialReference": null,
                     "timeoutMs": 5000
+                }
+            }
+        },
+        "models": {
+            "profiles": {
+                "loopback": {
+                    "providerProfile": "loopback",
+                    "model": "approval-tool-model",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": {"toolCalls": true, "streaming": true}
                 }
             },
             "roles": {"primary": "loopback"}
@@ -268,7 +278,7 @@ fn terminal_modes_deny_prompt_or_auto_prove_the_same_policy_obligation() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -296,10 +306,19 @@ providers:
   profiles:
     echo:
       kind: echo
-      model: echo
       baseUrl: null
       credentialReference: null
       timeoutMs: 5000
+models:
+  profiles:
+    echo:
+      providerProfile: echo
+      model: echo
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: echo
 agent:

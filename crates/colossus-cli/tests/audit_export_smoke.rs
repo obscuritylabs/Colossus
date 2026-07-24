@@ -36,7 +36,7 @@ fn configured_audit_export_is_queued_policy_bound_redacted_and_replayable() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -68,10 +68,19 @@ providers:
   profiles:
     echo:
       kind: echo
-      model: echo
       baseUrl: null
       credentialReference: null
       timeoutMs: 5000
+models:
+  profiles:
+    echo:
+      providerProfile: echo
+      model: echo
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: echo
 sandbox:

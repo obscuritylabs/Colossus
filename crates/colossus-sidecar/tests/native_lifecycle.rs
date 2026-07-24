@@ -5,10 +5,9 @@
 use colossus_api::{ApiScope, IdempotencyKey, scopes};
 use colossus_sdk::{
     ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, InputContentPart,
-    InstanceId, ManagedAccessProfile, ManagedProviderConfig, ManagedProviderKind,
-    ManagedRuntimeConfig, NativeSidecarLifecycle, NativeSidecarStatus, RunMode, Secret,
-    Sha256Digest, SidecarApplicationGrant, SidecarApprovalBrokerGrant, SidecarBootstrapConfig,
-    SidecarOptions, VerifiedExecutable,
+    InstanceId, ManagedAccessProfile, ManagedRuntimeConfig, NativeSidecarLifecycle,
+    NativeSidecarStatus, RunMode, Secret, Sha256Digest, SidecarApplicationGrant,
+    SidecarApprovalBrokerGrant, SidecarBootstrapConfig, SidecarOptions, VerifiedExecutable,
 };
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -134,15 +133,7 @@ async fn verified_sidecar_bootstraps_pinned_grpc_and_closes_by_guardian_eof() {
     .expect("grant");
     let bootstrap = SidecarBootstrapConfig::new(
         &workspace,
-        ManagedRuntimeConfig {
-            access_profile: ManagedAccessProfile::Minimal,
-            provider: ManagedProviderConfig {
-                kind: ManagedProviderKind::Echo,
-                model: "echo".into(),
-                base_url: None,
-                credential_id: None,
-            },
-        },
+        ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal),
         grant,
     )
     .expect("bootstrap")

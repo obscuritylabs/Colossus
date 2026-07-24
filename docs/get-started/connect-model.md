@@ -9,8 +9,9 @@ type: how-to
 
 ## Goal
 
-Replace the offline `echo` route with a network model profile while keeping the
-credential outside configuration and granting only the provider's exact network origin.
+Replace the offline `echo` route with a provider connection and explicit model profile
+while keeping the credential outside configuration and granting only the provider's
+exact network origin.
 
 ## Prerequisites
 
@@ -55,12 +56,21 @@ Edit `.colossus/config.yaml`.
     ```yaml
     providers:
       profiles:
-        openai:
+        openai-provider:
           kind: open_ai_responses
-          model: YOUR_MODEL_ID
           baseUrl: https://api.openai.com/v1
           credentialReference: env:COLOSSUS_PROVIDER_API_KEY
           timeoutMs: 120000
+    models:
+      profiles:
+        openai:
+          providerProfile: openai-provider
+          model: YOUR_MODEL_ID
+          contextWindowTokens: 128000
+          maxOutputTokens: 16000
+          capabilities:
+            toolCalls: true
+            streaming: true
       roles:
         primary: openai
 
@@ -74,12 +84,21 @@ Edit `.colossus/config.yaml`.
     ```yaml
     providers:
       profiles:
-        openrouter:
+        openrouter-provider:
           kind: open_ai_compatible
-          model: openrouter/free
           baseUrl: https://openrouter.ai/api/v1
           credentialReference: env:COLOSSUS_PROVIDER_API_KEY
           timeoutMs: 120000
+    models:
+      profiles:
+        openrouter:
+          providerProfile: openrouter-provider
+          model: openrouter/free
+          contextWindowTokens: 128000
+          maxOutputTokens: 16000
+          capabilities:
+            toolCalls: true
+            streaming: true
       roles:
         primary: openrouter
 
@@ -96,12 +115,14 @@ The origin grant contains only scheme, host, and effective port. The API path re
 
 ```bash
 colossus --config .colossus/config.yaml models route primary
-colossus --config .colossus/config.yaml provider doctor
+colossus --config .colossus/config.yaml provider doctor openai-provider
+colossus --config .colossus/config.yaml models doctor openai
 ```
 
-The route command is network-free. For a network provider, `provider doctor` sends one
-bounded readiness probe to the configured generation endpoint in addition to checking
-the model catalog; its response content is not printed.
+The route command is network-free. `provider doctor` checks the provider connection and
+catalog. `models doctor` sends one bounded generation probe for the configured model;
+its response content is not printed. Use the matching OpenRouter profile names when
+following that example.
 
 ### 4. Send one bounded model turn
 
@@ -121,6 +142,7 @@ Inspect the active route and recent redacted audit envelopes:
 
 ```bash
 colossus --config .colossus/config.yaml provider profiles
+colossus --config .colossus/config.yaml models profiles
 colossus --config .colossus/config.yaml audit show --limit 10
 ```
 

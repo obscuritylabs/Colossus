@@ -1,5 +1,5 @@
 use super::*;
-use colossus_contracts::{ProviderRoute, ProviderTurn};
+use colossus_contracts::{ModelCapabilities, ModelLimits, ProviderRoute, ProviderTurn};
 use colossus_ports::ModelProviderError;
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
@@ -36,12 +36,7 @@ type Fixture = (
 #[async_trait]
 impl ModelProvider for SummaryProvider {
     fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
-        Ok(ProviderRoute {
-            role: role.into(),
-            profile: "summary".into(),
-            provider: "test".into(),
-            model: "summary-model".into(),
-        })
+        Ok(model_route(role))
     }
 
     async fn turn(
@@ -56,6 +51,8 @@ impl ModelProvider for SummaryProvider {
             |output| {
                 Ok(ProviderTurn {
                     profile: "summary".into(),
+                    model_profile: "summary".into(),
+                    provider_profile: "summary-provider".into(),
                     provider: "test".into(),
                     model: "summary-model".into(),
                     response_id: None,
@@ -65,6 +62,39 @@ impl ModelProvider for SummaryProvider {
                 })
             },
         )
+    }
+}
+
+fn model_route(role: &str) -> ProviderRoute {
+    ProviderRoute {
+        role: role.into(),
+        profile: "summary".into(),
+        model_profile: "summary".into(),
+        provider_profile: "summary-provider".into(),
+        provider: "test".into(),
+        model: "summary-model".into(),
+        limits: ModelLimits {
+            context_window_tokens: 4_096,
+            max_output_tokens: 512,
+            safety_margin_tokens: 512,
+            input_budget_tokens: 3_072,
+        },
+        capabilities: ModelCapabilities {
+            tool_calls: true,
+            streaming: true,
+        },
+    }
+}
+
+fn preparation_request(messages: Vec<ModelMessage>, force: bool) -> ContextPreparationRequest {
+    ContextPreparationRequest {
+        session_id: "session-1".into(),
+        instructions: "test".into(),
+        messages,
+        tools: Vec::new(),
+        route: model_route("primary"),
+        context: execution_context(),
+        force,
     }
 }
 
@@ -112,7 +142,6 @@ async fn automatic_compaction_preserves_recent_tail_and_raw_history() {
         calls: AtomicUsize::new(0),
     });
     let config = ContextConfig {
-        context_window_tokens: 1_024,
         compact_at_percent: 50,
         target_percent: 30,
         preserve_recent_messages: 2,
@@ -123,7 +152,7 @@ async fn automatic_compaction_preserves_recent_tail_and_raw_history() {
     let messages = vec![
         message(
             ModelMessageRole::User,
-            format!("Please implement durable context. {}", "x".repeat(4_000)),
+            format!("Please implement durable context. {}", "x".repeat(6_000)),
         ),
         message(ModelMessageRole::Assistant, "work completed"),
         message(ModelMessageRole::User, "recent request"),
@@ -136,14 +165,7 @@ async fn automatic_compaction_preserves_recent_tail_and_raw_history() {
     }
 
     let prepared = service
-        .prepare(
-            "session-1",
-            "test",
-            messages.clone(),
-            &[],
-            execution_context(),
-            false,
-        )
+        .prepare(preparation_request(messages.clone(), false))
         .await
         .expect("prepared");
 
@@ -167,14 +189,7 @@ async fn below_threshold_does_not_create_snapshot() {
     let (_journal, _sessions, snapshots, service) = fixture(ContextConfig::default(), provider);
     let messages = vec![message(ModelMessageRole::User, "short")];
     let prepared = service
-        .prepare(
-            "session-1",
-            "test",
-            messages.clone(),
-            &[],
-            execution_context(),
-            false,
-        )
+        .prepare(preparation_request(messages.clone(), false))
         .await
         .expect("prepared");
     assert_eq!(prepared.messages, messages);
@@ -302,14 +317,7 @@ async fn active_decisions_are_binding_context_before_snapshots() {
     let service = service.with_work_repository(Arc::clone(&work));
 
     let compacted = service
-        .prepare(
-            "session-1",
-            "test",
-            vec![message],
-            &[],
-            execution_context(),
-            true,
-        )
+        .prepare(preparation_request(vec![message], true))
         .await
         .expect("prepared");
     assert!(
@@ -333,19 +341,15 @@ async fn active_decisions_are_binding_context_before_snapshots() {
         .archive_decision(&decision.id, user_actor())
         .expect("archive");
     let after_archive = service
-        .prepare(
-            "session-1",
-            "test",
+        .prepare(preparation_request(
             sessions
                 .list_messages("session-1")
                 .expect("messages")
                 .into_iter()
                 .map(|record| record.message)
                 .collect(),
-            &[],
-            execution_context(),
             false,
-        )
+        ))
         .await
         .expect("prepared after archive");
     assert!(
@@ -402,14 +406,7 @@ async fn relevant_memories_follow_decisions_and_precede_snapshots() {
         .with_work_repository(work)
         .with_memory_retriever(memories);
     let prepared = service
-        .prepare(
-            "session-1",
-            "test",
-            vec![message],
-            &[],
-            execution_context(),
-            true,
-        )
+        .prepare(preparation_request(vec![message], true))
         .await
         .expect("prepare");
     assert!(

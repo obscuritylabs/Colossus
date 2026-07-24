@@ -6,8 +6,6 @@ use super::*;
 pub struct ContextConfig {
     /// Create snapshots automatically when the threshold is crossed.
     pub auto_compaction: bool,
-    /// Fallback model context window used for deterministic budgeting.
-    pub context_window_tokens: u64,
     /// Integer percentage at which automatic compaction begins.
     pub compact_at_percent: u8,
     /// Integer percentage targeted after compaction.
@@ -22,7 +20,6 @@ impl Default for ContextConfig {
     fn default() -> Self {
         Self {
             auto_compaction: true,
-            context_window_tokens: 32_768,
             compact_at_percent: 70,
             target_percent: 45,
             preserve_recent_messages: 8,
@@ -34,25 +31,24 @@ impl Default for ContextConfig {
 impl ContextConfig {
     /// Validate safety-relevant budget relationships.
     pub fn validate(&self) -> Result<(), ContextError> {
-        if self.context_window_tokens < 1_024
-            || self.target_percent == 0
+        if self.target_percent == 0
             || self.compact_at_percent >= 100
             || self.target_percent >= self.compact_at_percent
             || self.preserve_recent_messages > 1_024
         {
             return Err(ContextError::Configuration(
-                "contextWindowTokens must be >=1024, targetPercent must be below compactAtPercent, percentages must be in 1..100, and preserveRecentMessages must be <=1024"
+                "targetPercent must be below compactAtPercent, percentages must be in 1..100, and preserveRecentMessages must be <=1024"
                     .into(),
             ));
         }
         Ok(())
     }
 
-    pub(super) fn threshold_tokens(&self) -> u64 {
-        self.context_window_tokens * u64::from(self.compact_at_percent) / 100
+    pub(super) fn threshold_tokens(&self, input_budget_tokens: u64) -> u64 {
+        input_budget_tokens * u64::from(self.compact_at_percent) / 100
     }
 
-    pub(super) fn target_tokens(&self) -> u64 {
-        self.context_window_tokens * u64::from(self.target_percent) / 100
+    pub(super) fn target_tokens(&self, input_budget_tokens: u64) -> u64 {
+        input_budget_tokens * u64::from(self.target_percent) / 100
     }
 }

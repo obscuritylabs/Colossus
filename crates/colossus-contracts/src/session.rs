@@ -117,8 +117,16 @@ pub struct ContextStatus {
     pub raw_token_estimate: u64,
     /// Estimated tokens in the provider-visible prepared request.
     pub token_estimate: u64,
-    /// Configured fallback context window.
+    /// Model profile whose budget was evaluated.
+    pub model_profile: String,
+    /// Configured model context window.
     pub context_window_tokens: u64,
+    /// Configured output reservation.
+    pub max_output_tokens: u64,
+    /// Conservative safety reservation.
+    pub safety_margin_tokens: u64,
+    /// Effective input budget.
+    pub input_budget_tokens: u64,
     /// Automatic compaction threshold.
     pub threshold_tokens: u64,
     /// Post-compaction target.
@@ -141,8 +149,16 @@ pub struct PreparedContext {
     pub token_estimate: u64,
     /// Estimated tokens before snapshot application.
     pub original_token_estimate: u64,
+    /// Model profile whose budget was applied.
+    pub model_profile: String,
     /// Configured model context window.
     pub context_window_tokens: u64,
+    /// Configured output reservation.
+    pub max_output_tokens: u64,
+    /// Conservative safety reservation.
+    pub safety_margin_tokens: u64,
+    /// Effective input budget.
+    pub input_budget_tokens: u64,
     /// Automatic compaction threshold.
     pub threshold_tokens: u64,
     /// Post-compaction target.

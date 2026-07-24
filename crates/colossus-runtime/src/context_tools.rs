@@ -5,9 +5,11 @@ use super::*;
 pub(super) enum ContextOperation {
     Show {
         session_id: String,
+        role: String,
     },
     Compact {
         session_id: String,
+        role: String,
     },
     Snapshots {
         session_id: String,
@@ -30,8 +32,8 @@ impl ContextOperation {
 
     pub(super) fn session_id(&self) -> &str {
         match self {
-            Self::Show { session_id }
-            | Self::Compact { session_id }
+            Self::Show { session_id, .. }
+            | Self::Compact { session_id, .. }
             | Self::Snapshots { session_id }
             | Self::Restore { session_id, .. } => session_id,
         }
@@ -65,15 +67,16 @@ impl EffectExecutor for ContextEffectExecutor {
             ));
         }
         let value = match operation {
-            ContextOperation::Show { session_id } => serde_json::to_value(
+            ContextOperation::Show { session_id, role } => serde_json::to_value(
                 self.service
-                    .status(&session_id)
+                    .status_for_role(&session_id, &role)
                     .map_err(context_execution_error)?,
             ),
-            ContextOperation::Compact { session_id } => serde_json::to_value(
+            ContextOperation::Compact { session_id, role } => serde_json::to_value(
                 self.service
-                    .compact_with_context(
+                    .compact_for_role_with_context(
                         &session_id,
+                        &role,
                         "You are Colossus.",
                         &self.tool_definitions,
                         request.context.clone(),
@@ -125,9 +128,11 @@ impl ToolExecutor for ContextToolExecutor {
         let operation = match call.name.as_str() {
             "context.show" => ContextOperation::Show {
                 session_id: context_tool_session(&context)?,
+                role: "primary".into(),
             },
             "context.compact" => ContextOperation::Compact {
                 session_id: context_tool_session(&context)?,
+                role: "primary".into(),
             },
             "context.snapshots" => ContextOperation::Snapshots {
                 session_id: context_tool_session(&context)?,

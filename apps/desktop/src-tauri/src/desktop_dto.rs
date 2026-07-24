@@ -1,13 +1,30 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use colossus_sdk::{
+    validate_managed_model_identifier, validate_managed_provider_base_url,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     desktop_settings::{
-        AccessProfileSetting, DesktopSettings, ProviderKindSetting, WorkspaceSetting,
+        AccessProfileSetting, DesktopSettings, MAX_MANAGED_MODELS, MAX_MANAGED_PROVIDERS,
+        ModelCapabilitiesSetting, ModelSetting, ProviderKindSetting, ProviderSetting,
+        WorkspaceSetting,
     },
     dto::{CommandErrorDto, ConnectionStatusDto},
 };
 
 const MAX_MODEL_BYTES: usize = 256;
+const MAX_PROFILE_BYTES: usize = 64;
+pub(crate) const MANAGED_MODEL_ROLES: [&str; 7] = [
+    "primary",
+    "risk_evaluator",
+    "context_summarizer",
+    "subagent_default",
+    "research_planner",
+    "research_worker",
+    "research_synthesizer",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,18 +122,21 @@ pub(crate) struct ProviderSummaryDto {
 
 impl ProviderSummaryDto {
     pub(crate) fn from_settings(settings: &DesktopSettings) -> Self {
-        settings.provider.as_ref().map_or_else(
-            || Self {
-                configured: false,
-                kind: None,
-                model: String::new(),
-            },
-            |provider| Self {
-                configured: true,
-                kind: Some(provider.kind),
-                model: provider.model.clone(),
-            },
-        )
+        settings
+            .primary_model()
+            .zip(settings.primary_provider())
+            .map_or_else(
+                || Self {
+                    configured: false,
+                    kind: None,
+                    model: String::new(),
+                },
+                |(model, provider)| Self {
+                    configured: true,
+                    kind: Some(provider.kind),
+                    model: model.model.clone(),
+                },
+            )
     }
 }
 
@@ -130,8 +150,220 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) managed_state: ManagedRuntimeStateDto,
     pub(crate) workspace: Option<WorkspaceSummaryDto>,
     pub(crate) provider: ProviderSummaryDto,
+    pub(crate) managed_model_configuration: ManagedModelConfigurationDto,
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) terminal_enabled: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ManagedProviderDto {
+    pub(crate) profile: String,
+    pub(crate) provider_kind: ProviderKindSetting,
+    pub(crate) base_url: String,
+    pub(crate) has_credential: bool,
+    pub(crate) timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ManagedModelDto {
+    pub(crate) profile: String,
+    pub(crate) provider_profile: String,
+    pub(crate) model: String,
+    pub(crate) context_window_tokens: u64,
+    pub(crate) max_output_tokens: u64,
+    pub(crate) capabilities: ModelCapabilitiesSetting,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ManagedModelConfigurationDto {
+    pub(crate) providers: Vec<ManagedProviderDto>,
+    pub(crate) models: Vec<ManagedModelDto>,
+    pub(crate) roles: BTreeMap<String, String>,
+}
+
+impl ManagedModelConfigurationDto {
+    pub(crate) fn from_settings(settings: &DesktopSettings) -> Self {
+        Self {
+            providers: settings
+                .providers
+                .iter()
+                .map(|provider| ManagedProviderDto {
+                    profile: provider.profile.clone(),
+                    provider_kind: provider.kind,
+                    base_url: provider.base_url.clone(),
+                    has_credential: provider.credential_id.is_some(),
+                    timeout_ms: provider.timeout_ms,
+                })
+                .collect(),
+            models: settings
+                .models
+                .iter()
+                .map(|model| ManagedModelDto {
+                    profile: model.profile.clone(),
+                    provider_profile: model.provider_profile.clone(),
+                    model: model.model.clone(),
+                    context_window_tokens: model.context_window_tokens,
+                    max_output_tokens: model.max_output_tokens,
+                    capabilities: model.capabilities,
+                })
+                .collect(),
+            roles: settings.model_roles.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CredentialActionInput {
+    None,
+    Reuse,
+    Replace,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ManagedProviderInput {
+    pub(crate) profile: String,
+    pub(crate) provider_kind: ProviderKindSetting,
+    pub(crate) base_url: String,
+    pub(crate) timeout_ms: u64,
+    pub(crate) credential_action: CredentialActionInput,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ManagedModelInput {
+    pub(crate) profile: String,
+    pub(crate) provider_profile: String,
+    pub(crate) model: String,
+    pub(crate) context_window_tokens: u64,
+    pub(crate) max_output_tokens: u64,
+    pub(crate) capabilities: ModelCapabilitiesSetting,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ApplyManagedModelConfigurationInput {
+    pub(crate) workspace_id: String,
+    pub(crate) providers: Vec<ManagedProviderInput>,
+    pub(crate) models: Vec<ManagedModelInput>,
+    pub(crate) roles: BTreeMap<String, String>,
+    pub(crate) access_profile: AccessProfileSetting,
+}
+
+impl ApplyManagedModelConfigurationInput {
+    pub(crate) fn validate(&self) -> Result<(), CommandErrorDto> {
+        if uuid::Uuid::parse_str(&self.workspace_id).is_err() {
+            return Err(CommandErrorDto::invalid(
+                "workspaceId",
+                "The workspace selection is no longer valid.",
+            ));
+        }
+        if self.providers.is_empty()
+            || self.providers.len() > MAX_MANAGED_PROVIDERS
+            || self.models.is_empty()
+            || self.models.len() > MAX_MANAGED_MODELS
+        {
+            return Err(CommandErrorDto::invalid(
+                "models",
+                "Managed Local requires 1–16 providers and 1–64 models.",
+            ));
+        }
+        if self.access_profile == AccessProfileSetting::LegacyAllowAll {
+            return Err(CommandErrorDto::invalid(
+                "accessProfile",
+                "Managed Local accepts only the Minimal or Development access profile.",
+            ));
+        }
+
+        let mut providers = BTreeSet::new();
+        for provider in &self.providers {
+            if !valid_profile(&provider.profile)
+                || !providers.insert(provider.profile.as_str())
+                || provider.timeout_ms == 0
+                || validate_managed_provider_base_url(&provider.base_url).is_err()
+            {
+                return Err(CommandErrorDto::invalid(
+                    "providers",
+                    "A provider profile, URL, or timeout is invalid.",
+                ));
+            }
+        }
+
+        let mut models = BTreeSet::new();
+        for model in &self.models {
+            let safety = model.context_window_tokens.div_ceil(10).max(512);
+            if !valid_profile(&model.profile)
+                || !models.insert(model.profile.as_str())
+                || !providers.contains(model.provider_profile.as_str())
+                || validate_managed_model_identifier(&model.model).is_err()
+                || model.context_window_tokens < 1_024
+                || model.max_output_tokens == 0
+                || model
+                    .context_window_tokens
+                    .checked_sub(model.max_output_tokens)
+                    .and_then(|remaining| remaining.checked_sub(safety))
+                    .is_none_or(|input| input == 0)
+            {
+                return Err(CommandErrorDto::invalid(
+                    "models",
+                    "A model profile, provider reference, model ID, or token limit is invalid.",
+                ));
+            }
+        }
+        if !self.roles.contains_key("primary")
+            || self.roles.iter().any(|(role, profile)| {
+                !MANAGED_MODEL_ROLES.contains(&role.as_str()) || !models.contains(profile.as_str())
+            })
+        {
+            return Err(CommandErrorDto::invalid(
+                "roles",
+                "Model roles must reference configured model profiles and include primary.",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn providers_with_credentials(
+        &self,
+        credential_ids: &BTreeMap<String, Option<String>>,
+    ) -> Vec<ProviderSetting> {
+        self.providers
+            .iter()
+            .map(|provider| ProviderSetting {
+                profile: provider.profile.clone(),
+                kind: provider.provider_kind,
+                base_url: provider.base_url.clone(),
+                credential_id: credential_ids.get(&provider.profile).cloned().flatten(),
+                timeout_ms: provider.timeout_ms,
+            })
+            .collect()
+    }
+
+    pub(crate) fn model_settings(&self) -> Vec<ModelSetting> {
+        self.models
+            .iter()
+            .map(|model| ModelSetting {
+                profile: model.profile.clone(),
+                provider_profile: model.provider_profile.clone(),
+                model: model.model.clone(),
+                context_window_tokens: model.context_window_tokens,
+                max_output_tokens: model.max_output_tokens,
+                capabilities: model.capabilities,
+            })
+            .collect()
+    }
+}
+
+fn valid_profile(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_PROFILE_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,6 +418,35 @@ mod tests {
         }
     }
 
+    fn managed_input(base_url: &str) -> ApplyManagedModelConfigurationInput {
+        ApplyManagedModelConfigurationInput {
+            workspace_id: uuid::Uuid::now_v7().to_string(),
+            providers: vec![ManagedProviderInput {
+                profile: "local-provider".into(),
+                provider_kind: ProviderKindSetting::OpenAiCompatible,
+                base_url: base_url.into(),
+                timeout_ms: 30_000,
+                credential_action: CredentialActionInput::None,
+            }],
+            models: vec![ManagedModelInput {
+                profile: "primary".into(),
+                provider_profile: "local-provider".into(),
+                model: "local-model".into(),
+                context_window_tokens: 32_768,
+                max_output_tokens: 4_096,
+                capabilities: ModelCapabilitiesSetting {
+                    tool_calls: false,
+                    streaming: true,
+                },
+            }],
+            roles: BTreeMap::from([
+                ("primary".into(), "primary".into()),
+                ("context_summarizer".into(), "primary".into()),
+            ]),
+            access_profile: AccessProfileSetting::Minimal,
+        }
+    }
+
     #[test]
     fn managed_input_has_no_renderer_credential_or_origin_surface() {
         let input = input();
@@ -220,6 +481,79 @@ mod tests {
         let mut input = input();
         input.access_profile = AccessProfileSetting::LegacyAllowAll;
         assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn managed_configuration_accepts_https_and_loopback_http_without_credentials() {
+        assert!(
+            managed_input("https://models.example.test/v1")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            managed_input("http://127.0.0.1:11434/v1")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            managed_input("http://localhost:11434/v1")
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn managed_configuration_rejects_unsafe_urls_and_invalid_model_routes() {
+        for url in [
+            "http://models.example.test/v1",
+            "https://user@example.test/v1",
+            "https://example.test/v1?key=secret",
+            "https://example.test/v1#fragment",
+        ] {
+            assert!(managed_input(url).validate().is_err(), "accepted {url}");
+        }
+        let mut input = managed_input("https://models.example.test/v1");
+        input.models[0].provider_profile = "missing".into();
+        assert!(input.validate().is_err());
+        input.models[0].provider_profile = "local-provider".into();
+        input.roles.insert("primary".into(), "missing".into());
+        assert!(input.validate().is_err());
+        input.roles.insert("primary".into(), "primary".into());
+        input.models[0].model = "model with spaces".into();
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn renderer_configuration_summary_omits_native_credential_ids() {
+        let credential_id = uuid::Uuid::now_v7().to_string();
+        let settings = DesktopSettings {
+            providers: vec![ProviderSetting {
+                profile: "provider".into(),
+                kind: ProviderKindSetting::OpenAiCompatible,
+                base_url: "https://models.example.test/v1".into(),
+                credential_id: Some(credential_id.clone()),
+                timeout_ms: 30_000,
+            }],
+            models: vec![ModelSetting {
+                profile: "primary".into(),
+                provider_profile: "provider".into(),
+                model: "model".into(),
+                context_window_tokens: 32_768,
+                max_output_tokens: 4_096,
+                capabilities: ModelCapabilitiesSetting {
+                    tool_calls: true,
+                    streaming: false,
+                },
+            }],
+            model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
+            ..DesktopSettings::default()
+        };
+
+        let serialized =
+            serde_json::to_string(&ManagedModelConfigurationDto::from_settings(&settings))
+                .expect("summary");
+        assert!(!serialized.contains(&credential_id));
+        assert!(serialized.contains(r#""hasCredential":true"#));
     }
 
     #[test]

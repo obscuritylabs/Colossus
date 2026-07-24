@@ -64,6 +64,36 @@ export interface ProviderSummary {
   model: string;
 }
 
+export type ProviderKind = "openai_responses" | "openai_compatible";
+
+export interface ManagedProviderConfiguration {
+  profile: string;
+  providerKind: ProviderKind;
+  baseUrl: string;
+  hasCredential: boolean;
+  timeoutMs: number;
+}
+
+export interface ManagedModelCapabilities {
+  toolCalls: boolean;
+  streaming: boolean;
+}
+
+export interface ManagedModelConfiguration {
+  profile: string;
+  providerProfile: string;
+  model: string;
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  capabilities: ManagedModelCapabilities;
+}
+
+export interface ManagedConfiguration {
+  providers: ManagedProviderConfiguration[];
+  models: ManagedModelConfiguration[];
+  roles: Record<string, string>;
+}
+
 export type DesktopReleaseChannel =
   "development" | "stable" | "developer_preview" | "validation_only";
 
@@ -75,16 +105,35 @@ export interface DesktopStatus {
   managedState: ManagedRuntimeState;
   workspace: WorkspaceSummary | null;
   provider: ProviderSummary;
+  managedModelConfiguration: ManagedConfiguration;
   accessProfile: "minimal" | "development";
   terminalEnabled: boolean;
 }
 
 export interface ConfigureManagedRuntimeRequest {
   workspaceId: string;
-  providerKind: "openai_responses" | "openai_compatible";
+  providerKind: ProviderKind;
   model: string;
   accessProfile: "minimal" | "development";
   replaceCredential: boolean;
+}
+
+export type CredentialAction = "none" | "reuse" | "replace";
+
+export interface ManagedProviderConfigurationInput {
+  profile: string;
+  providerKind: ProviderKind;
+  baseUrl: string;
+  timeoutMs: number;
+  credentialAction: CredentialAction;
+}
+
+export interface ApplyManagedModelConfigurationRequest {
+  workspaceId: string;
+  providers: ManagedProviderConfigurationInput[];
+  models: ManagedModelConfiguration[];
+  roles: Record<string, string>;
+  accessProfile: "minimal" | "development";
 }
 
 export type TerminalKind = "colossus_tui";
@@ -154,6 +203,8 @@ export type OutcomeCertainty = "known" | "unknown";
 export interface RunResult {
   output: string;
   profile: string;
+  modelProfile: string;
+  providerProfile: string;
   model: string;
   elapsedSeconds: number;
 }

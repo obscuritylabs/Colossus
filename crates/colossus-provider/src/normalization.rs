@@ -73,19 +73,22 @@ pub(super) fn validate_credential_disclosure(
 
 pub(super) fn validate_model_request(
     request: &ModelRequest,
-    profile: &ProviderProfile,
+    resolved_max_output_tokens: u64,
 ) -> Result<(), ProviderError> {
-    if request.model != profile.model
-        || request.messages.is_empty()
+    if request.messages.is_empty()
         || request.messages.len() > 512
         || request.tools.len() > 128
+        || resolved_max_output_tokens == 0
+        || request
+            .max_output_tokens
+            .is_some_and(|limit| limit == 0 || limit != resolved_max_output_tokens)
         || request
             .messages
             .iter()
             .any(|message| message.content.len() > MAX_PROVIDER_REQUEST_BYTES)
     {
         return Err(ProviderError::Configuration(
-            "provider request model, messages, or bounds are invalid".into(),
+            "provider request messages, tools, or bounds are invalid".into(),
         ));
     }
     let mut names = BTreeSet::new();
@@ -105,6 +108,8 @@ pub(super) fn validate_model_request(
 
 pub(super) fn responses_payload(
     request: &ModelRequest,
+    model: &str,
+    max_output_tokens: u64,
     streaming: bool,
 ) -> Result<Value, ProviderError> {
     let mut input = Vec::new();
@@ -125,9 +130,10 @@ pub(super) fn responses_payload(
         })
         .collect::<Vec<_>>();
     let mut payload = json!({
-        "model": request.model,
+        "model": model,
         "instructions": request.instructions,
         "input": input,
+        "max_output_tokens": max_output_tokens,
         "store": false,
         "stream": streaming,
     });
@@ -180,6 +186,8 @@ pub(super) fn responses_tool_call(call: &ModelToolCall) -> Value {
 
 pub(super) fn chat_payload(
     request: &ModelRequest,
+    model: &str,
+    max_output_tokens: u64,
     streaming: bool,
 ) -> Result<Value, ProviderError> {
     let mut messages = Vec::new();
@@ -194,7 +202,12 @@ pub(super) fn chat_payload(
             .collect::<Result<Vec<_>, _>>()?,
     );
     let tools = request.tools.iter().map(chat_tool).collect::<Vec<_>>();
-    let mut payload = json!({"model": request.model, "messages": messages, "stream": streaming});
+    let mut payload = json!({
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_output_tokens,
+        "stream": streaming
+    });
     if streaming {
         payload["stream_options"] = json!({"include_usage": true});
     }
@@ -248,6 +261,8 @@ pub(super) fn chat_tool(tool: &ModelToolDefinition) -> Value {
 
 pub(super) fn normalize_responses(
     profile: &ProviderProfile,
+    model_profile: &str,
+    model: &str,
     bytes: &[u8],
 ) -> Result<ProviderTurn, ProviderError> {
     let data: Value = serde_json::from_slice(bytes)
@@ -323,9 +338,11 @@ pub(super) fn normalize_responses(
         return Err(ProviderError::Malformed(response_shape(object, "output")));
     }
     Ok(ProviderTurn {
-        profile: profile.name.clone(),
+        profile: model_profile.into(),
+        model_profile: model_profile.into(),
+        provider_profile: profile.name.clone(),
         provider: profile.kind.as_str().into(),
-        model: profile.model.clone(),
+        model: model.into(),
         response_id: object.get("id").and_then(Value::as_str).map(str::to_owned),
         events,
     })
@@ -333,6 +350,8 @@ pub(super) fn normalize_responses(
 
 pub(super) fn normalize_chat(
     profile: &ProviderProfile,
+    model_profile: &str,
+    model: &str,
     bytes: &[u8],
 ) -> Result<ProviderTurn, ProviderError> {
     let data: Value = serde_json::from_slice(bytes)
@@ -386,9 +405,11 @@ pub(super) fn normalize_chat(
         return Err(ProviderError::Malformed(response_shape(object, "choices")));
     }
     Ok(ProviderTurn {
-        profile: profile.name.clone(),
+        profile: model_profile.into(),
+        model_profile: model_profile.into(),
+        provider_profile: profile.name.clone(),
         provider: profile.kind.as_str().into(),
-        model: profile.model.clone(),
+        model: model.into(),
         response_id: object.get("id").and_then(Value::as_str).map(str::to_owned),
         events,
     })

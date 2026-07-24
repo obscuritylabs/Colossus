@@ -64,6 +64,8 @@ function runFixture(
           result: {
             output: `Output for ${runId}`,
             profile: "default",
+            modelProfile: "default",
+            providerProfile: "default-provider",
             model: "test-model",
             elapsedSeconds: 1,
           },
@@ -123,6 +125,8 @@ describe("chatReducer", () => {
       result: {
         output: "Done",
         profile: "default",
+        modelProfile: "default",
+        providerProfile: "default-provider",
         model: "test-model",
         elapsedSeconds: 1.25,
       },
@@ -225,6 +229,8 @@ describe("chatReducer", () => {
         result: {
           output: oversized,
           profile: "default",
+          modelProfile: "default",
+          providerProfile: "default-provider",
           model: "test-model",
           elapsedSeconds: 1,
         },
@@ -287,6 +293,8 @@ describe("chatReducer", () => {
           result: {
             output: "Done",
             profile: "default",
+            modelProfile: "default",
+            providerProfile: "default-provider",
             model: "test-model",
             elapsedSeconds: 1,
           },
@@ -330,6 +338,8 @@ describe("chatReducer", () => {
         result: {
           output: "Sensitive streamed output stays out of Activity.",
           profile: "default",
+          modelProfile: "default",
+          providerProfile: "default-provider",
           model: "test-model",
           elapsedSeconds: 1.5,
         },

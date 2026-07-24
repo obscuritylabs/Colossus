@@ -318,6 +318,10 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             }
         },
         Command::Models(command) => match command.command {
+            ModelsAction::Profiles => print_json(&runtime.model_profiles())?,
+            ModelsAction::Doctor { profile } => {
+                print_json(&runtime.model_doctor(profile.as_deref()).await?)?;
+            }
             ModelsAction::Routes => print_json(&runtime.provider_routes())?,
             ModelsAction::Route { role } => print_json(&runtime.provider_route(&role)?)?,
         },
@@ -345,14 +349,14 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             print_json(&runtime.work_state(&session_id)?)?;
         }
         Command::Context(command) => match command.command {
-            ContextAction::Status { session_id } => {
-                print_json(&runtime.context_status(&session_id).await?)?;
+            ContextAction::Status { session_id, role } => {
+                print_json(&runtime.context_status_for_role(&session_id, &role).await?)?;
             }
             ContextAction::List { session_id } => {
                 print_json(&runtime.context_snapshots(&session_id).await?)?;
             }
-            ContextAction::Compact { session_id } => {
-                print_json(&runtime.compact_context(&session_id).await?)?;
+            ContextAction::Compact { session_id, role } => {
+                print_json(&runtime.compact_context_for_role(&session_id, &role).await?)?;
             }
             ContextAction::Restore {
                 session_id,

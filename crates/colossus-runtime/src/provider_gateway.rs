@@ -160,8 +160,7 @@ impl RiskEvaluator for GatewayRiskEvaluator {
         request: &EffectRequest,
         decision: &colossus_contracts::PolicyDecision,
     ) -> Result<RiskAssessment, RiskEvaluationError> {
-        let route = self
-            .provider
+        self.provider
             .route("risk_evaluator")
             .map_err(|error| RiskEvaluationError::Unavailable(error.to_string()))?;
         let metadata = redacted_risk_metadata(request, decision);
@@ -172,7 +171,6 @@ impl RiskEvaluator for GatewayRiskEvaluator {
             .turn(
                 "risk_evaluator",
                 ModelRequest {
-                    model: route.model,
                     instructions: concat!(
                         "Assess the proposed shell effect conservatively. Return only one JSON object with exactly ",
                         "risk_level (low, medium, or high), recommended_decision (allow, deny, or require_approval), ",
@@ -188,6 +186,7 @@ impl RiskEvaluator for GatewayRiskEvaluator {
                         tool_calls: Vec::new(),
                     }],
                     tools: Vec::new(),
+                    max_output_tokens: None,
                 },
                 request.context.clone(),
             )
@@ -220,17 +219,12 @@ impl RiskEvaluator for GatewayRiskEvaluator {
 
 #[async_trait]
 impl ModelProvider for GatewayModelProvider {
-    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
-        let provider = self
+    fn route(&self, role: &str) -> Result<ModelRoute, ModelProviderError> {
+        let resolved = self
             .providers
             .resolve(role)
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
-        Ok(ProviderRoute {
-            role: role.into(),
-            profile: provider.profile().name.clone(),
-            provider: provider.profile().kind.as_str().into(),
-            model: provider.profile().model.clone(),
-        })
+        Ok(resolved.route())
     }
 
     async fn turn(
@@ -239,10 +233,13 @@ impl ModelProvider for GatewayModelProvider {
         request: colossus_contracts::ModelRequest,
         context: ExecutionContext,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        let provider = self
+        let resolved = self
             .providers
             .resolve(role)
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+        let route = resolved.route();
+        let provider = resolved.provider();
+        let max_output_tokens = resolved_output_limit(&route, &request)?;
         let endpoint = provider
             .profile()
             .generation_endpoint()
@@ -255,7 +252,10 @@ impl ModelProvider for GatewayModelProvider {
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
-                profile: provider.profile().name.clone(),
+                provider_profile: route.provider_profile,
+                model_profile: Some(route.model_profile),
+                model: Some(route.model),
+                max_output_tokens: Some(max_output_tokens),
                 request: Some(request),
             })
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?,
@@ -282,10 +282,21 @@ impl ModelProvider for GatewayModelProvider {
         context: ExecutionContext,
         observer: &mut dyn ProviderEventObserver,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        let provider = self
+        let route = self.route(role)?;
+        if !route.capabilities.streaming {
+            let turn = self.turn(role, request, context).await?;
+            for event in &turn.events {
+                observer.observe(event.clone()).await?;
+            }
+            return Ok(turn);
+        }
+        let resolved = self
             .providers
             .resolve(role)
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+        let route = resolved.route();
+        let provider = resolved.provider();
+        let max_output_tokens = resolved_output_limit(&route, &request)?;
         let endpoint = provider
             .profile()
             .generation_endpoint()
@@ -298,7 +309,10 @@ impl ModelProvider for GatewayModelProvider {
             provider.profile().kind.generation_action(),
             endpoint,
             serde_json::to_value(ProviderEffectInput {
-                profile: provider.profile().name.clone(),
+                provider_profile: route.provider_profile,
+                model_profile: Some(route.model_profile),
+                model: Some(route.model),
+                max_output_tokens: Some(max_output_tokens),
                 request: Some(request),
             })
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?,
@@ -319,7 +333,7 @@ impl ModelProvider for GatewayModelProvider {
 pub(super) struct ReleasedProviderStream<'a> {
     pub(super) observer: &'a mut dyn ProviderEventObserver,
     pub(super) events: Vec<ProviderEvent>,
-    pub(super) completed: Option<(String, String, String, Option<String>)>,
+    pub(super) completed: Option<(String, String, String, String, Option<String>)>,
 }
 
 impl<'a> ReleasedProviderStream<'a> {
@@ -339,6 +353,8 @@ impl<'a> ReleasedProviderStream<'a> {
         })?;
         let ProviderStreamItem::Completed {
             profile,
+            model_profile,
+            provider_profile,
             provider,
             model,
             response_id,
@@ -348,13 +364,15 @@ impl<'a> ReleasedProviderStream<'a> {
                 "released provider stream did not end with completion metadata".into(),
             ));
         };
-        if self.completed.as_ref()
-            != Some(&(
-                profile.clone(),
-                provider.clone(),
-                model.clone(),
-                response_id.clone(),
-            ))
+        if profile != model_profile
+            || self.completed.as_ref()
+                != Some(&(
+                    model_profile.clone(),
+                    provider_profile.clone(),
+                    provider.clone(),
+                    model.clone(),
+                    response_id.clone(),
+                ))
         {
             return Err(ModelProviderError::Failed(
                 "released provider stream completion metadata did not match".into(),
@@ -362,6 +380,8 @@ impl<'a> ReleasedProviderStream<'a> {
         }
         Ok(ProviderTurn {
             profile,
+            model_profile,
+            provider_profile,
             provider,
             model,
             response_id,
@@ -386,6 +406,8 @@ impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
             }
             ProviderStreamItem::Completed {
                 profile,
+                model_profile,
+                provider_profile,
                 provider,
                 model,
                 response_id,
@@ -395,10 +417,51 @@ impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
                         "provider stream completed more than once".into(),
                     ));
                 }
-                self.completed = Some((profile, provider, model, response_id));
+                if profile != model_profile {
+                    return Err(ExecutionError::Failed(
+                        "provider stream compatibility profile did not match model profile".into(),
+                    ));
+                }
+                self.completed = Some((
+                    model_profile,
+                    provider_profile,
+                    provider,
+                    model,
+                    response_id,
+                ));
             }
         }
         Ok(())
+    }
+}
+
+fn resolved_output_limit(
+    route: &ModelRoute,
+    request: &ModelRequest,
+) -> Result<u64, ModelProviderError> {
+    if !route.capabilities.tool_calls
+        && (!request.tools.is_empty()
+            || request.messages.iter().any(|message| {
+                message.role == ModelMessageRole::Tool || !message.tool_calls.is_empty()
+            }))
+    {
+        return Err(ModelProviderError::Configuration(format!(
+            "model profile {} does not support tool calls or structured tool history",
+            route.model_profile
+        )));
+    }
+    match request.max_output_tokens {
+        Some(0) => Err(ModelProviderError::Configuration(
+            "max_output_tokens must be greater than zero".into(),
+        )),
+        Some(limit) if limit > route.limits.max_output_tokens => {
+            Err(ModelProviderError::Configuration(format!(
+                "requested output limit {limit} exceeds model profile {} maximum {}",
+                route.model_profile, route.limits.max_output_tokens
+            )))
+        }
+        Some(limit) => Ok(limit),
+        None => Ok(route.limits.max_output_tokens),
     }
 }
 

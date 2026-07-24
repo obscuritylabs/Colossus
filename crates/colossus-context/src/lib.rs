@@ -9,8 +9,8 @@ use colossus_contracts::{
     ModelMessageRole, ModelRequest, ModelToolDefinition, NewEvent, PreparedContext, ProviderEvent,
 };
 use colossus_ports::{
-    ContextError, ContextPreparer, ContextRepository, EventJournal, MemoryRetriever, ModelProvider,
-    SessionRepository, StoreError, WorkRepository,
+    ContextError, ContextPreparationRequest, ContextPreparer, ContextRepository, EventJournal,
+    MemoryRetriever, ModelProvider, SessionRepository, StoreError, WorkRepository,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};

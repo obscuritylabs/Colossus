@@ -127,18 +127,32 @@ pub trait PresentationRepository: Send + Sync {
     fn append_history(&self, entry: String, actor: Actor) -> Result<String, StoreError>;
 }
 
+/// Complete input for one context-preparation pass.
+#[derive(Clone, Debug)]
+pub struct ContextPreparationRequest {
+    /// Canonical session whose history is being prepared.
+    pub session_id: String,
+    /// System instructions included in the model budget.
+    pub instructions: String,
+    /// Ordered model-visible messages for the pending turn.
+    pub messages: Vec<ModelMessage>,
+    /// Tool schemas exposed to the selected model.
+    pub tools: Vec<ModelToolDefinition>,
+    /// Resolved model route and its effective token limits.
+    pub route: ModelRoute,
+    /// Execution provenance retained by compaction side effects.
+    pub context: ExecutionContext,
+    /// Create a snapshot even when the automatic threshold is not exceeded.
+    pub force: bool,
+}
+
 /// Shared context preparation boundary used by every agent provider turn.
 #[async_trait]
 pub trait ContextPreparer: Send + Sync {
     /// Apply an active snapshot or create one when the configured budget requires it.
     async fn prepare(
         &self,
-        session_id: &str,
-        instructions: &str,
-        messages: Vec<ModelMessage>,
-        tools: &[ModelToolDefinition],
-        context: ExecutionContext,
-        force: bool,
+        request: ContextPreparationRequest,
     ) -> Result<PreparedContext, ContextError>;
 }
 /// Canonical task and key-decision lifecycle repository.

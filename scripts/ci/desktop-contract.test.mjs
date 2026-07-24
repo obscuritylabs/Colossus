@@ -158,21 +158,48 @@ test("provider enrollment and external trust stay behind native UI", () => {
   const types = read("apps/desktop/src/types.ts");
   const configureRequest = types.slice(
     types.indexOf("export interface ConfigureManagedRuntimeRequest"),
-    types.indexOf("export type TerminalKind"),
+    types.indexOf("export type CredentialAction"),
   );
   assert.doesNotMatch(configureRequest, /apiKey|baseUrl/u);
+  const managedConfigurationRequest = types.slice(
+    types.indexOf("export type CredentialAction"),
+    types.indexOf("export type TerminalKind"),
+  );
+  assert.match(managedConfigurationRequest, /baseUrl/u);
+  assert.match(managedConfigurationRequest, /credentialAction/u);
+  assert.doesNotMatch(
+    managedConfigurationRequest,
+    /apiKey|credentialId|credentialValue|secret/u,
+  );
 
   const onboarding = read("apps/desktop/src/components/OnboardingSurface.tsx");
   assert.doesNotMatch(onboarding, /type=["']password["']|API base URL/u);
   assert.match(onboarding, /native secure prompt/u);
   assert.match(onboarding, /WebView or renderer IPC/u);
+  const modelEditor = read(
+    "apps/desktop/src/components/ModelConfigurationEditor.tsx",
+  );
+  assert.match(modelEditor, /contextWindowTokens/u);
+  assert.match(modelEditor, /maxOutputTokens/u);
+  assert.match(modelEditor, /credentialAction/u);
+  assert.doesNotMatch(modelEditor, /type=["']password["']|apiKey|credentialId/u);
 
   const enrollment = read("apps/desktop/src-tauri/src/provider_enrollment.rs");
-  assert.match(enrollment, /Command::new\("\/usr\/bin\/osascript"\)/u);
-  assert.match(enrollment, /\.env_clear\(\)/u);
-  assert.match(enrollment, /with hidden answer/u);
-  assert.match(enrollment, /api\.openai\.com/u);
-  assert.match(enrollment, /openrouter\.ai/u);
+  const enrollmentImplementation = enrollment.slice(
+    0,
+    enrollment.indexOf("#[cfg(test)]"),
+  );
+  assert.match(
+    enrollmentImplementation,
+    /Command::new\("\/usr\/bin\/osascript"\)/u,
+  );
+  assert.match(enrollmentImplementation, /\.env_clear\(\)/u);
+  assert.match(enrollmentImplementation, /with hidden answer/u);
+  assert.doesNotMatch(
+    enrollmentImplementation,
+    /api\.openai\.com|openrouter\.ai/u,
+  );
+  assert.doesNotMatch(enrollmentImplementation, /starts_with|sk-or-v1/u);
 
   const commands = read("apps/desktop/src-tauri/src/desktop_commands.rs");
   assert.match(commands, /fn reusable_provider_credential/u);
@@ -181,6 +208,10 @@ test("provider enrollment and external trust stay behind native UI", () => {
   assert.match(commands, /verify_reused_provider_credential/u);
   assert.match(commands, /fn development_access_elevation/u);
   assert.match(commands, /confirm_development_access\(&app\)/u);
+  assert.match(commands, /fn confirm_provider_origins/u);
+  assert.match(commands, /fn rollback_staged_provider_credentials/u);
+  assert.match(commands, /fn reject_active_managed_runs/u);
+  assert.match(commands, /request_provider_secret\(\)/u);
   assert.match(commands, /Enable Development/u);
   for (const action of ["Import", "Connect", "Select", "Remove"]) {
     assert.match(commands, new RegExp(`ExternalConsentAction::${action}`, "u"));

@@ -113,7 +113,6 @@ fn provider_profiles_accept_only_valid_environment_or_host_references() {
         ProviderProfile::new(
             "remote",
             ProviderKind::OpenAiResponses,
-            "unit-model",
             Some("https://api.example.com/v1".into()),
             Some(reference.into()),
             1_000,
@@ -125,7 +124,6 @@ fn provider_profiles_accept_only_valid_environment_or_host_references() {
             ProviderProfile::new(
                 "remote",
                 ProviderKind::OpenAiResponses,
-                "unit-model",
                 Some("https://api.example.com/v1".into()),
                 Some(reference.into()),
                 1_000,
@@ -136,9 +134,43 @@ fn provider_profiles_accept_only_valid_environment_or_host_references() {
     }
 }
 
+#[test]
+fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
+    let profile = ModelProfile::new(
+        "primary",
+        "provider",
+        "model",
+        10_001,
+        2_000,
+        ModelCapabilities {
+            tool_calls: false,
+            streaming: false,
+        },
+    )
+    .expect("model profile");
+    assert_eq!(profile.limits.safety_margin_tokens, 1_001);
+    assert_eq!(profile.limits.input_budget_tokens, 7_000);
+    assert!(!profile.capabilities.tool_calls);
+    assert!(!profile.capabilities.streaming);
+
+    assert!(
+        ModelProfile::new(
+            "exhausted",
+            "provider",
+            "model",
+            4_096,
+            3_584,
+            ModelCapabilities {
+                tool_calls: true,
+                streaming: true,
+            },
+        )
+        .is_err()
+    );
+}
+
 fn model_request() -> ModelRequest {
     ModelRequest {
-        model: "unit-model".into(),
         instructions: "Be exact.".into(),
         messages: vec![ModelMessage {
             role: ModelMessageRole::User,
@@ -147,7 +179,23 @@ fn model_request() -> ModelRequest {
             tool_calls: Vec::new(),
         }],
         tools: Vec::new(),
+        max_output_tokens: None,
     }
+}
+
+#[test]
+fn request_output_ceiling_must_match_the_resolved_model_limit() {
+    let mut request = model_request();
+    assert!(validate_model_request(&request, 4_096).is_ok());
+
+    request.max_output_tokens = Some(4_096);
+    assert!(validate_model_request(&request, 4_096).is_ok());
+    assert!(validate_model_request(&request, 2_048).is_err());
+
+    request.max_output_tokens = Some(0);
+    assert!(validate_model_request(&request, 4_096).is_err());
+    request.max_output_tokens = None;
+    assert!(validate_model_request(&request, 0).is_err());
 }
 
 fn provider_request(profile: &ProviderProfile) -> EffectRequest {
@@ -156,7 +204,10 @@ fn provider_request(profile: &ProviderProfile) -> EffectRequest {
         profile.kind.generation_action(),
         profile.generation_endpoint().expect("generation endpoint"),
         serde_json::to_value(ProviderEffectInput {
-            profile: profile.name.clone(),
+            provider_profile: profile.name.clone(),
+            model_profile: Some("unit-profile".into()),
+            model: Some("unit-model".into()),
+            max_output_tokens: Some(4_096),
             request: Some(model_request()),
         })
         .expect("effect input"),
@@ -268,7 +319,6 @@ fn malformed_tool_arguments_fail_closed() {
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,
-        "unit-model",
         Some("http://127.0.0.1:9000/v1".into()),
         None,
         1_000,
@@ -284,8 +334,13 @@ fn malformed_tool_arguments_fail_closed() {
             }]
         }}]
     });
-    let error = normalize_chat(&profile, &serde_json::to_vec(&malformed).expect("JSON"))
-        .expect_err("non-object arguments must fail");
+    let error = normalize_chat(
+        &profile,
+        "unit-profile",
+        "unit-model",
+        &serde_json::to_vec(&malformed).expect("JSON"),
+    )
+    .expect_err("non-object arguments must fail");
     assert!(matches!(error, ProviderError::Malformed(_)));
 }
 
@@ -294,7 +349,6 @@ fn responses_output_normalizes_visible_text_and_strict_tool_calls() {
     let profile = ProviderProfile::new(
         "openai",
         ProviderKind::OpenAiResponses,
-        "unit-model",
         Some("https://api.openai.com/v1".into()),
         Some("env:UNIT_PROVIDER_KEY".into()),
         1_000,
@@ -313,8 +367,13 @@ fn responses_output_normalizes_visible_text_and_strict_tool_calls() {
              "arguments": "{\"query\":\"rust\"}"}
         ]
     });
-    let turn = normalize_responses(&profile, &serde_json::to_vec(&response).expect("JSON"))
-        .expect("normalized response");
+    let turn = normalize_responses(
+        &profile,
+        "unit-profile",
+        "unit-model",
+        &serde_json::to_vec(&response).expect("JSON"),
+    )
+    .expect("normalized response");
     assert!(matches!(
         &turn.events[0],
         ProviderEvent::ReasoningSummary { summary } if summary == "safe plan"
@@ -429,7 +488,6 @@ fn incomplete_sse_and_unterminated_chat_streams_fail_closed() {
 #[test]
 fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
     let request = ModelRequest {
-        model: "unit-model".into(),
         instructions: "test".into(),
         messages: vec![
             ModelMessage {
@@ -450,14 +508,20 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
             },
         ],
         tools: Vec::new(),
+        max_output_tokens: None,
     };
-    let responses = responses_payload(&request, false).expect("Responses payload");
+    let responses =
+        responses_payload(&request, "unit-model", 4_096, false).expect("Responses payload");
+    assert_eq!(responses["model"], "unit-model");
+    assert_eq!(responses["max_output_tokens"], 4_096);
     assert_eq!(responses["input"][0]["type"], "function_call");
     assert_eq!(responses["input"][0]["call_id"], "call-1");
     assert_eq!(responses["input"][1]["type"], "function_call_output");
     assert_eq!(responses["input"][1]["call_id"], "call-1");
 
-    let chat = chat_payload(&request, false).expect("chat payload");
+    let chat = chat_payload(&request, "unit-model", 4_096, false).expect("chat payload");
+    assert_eq!(chat["model"], "unit-model");
+    assert_eq!(chat["max_tokens"], 4_096);
     assert_eq!(chat["messages"][1]["tool_calls"][0]["id"], "call-1");
     assert_eq!(chat["messages"][2]["tool_call_id"], "call-1");
 }
@@ -467,7 +531,6 @@ fn hidden_reasoning_is_not_released_but_safe_summary_is() {
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,
-        "unit-model",
         Some("http://127.0.0.1:9000/v1".into()),
         None,
         1_000,
@@ -485,8 +548,13 @@ fn hidden_reasoning_is_not_released_but_safe_summary_is() {
             ]
         }}]
     });
-    let turn = normalize_chat(&profile, &serde_json::to_vec(&response).expect("JSON"))
-        .expect("normalized turn");
+    let turn = normalize_chat(
+        &profile,
+        "unit-profile",
+        "unit-model",
+        &serde_json::to_vec(&response).expect("JSON"),
+    )
+    .expect("normalized turn");
     assert!(turn.events.iter().any(|event| matches!(
         event,
         ProviderEvent::ReasoningSummary { summary } if summary == "safe summary"
@@ -501,7 +569,6 @@ async fn denial_happens_before_credential_resolution() {
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,
-        "unit-model",
         Some("http://127.0.0.1:9/v1".into()),
         Some("host:provider-main".into()),
         1_000,
@@ -538,7 +605,6 @@ async fn allowed_provider_call_is_permit_bound_and_post_released() {
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,
-        "unit-model",
         Some(base_url),
         Some("env:UNIT_PROVIDER_KEY".into()),
         5_000,
@@ -603,7 +669,6 @@ async fn actual_provider_content_denied_post_effect_never_reaches_the_caller() {
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,
-        "unit-model",
         Some(base_url),
         None,
         5_000,
@@ -670,7 +735,6 @@ async fn compatible_sse_stream_releases_ordered_deltas_usage_and_completion() {
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,
-        "unit-model",
         Some(base_url),
         None,
         5_000,
@@ -757,7 +821,6 @@ async fn streamed_credential_echo_is_redacted_before_release() {
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,
-        "unit-model",
         Some(base_url),
         Some("host:provider-main".into()),
         5_000,
@@ -811,7 +874,6 @@ async fn malformed_tool_arguments_cross_gateway_as_recoverable_failure() {
     let profile = ProviderProfile::new(
         "local",
         ProviderKind::OpenAiCompatible,
-        "unit-model",
         Some(base_url),
         None,
         5_000,

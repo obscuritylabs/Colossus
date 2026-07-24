@@ -89,7 +89,7 @@ fn write_config(
     fs::write(
         config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:

@@ -55,6 +55,10 @@ pub(super) async fn dispatch(
         WorkerOperation::ProviderModels { profile } => Ok(serde_json::to_value(
             runtime.provider_models(profile.as_deref()).await?,
         )?),
+        WorkerOperation::ModelProfiles => Ok(serde_json::to_value(runtime.model_profiles())?),
+        WorkerOperation::ModelDoctor { profile } => {
+            Ok(runtime.model_doctor(profile.as_deref()).await?)
+        }
         WorkerOperation::ProviderRoutes => Ok(runtime.provider_routes()),
         WorkerOperation::ProviderRoute { role } => {
             Ok(serde_json::to_value(runtime.provider_route(&role)?)?)
@@ -109,14 +113,14 @@ pub(super) async fn dispatch(
         WorkerOperation::PresentationHistoryAppend { entry } => Ok(serde_json::to_value(
             runtime.append_terminal_history(&entry).await?,
         )?),
-        WorkerOperation::ContextStatus { session_id } => Ok(serde_json::to_value(
-            runtime.context_status(&session_id).await?,
+        WorkerOperation::ContextStatus { session_id, role } => Ok(serde_json::to_value(
+            runtime.context_status_for_role(&session_id, &role).await?,
         )?),
         WorkerOperation::ContextList { session_id } => Ok(serde_json::to_value(
             runtime.context_snapshots(&session_id).await?,
         )?),
-        WorkerOperation::ContextCompact { session_id } => Ok(serde_json::to_value(
-            runtime.compact_context(&session_id).await?,
+        WorkerOperation::ContextCompact { session_id, role } => Ok(serde_json::to_value(
+            runtime.compact_context_for_role(&session_id, &role).await?,
         )?),
         WorkerOperation::ContextRestore {
             session_id,

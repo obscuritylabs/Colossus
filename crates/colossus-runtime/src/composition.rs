@@ -332,7 +332,11 @@ impl Runtime {
         if !journal.is_recovery_mode() {
             recover_unknown_effects(journal.as_ref())?;
         }
-        let providers = Arc::new(provider_registry(&config.providers, provider_credentials)?);
+        let providers = Arc::new(provider_registry(
+            &config.providers,
+            &config.models,
+            provider_credentials,
+        )?);
         let searches = Arc::new(search_registry(config)?);
         let access_config = &config.access;
         let mut candidate_tool_specs = builtin_specs();

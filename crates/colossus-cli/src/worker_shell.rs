@@ -613,6 +613,7 @@ pub(super) async fn worker_line_runner(
                 client
                     .call(WorkerOperation::ContextStatus {
                         session_id: active_session_id.clone(),
+                        role: "primary".into(),
                     })
                     .await?,
             )?;
@@ -635,6 +636,7 @@ pub(super) async fn worker_line_runner(
                 &client
                     .call(WorkerOperation::ContextCompact {
                         session_id: active_session_id.clone(),
+                        role: "primary".into(),
                     })
                     .await?,
             )?;

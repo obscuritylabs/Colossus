@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import {
   addExternalTarget,
+  applyManagedModelConfiguration,
   cancelRun,
   closeTerminal,
   configureManagedRuntime,
@@ -39,6 +40,7 @@ import {
   writeTerminal,
 } from "./api";
 import type {
+  ApplyManagedModelConfigurationRequest,
   CancelRunRequest,
   ConfigureManagedRuntimeRequest,
   CreateRunRequest,
@@ -144,6 +146,42 @@ describe("desktop API target routing", () => {
       ["set_terminal_enabled", { enabled: true }],
       ["show_terminal_window", { request: { kind: "colossus_tui" } }],
     ]);
+  });
+
+  it("applies provider and model collections without renderer credential values", async () => {
+    const request: ApplyManagedModelConfigurationRequest = {
+      workspaceId: "workspace-opaque-2",
+      providers: [
+        {
+          profile: "local-provider",
+          providerKind: "openai_compatible",
+          baseUrl: "http://127.0.0.1:11434/v1",
+          timeoutMs: 30_000,
+          credentialAction: "none",
+        },
+      ],
+      models: [
+        {
+          profile: "primary",
+          providerProfile: "local-provider",
+          model: "local-model",
+          contextWindowTokens: 32_768,
+          maxOutputTokens: 4_096,
+          capabilities: { toolCalls: false, streaming: false },
+        },
+      ],
+      roles: { primary: "primary", context_summarizer: "primary" },
+      accessProfile: "minimal",
+    };
+
+    await applyManagedModelConfiguration(request);
+
+    expect(tauri.invoke).toHaveBeenCalledWith(
+      "apply_managed_model_configuration",
+      { request },
+    );
+    expect(JSON.stringify(request)).not.toContain("apiKey");
+    expect(JSON.stringify(request)).not.toContain("credentialId");
   });
 
   it("reads the native compile-time release channel without renderer input", async () => {

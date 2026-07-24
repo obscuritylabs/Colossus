@@ -14,8 +14,9 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 pub use colossus_sidecar_protocol::{
-    ManagedAccessProfile, ManagedProviderConfig, ManagedProviderKind, ManagedRuntimeConfig,
-    WorkspaceIdentity, validate_managed_provider_base_url,
+    ManagedAccessProfile, ManagedModelCapabilities, ManagedModelConfig, ManagedProviderConfig,
+    ManagedProviderKind, ManagedRuntimeConfig, WorkspaceIdentity,
+    validate_managed_model_identifier, validate_managed_provider_base_url,
 };
 
 /// Fixed secret-free runtime configuration filename written inside the instance directory.
@@ -513,15 +514,7 @@ mod tests {
     }
 
     fn runtime() -> ManagedRuntimeConfig {
-        ManagedRuntimeConfig {
-            access_profile: ManagedAccessProfile::Minimal,
-            provider: ManagedProviderConfig {
-                kind: ManagedProviderKind::Echo,
-                model: "echo".into(),
-                base_url: None,
-                credential_id: None,
-            },
-        }
+        ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal)
     }
 
     #[test]

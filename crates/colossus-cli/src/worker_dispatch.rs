@@ -150,6 +150,18 @@ pub(super) async fn dispatch_to_worker_if_active(
         }
         Command::Models(command) => {
             match &command.command {
+                ModelsAction::Profiles => {
+                    print_json(&client.call(WorkerOperation::ModelProfiles).await?)?;
+                }
+                ModelsAction::Doctor { profile } => {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ModelDoctor {
+                                profile: profile.clone(),
+                            })
+                            .await?,
+                    )?;
+                }
                 ModelsAction::Routes => {
                     print_json(&client.call(WorkerOperation::ProviderRoutes).await?)?;
                 }
@@ -544,14 +556,16 @@ pub(super) async fn dispatch_to_worker_if_active(
         }
         Command::Context(command) => {
             let operation = match &command.command {
-                ContextAction::Status { session_id } => WorkerOperation::ContextStatus {
+                ContextAction::Status { session_id, role } => WorkerOperation::ContextStatus {
                     session_id: session_id.clone(),
+                    role: role.clone(),
                 },
                 ContextAction::List { session_id } => WorkerOperation::ContextList {
                     session_id: session_id.clone(),
                 },
-                ContextAction::Compact { session_id } => WorkerOperation::ContextCompact {
+                ContextAction::Compact { session_id, role } => WorkerOperation::ContextCompact {
                     session_id: session_id.clone(),
+                    role: role.clone(),
                 },
                 ContextAction::Restore {
                     session_id,

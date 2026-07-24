@@ -17,9 +17,12 @@ pub struct RuntimeConfig {
     pub policy: PolicyConfig,
     /// Workflow definition libraries.
     pub workflows: WorkflowLibraryConfig,
-    /// Provider profiles and role routing.
+    /// Provider connection profiles.
     #[serde(default)]
     pub providers: ProvidersConfig,
+    /// Explicit model profiles and logical role routing.
+    #[serde(default)]
+    pub models: ModelsConfig,
     /// Agent model-turn and active-tool limits.
     #[serde(default)]
     pub agent: AgentConfig,
@@ -362,14 +365,12 @@ pub(super) fn default_research_user_agent() -> String {
     "colossus-rust/0.6".into()
 }
 
-/// Strict provider profiles and role routing.
+/// Strict provider connection profiles.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProvidersConfig {
     /// Named provider profiles.
     pub profiles: BTreeMap<String, ProviderProfileConfig>,
-    /// Named model roles mapped to profiles. Specialized roles fall back to `primary`.
-    pub roles: BTreeMap<String, String>,
 }
 
 impl Default for ProvidersConfig {
@@ -379,13 +380,11 @@ impl Default for ProvidersConfig {
                 "echo".into(),
                 ProviderProfileConfig {
                     kind: ProviderKind::Echo,
-                    model: "echo".into(),
                     base_url: None,
                     credential_reference: None,
                     timeout_ms: default_provider_timeout_ms(),
                 },
             )]),
-            roles: BTreeMap::from([("primary".into(), "echo".into())]),
         }
     }
 }
@@ -396,8 +395,6 @@ impl Default for ProvidersConfig {
 pub struct ProviderProfileConfig {
     /// Provider adapter kind.
     pub kind: ProviderKind,
-    /// Default model identifier.
-    pub model: String,
     /// API version base URL for network providers.
     pub base_url: Option<String>,
     /// Credential reference such as `env:OPENAI_API_KEY` or an injected `host:provider-main`.
@@ -405,6 +402,53 @@ pub struct ProviderProfileConfig {
     /// Provider transport timeout.
     #[serde(default = "default_provider_timeout_ms")]
     pub timeout_ms: u64,
+}
+
+/// Explicit model profiles and role routing.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelsConfig {
+    /// Named model profiles.
+    pub profiles: BTreeMap<String, ModelProfileConfig>,
+    /// Named logical roles mapped to model profiles. Specialized roles fall back to `primary`.
+    pub roles: BTreeMap<String, String>,
+}
+
+impl Default for ModelsConfig {
+    fn default() -> Self {
+        Self {
+            profiles: BTreeMap::from([(
+                "echo".into(),
+                ModelProfileConfig {
+                    provider_profile: "echo".into(),
+                    model: "echo".into(),
+                    context_window_tokens: 32_768,
+                    max_output_tokens: 4_096,
+                    capabilities: ModelCapabilities {
+                        tool_calls: true,
+                        streaming: true,
+                    },
+                },
+            )]),
+            roles: BTreeMap::from([("primary".into(), "echo".into())]),
+        }
+    }
+}
+
+/// One strict model profile with explicit limits and capabilities.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelProfileConfig {
+    /// Referenced provider connection profile.
+    pub provider_profile: String,
+    /// Exact model identifier sent to the provider.
+    pub model: String,
+    /// Total provider context window.
+    pub context_window_tokens: u64,
+    /// Maximum generated tokens reserved from the context window.
+    pub max_output_tokens: u64,
+    /// Explicit request-shaping capabilities.
+    pub capabilities: ModelCapabilities,
 }
 
 const fn default_provider_timeout_ms() -> u64 {
@@ -583,6 +627,20 @@ impl RuntimeConfig {
         let root = document.as_object().ok_or_else(|| {
             RuntimeError::Config("configuration root must be a YAML mapping".into())
         })?;
+        match root.get("schemaVersion").and_then(Value::as_u64) {
+            Some(1) => {
+                return Err(RuntimeError::Config(
+                    "schemaVersion 1 is no longer supported because provider connections and model profiles are now separate; generate a fresh schemaVersion 2 configuration with `colossus --config PATH config init`"
+                        .into(),
+                ));
+            }
+            Some(2) => {}
+            _ => {
+                return Err(RuntimeError::Config(
+                    "schemaVersion must be exactly 2".into(),
+                ));
+            }
+        }
         let has_legacy_tools = root
             .get("agent")
             .and_then(Value::as_object)
@@ -607,11 +665,6 @@ impl RuntimeConfig {
         }
         let config: Self = serde_saphyr::from_str(yaml)
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        if config.schema_version != 1 {
-            return Err(RuntimeError::Config(
-                "schemaVersion must be exactly 1".into(),
-            ));
-        }
         validate_access_config(
             &config.access,
             matches!(&config.policy, PolicyConfig::Opa { .. }),
@@ -847,7 +900,7 @@ impl RuntimeConfig {
     pub fn offline_template(state_path: impl Into<PathBuf>) -> Self {
         let instance_id = Uuid::now_v7();
         Self {
-            schema_version: 1,
+            schema_version: 2,
             access: AccessConfig::default(),
             storage: StorageConfig {
                 path: state_path.into(),
@@ -868,6 +921,7 @@ impl RuntimeConfig {
                 user: PathBuf::from("workflows"),
             },
             providers: ProvidersConfig::default(),
+            models: ModelsConfig::default(),
             agent: AgentConfig::default(),
             subagents: SubagentConfig::default(),
             context: ContextConfig::default(),
@@ -1301,7 +1355,6 @@ pub(super) fn provider_profile(
     ProviderProfile::new(
         name,
         config.kind,
-        config.model.clone(),
         config.base_url.clone(),
         config.credential_reference.clone(),
         config.timeout_ms,
@@ -1310,10 +1363,11 @@ pub(super) fn provider_profile(
 }
 
 pub(super) fn provider_registry(
-    config: &ProvidersConfig,
+    providers_config: &ProvidersConfig,
+    models_config: &ModelsConfig,
     credentials: Arc<dyn CredentialResolver>,
 ) -> Result<ProviderRegistry, RuntimeError> {
-    let profiles = config
+    let profiles = providers_config
         .profiles
         .iter()
         .map(|(name, profile)| {
@@ -1322,7 +1376,21 @@ pub(super) fn provider_registry(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    ProviderRegistry::new(profiles, config.roles.clone()).map_err(Into::into)
+    let models = models_config
+        .profiles
+        .iter()
+        .map(|(name, model)| {
+            ModelProfile::new(
+                name,
+                model.provider_profile.clone(),
+                model.model.clone(),
+                model.context_window_tokens,
+                model.max_output_tokens,
+                model.capabilities,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    ProviderRegistry::new(profiles, models, models_config.roles.clone()).map_err(Into::into)
 }
 
 pub(super) fn compose_memory_indexes(
@@ -1427,16 +1495,20 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
         "research_synthesizer",
     ];
     if config
-        .providers
+        .models
         .roles
         .keys()
         .any(|role| !ROLES.contains(&role.as_str()))
     {
         return Err(RuntimeError::Config(
-            "provider roles contain an unknown role name".into(),
+            "model roles contain an unknown role name".into(),
         ));
     }
-    let _ = provider_registry(&config.providers, Arc::new(EnvironmentCredentialResolver))?;
+    let _ = provider_registry(
+        &config.providers,
+        &config.models,
+        Arc::new(EnvironmentCredentialResolver),
+    )?;
     for (name, profile) in &config.providers.profiles {
         let profile = provider_profile(name, profile)?;
         if let Some(origin) = profile.network_origin()?

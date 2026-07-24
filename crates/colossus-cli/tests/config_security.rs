@@ -23,7 +23,7 @@ fn command(binary: &Path, config: &Path) -> Command {
 
 fn config_document(root: &Path) -> Value {
     json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "storage": {
             "path": root.join("state.redb"),
             "keys": {
@@ -52,10 +52,20 @@ fn config_document(root: &Path) -> Value {
             "profiles": {
                 "hosted": {
                     "kind": "open_ai_compatible",
-                    "model": "config-security-model",
                     "baseUrl": "https://example.com/v1",
                     "credentialReference": "env:COLOSSUS_CONFIG_DISPLAY_PROVIDER_SECRET",
                     "timeoutMs": 5000
+                }
+            }
+        },
+        "models": {
+            "profiles": {
+                "hosted": {
+                    "providerProfile": "hosted",
+                    "model": "config-security-model",
+                    "contextWindowTokens": 32768,
+                    "maxOutputTokens": 4096,
+                    "capabilities": {"toolCalls": true, "streaming": true}
                 }
             },
             "roles": {"primary": "hosted"}

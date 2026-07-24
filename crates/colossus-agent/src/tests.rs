@@ -1,6 +1,8 @@
 use super::*;
 use async_trait::async_trait;
-use colossus_contracts::{PreparedContext, ProviderRoute, ProviderTurn};
+use colossus_contracts::{
+    ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext, ProviderRoute, ProviderTurn,
+};
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
 use colossus_tools::StaticToolRegistry;
@@ -67,12 +69,7 @@ impl ScriptedProvider {
 #[async_trait]
 impl ModelProvider for ScriptedProvider {
     fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
-        Ok(ProviderRoute {
-            role: role.into(),
-            profile: "scripted".into(),
-            provider: "test".into(),
-            model: "test-model".into(),
-        })
+        Ok(test_route(role, "scripted"))
     }
 
     async fn turn(
@@ -94,15 +91,32 @@ struct EchoTools;
 
 struct PartialFailureProvider;
 
+struct TextOnlyProvider {
+    inner: ScriptedProvider,
+}
+
+#[async_trait]
+impl ModelProvider for TextOnlyProvider {
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+        let mut route = test_route(role, "text-only");
+        route.capabilities.tool_calls = false;
+        Ok(route)
+    }
+
+    async fn turn(
+        &self,
+        role: &str,
+        request: ModelRequest,
+        context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        self.inner.turn(role, request, context).await
+    }
+}
+
 #[async_trait]
 impl ModelProvider for PartialFailureProvider {
     fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
-        Ok(ProviderRoute {
-            role: role.into(),
-            profile: "partial".into(),
-            provider: "test".into(),
-            model: "test-model".into(),
-        })
+        Ok(test_route(role, "partial"))
     }
 
     async fn turn(
@@ -160,18 +174,22 @@ struct FixedContext;
 impl ContextPreparer for FixedContext {
     async fn prepare(
         &self,
-        _session_id: &str,
-        _instructions: &str,
-        messages: Vec<ModelMessage>,
-        _tools: &[colossus_contracts::ModelToolDefinition],
-        _context: ExecutionContext,
-        _force: bool,
+        request: ContextPreparationRequest,
     ) -> Result<PreparedContext, ContextError> {
+        let ContextPreparationRequest {
+            messages,
+            route: budget,
+            ..
+        } = request;
         Ok(PreparedContext {
             messages,
             token_estimate: 10,
             original_token_estimate: 100,
-            context_window_tokens: 1_024,
+            model_profile: budget.model_profile,
+            context_window_tokens: budget.limits.context_window_tokens,
+            max_output_tokens: budget.limits.max_output_tokens,
+            safety_margin_tokens: budget.limits.safety_margin_tokens,
+            input_budget_tokens: budget.limits.input_budget_tokens,
             threshold_tokens: 700,
             target_tokens: 450,
             snapshot_id: Some("snapshot-1".into()),
@@ -212,12 +230,7 @@ struct CancellingProvider {
 #[async_trait]
 impl ModelProvider for CancellingProvider {
     fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
-        Ok(ProviderRoute {
-            role: role.into(),
-            profile: "cancelling".into(),
-            provider: "test".into(),
-            model: "test-model".into(),
-        })
+        Ok(test_route(role, "cancelling"))
     }
 
     async fn turn(
@@ -257,11 +270,97 @@ impl ToolExecutor for CancellingTools {
 fn turn(events: Vec<ProviderEvent>) -> Result<ProviderTurn, ModelProviderError> {
     Ok(ProviderTurn {
         profile: "scripted".into(),
+        model_profile: "scripted".into(),
+        provider_profile: "scripted-provider".into(),
         provider: "test".into(),
         model: "test-model".into(),
         response_id: None,
         events,
     })
+}
+
+fn test_route(role: &str, profile: &str) -> ProviderRoute {
+    ProviderRoute {
+        role: role.into(),
+        profile: profile.into(),
+        model_profile: profile.into(),
+        provider_profile: format!("{profile}-provider"),
+        provider: "test".into(),
+        model: "test-model".into(),
+        limits: ModelLimits {
+            context_window_tokens: 4_096,
+            max_output_tokens: 512,
+            safety_margin_tokens: 512,
+            input_budget_tokens: 3_072,
+        },
+        capabilities: ModelCapabilities {
+            tool_calls: true,
+            streaming: true,
+        },
+    }
+}
+
+#[tokio::test]
+async fn text_only_models_omit_tools_and_reject_structured_tool_history() {
+    let provider = Arc::new(TextOnlyProvider {
+        inner: ScriptedProvider::new(vec![turn(vec![ProviderEvent::FinalOutput {
+            text: "done".into(),
+        }])]),
+    });
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::clone(&sessions) as Arc<dyn SessionRepository>,
+    );
+
+    service
+        .run("primary", "test", "plain text", 1)
+        .await
+        .expect("text-only run");
+    assert!(
+        provider.inner.requests.lock().expect("requests")[0]
+            .tools
+            .is_empty()
+    );
+
+    let actor = Actor {
+        actor_type: ActorType::User,
+        id: "terminal-user".into(),
+    };
+    sessions
+        .create_session("structured-session", None, actor.clone())
+        .expect("session");
+    sessions
+        .append_message(
+            "structured-session",
+            "earlier-run",
+            ModelMessage {
+                role: ModelMessageRole::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ModelToolCall {
+                    call_id: "call-1".into(),
+                    name: "echo".into(),
+                    arguments: json!({"text": "hello"}),
+                }],
+            },
+            actor,
+        )
+        .expect("structured history");
+    let error = service
+        .run_in_session("primary", "test", "continue", 1, Some("structured-session"))
+        .await
+        .expect_err("structured history must be rejected");
+    assert!(matches!(error, AgentError::Configuration(_)));
+    assert_eq!(
+        provider.inner.requests.lock().expect("requests").len(),
+        1,
+        "rejected history must not reach the provider"
+    );
 }
 
 #[tokio::test]

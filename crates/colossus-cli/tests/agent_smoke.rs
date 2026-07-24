@@ -36,7 +36,7 @@ fn offline_agent_run_uses_active_tools_and_persists_typed_events() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
@@ -64,10 +64,19 @@ providers:
   profiles:
     echo:
       kind: echo
-      model: echo
       baseUrl: null
       credentialReference: null
       timeoutMs: 5000
+models:
+  profiles:
+    echo:
+      providerProfile: echo
+      model: echo
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: echo
 agent:

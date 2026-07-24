@@ -113,7 +113,7 @@ fn unsigned_pack_requires_override_and_lifecycle_is_permit_bound_and_audited() {
     fs::write(
         &config,
         format!(
-            r#"schemaVersion: 1
+            r#"schemaVersion: 2
 storage:
   path: {state}
   keys:
