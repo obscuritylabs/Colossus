@@ -274,40 +274,11 @@ impl ContextService {
         source: &[ModelMessage],
         context: ExecutionContext,
     ) -> Option<String> {
-        self.provider.route("context_summarizer").ok()?;
-        let mut history = String::new();
-        for (index, message) in source.iter().enumerate() {
-            let item = format!(
-                "{}. {:?}: {}\n\n",
-                index + 1,
-                message.role,
-                truncate_chars(&message.content, 1_000)
-            );
-            if history.len().saturating_add(item.len()) > MAX_SUMMARY_PROMPT_BYTES {
-                history.push_str("[Additional source messages omitted from the bounded model summary prompt; deterministic metadata still covers the complete source range.]\n");
-                break;
-            }
-            history.push_str(&item);
-        }
+        let route = self.provider.route("context_summarizer").ok()?;
+        let request = bounded_summary_request(source, route.limits.input_budget_tokens)?;
         let turn = self
             .provider
-            .turn(
-                "context_summarizer",
-                ModelRequest {
-                    instructions: SUMMARY_INSTRUCTIONS.into(),
-                    messages: vec![ModelMessage {
-                        role: ModelMessageRole::User,
-                        content: format!(
-                            "Compact this Colossus session history into durable future context.\n\n{history}"
-                        ),
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                    }],
-                    tools: Vec::new(),
-                    max_output_tokens: None,
-                },
-                context,
-            )
+            .turn("context_summarizer", request, context)
             .await
             .ok()?;
         let final_text = turn.events.iter().rev().find_map(|event| match event {
@@ -326,6 +297,65 @@ impl ContextService {
             (!text.trim().is_empty()).then(|| text.trim().to_owned())
         })
     }
+}
+
+fn bounded_summary_request(
+    source: &[ModelMessage],
+    input_budget_tokens: u64,
+) -> Option<ModelRequest> {
+    const PREFIX: &str = "Compact this Colossus session history into durable future context.\n\n";
+    const OMITTED: &str = "[Additional source messages omitted to fit the context-summarizer model's effective input budget; deterministic metadata still covers the complete source range.]\n";
+
+    let request_for = |history: &str| ModelRequest {
+        instructions: SUMMARY_INSTRUCTIONS.into(),
+        messages: vec![ModelMessage {
+            role: ModelMessageRole::User,
+            content: format!("{PREFIX}{history}"),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        tools: Vec::new(),
+        max_output_tokens: None,
+    };
+    let fits = |request: &ModelRequest| {
+        request.messages[0].content.len() <= MAX_SUMMARY_PROMPT_BYTES
+            && estimate_tokens(&request.instructions, &request.messages, &request.tools)
+                <= input_budget_tokens
+    };
+
+    let base = request_for("");
+    if !fits(&base) {
+        return None;
+    }
+
+    let mut history = String::new();
+    let mut omitted = false;
+    for (index, message) in source.iter().enumerate() {
+        let item = format!(
+            "{}. {:?}: {}\n\n",
+            index + 1,
+            message.role,
+            truncate_chars(&message.content, 1_000)
+        );
+        let checkpoint = history.len();
+        history.push_str(&item);
+        if !fits(&request_for(&history)) {
+            history.truncate(checkpoint);
+            omitted = true;
+            break;
+        }
+    }
+
+    if omitted {
+        let checkpoint = history.len();
+        history.push_str(OMITTED);
+        if !fits(&request_for(&history)) {
+            history.truncate(checkpoint);
+        }
+    }
+
+    let request = request_for(&history);
+    fits(&request).then_some(request)
 }
 
 #[async_trait]

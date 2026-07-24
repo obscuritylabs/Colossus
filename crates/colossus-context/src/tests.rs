@@ -4,11 +4,19 @@ use colossus_ports::ModelProviderError;
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
 use colossus_work::{EventSourcedWorkRepository, WorkService};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 struct SummaryProvider {
     output: Option<String>,
     calls: AtomicUsize,
+}
+
+struct BudgetSummaryProvider {
+    summary_route: ProviderRoute,
+    requests: Mutex<Vec<ModelRequest>>,
 }
 
 struct StaticMemories(Vec<MemoryRecord>);
@@ -62,6 +70,37 @@ impl ModelProvider for SummaryProvider {
                 })
             },
         )
+    }
+}
+
+#[async_trait]
+impl ModelProvider for BudgetSummaryProvider {
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+        if role == "context_summarizer" {
+            Ok(self.summary_route.clone())
+        } else {
+            Ok(model_route(role))
+        }
+    }
+
+    async fn turn(
+        &self,
+        _role: &str,
+        request: ModelRequest,
+        _context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        self.requests.lock().expect("requests").push(request);
+        Ok(ProviderTurn {
+            profile: self.summary_route.model_profile.clone(),
+            model_profile: self.summary_route.model_profile.clone(),
+            provider_profile: self.summary_route.provider_profile.clone(),
+            provider: self.summary_route.provider.clone(),
+            model: self.summary_route.model.clone(),
+            response_id: None,
+            events: vec![ProviderEvent::FinalOutput {
+                text: "budgeted model summary".into(),
+            }],
+        })
     }
 }
 
@@ -229,6 +268,91 @@ async fn model_summary_is_used_and_failure_falls_back_deterministically() {
             assert_eq!(snapshot.summary, "assisted durable summary");
         }
     }
+}
+
+#[tokio::test]
+async fn model_summary_prompt_obeys_the_summarizer_models_effective_input_budget() {
+    let mut route = model_route("context_summarizer");
+    route.limits.input_budget_tokens = 256;
+    let provider = Arc::new(BudgetSummaryProvider {
+        summary_route: route.clone(),
+        requests: Mutex::new(Vec::new()),
+    });
+    let (_journal, sessions, snapshots, service) = fixture(
+        ContextConfig::default(),
+        provider.clone() as Arc<dyn ModelProvider>,
+    );
+    for index in 0..12 {
+        sessions
+            .append_message(
+                "session-1",
+                "run-1",
+                message(
+                    ModelMessageRole::User,
+                    format!("history-{index}: {}", "x".repeat(1_000)),
+                ),
+                user_actor(),
+            )
+            .expect("message");
+    }
+
+    let prepared = service
+        .compact("session-1", "budget test", &[])
+        .await
+        .expect("compact");
+
+    assert_eq!(prepared.strategy.as_deref(), Some("hybrid_model"));
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert!(
+        estimate_tokens(&request.instructions, &request.messages, &request.tools)
+            <= route.limits.input_budget_tokens
+    );
+    assert!(request.messages[0].content.len() <= MAX_SUMMARY_PROMPT_BYTES);
+    assert!(
+        request.messages[0]
+            .content
+            .contains("Additional source messages omitted")
+    );
+    assert_eq!(
+        snapshots
+            .active("session-1")
+            .expect("active")
+            .expect("snapshot")
+            .summary,
+        "budgeted model summary"
+    );
+}
+
+#[tokio::test]
+async fn model_summary_skips_provider_when_fixed_prompt_exceeds_the_summarizer_budget() {
+    let mut route = model_route("context_summarizer");
+    route.limits.input_budget_tokens = 1;
+    let provider = Arc::new(BudgetSummaryProvider {
+        summary_route: route,
+        requests: Mutex::new(Vec::new()),
+    });
+    let (_journal, sessions, _snapshots, service) = fixture(
+        ContextConfig::default(),
+        provider.clone() as Arc<dyn ModelProvider>,
+    );
+    sessions
+        .append_message(
+            "session-1",
+            "run-1",
+            message(ModelMessageRole::User, "important requirement"),
+            user_actor(),
+        )
+        .expect("message");
+
+    let prepared = service
+        .compact("session-1", "budget test", &[])
+        .await
+        .expect("compact");
+
+    assert_eq!(prepared.strategy.as_deref(), Some("deterministic"));
+    assert!(provider.requests.lock().expect("requests").is_empty());
 }
 
 #[tokio::test]
