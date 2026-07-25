@@ -222,8 +222,7 @@ jobs:
       - name: Run authenticated named-pipe and AppContainer escape acceptance
         run: |
           cargo test --locked -p colossus-windows-native -- --nocapture
-          cargo test --locked -p colossus-cli \
-            --test worker_smoke --test windows_sandbox -- --nocapture
+          cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture
       - name: Install locked Desktop dependencies
         working-directory: apps/desktop
         run: npm ci --ignore-scripts
