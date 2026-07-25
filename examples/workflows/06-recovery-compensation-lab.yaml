@@ -1,0 +1,34 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: recovery-compensation-lab
+  version: 1.0.0
+  description: Intentionally fail after a bounded retry and dispatch deterministic compensation
+inputs:
+  type: object
+  additionalProperties: false
+outputs:
+  type: object
+capabilities:
+  - demo.always-fail
+  - provider.echo
+maxConcurrency: 1
+stepBudget: 8
+steps:
+  - id: started
+    type: emit
+    value:
+      phase: started
+  - id: expected-failure
+    type: tool
+    tool: demo.always-fail
+    arguments:
+      reason: exercise-known-failure-recovery
+    idempotency: recovery-lab-primary
+compensation:
+  - id: record-compensation
+    type: tool
+    tool: echo
+    arguments:
+      message: Recovery lab compensation was dispatched
+    idempotency: recovery-lab-compensation

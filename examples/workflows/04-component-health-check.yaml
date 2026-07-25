@@ -1,0 +1,43 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: component-health-check
+  version: 1.0.0
+  description: Reusable pinned child workflow for one component health classification
+inputs:
+  type: object
+  additionalProperties: false
+  required: [component, critical]
+  properties:
+    component:
+      type: string
+      minLength: 1
+      maxLength: 80
+    critical:
+      type: boolean
+outputs:
+  type: object
+capabilities: []
+maxConcurrency: 1
+stepBudget: 8
+steps:
+  - id: criticality-route
+    type: condition
+    expression: /inputs/critical == true
+    then:
+      - id: critical-check
+        type: emit
+        value:
+          tier: critical
+          check_set: extended
+    otherwise:
+      - id: standard-check
+        type: emit
+        value:
+          tier: standard
+          check_set: baseline
+  - id: child-result
+    type: emit
+    value:
+      status: healthy
+      source: component-health-check

@@ -51,6 +51,19 @@ steps:
     value: { ok: true }
 "#;
 
+const CONTROL_FLOW_EXAMPLE: &str =
+    include_str!("../../../examples/workflows/01-control-flow-lab.yaml");
+const OPERATOR_GATE_EXAMPLE: &str =
+    include_str!("../../../examples/workflows/02-operator-gated-deployment.yaml");
+const COMPONENT_REVIEW_EXAMPLE: &str =
+    include_str!("../../../examples/workflows/03-component-review-loop.yaml");
+const COMPONENT_HEALTH_EXAMPLE: &str =
+    include_str!("../../../examples/workflows/04-component-health-check.yaml");
+const RELEASE_ORCHESTRATOR_EXAMPLE: &str =
+    include_str!("../../../examples/workflows/05-release-orchestrator.yaml");
+const RECOVERY_COMPENSATION_EXAMPLE: &str =
+    include_str!("../../../examples/workflows/06-recovery-compensation-lab.yaml");
+
 const WEBHOOK_WORKFLOW: &str = r#"
 apiVersion: colossus.dev/v1alpha1
 kind: Workflow
@@ -1183,6 +1196,207 @@ impl WorkflowEffectRunner for RecordingEffects {
         }
         Ok(json!({"action": effect.action, "compensation": effect.compensation}))
     }
+}
+
+#[tokio::test]
+async fn deterministic_control_flow_example_completes_with_scoped_items() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn WorkflowRepository> =
+        Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+    let service = WorkflowService::new(journal, repository, Arc::new(DenyWorkflowEffects));
+    service
+        .register_definition(CONTROL_FLOW_EXAMPLE, "repository-example")
+        .expect("register control-flow example");
+
+    let run = service
+        .start_run(
+            "control-flow-lab",
+            "1.0.0",
+            json!({
+                "environment": "production",
+                "components": ["api", "desktop"],
+            }),
+        )
+        .await
+        .expect("run control-flow example");
+    assert_eq!(run.status, WorkflowStatus::Completed);
+    let outputs = run.outputs.expect("control-flow outputs");
+    assert_eq!(
+        outputs["environment-route"]["production-route"]["route"],
+        "production"
+    );
+    assert_eq!(outputs["inspect-components"][0]["item"], "api");
+    assert_eq!(outputs["inspect-components"][1]["item"], "desktop");
+}
+
+#[tokio::test]
+async fn operator_gate_example_supports_blocked_and_two_stage_approval_routes() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn WorkflowRepository> =
+        Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+    let service = WorkflowService::new(journal, repository, Arc::new(DenyWorkflowEffects));
+    service
+        .register_definition(OPERATOR_GATE_EXAMPLE, "repository-example")
+        .expect("register operator-gate example");
+
+    let blocked = service
+        .start_run(
+            "operator-gated-deployment",
+            "1.0.0",
+            json!({"environment": "staging", "release": "2026.7.0"}),
+        )
+        .await
+        .expect("start blocked route");
+    assert_eq!(blocked.status, WorkflowStatus::Waiting);
+    let blocked = service
+        .provide_input(
+            &blocked.run_id,
+            json!({"approved": false, "change_ticket": "CHG-1"}),
+        )
+        .await
+        .expect("provide blocked decision");
+    assert_eq!(blocked.status, WorkflowStatus::Completed);
+    let blocked_outputs = blocked.outputs.expect("blocked route outputs");
+    assert_eq!(
+        blocked_outputs["decision-route"]["blocked-result"]["decision"],
+        "blocked"
+    );
+
+    let approved = service
+        .start_run(
+            "operator-gated-deployment",
+            "1.0.0",
+            json!({"environment": "production", "release": "2026.7.1"}),
+        )
+        .await
+        .expect("start approved route");
+    let awaiting_approval = service
+        .provide_input(
+            &approved.run_id,
+            json!({"approved": true, "change_ticket": "CHG-2"}),
+        )
+        .await
+        .expect("provide reviewed decision");
+    assert_eq!(awaiting_approval.status, WorkflowStatus::Waiting);
+    assert_eq!(
+        awaiting_approval.waiting_step_id.as_deref(),
+        Some("final-authorization")
+    );
+    let completed = service
+        .provide_input(&approved.run_id, json!(true))
+        .await
+        .expect("provide explicit approval");
+    assert_eq!(completed.status, WorkflowStatus::Completed);
+}
+
+#[tokio::test]
+async fn component_review_example_resumes_each_scoped_iteration() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn WorkflowRepository> =
+        Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+    let service = WorkflowService::new(journal, repository, Arc::new(DenyWorkflowEffects));
+    service
+        .register_definition(COMPONENT_REVIEW_EXAMPLE, "repository-example")
+        .expect("register component-review example");
+
+    let first = service
+        .start_run(
+            "component-review-loop",
+            "1.0.0",
+            json!({"components": ["api", "worker"]}),
+        )
+        .await
+        .expect("start component review");
+    assert_eq!(
+        first.waiting_execution_id.as_deref(),
+        Some("review-components[0]/review")
+    );
+    let second = service
+        .provide_input(
+            &first.run_id,
+            json!({"status": "pass", "notes": "api passed"}),
+        )
+        .await
+        .expect("provide first review");
+    assert_eq!(
+        second.waiting_execution_id.as_deref(),
+        Some("review-components[1]/review")
+    );
+    let completed = service
+        .provide_input(
+            &first.run_id,
+            json!({"status": "needs_work", "notes": "worker needs follow-up"}),
+        )
+        .await
+        .expect("provide second review");
+    assert_eq!(completed.status, WorkflowStatus::Completed);
+    let completed_outputs = completed.outputs.expect("component review outputs");
+    let iterations = completed_outputs["review-components"]
+        .as_array()
+        .expect("iteration outputs")
+        .clone();
+    assert_eq!(iterations[0]["item"], "api");
+    assert_eq!(
+        iterations[1]["steps"]["follow-up-component"]["disposition"],
+        "follow_up_required"
+    );
+}
+
+#[tokio::test]
+async fn orchestrator_and_recovery_examples_exercise_linkage_retry_and_compensation() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn WorkflowRepository> =
+        Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+    let effects = Arc::new(RecordingEffects::default());
+    let service = WorkflowService::new(journal, repository, effects.clone());
+    service
+        .register_definition(COMPONENT_HEALTH_EXAMPLE, "repository-example")
+        .expect("register child example");
+    service
+        .register_definition(RELEASE_ORCHESTRATOR_EXAMPLE, "repository-example")
+        .expect("register orchestrator example");
+
+    let orchestrated = service
+        .start_run(
+            "release-orchestrator",
+            "1.0.0",
+            json!({"release": "2026.7.0"}),
+        )
+        .await
+        .expect("run orchestrator example");
+    assert_eq!(orchestrated.status, WorkflowStatus::Completed);
+    assert_eq!(
+        service
+            .list_runs(10)
+            .expect("linked runs")
+            .iter()
+            .filter(|run| run.parent_run_id.as_deref() == Some(&orchestrated.run_id))
+            .count(),
+        3
+    );
+
+    service
+        .register_definition(RECOVERY_COMPENSATION_EXAMPLE, "repository-example")
+        .expect("register recovery example");
+    effects.fail("demo.always-fail", 2);
+    let recovery = service
+        .start_run("recovery-compensation-lab", "1.0.0", json!({}))
+        .await
+        .expect("run recovery example");
+    assert_eq!(recovery.status, WorkflowStatus::Failed);
+    let calls = effects.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.action == "demo.always-fail")
+            .count(),
+        2
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.action == "echo" && call.compensation)
+    );
 }
 
 struct FileKeyProvider {

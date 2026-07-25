@@ -1,0 +1,75 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: control-flow-lab
+  version: 1.0.0
+  description: Exercise deterministic conditions, parallel branches, and bounded iteration
+inputs:
+  type: object
+  additionalProperties: false
+  required: [environment, components]
+  properties:
+    environment:
+      type: string
+      enum: [development, staging, production]
+    components:
+      type: array
+      minItems: 1
+      maxItems: 8
+      uniqueItems: true
+      items:
+        type: string
+        minLength: 1
+        maxLength: 80
+outputs:
+  type: object
+capabilities: []
+maxConcurrency: 2
+stepBudget: 32
+steps:
+  - id: baseline-checks
+    type: parallel
+    max_concurrency: 2
+    branches:
+      -
+        - id: schema-check
+          type: emit
+          value:
+            check: schema
+            status: pass
+      -
+        - id: policy-check
+          type: emit
+          value:
+            check: policy
+            status: pass
+  - id: environment-route
+    type: condition
+    expression: /inputs/environment == "production"
+    then:
+      - id: production-route
+        type: emit
+        value:
+          route: production
+          requires_change_control: true
+    otherwise:
+      - id: non-production-route
+        type: emit
+        value:
+          route: non-production
+          requires_change_control: false
+  - id: inspect-components
+    type: foreach
+    items: /inputs/components
+    max_items: 8
+    steps:
+      - id: component-observed
+        type: emit
+        value:
+          check: component-present
+          status: queued
+  - id: result
+    type: emit
+    value:
+      workflow: control-flow-lab
+      status: completed

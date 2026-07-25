@@ -6,6 +6,7 @@ use colossus_tools::builtin_specs;
 use colossus_workflow::validate_definition;
 use serde::Deserialize;
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -641,6 +642,39 @@ fn published_config_and_workflow_examples_are_accepted_by_rust_parsers() {
     let workflow_reference = read("docs/reference/workflow-schema.md");
     validate_definition(marked_yaml(&workflow_reference, "rust-workflow-example"))
         .expect("reference workflow must validate");
+}
+
+#[test]
+fn repository_workflow_examples_are_accepted_by_the_rust_parser() {
+    let directory = repository_root().join("examples/workflows");
+    let mut paths = fs::read_dir(&directory)
+        .expect("read workflow examples")
+        .map(|entry| entry.expect("workflow example entry").path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("yaml"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert!(
+        paths.len() >= 7,
+        "advanced workflow example suite is unexpectedly small"
+    );
+
+    let mut identities = BTreeSet::new();
+    for path in paths {
+        let yaml = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let validated = validate_definition(&yaml)
+            .unwrap_or_else(|error| panic!("validate {}: {error}", path.display()));
+        let identity = (
+            validated.definition.metadata.name,
+            validated.definition.metadata.version,
+        );
+        assert!(
+            identities.insert(identity.clone()),
+            "duplicate example workflow identity {}:{}",
+            identity.0,
+            identity.1
+        );
+    }
 }
 
 #[test]

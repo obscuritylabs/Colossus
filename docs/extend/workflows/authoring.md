@@ -144,4 +144,6 @@ registration trusts exact content rather than a mutable path.
 ## Next step
 
 Add schedules, webhooks, or repository events with
-[Triggers and recovery](triggers-recovery.md).
+[Triggers and recovery](triggers-recovery.md), or run the advanced examples in
+`examples/workflows/` to exercise conditions, parallel branches, durable input, child
+workflows, and recovery.
