@@ -325,6 +325,15 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
           toolchain: 1.96.0
+      - name: Pull pinned Chroma release
+        run: |
+          for attempt in 1 2 3; do
+            docker pull "${{ matrix.image }}" && exit 0
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
       - name: Start pinned Chroma release
         run: |
           docker run --detach --rm --name colossus-chroma \

@@ -6,7 +6,7 @@ use std::{
     os::windows::{
         ffi::{OsStrExt as _, OsStringExt as _},
         fs::OpenOptionsExt as _,
-        io::{FromRawHandle as _, OwnedHandle, RawHandle},
+        io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle, RawHandle},
         process::CommandExt as _,
     },
     path::{Path, PathBuf},

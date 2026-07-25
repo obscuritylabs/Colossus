@@ -255,6 +255,8 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
         "test \"$CARGO_TARGET_DIR\" = \"$expected\"",
         "rm -rf \"$expected/debug\"",
+        "for attempt in 1 2 3",
+        "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
     ] {
         assert!(
