@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 colossus-contracts.workspace = true
+colossus-network.workspace = true
 colossus-policy.workspace = true
 futures.workspace = true
 reqwest.workspace = true
@@ -21,6 +22,9 @@ zeroize.workspace = true
 [dev-dependencies]
 colossus-ports.workspace = true
 colossus-testkit.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
 
 [lints]
 workspace = true

@@ -55,6 +55,36 @@ test("Tauri bundles only the two native-owned executables", () => {
     "main-chat",
     "terminal-pty",
   ]);
+  assert.deepEqual(config.plugins.updater, {
+    endpoints: [],
+    pubkey: "",
+  });
+});
+
+test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
+  const config = json("apps/desktop/src-tauri/tauri.windows.conf.json");
+  assert.deepEqual(config.bundle.targets, ["nsis"]);
+  assert.deepEqual(config.bundle.resources, {
+    "binaries/colossus-bundle-manifest.json": "colossus-bundle-manifest.json",
+  });
+  assert.equal(config.bundle.windows.allowDowngrades, false);
+  assert.deepEqual(config.bundle.windows.webviewInstallMode, {
+    type: "offlineInstaller",
+    silent: true,
+  });
+  assert.equal(config.bundle.windows.nsis.installMode, "currentUser");
+
+  const packaging = read("scripts/package-desktop-windows.ps1");
+  assert.match(packaging, /x86_64-pc-windows-msvc/u);
+  assert.match(packaging, /developer_preview", "validation_only/u);
+  assert.match(packaging, /COLOSSUS_DESKTOP_TEAM_ID -ne "UNSIGNED"/u);
+  assert.match(packaging, /cargo xtask desktop prepare/u);
+  assert.match(packaging, /--no-sign/u);
+  assert.match(packaging, /write-desktop-bundle-manifest\.mjs/u);
+  assert.match(packaging, /patch-desktop-manifest-binding\.mjs/u);
+  assert.match(packaging, /"--bundles", "nsis"/u);
+  assert.match(packaging, /Get-FileHash/u);
+  assert.doesNotMatch(packaging, /stable/u);
 });
 
 test("release and development CSPs preserve the local-only boundary", () => {
@@ -154,6 +184,64 @@ test("terminal PTY authority is isolated from the main WebView", () => {
   assert.match(bridge, /url\.query\(\) == Some\("surface=terminal"\)/u);
 });
 
+test("workspace file preview is read-only, bounded, and workspace-bound", () => {
+  const main = json("apps/desktop/src-tauri/capabilities/main-chat.json");
+  assert.ok(main.permissions.includes("allow-list-workspace-directory"));
+  assert.ok(main.permissions.includes("allow-read-workspace-file"));
+
+  const source = read("apps/desktop/src-tauri/src/workspace_files.rs");
+  const implementation = source.slice(0, source.indexOf("#[cfg(test)]"));
+  assert.match(implementation, /MAX_FILE_BYTES: u64 = 256 \* 1_024/u);
+  assert.match(
+    implementation,
+    /settings\.selected_target_id\.as_deref\(\) != Some\(MANAGED_TARGET_ID\)/u,
+  );
+  assert.match(
+    implementation,
+    /settings\.access_profile != AccessProfileSetting::Development/u,
+  );
+  assert.match(implementation, /revalidate_workspace\(workspace\)/u);
+  assert.match(implementation, /OFlags::NOFOLLOW/u);
+  assert.match(implementation, /\.file_type\(\)\.is_symlink\(\)/u);
+  assert.match(implementation, /"\.colossus"/u);
+  assert.match(implementation, /"\.env"/u);
+  assert.match(implementation, /"pem" \| "key"/u);
+  assert.doesNotMatch(implementation, /write_all|create_dir|remove_file/u);
+});
+
+test("CA bundle management stays native and exposes only sanitized trust metadata", () => {
+  const main = json("apps/desktop/src-tauri/capabilities/main-chat.json");
+  assert.ok(main.permissions.includes("allow-import-ca-bundle"));
+  assert.ok(main.permissions.includes("allow-remove-ca-bundle"));
+
+  const commands = read("apps/desktop/src-tauri/build.rs");
+  const bridge = read("apps/desktop/src-tauri/src/lib.rs");
+  for (const command of ["import_ca_bundle", "remove_ca_bundle"]) {
+    assert.match(commands, new RegExp(`"${command}"`, "u"));
+    assert.match(bridge, new RegExp(`\\b${command}\\b`, "u"));
+  }
+
+  const dto = read("apps/desktop/src-tauri/src/desktop_dto.rs");
+  const caStatus = dto.slice(
+    dto.indexOf("pub(crate) struct CaBundleStatusDto"),
+    dto.indexOf("impl CaBundleStatusDto"),
+  );
+  assert.match(caStatus, /configured/u);
+  assert.match(caStatus, /certificate_count/u);
+  assert.match(caStatus, /fingerprints_sha256/u);
+  assert.doesNotMatch(caStatus, /path|pem|source/u);
+
+  const types = read("apps/desktop/src/types.ts");
+  const rendererStatus = types.slice(
+    types.indexOf("export interface CaBundleStatus"),
+    types.indexOf("export interface DesktopCapabilities"),
+  );
+  assert.match(rendererStatus, /configured/u);
+  assert.match(rendererStatus, /certificateCount/u);
+  assert.match(rendererStatus, /fingerprintsSha256/u);
+  assert.doesNotMatch(rendererStatus, /path|pem|source/u);
+});
+
 test("provider enrollment and external trust stay behind native UI", () => {
   const types = read("apps/desktop/src/types.ts");
   const configureRequest = types.slice(
@@ -182,7 +270,10 @@ test("provider enrollment and external trust stay behind native UI", () => {
   assert.match(modelEditor, /contextWindowTokens/u);
   assert.match(modelEditor, /maxOutputTokens/u);
   assert.match(modelEditor, /credentialAction/u);
-  assert.doesNotMatch(modelEditor, /type=["']password["']|apiKey|credentialId/u);
+  assert.doesNotMatch(
+    modelEditor,
+    /type=["']password["']|apiKey|credentialId/u,
+  );
 
   const enrollment = read("apps/desktop/src-tauri/src/provider_enrollment.rs");
   const enrollmentImplementation = enrollment.slice(
@@ -244,7 +335,10 @@ test("release packaging records hashes only after nested signing", () => {
   assert.match(source, /build mode rejects signing identity state/u);
   assert.match(source, /sign ABSOLUTE_APP_PATH/u);
   assert.match(source, /prepare_resources_directory/u);
-  assert.match(source, /resources must remain inside the canonical application bundle/u);
+  assert.match(
+    source,
+    /resources must remain inside the canonical application bundle/u,
+  );
   assert.match(source, /COLOSSUS_DESKTOP_TEAM_ID/u);
   assert.match(source, /COLOSSUS_DESKTOP_RELEASE_CHANNEL/u);
   assert.match(source, /developer_preview \| validation_only/u);
@@ -312,22 +406,41 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   assert.ok(desktopStart >= 0 && windowsStart > desktopStart);
   const desktop = workflow.slice(desktopStart, windowsStart);
   assert.match(desktop, /COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"/u);
-  assert.match(
-    desktop,
-    /COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"/u,
-  );
+  assert.match(desktop, /COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"/u);
   assert.match(desktop, /Build validation-only ADHOC macOS bundle structure/u);
+
+  const windowsEnd = workflow.indexOf("  fuzz:", windowsStart);
+  assert.ok(windowsEnd > windowsStart);
+  const windows = workflow.slice(windowsStart, windowsEnd);
+  assert.match(windows, /runs-on: windows-2025/u);
+  assert.match(windows, /COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"/u);
+  assert.match(windows, /cargo xtask desktop prepare --profile debug/u);
+  assert.match(
+    windows,
+    /cargo test --locked --manifest-path apps\/desktop\/src-tauri\/Cargo\.toml --lib/u,
+  );
+  assert.match(windows, /npm run check/u);
 });
 
 test("release compilation and signing authority use separate runners", () => {
   const workflow = read(".github/workflows/release.yml");
   const buildStart = workflow.indexOf("  desktop_macos_build:");
   const signStart = workflow.indexOf("  desktop_macos:", buildStart);
-  const gateStart = workflow.indexOf("  gate:", signStart);
-  assert.ok(buildStart >= 0 && buildStart < signStart && signStart < gateStart);
+  const windowsStart = workflow.indexOf(
+    "  desktop_windows_preview:",
+    signStart,
+  );
+  const gateStart = workflow.indexOf("  gate:", windowsStart);
+  assert.ok(
+    buildStart >= 0 &&
+      buildStart < signStart &&
+      signStart < windowsStart &&
+      windowsStart < gateStart,
+  );
 
   const buildJob = workflow.slice(buildStart, signStart);
-  const signJob = workflow.slice(signStart, gateStart);
+  const signJob = workflow.slice(signStart, windowsStart);
+  const windowsJob = workflow.slice(windowsStart, gateStart);
   assert.match(buildJob, /npm ci --ignore-scripts/u);
   assert.match(buildJob, /package-desktop-macos build/u);
   assert.match(buildJob, /Colossus Desktop\.unsigned\.zip/u);
@@ -373,6 +486,7 @@ test("release compilation and signing authority use separate runners", () => {
     "patch-desktop-manifest-binding.mjs",
     "verify-desktop-bundle.mjs",
     "verify-desktop-unsigned-archive.mjs",
+    "verify-tauri-updater-signature.mjs",
   ]) {
     assert.match(
       signJob,
@@ -402,11 +516,25 @@ test("release compilation and signing authority use separate runners", () => {
     signJob,
     /MACOS_TEAM_ID secret must be a 10-character Apple Team ID' >&2\n\s+exit 1\n\s+fi/u,
   );
-  assert.doesNotMatch(signJob, /actions\/setup-node@/u);
+  assert.match(signJob, /actions\/setup-node@[0-9a-f]{40}/u);
+  assert.match(signJob, /npm ci --ignore-scripts/u);
   assert.doesNotMatch(signJob, /rust-toolchain@/u);
-  assert.doesNotMatch(signJob, /\bnpm\s/u);
   assert.doesNotMatch(signJob, /\bcargo\s/u);
   assert.doesNotMatch(signJob, /\btauri\s/u);
+
+  assert.match(
+    windowsJob,
+    /if: needs\.validate\.outputs\.release_channel != 'stable'/u,
+  );
+  assert.match(windowsJob, /runs-on: windows-2025/u);
+  assert.match(windowsJob, /COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED/u);
+  assert.match(windowsJob, /package-desktop-windows\.ps1/u);
+  assert.match(windowsJob, /Get-FileHash/u);
+  assert.match(windowsJob, /codeSigning = "unsigned_developer_preview"/u);
+  assert.match(windowsJob, /smartScreenWarningExpected = \$true/u);
+  assert.match(windowsJob, /Start-Process -FilePath \$installer/u);
+  assert.match(windowsJob, /Start-Process -FilePath \$uninstallers/u);
+  assert.match(windowsJob, /Colossus processes remained after uninstall/u);
 
   const archiveCheck = signJob.indexOf(
     "node ./scripts/verify-desktop-unsigned-archive.mjs",
@@ -435,6 +563,69 @@ test("release compilation and signing authority use separate runners", () => {
     workflow,
     /desktop_macos_build=\$\{\{ needs\.desktop_macos_build\.result \}\}/u,
   );
+  assert.match(workflow, /desktop_windows_preview="\$WINDOWS_DESKTOP_RESULT"/u);
+  assert.match(
+    workflow,
+    /if \[ "\$RELEASE_CHANNEL" = stable \]; then\s+test "\$WINDOWS_DESKTOP_RESULT" = skipped/u,
+  );
+});
+
+test("desktop updates are signature-bound and channel-isolated", () => {
+  const manifest = read("apps/desktop/src-tauri/Cargo.toml");
+  const build = read("apps/desktop/src-tauri/build.rs");
+  const updater = read("apps/desktop/src-tauri/src/updates.rs");
+  const macos = read("scripts/package-desktop-macos");
+  const windows = read("scripts/package-desktop-windows.ps1");
+  const release = read(".github/workflows/release.yml");
+  const channels = read(".github/workflows/desktop-update-channels.yml");
+
+  assert.match(manifest, /tauri-plugin-updater = \{ version = "=2\.9\.0"/u);
+  assert.match(build, /COLOSSUS_DESKTOP_UPDATE_ENDPOINT/u);
+  assert.match(build, /COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY/u);
+  assert.match(build, /validation-only Desktop builds must not advertise/u);
+  assert.match(updater, /AdditionalRootCertificates/u);
+  assert.match(updater, /MAX_UPDATE_BYTES/u);
+  assert.match(updater, /verify_update_signature/u);
+  assert.match(updater, /download_url\.scheme\(\)/u);
+  assert.match(updater, /schemaVersion/u);
+  assert.match(updater, /attempt\.url\(\)\.scheme\(\) == "https"/u);
+  assert.match(macos, /Colossus Desktop\.app\.tar\.gz/u);
+  assert.match(macos, /signer sign "\$updater_archive"/u);
+  assert.match(windows, /createUpdaterArtifacts = \$true/u);
+  assert.match(windows, /NSIS updater signature was not created/u);
+  assert.match(release, /DESKTOP_UPDATE_PUBLIC_KEY/u);
+  assert.match(release, /DESKTOP_UPDATE_PRIVATE_KEY/u);
+  assert.match(release, /write-desktop-update-manifest\.mjs/u);
+  assert.match(release, /verify-tauri-updater-signature\.mjs/u);
+  assert.match(channels, /types: \[published\]/u);
+  assert.match(channels, /desktop-update-channels/u);
+  assert.match(channels, /gh release upload "\$channel_tag"/u);
+});
+
+test("desktop browser acceptance covers the supported minimum layout", () => {
+  const packageManifest = JSON.parse(read("apps/desktop/package.json"));
+  const config = read("apps/desktop/playwright.config.ts");
+  const acceptance = read(
+    "apps/desktop/tests/browser/operations-studio.spec.ts",
+  );
+  const premerge = read(".github/workflows/premerge.yml");
+
+  assert.equal(packageManifest.devDependencies["@playwright/test"], "1.62.0");
+  assert.equal(packageManifest.devDependencies["@axe-core/playwright"], "4.12.1");
+  assert.equal(packageManifest.scripts["test:browser"], "playwright test");
+  assert.equal(
+    packageManifest.scripts["test:browser:install"],
+    "playwright install chromium",
+  );
+  assert.match(config, /viewport: \{ width: 880, height: 640 \}/u);
+  assert.match(config, /fixture=operations-studio/u);
+  assert.match(acceptance, /new AxeBuilder/u);
+  assert.match(acceptance, /forcedColors: "active"/u);
+  assert.match(acceptance, /Shift\+Tab/u);
+  assert.match(acceptance, /page\.keyboard\.press\("Escape"\)/u);
+  assert.match(acceptance, /Allow once/u);
+  assert.match(premerge, /npm run test:browser:install/u);
+  assert.match(premerge, /npm run test:browser/u);
 });
 
 test("draft release binds GitHub CLI without checking out tagged sources", () => {
@@ -540,6 +731,47 @@ test("release manifest writer emits exact final binary digests", () => {
       output,
     ]);
     assert.notEqual(rejected.status, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("release manifest writer uses final Windows executable names", () => {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), "colossus-windows-desktop-contract-")),
+  );
+  try {
+    const sidecar = join(root, "colossus-sidecar-x86_64-pc-windows-msvc.exe");
+    const cli = join(root, "colossus-x86_64-pc-windows-msvc.exe");
+    copyFileSync(process.execPath, sidecar);
+    copyFileSync(process.execPath, cli);
+    chmodSync(sidecar, 0o755);
+    chmodSync(cli, 0o755);
+    const output = join(root, "colossus-bundle-manifest.json");
+    execFileSync(process.execPath, [
+      join(repository, "scripts/write-desktop-bundle-manifest.mjs"),
+      "--target",
+      "x86_64-pc-windows-msvc",
+      "--release-channel",
+      "developer_preview",
+      "--sidecar",
+      sidecar,
+      "--cli",
+      cli,
+      "--output",
+      output,
+    ]);
+    assert.deepEqual(JSON.parse(readFileSync(output, "utf8")), {
+      schemaVersion: 2,
+      targetTriple: "x86_64-pc-windows-msvc",
+      profile: "release",
+      releaseChannel: "developer_preview",
+      sidecar: {
+        fileName: "colossus-sidecar.exe",
+        sha256: digest(sidecar),
+      },
+      cli: { fileName: "colossus.exe", sha256: digest(cli) },
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -67,6 +67,7 @@ impl CredentialResolver for EnvironmentCredentialResolver {
 pub struct SearchExecutor {
     pub(super) profile: SearchProfile,
     credentials: Arc<dyn CredentialResolver>,
+    tls_roots: AdditionalRootCertificates,
 }
 
 impl SearchExecutor {
@@ -83,7 +84,15 @@ impl SearchExecutor {
         Self {
             profile,
             credentials,
+            tls_roots: AdditionalRootCertificates::default(),
         }
+    }
+
+    /// Add validated runtime-wide CA roots to this search adapter's built-in public roots.
+    #[must_use]
+    pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
+        self.tls_roots = tls_roots;
+        self
     }
 
     /// Profile metadata without credentials.
@@ -161,7 +170,9 @@ impl SearchExecutor {
                 || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
         let addresses = resolve_search_addresses(host, port, allow_non_public).await?;
         let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
-        let client = Client::builder()
+        let client = self
+            .tls_roots
+            .configure_reqwest(Client::builder())
             .no_proxy()
             .redirect(RedirectPolicy::none())
             .resolve_to_addrs(host, &addresses)

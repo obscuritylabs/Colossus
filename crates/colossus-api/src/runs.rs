@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 const MAX_PUBLIC_APPROVAL_ORIGIN_BYTES: usize = 512;
+const MAX_RUN_TITLE_CHARACTERS: usize = 80;
+const UNTITLED_RUN: &str = "Untitled work";
 use std::pin::Pin;
 
 /// Persistent public run lifecycle state.
@@ -101,8 +103,7 @@ pub enum RunMode {
 }
 
 /// Released terminal run result.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RunResult {
     /// Complete released assistant output.
     pub output: String,
@@ -118,6 +119,54 @@ pub struct RunResult {
     pub elapsed_seconds: f64,
 }
 
+#[derive(Default)]
+struct LegacyRunResultProfile(Option<String>);
+
+impl<'de> Deserialize<'de> for LegacyRunResultProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(|value| Self(Some(value)))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunResultFields {
+    output: String,
+    profile: String,
+    #[serde(default)]
+    model_profile: LegacyRunResultProfile,
+    #[serde(default)]
+    provider_profile: LegacyRunResultProfile,
+    model: String,
+    elapsed_seconds: f64,
+}
+
+impl<'de> Deserialize<'de> for RunResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fields = RunResultFields::deserialize(deserializer)?;
+        Ok(Self {
+            output: fields.output,
+            model_profile: fields
+                .model_profile
+                .0
+                .unwrap_or_else(|| fields.profile.clone()),
+            provider_profile: fields
+                .provider_profile
+                .0
+                .unwrap_or_else(|| fields.profile.clone()),
+            profile: fields.profile,
+            model: fields.model,
+            elapsed_seconds: fields.elapsed_seconds,
+        })
+    }
+}
+
 /// Released terminal failure without private adapter detail.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +177,15 @@ pub struct RunFailure {
     pub message: String,
     /// Whether durable evidence proves the external outcome.
     pub outcome: crate::OutcomeCertainty,
+    /// Whether an explicit caller retry is known to be safe.
+    #[serde(default)]
+    pub recoverable: bool,
+    /// Released upstream HTTP response status, when one was received.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    /// Provider-supplied retry lower bound in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
 }
 
 /// Durable terminal cancellation evidence.
@@ -457,6 +515,8 @@ pub struct Run {
     pub id: String,
     /// Durable session identity associated with the run.
     pub session_id: String,
+    /// Bounded deterministic display title derived from the opening request.
+    pub title: String,
     /// Current lifecycle state.
     pub status: RunStatus,
     /// Requested execution mode.
@@ -642,6 +702,55 @@ impl RunExecutionRequest {
 }
 
 impl CreateRunRequest {
+    pub(crate) fn display_title(&self) -> String {
+        let mut title = String::new();
+        let mut title_characters = 0;
+        let mut needs_space = false;
+        let mut truncated = false;
+
+        'parts: for part in &self.input {
+            let ContentPart::Text { text } = part;
+            for character in text.chars() {
+                let is_unsafe_formatting = matches!(
+                    character,
+                    '\u{061c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                );
+                if character.is_whitespace() || character.is_control() || is_unsafe_formatting {
+                    needs_space = !title.is_empty();
+                    continue;
+                }
+                let additional_characters = usize::from(needs_space) + 1;
+                if title_characters + additional_characters > MAX_RUN_TITLE_CHARACTERS {
+                    truncated = true;
+                    break 'parts;
+                }
+                if needs_space {
+                    title.push(' ');
+                    needs_space = false;
+                }
+                title.push(character);
+                title_characters += additional_characters;
+            }
+        }
+
+        if truncated && title_characters == MAX_RUN_TITLE_CHARACTERS {
+            title.pop();
+        }
+        let title = title.trim();
+        if title.is_empty() {
+            return UNTITLED_RUN.into();
+        }
+        if truncated {
+            format!("{}…", title.trim_end())
+        } else {
+            title.into()
+        }
+    }
+
     /// Validate bounded public request fields.
     pub fn validate(&self) -> ApiResult<()> {
         if self.input.is_empty() {

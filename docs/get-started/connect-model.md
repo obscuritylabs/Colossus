@@ -18,6 +18,7 @@ exact network origin.
 - A completed [five-minute quickstart](quickstart.md).
 - A provider account, model identifier, and API credential.
 - Permission to expose the provider's exact HTTPS origin from the Colossus sandbox.
+- For an endpoint issued by a private CA, a PEM CA certificate bundle.
 
 ## Steps
 
@@ -50,6 +51,17 @@ Colossus runs; close the shell when finished. Do not paste a secret into
 ### 2. Add a provider profile and route
 
 Edit `.colossus/config.yaml`.
+
+If the provider uses a private CA, add the runtime-wide bundle once. Relative paths are
+resolved from the selected workspace:
+
+```yaml
+network:
+  caBundlePath: .colossus/certs/company-ca-bundle.pem
+```
+
+Publicly trusted endpoints can leave `caBundlePath` as `null` or omit the `network`
+block.
 
 === "OpenAI Responses"
 
@@ -155,6 +167,8 @@ The credential value must not appear in configuration, output, or audit evidence
 - **Origin absent from the sandbox:** add the exact provider origin, not its URL path.
 - **Provider or model not found:** verify `kind`, `baseUrl`, and `model` with the
   provider.
+- **TLS or certificate failure:** set `network.caBundlePath` to the PEM bundle that
+  issued the endpoint certificate, then rerun `provider doctor`.
 - **Request denied:** inspect `config effective`; provider visibility, action policy,
   approval, and network grants are separate decisions.
 - **Outcome unknown:** inspect provider-side usage before retrying. Colossus does not

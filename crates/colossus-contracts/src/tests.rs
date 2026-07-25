@@ -37,6 +37,34 @@ fn run_event_rejects_unknown_fields() {
 }
 
 #[test]
+fn run_error_http_status_is_optional_and_structured() {
+    let legacy = r#"{
+        "type":"error","code":"provider.failed","message":"failed",
+        "recoverable":false,"turn":1,"elapsed_seconds":0.1
+    }"#;
+    assert!(matches!(
+        serde_json::from_str::<RunEvent>(legacy).expect("legacy error event"),
+        RunEvent::Error {
+            http_status: None,
+            ..
+        }
+    ));
+
+    let event = RunEvent::Error {
+        code: "provider.temporarily_unavailable".into(),
+        message: "not ready".into(),
+        recoverable: true,
+        http_status: Some(503),
+        retry_after_ms: Some(7_000),
+        turn: Some(1),
+        elapsed_seconds: 0.1,
+    };
+    let value = serde_json::to_value(event).expect("structured error event");
+    assert_eq!(value["http_status"], 503);
+    assert_eq!(value["retry_after_ms"], 7_000);
+}
+
+#[test]
 fn theme_names_are_stable_and_plain_migrates_to_mono() {
     for (theme, name) in [
         (ThemeName::Default, "default"),

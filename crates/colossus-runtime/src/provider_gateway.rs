@@ -494,8 +494,19 @@ fn resolved_output_limit(
 
 pub(super) fn model_gateway_error(error: GatewayError) -> ModelProviderError {
     match error {
-        GatewayError::RecoverableExecution { code, message } => {
-            ModelProviderError::Recoverable { code, message }
+        GatewayError::RecoverableExecution {
+            code,
+            message,
+            http_status,
+            retry_after_ms,
+        } => ModelProviderError::Recoverable {
+            code,
+            message,
+            http_status,
+            retry_after_ms,
+        },
+        GatewayError::HttpStatus { status, message } => {
+            ModelProviderError::HttpStatus { status, message }
         }
         GatewayError::OutcomeUnknown(message) => ModelProviderError::OutcomeUnknown(message),
         error => ModelProviderError::Failed(error.to_string()),

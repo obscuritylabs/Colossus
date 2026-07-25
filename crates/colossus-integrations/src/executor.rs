@@ -81,12 +81,23 @@ impl IntegrationRequest {
 /// Permit-bound connection management and HTTP operation adapter.
 pub struct IntegrationExecutor {
     repository: Arc<dyn ExtensionRepository>,
+    tls_roots: AdditionalRootCertificates,
 }
 
 impl IntegrationExecutor {
     /// Construct an adapter. Every effectful method still requires an opaque permit.
     pub fn new(repository: Arc<dyn ExtensionRepository>) -> Result<Self, StoreError> {
-        Ok(Self { repository })
+        Ok(Self {
+            repository,
+            tls_roots: AdditionalRootCertificates::default(),
+        })
+    }
+
+    /// Add validated runtime-wide CA roots to integration clients' built-in public roots.
+    #[must_use]
+    pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
+        self.tls_roots = tls_roots;
+        self
     }
 
     /// Connected tool specs in deterministic connection/operation order.
@@ -308,7 +319,9 @@ impl IntegrationExecutor {
             && (host.eq_ignore_ascii_case("localhost")
                 || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
         let addresses = resolve_integration_addresses(host, port, allow_non_public).await?;
-        let client = reqwest::Client::builder()
+        let client = self
+            .tls_roots
+            .configure_reqwest(reqwest::Client::builder())
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .resolve_to_addrs(host, &addresses)

@@ -20,27 +20,41 @@ sha2 = "0.10.9"
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+anyhow = "1.0.104"
 base64 = "0.22.1"
+colossus-network = { version = "=0.10.1-preview.2", path = "../../../crates/colossus-network" }
 colossus-sdk = { version = "=0.10.1-preview.2", path = "../../../crates/colossus-sdk", features = ["daemon", "keyring", "sidecar"] }
 colossus-sidecar-protocol = { version = "=0.10.1-preview.2", path = "../../../crates/colossus-sidecar-protocol" }
 directories = "6.0.0"
+futures-util = "0.3.33"
 getrandom = "0.4.3"
 hex = "0.4.3"
 keyring = "4.1.4"
-nix = { version = "0.31.3", features = ["process", "signal"] }
+minisign-verify = "0.2.5"
 portable-pty = "0.9.0"
-rustix = { version = "1.1.4", features = ["fs", "process"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10.9"
 tauri = { version = "=2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.2"
-tokio = { version = "1.49.0", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tauri-plugin-updater = { version = "=2.9.0", default-features = false, features = ["rustls-tls", "zip"] }
+tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 uuid = { version = "1.23.4", features = ["v4", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", features = ["process", "signal"] }
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+colossus-windows-native = { version = "=0.10.1-preview.2", path = "../../../crates/colossus-windows-native" }
+
 [dev-dependencies]
+rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
+rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
 tempfile = "3.23.0"
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 
 [lints.rust]
 unsafe_code = "forbid"

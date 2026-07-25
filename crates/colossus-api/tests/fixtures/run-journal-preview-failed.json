@@ -1,0 +1,22 @@
+{
+  "format_version": 1,
+  "prior_state": {
+    "status": "running",
+    "started_at": "2026-01-01T00:00:01Z",
+    "finished_at": null,
+    "result": null,
+    "failure": null,
+    "cancellation": null,
+    "pending_interaction": null
+  },
+  "released_bytes_before": 0,
+  "kind": {
+    "type": "failure",
+    "status": "failed",
+    "failure": {
+      "code": "provider.temporarily_unavailable",
+      "message": "The provider endpoint returned HTTP 503.",
+      "outcome": "known"
+    }
+  }
+}

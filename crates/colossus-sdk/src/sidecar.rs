@@ -247,6 +247,7 @@ pub struct SidecarBootstrapConfig {
     runtime: ManagedRuntimeConfig,
     grant: SidecarApplicationGrant,
     expected_workspace_identity: Option<WorkspaceIdentity>,
+    ca_bundle_path: Option<PathBuf>,
     approval_broker_grant: Option<SidecarApprovalBrokerGrant>,
     host_credentials: Vec<SidecarHostCredential>,
     worker_ipc_authentication: Option<SecretString>,
@@ -270,6 +271,7 @@ impl SidecarBootstrapConfig {
             runtime,
             grant,
             expected_workspace_identity: None,
+            ca_bundle_path: None,
             approval_broker_grant: None,
             host_credentials: Vec::new(),
             worker_ipc_authentication: None,
@@ -289,6 +291,21 @@ impl SidecarBootstrapConfig {
     ) -> SdkResult<Self> {
         validate_expected_workspace_identity(&identity)?;
         self.expected_workspace_identity = Some(identity);
+        Ok(self)
+    }
+
+    /// Add one native-copied private CA bundle to every managed-runtime network client.
+    pub fn with_additional_ca_bundle_path(mut self, path: impl Into<PathBuf>) -> SdkResult<Self> {
+        let path = path.into();
+        if !path.is_absolute()
+            || path.parent().is_none()
+            || path.to_str().is_none_or(|path| path.len() > 4_096)
+        {
+            return Err(SdkError::InvalidConfiguration(
+                "additional CA bundle path is invalid",
+            ));
+        }
+        self.ca_bundle_path = Some(path);
         Ok(self)
     }
 
@@ -389,6 +406,17 @@ impl SidecarBootstrapConfig {
                 ))?
                 .to_owned(),
             workspace_identity,
+            ca_bundle_path: self
+                .ca_bundle_path
+                .as_ref()
+                .map(|path| {
+                    path.to_str()
+                        .map(str::to_owned)
+                        .ok_or(SdkError::InvalidConfiguration(
+                            "additional CA bundle path must be UTF-8",
+                        ))
+                })
+                .transpose()?,
             runtime: self.runtime.clone(),
             grant: self.grant.wire(),
             approval_broker_grant: self
@@ -422,9 +450,13 @@ impl SidecarBootstrapConfig {
 
 #[cfg(target_os = "macos")]
 fn validate_expected_workspace_identity(identity: &WorkspaceIdentity) -> SdkResult<()> {
-    identity.validate_current().map_err(|_| {
-        SdkError::InvalidConfiguration("expected sidecar workspace identity is invalid")
-    })
+    if identity.is_current_macos() {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidConfiguration(
+            "expected sidecar workspace identity is invalid",
+        ))
+    }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -441,8 +473,20 @@ fn validate_expected_workspace_identity(identity: &WorkspaceIdentity) -> SdkResu
     }
 }
 
-#[cfg(not(unix))]
-fn validate_expected_workspace_identity(_identity: &WorkspaceIdentity) -> SdkResult<()> {
+#[cfg(windows)]
+fn validate_expected_workspace_identity(identity: &WorkspaceIdentity) -> SdkResult<()> {
+    if identity.is_current_windows() {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidConfiguration(
+            "expected sidecar workspace identity is invalid",
+        ))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn validate_expected_workspace_identity(identity: &WorkspaceIdentity) -> SdkResult<()> {
+    let _ = identity;
     Err(SdkError::InvalidConfiguration(
         "expected sidecar workspace identity is invalid",
     ))
@@ -460,6 +504,7 @@ impl fmt::Debug for SidecarBootstrapConfig {
                     .as_ref()
                     .map(|_| "[OPAQUE IDENTITY]"),
             )
+            .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
             .field("runtime", &self.runtime)
             .field("grant", &self.grant)
             .field("approval_broker_grant", &self.approval_broker_grant)
@@ -566,6 +611,37 @@ mod tests {
     }
 
     #[test]
+    fn additional_ca_bundle_path_is_native_only_and_redacted() {
+        let path = if cfg!(windows) {
+            r"C:\private\app\trust\company-ca.pem"
+        } else {
+            "/private/app/trust/company-ca.pem"
+        };
+        let bootstrap = SidecarBootstrapConfig::new(
+            "/tmp/colossus-sdk-sidecar-workspace",
+            runtime(),
+            primary_grant(&[scopes::RUNS_READ]),
+        )
+        .expect("bootstrap")
+        .with_additional_ca_bundle_path(path)
+        .expect("CA bundle path");
+
+        let debug = format!("{bootstrap:?}");
+        assert!(debug.contains("ca_bundle_configured: true"));
+        assert!(!debug.contains(path));
+        assert!(
+            SidecarBootstrapConfig::new(
+                "/tmp/colossus-sdk-sidecar-workspace",
+                runtime(),
+                primary_grant(&[scopes::RUNS_READ]),
+            )
+            .expect("bootstrap")
+            .with_additional_ca_bundle_path("../company-ca.pem")
+            .is_err()
+        );
+    }
+
+    #[test]
     fn expected_workspace_identity_is_validated_and_redacted() {
         let v2_identity = WorkspaceIdentity::from_macos_parts(42, 84, 1_700_000_000, 123_456_789)
             .expect("current identity");
@@ -630,7 +706,7 @@ mod tests {
         );
 
         let mut malformed = v2_identity;
-        malformed.version = malformed.version.saturating_add(1);
+        malformed.version = u16::MAX;
         assert!(
             SidecarBootstrapConfig::new(
                 "/tmp/colossus-sdk-sidecar-workspace",

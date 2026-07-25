@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 
 use crate::dto::CommandErrorDto;
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const MAX_PROVIDER_SECRET_BYTES: usize = 761;
 #[cfg(target_os = "macos")]
 const PROVIDER_PROMPT_OUTPUT_BYTES: u64 = (MAX_PROVIDER_SECRET_BYTES + 2) as u64;
@@ -76,7 +76,29 @@ async fn kill_and_reap(child: &mut tokio::process::Child) {
     let _ = tokio::time::timeout(PROVIDER_REAP_TIMEOUT, child.wait()).await;
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(crate) async fn request_provider_secret() -> Result<Zeroizing<String>, CommandErrorDto> {
+    let secret = tokio::task::spawn_blocking(|| {
+        colossus_windows_native::prompt_secret(
+            "Configure a model provider for Colossus",
+            "Enter the credential for this model provider. Colossus will store it in Windows Credential Manager.",
+            "com.obscuritylabs.colossus.desktop/provider",
+            MAX_PROVIDER_SECRET_BYTES,
+        )
+    })
+    .await
+    .map_err(|_| enrollment_error(true))?
+    .map_err(|error| {
+        enrollment_error(!matches!(
+            error,
+            colossus_windows_native::WindowsNativeError::InvalidInput
+        ))
+    })?;
+    validate_secret(&secret)?;
+    Ok(secret)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn request_provider_secret()
 -> impl std::future::Future<Output = Result<Zeroizing<String>, CommandErrorDto>> {
     std::future::ready(Err(CommandErrorDto::local_sanitized(
@@ -94,7 +116,7 @@ if (length of providerKey) < 1 or (length of providerKey) > 761 then error numbe
 return providerKey"#
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn validate_secret(secret: &str) -> Result<(), CommandErrorDto> {
     if secret.is_empty()
         || secret.len() > MAX_PROVIDER_SECRET_BYTES
@@ -108,7 +130,7 @@ fn validate_secret(secret: &str) -> Result<(), CommandErrorDto> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn enrollment_error(retryable: bool) -> CommandErrorDto {
     CommandErrorDto::local_sanitized(
         "provider_enrollment",

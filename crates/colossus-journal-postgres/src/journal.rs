@@ -18,10 +18,23 @@ impl PostgresEventJournal {
         keys: Arc<dyn KeyProvider>,
         signer: Arc<dyn CheckpointSigner>,
     ) -> Result<Self, StoreError> {
+        Self::open_with_tls_roots(config, keys, signer, &AdditionalRootCertificates::default())
+    }
+
+    /// Open the journal while augmenting the default WebPKI policy with runtime-wide roots.
+    ///
+    /// An explicit `custom_ca` storage policy remains exclusive and does not inherit
+    /// runtime-wide roots.
+    pub fn open_with_tls_roots(
+        config: PostgresJournalConfig,
+        keys: Arc<dyn KeyProvider>,
+        signer: Arc<dyn CheckpointSigner>,
+        tls_roots: &AdditionalRootCertificates,
+    ) -> Result<Self, StoreError> {
         config.validate()?;
         let tls_connector = match &config.tls {
             PostgresTlsConfig::Disabled => None,
-            tls => Some(Self::build_tls_connector(tls)?),
+            tls => Some(Self::build_tls_connector_with_roots(tls, tls_roots)?),
         };
         let journal = Self {
             config,
@@ -154,13 +167,27 @@ impl PostgresEventJournal {
             .ok_or_else(|| StoreError::Adapter("PostgreSQL TLS connector is not configured".into()))
     }
 
+    #[cfg(test)]
     pub(super) fn build_tls_connector(
         tls: &PostgresTlsConfig,
     ) -> Result<MakeRustlsConnect, StoreError> {
+        Self::build_tls_connector_with_roots(tls, &AdditionalRootCertificates::default())
+    }
+
+    pub(super) fn build_tls_connector_with_roots(
+        tls: &PostgresTlsConfig,
+        tls_roots: &AdditionalRootCertificates,
+    ) -> Result<MakeRustlsConnect, StoreError> {
         let roots = match tls {
-            PostgresTlsConfig::WebpkiRoots => RootCertStore {
-                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-            },
+            PostgresTlsConfig::WebpkiRoots => {
+                let mut roots = RootCertStore {
+                    roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+                };
+                tls_roots
+                    .add_to_rustls(&mut roots)
+                    .map_err(|_| StoreError::Adapter("runtime CA bundle is invalid".into()))?;
+                roots
+            }
             PostgresTlsConfig::CustomCa { ca_pem_path } => {
                 let bytes = fs::read(ca_pem_path).map_err(|_| {
                     StoreError::Adapter("PostgreSQL CA bundle is unreadable".into())

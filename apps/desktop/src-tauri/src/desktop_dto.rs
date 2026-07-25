@@ -151,6 +151,60 @@ pub(crate) struct DesktopStatusDto {
     pub(crate) managed_model_configuration: ManagedModelConfigurationDto,
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) terminal_enabled: bool,
+    pub(crate) additional_ca_bundle: CaBundleStatusDto,
+    pub(crate) capabilities: DesktopCapabilitiesDto,
+}
+
+/// Renderer-safe trust-bundle state without source or private storage paths.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CaBundleStatusDto {
+    pub(crate) configured: bool,
+    pub(crate) certificate_count: usize,
+    pub(crate) fingerprints_sha256: Vec<String>,
+}
+
+impl CaBundleStatusDto {
+    pub(crate) fn from_settings(settings: &DesktopSettings) -> Self {
+        settings.additional_ca_bundle.as_ref().map_or_else(
+            || Self {
+                configured: false,
+                certificate_count: 0,
+                fingerprints_sha256: Vec::new(),
+            },
+            |bundle| Self {
+                configured: true,
+                certificate_count: bundle.certificate_count,
+                fingerprints_sha256: bundle.fingerprints_sha256.clone(),
+            },
+        )
+    }
+}
+
+/// Renderer-safe features advertised for the selected authenticated runtime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)] // Wire-compatible feature flags are independently optional.
+pub(crate) struct DesktopCapabilitiesDto {
+    pub(crate) delegation: bool,
+    pub(crate) skills: bool,
+    pub(crate) tui: bool,
+    pub(crate) files: bool,
+    pub(crate) artifacts: bool,
+    pub(crate) update_available: bool,
+    pub(crate) agent_workflows: bool,
+    pub(crate) attachments: bool,
+}
+
+/// Renderer-safe result of an explicit native update check.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopUpdateCheckDto {
+    pub(crate) configured: bool,
+    pub(crate) available: bool,
+    pub(crate) current_version: String,
+    pub(crate) version: Option<String>,
+    pub(crate) channel: DesktopReleaseChannelDto,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

@@ -20,20 +20,36 @@ const prefix = "COLOSSUS_DESKTOP_RELEASE_MANIFEST_SHA256_V1=";
 const suffix = ":END_COLOSSUS_DESKTOP_RELEASE_MANIFEST_SHA256";
 const placeholder = `${prefix}${"0".repeat(64)}${suffix}`;
 
-function manifest() {
+function manifest({
+  targetTriple = "aarch64-apple-darwin",
+  sidecar = "colossus-sidecar",
+  cli = "colossus",
+} = {}) {
   return `${JSON.stringify({
     schemaVersion: 2,
-    targetTriple: "aarch64-apple-darwin",
+    targetTriple,
     profile: "release",
     releaseChannel: "developer_preview",
-    sidecar: { fileName: "colossus-sidecar", sha256: "a".repeat(64) },
-    cli: { fileName: "colossus", sha256: "b".repeat(64) },
+    sidecar: { fileName: sidecar, sha256: "a".repeat(64) },
+    cli: { fileName: cli, sha256: "b".repeat(64) },
   })}\n`;
 }
 
 function executable(bindings) {
   const header = Buffer.alloc(32, 0);
   header.writeUInt32BE(0xfeedfacf, 0);
+  return Buffer.concat([
+    header,
+    ...bindings.map((binding) => Buffer.from(binding, "ascii")),
+    Buffer.alloc(32, 0),
+  ]);
+}
+
+function portableExecutable(bindings) {
+  const header = Buffer.alloc(160, 0);
+  header.write("MZ", 0, "ascii");
+  header.writeUInt32LE(128, 0x3c);
+  header.write("PE\0\0", 128, "ascii");
   return Buffer.concat([
     header,
     ...bindings.map((binding) => Buffer.from(binding, "ascii")),
@@ -87,6 +103,39 @@ test("patches the one release placeholder with the exact manifest digest", () =>
   }
 });
 
+test("patches a Windows PE image using Windows bundle names", () => {
+  const { root, executablePath, manifestPath } = fixture();
+  try {
+    writeFileSync(
+      manifestPath,
+      manifest({
+        targetTriple: "x86_64-pc-windows-msvc",
+        sidecar: "colossus-sidecar.exe",
+        cli: "colossus.exe",
+      }),
+      { mode: 0o644 },
+    );
+    writeFileSync(executablePath, portableExecutable([placeholder]), {
+      mode: 0o755,
+    });
+    chmodSync(executablePath, 0o755);
+
+    const result = run(executablePath, manifestPath);
+    assert.equal(result.status, 0, result.stderr);
+    const digest = createHash("sha256")
+      .update(readFileSync(manifestPath))
+      .digest("hex");
+    assert.equal(
+      readFileSync(executablePath).includes(
+        Buffer.from(`${prefix}${digest}${suffix}`, "ascii"),
+      ),
+      true,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects missing, malformed, and duplicate release placeholders", () => {
   const { root, executablePath, manifestPath } = fixture();
   try {
@@ -115,7 +164,7 @@ test("rejects non-Mach-O executables and noncanonical manifests", () => {
     chmodSync(executablePath, 0o755);
     let result = run(executablePath, manifestPath);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /not a Mach-O image/u);
+    assert.match(result.stderr, /not a supported Mach-O or PE image/u);
 
     writeFileSync(executablePath, executable([placeholder]), { mode: 0o755 });
     chmodSync(executablePath, 0o755);

@@ -130,6 +130,67 @@ fn structured_output_is_human_for_terminals_and_json_for_automation() {
 }
 
 #[test]
+fn run_output_is_response_only_for_humans_and_structured_for_automation() {
+    let value = json!({
+        "run_id": "run-private-metadata",
+        "session_id": "session-private-metadata",
+        "model": "provider/private-model",
+        "output": "## Ready\n\n- response only",
+        "event_count": 35,
+        "elapsed_seconds": 13.5
+    });
+    let terminal = render_run_output(
+        &value,
+        value["output"].as_str().expect("response"),
+        OutputMode::Auto,
+        true,
+        80,
+        TerminalPreferences::default(),
+    )
+    .expect("terminal run output");
+    assert!(terminal.contains("Ready"));
+    assert!(terminal.contains("response only"));
+    for metadata in [
+        "Agent response",
+        "Run id",
+        "Session id",
+        "private-model",
+        "Event count",
+        "Elapsed seconds",
+    ] {
+        assert!(!terminal.contains(metadata), "{metadata}: {terminal}");
+    }
+
+    let explicit_human = render_run_output(
+        &value,
+        value["output"].as_str().expect("response"),
+        OutputMode::Human,
+        false,
+        80,
+        TerminalPreferences::default(),
+    )
+    .expect("explicit human run output");
+    assert!(explicit_human.contains("response only"));
+    assert!(!explicit_human.contains("run-private-metadata"));
+
+    for (mode, terminal) in [(OutputMode::Auto, false), (OutputMode::Json, true)] {
+        let structured = render_run_output(
+            &value,
+            value["output"].as_str().expect("response"),
+            mode,
+            terminal,
+            80,
+            TerminalPreferences::default(),
+        )
+        .expect("structured run output");
+        assert_eq!(
+            serde_json::from_str::<Value>(&structured).expect("run JSON"),
+            value
+        );
+    }
+}
+
+#[test]
 fn terminal_completion_catalog_includes_commands_and_discovered_skills() {
     let themes = ThemeLibrary::default();
     let values =

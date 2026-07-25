@@ -59,7 +59,7 @@ flowchart LR
 |---|---|---|---|---:|
 | PR validation | Open, edit, reopen, synchronize, or mark ready | Linux and selected documentation/dependency jobs | `Colossus PR gate` | $0.15 per update |
 | Pre-merge acceptance | Apply `ci:full` | macOS 14 ARM, Windows 2025 x64, bounded fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA, and mTLS | `Colossus pre-merge gate` | $0.75 per final run |
-| Release | Push an annotated stable or approved prerelease tag | Six CLI targets plus the channel-specific Apple-silicon Desktop | `Colossus release gate` | $4.50 per release |
+| Release | Push an annotated stable or approved prerelease tag | Six CLI targets, channel-specific Apple-silicon Desktop, and Windows x64 Developer Preview for prereleases | `Colossus release gate` | $4.50 per release |
 
 These ceilings are planning targets based on hosted-runner rates and observed durations,
 not billing or runtime enforcement. A job timeout remains mandatory for every hosted job.
@@ -128,9 +128,10 @@ rejects draft PRs, actors below write permission, and a missing or failed curren
 gate. The required pre-merge gate fails on failed, cancelled, or unexpectedly skipped
 acceptance work. Separate macOS jobs keep the root native-debug graph from coexisting
 with the standalone Tauri graph on the runner's bounded disk. The desktop job formats,
-lints, and tests the standalone native bridge, deletes its debug artifacts, then builds
-the bundled sidecar, CLI, and Tauri application into one shared non-incremental release
-tree. The native job exercises the otherwise-ignored real sidecar
+lints, and tests the standalone native bridge; runs pinned Chromium keyboard,
+accessibility, high-contrast, drawer, approval, and 880×640 layout acceptance; deletes
+its debug artifacts; then builds the bundled sidecar, CLI, and Tauri application into one
+shared non-incremental release tree. The native job exercises the otherwise-ignored real sidecar
 bootstrap/pinned-gRPC/guardian lifecycle and sandbox acceptance. Together they prove the
 pruned locked build, then create an ad-hoc signed two-phase app bundle and verify the outer
 seal plus final nested-binary manifest hashes. Ad-hoc signing
@@ -172,10 +173,18 @@ clean installation, offline echo/audit, and signed-bundle smoke. A credential-fr
 14 ARM job builds the standalone Tauri graph into one shared Cargo target and uploads an
 exact ditto archive of the unsigned application. A separate fresh macOS runner downloads
 that archive before it imports Developer ID and notarization authority; this minimal job
-runs no npm, Cargo, Vite, or Tauri build step. It signs both bundled executables, writes
-their final manifest, binds that exact manifest digest into the already-built main
-executable, signs the desktop application, submits it to Apple notarization,
+runs no Rust, Cargo, Vite, or Tauri build step. It installs locked Node dependencies with
+lifecycle scripts disabled only for updater signing and verification. It signs both
+bundled executables, writes their final manifest, binds that exact manifest digest into
+the already-built main executable, signs the desktop application, submits it to Apple notarization,
 staples and assesses it, and uploads an Apple-silicon direct-download zip plus checksum.
+Approved prerelease tags additionally build an x64 per-user NSIS package on
+`windows-2025`, run silent install/first-launch/uninstall and process-cleanup smoke
+checks, and publish its checksum, sealed manifest, and provenance. That package is
+explicitly labeled unsigned and preview-only. Stable release gating requires the Windows
+preview job to be skipped; it cannot accidentally promote an unsigned Windows package.
+The stable Windows job remains absent until Authenticode signing authority is configured
+for the nested CLI and sidecar, the app, and the installer.
 The validated workspace release version and public Apple Team ID are injected during the
 unsigned build, then the signing runner checks the imported identity against that Team ID,
 so application metadata, code identity, and asset tag cannot drift.
@@ -207,19 +216,49 @@ channel also drives a persistent in-app warning. Stable tags continue to require
 canonical Team ID, Developer ID signature, notarization, stapling, and Gatekeeper
 assessment.
 
-Only the final publication job receives `contents: write`. After all six CLI targets and
-the Desktop artifact pass, automation creates or updates a draft GitHub Release. A human
-reviews the draft and publishes it; the approved Developer Preview draft is already
-marked as a GitHub prerelease. Manual dispatch is artifact-only and cannot create a
-release; it uses the separate `validation_only` channel with an ad-hoc signature and
-`ADHOC` sentinel, never reads production signing secrets, and does not produce a runnable
-Desktop application. Its Actions artifact and archive are explicitly named
+Within `release.yml`, only the final publication job receives `contents: write`. After
+all six CLI targets and the Desktop artifact pass, automation creates or updates a draft
+GitHub Release. A human reviews the draft and publishes it; the approved Developer
+Preview draft is already marked as a GitHub prerelease. The separate post-publication
+channel workflow has narrow `contents: write` authority only to replace the fixed update
+metadata assets. Manual dispatch is artifact-only and cannot create a release; it uses
+the separate `validation_only` channel with an ad-hoc signature and `ADHOC` sentinel,
+never reads production signing secrets, and does not produce a runnable Desktop
+application. Its Actions artifact and archive are explicitly named
 `validation-only-adhoc` / `VALIDATION-ONLY-ADHOC` so they cannot be mistaken for a
 Developer Preview or stable signed release:
 
 ```bash
 gh workflow run release.yml --ref BRANCH -f version=vX.Y.Z
 ```
+
+### Desktop update signing and channels
+
+Runnable stable and Developer Preview builds require the repository variable
+`DESKTOP_UPDATE_PUBLIC_KEY`, containing the one-line base64 Tauri updater public key.
+The isolated packaging jobs require the protected secrets
+`DESKTOP_UPDATE_PRIVATE_KEY` and, when applicable,
+`DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD`. Validation-only builds reject update endpoints
+and keys and never produce updater artifacts.
+
+macOS packages a signed `.app.tar.gz` only after nested signing, outer signing,
+notarization when stable, stapling, and final bundle verification. Windows preview
+packaging emits the NSIS updater signature next to the explicitly unsigned installer.
+The versioned draft includes channel-scoped metadata whose platform entries carry those
+signatures and immutable version-release URLs.
+
+When a human publishes the versioned release,
+`desktop-update-channels.yml` revalidates the tag, prerelease bit, channel, platform
+keys, HTTPS URLs, and immutable release paths before replacing only `stable.json` or
+`developer_preview.json` on the fixed `desktop-update-channels` release. Applications
+compile one corresponding fixed endpoint and use distinct target names, so a preview
+cannot consume stable metadata or vice versa. The native update client also uses the
+shared additional-CA configuration and rejects HTTPS-to-HTTP redirects.
+
+The application update signature is separate from platform publisher identity.
+Authenticode remains mandatory before a Windows package can enter the stable channel;
+the existing stable Windows release job remains absent and the release gate requires
+the unsigned Windows job to be skipped for stable tags.
 
 ## Expected result
 

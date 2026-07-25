@@ -1733,6 +1733,7 @@ fn local_opa_config(base_url: String) -> super::OpaConfig {
         base_url,
         decision_path: "colossus/effect".into(),
         ca_pem: None,
+        tls_roots: Default::default(),
         identity_pem: None,
         full_content_disclosure_acknowledged: true,
         decision_log_masking_verified: false,

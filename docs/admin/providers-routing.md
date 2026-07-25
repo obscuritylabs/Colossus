@@ -52,6 +52,16 @@ routing explicit while credentials remain late-bound.
     Use `open_ai_responses` for a Responses-compatible endpoint. Use `echo` for a
     credential-free, network-free smoke route.
 
+    When the endpoint uses a private CA, configure the shared PEM bundle once:
+
+    ```yaml
+    network:
+      caBundlePath: .colossus/certs/company-ca-bundle.pem
+    ```
+
+    The roots are added to the public trust roots used by every Colossus-owned
+    outbound client. Relative paths resolve from the selected workspace.
+
     `providers.profiles.NAME.timeoutMs` is the transport ceiling for that connection's
     catalog and generation requests. With the built-in policy it remains effective even
     when `sandbox.timeoutMs` is lower; the sandbox timeout continues to bound ordinary
@@ -99,8 +109,10 @@ closed and fall back to the configured approval behavior.
 Some local servers return HTTP 503 while a model is loading. Colossus reports that status
 as `provider.temporarily_unavailable` with `Recoverable: yes` and does not retry the turn
 implicitly. Wait until the endpoint reports ready, run `models doctor` again, and then
-resubmit the turn. Other client errors, including HTTP 400 schema rejection, remain
-terminal so configuration and compatibility failures are not mislabeled as startup delay.
+resubmit the turn. `/events verbose` includes the structured numeric `HTTP status` in the
+run-error card while keeping provider response headers and bodies private. Other client
+errors, including HTTP 400 schema rejection, remain terminal so configuration and
+compatibility failures are not mislabeled as startup delay.
 
 Specialized roles include `risk_evaluator`, `context_summarizer`,
 `subagent_default`, `research_planner`, `research_worker`, and

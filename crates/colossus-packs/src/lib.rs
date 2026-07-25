@@ -12,6 +12,7 @@ use colossus_contracts::{
     PackVerification, PublisherTrust, QuarantinedEffectResult, RegistryPullResult,
     RegistryPushResult, SkillInstallResult, SkillValidationResult,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit};
 use colossus_ports::{ExtensionRepository, StoreError};
 use colossus_skills::{copy_verified_skill, inspect_skill_directory};

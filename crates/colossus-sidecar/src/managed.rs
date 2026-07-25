@@ -45,7 +45,9 @@ const PUBLIC_API_DIRECTORY: &str = "public-api";
 const DESCRIPTOR_FILENAME: &str = "endpoint.json";
 const CERTIFICATE_FILENAME: &str = "certificate.pem";
 const MANAGED_CONFIG_FILENAME: &str = "managed-config.yaml";
+const MANAGED_CA_BUNDLE_FILENAME: &str = "additional-ca-bundle.pem";
 const MANAGED_KEYRING_SERVICE: &str = "com.obscuritylabs.colossus.managed-runtime";
+const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn main_entry() -> ExitCode {
     let argument = std::env::args_os().nth(1);
@@ -71,11 +73,16 @@ pub(crate) fn main_entry() -> ExitCode {
         send_failure(None, FailureCode::RuntimeFailed);
         return ExitCode::FAILURE;
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         send_failure(None, FailureCode::RuntimeFailed);
         return ExitCode::FAILURE;
     }
+    #[cfg(windows)]
+    let _bootstrap_pipe = match connect_windows_bootstrap_pipe() {
+        Ok(pipe) => pipe,
+        Err(()) => return ExitCode::FAILURE,
+    };
 
     let mut input = std::io::stdin();
     let request = match read_frame::<_, ParentFrame>(&mut input) {
@@ -121,8 +128,28 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     // Bind process-relative operations to the descriptor that reproduced the native
     // parent's opaque identity. The runtime separately reopens the pathname and checks
     // the same device/inode token as part of workspace lease acquisition.
+    #[cfg(unix)]
     rustix::process::fchdir(&workspace.directory).map_err(|_| FailureCode::InvalidWorkspace)?;
-    let config = managed_runtime_config(&request.runtime, instance_id, &instance_dir)?;
+    #[cfg(windows)]
+    {
+        workspace
+            .binding
+            .revalidate()
+            .map_err(|_| FailureCode::InvalidWorkspace)?;
+        std::env::set_current_dir(&workspace.canonical_path)
+            .map_err(|_| FailureCode::InvalidWorkspace)?;
+    }
+    let ca_bundle_path = request
+        .ca_bundle_path
+        .as_deref()
+        .map(|path| install_private_ca_bundle(Path::new(path), &instance_dir))
+        .transpose()?;
+    let config = managed_runtime_config(
+        &request.runtime,
+        instance_id,
+        &instance_dir,
+        ca_bundle_path.as_deref(),
+    )?;
     persist_managed_config(&instance_dir, &config)?;
     let runtime_options = RuntimeOpenOptions::for_workspace(&workspace.canonical_path)
         .map_err(|_| FailureCode::InvalidWorkspace)?
@@ -337,6 +364,7 @@ fn managed_runtime_config(
     managed: &ManagedRuntimeConfig,
     instance_id: Uuid,
     instance_dir: &Path,
+    ca_bundle_path: Option<&Path>,
 ) -> Result<RuntimeConfig, FailureCode> {
     managed
         .validate()
@@ -354,6 +382,7 @@ fn managed_runtime_config(
         ManagedAccessProfile::Pinned => AccessProfile::Pinned,
     };
     config.set_access_profile(access_profile);
+    config.network.ca_bundle_path = ca_bundle_path.map(Path::to_path_buf);
     if matches!(
         managed.access_profile,
         ManagedAccessProfile::Development | ManagedAccessProfile::AllowAll
@@ -429,6 +458,143 @@ fn managed_runtime_config(
     RuntimeConfig::from_yaml(&yaml).map_err(|_| FailureCode::InvalidConfiguration)
 }
 
+fn install_private_ca_bundle(
+    source_path: &Path,
+    instance_dir: &Path,
+) -> Result<PathBuf, FailureCode> {
+    let bytes = read_private_ca_bundle(source_path)?;
+    colossus_network::AdditionalRootCertificates::from_pem_bundle(&bytes)
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    let destination = instance_dir.join(MANAGED_CA_BUNDLE_FILENAME);
+    persist_private_bytes(instance_dir, &destination, &bytes)?;
+    Ok(destination)
+}
+
+#[cfg(unix)]
+fn read_private_ca_bundle(path: &Path) -> Result<Vec<u8>, FailureCode> {
+    let canonical = std::fs::canonicalize(path).map_err(|_| FailureCode::InvalidConfiguration)?;
+    let before = std::fs::symlink_metadata(path).map_err(|_| FailureCode::InvalidConfiguration)?;
+    if canonical != path
+        || !before.file_type().is_file()
+        || before.uid() != rustix::process::getuid().as_raw()
+        || before.mode() & 0o077 != 0
+        || before.len() > MAX_CA_BUNDLE_BYTES
+    {
+        return Err(FailureCode::InvalidConfiguration);
+    }
+    let mut source = File::open(path).map_err(|_| FailureCode::InvalidConfiguration)?;
+    let opened = source
+        .metadata()
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    if opened.dev() != before.dev() || opened.ino() != before.ino() {
+        return Err(FailureCode::InvalidConfiguration);
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
+    std::io::Read::by_ref(&mut source)
+        .take(MAX_CA_BUNDLE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    if bytes.len() as u64 > MAX_CA_BUNDLE_BYTES {
+        return Err(FailureCode::InvalidConfiguration);
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn read_private_ca_bundle(path: &Path) -> Result<Vec<u8>, FailureCode> {
+    let binding = colossus_windows_native::BoundPath::open_file(path)
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    binding
+        .validate_private_owner_dacl()
+        .and_then(|()| binding.revalidate())
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    let mut source = binding
+        .try_clone_file()
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut source)
+        .take(MAX_CA_BUNDLE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    if bytes.len() as u64 > MAX_CA_BUNDLE_BYTES {
+        return Err(FailureCode::InvalidConfiguration);
+    }
+    binding
+        .revalidate()
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    Ok(bytes)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_private_ca_bundle(_path: &Path) -> Result<Vec<u8>, FailureCode> {
+    Err(FailureCode::InvalidConfiguration)
+}
+
+#[cfg(unix)]
+fn persist_private_bytes(
+    instance_dir: &Path,
+    destination: &Path,
+    bytes: &[u8],
+) -> Result<(), FailureCode> {
+    let temporary = instance_dir.join(format!(".ca-bundle.{}.tmp", Uuid::now_v7()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    if file.write_all(bytes).is_err() || file.sync_all().is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(FailureCode::InvalidInstanceDirectory);
+    }
+    drop(file);
+    if std::fs::rename(&temporary, destination).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(FailureCode::InvalidInstanceDirectory);
+    }
+    std::fs::File::open(instance_dir)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)
+}
+
+#[cfg(windows)]
+fn persist_private_bytes(
+    instance_dir: &Path,
+    destination: &Path,
+    bytes: &[u8],
+) -> Result<(), FailureCode> {
+    let temporary = instance_dir.join(format!(".ca-bundle.{}.tmp", Uuid::now_v7()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    if file.write_all(bytes).is_err() || file.sync_all().is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(FailureCode::InvalidInstanceDirectory);
+    }
+    drop(file);
+    if std::fs::rename(&temporary, destination).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(FailureCode::InvalidInstanceDirectory);
+    }
+    let binding = colossus_windows_native::BoundPath::open_file(destination)
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    binding
+        .validate_private_owner_dacl()
+        .and_then(|()| binding.revalidate())
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn persist_private_bytes(
+    _instance_dir: &Path,
+    _destination: &Path,
+    _bytes: &[u8],
+) -> Result<(), FailureCode> {
+    Err(FailureCode::InvalidInstanceDirectory)
+}
+
 #[cfg(unix)]
 fn persist_managed_config(instance_dir: &Path, config: &RuntimeConfig) -> Result<(), FailureCode> {
     let yaml = config
@@ -456,12 +622,33 @@ fn persist_managed_config(instance_dir: &Path, config: &RuntimeConfig) -> Result
         .map_err(|_| FailureCode::InvalidInstanceDirectory)
 }
 
-#[cfg(not(unix))]
-fn persist_managed_config(
-    _instance_dir: &Path,
-    _config: &RuntimeConfig,
-) -> Result<(), FailureCode> {
-    Err(FailureCode::InvalidInstanceDirectory)
+#[cfg(windows)]
+fn persist_managed_config(instance_dir: &Path, config: &RuntimeConfig) -> Result<(), FailureCode> {
+    let yaml = config
+        .to_yaml()
+        .map_err(|_| FailureCode::InvalidConfiguration)?;
+    let destination = instance_dir.join(MANAGED_CONFIG_FILENAME);
+    let temporary = instance_dir.join(format!(".{MANAGED_CONFIG_FILENAME}.{}.tmp", Uuid::now_v7()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    if file.write_all(yaml.as_bytes()).is_err() || file.sync_all().is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(FailureCode::InvalidInstanceDirectory);
+    }
+    drop(file);
+    if std::fs::rename(&temporary, &destination).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(FailureCode::InvalidInstanceDirectory);
+    }
+    let binding = colossus_windows_native::BoundPath::open_file(&destination)
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    binding
+        .validate_private_owner_dacl()
+        .and_then(|()| binding.revalidate())
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)
 }
 
 fn application_grant(
@@ -572,6 +759,12 @@ struct BoundWorkspace {
     birth_seconds: i64,
     #[cfg(target_os = "macos")]
     birth_nanoseconds: i64,
+}
+
+#[cfg(windows)]
+struct BoundWorkspace {
+    binding: colossus_windows_native::BoundPath,
+    canonical_path: PathBuf,
 }
 
 #[cfg(unix)]
@@ -689,6 +882,40 @@ impl BoundWorkspace {
     }
 }
 
+#[cfg(windows)]
+impl BoundWorkspace {
+    fn open(path: &Path, expected: &BootstrapWorkspaceIdentity) -> Result<Self, FailureCode> {
+        expected
+            .validate_current()
+            .map_err(|_| FailureCode::InvalidWorkspace)?;
+        let binding = colossus_windows_native::BoundPath::open_directory(path)
+            .map_err(|_| FailureCode::InvalidWorkspace)?;
+        let identity = binding.identity();
+        let actual = BootstrapWorkspaceIdentity::from_windows_parts(
+            identity.volume_serial_number,
+            identity.file_id,
+        )
+        .map_err(|_| FailureCode::InvalidWorkspace)?;
+        if actual != *expected {
+            return Err(FailureCode::InvalidWorkspace);
+        }
+        let canonical_path = binding.canonical_path().to_owned();
+        Ok(Self {
+            binding,
+            canonical_path,
+        })
+    }
+
+    fn runtime_identity(&self) -> Result<WorkspaceIdentityToken, FailureCode> {
+        self.binding
+            .revalidate()
+            .map_err(|_| FailureCode::InvalidWorkspace)?;
+        let identity = self.binding.identity();
+        WorkspaceIdentityToken::from_windows_parts(identity.volume_serial_number, identity.file_id)
+            .ok_or(FailureCode::InvalidWorkspace)
+    }
+}
+
 #[cfg(unix)]
 fn private_directory(path: &Path) -> Result<PathBuf, FailureCode> {
     let canonical =
@@ -705,7 +932,18 @@ fn private_directory(path: &Path) -> Result<PathBuf, FailureCode> {
     Ok(canonical)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn private_directory(path: &Path) -> Result<PathBuf, FailureCode> {
+    let binding = colossus_windows_native::BoundPath::open_directory(path)
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    binding
+        .validate_private_owner_dacl()
+        .and_then(|()| binding.revalidate())
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    Ok(binding.canonical_path().to_owned())
+}
+
+#[cfg(not(any(unix, windows)))]
 fn private_directory(_path: &Path) -> Result<PathBuf, FailureCode> {
     Err(FailureCode::InvalidInstanceDirectory)
 }
@@ -738,9 +976,67 @@ fn prepare_public_directory(instance_dir: &Path) -> Result<PathBuf, FailureCode>
     Ok(canonical)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn prepare_public_directory(instance_dir: &Path) -> Result<PathBuf, FailureCode> {
+    let path = instance_dir.join(PUBLIC_API_DIRECTORY);
+    match std::fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err(FailureCode::InvalidInstanceDirectory),
+    }
+    let binding = colossus_windows_native::BoundPath::open_directory(&path)
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    binding
+        .validate_private_owner_dacl()
+        .and_then(|()| binding.revalidate())
+        .map_err(|_| FailureCode::InvalidInstanceDirectory)?;
+    if binding.canonical_path().parent() != Some(instance_dir) {
+        return Err(FailureCode::InvalidInstanceDirectory);
+    }
+    Ok(binding.canonical_path().to_owned())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn persist_managed_config(
+    _instance_dir: &Path,
+    _config: &RuntimeConfig,
+) -> Result<(), FailureCode> {
+    Err(FailureCode::InvalidInstanceDirectory)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn prepare_public_directory(_instance_dir: &Path) -> Result<PathBuf, FailureCode> {
     Err(FailureCode::InvalidInstanceDirectory)
+}
+
+#[cfg(windows)]
+fn connect_windows_bootstrap_pipe() -> Result<File, ()> {
+    const PIPE_ENVIRONMENT: &str = "COLOSSUS_WINDOWS_BOOTSTRAP_PIPE_V1";
+    const PARENT_ENVIRONMENT: &str = "COLOSSUS_WINDOWS_BOOTSTRAP_PARENT_PID_V1";
+    const PIPE_PREFIX: &str = r"\\.\pipe\colossus-managed-";
+
+    let pipe_name = std::env::var(PIPE_ENVIRONMENT).map_err(|_| ())?;
+    let parent_process = std::env::var(PARENT_ENVIRONMENT)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value != 0)
+        .ok_or(())?;
+    if pipe_name.len() > 256
+        || !pipe_name.starts_with(PIPE_PREFIX)
+        || !pipe_name[PIPE_PREFIX.len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    {
+        return Err(());
+    }
+    let pipe = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_name)
+        .map_err(|_| ())?;
+    colossus_windows_native::validate_named_pipe_server(&pipe, parent_process).map_err(|_| ())?;
+    colossus_windows_native::install_bootstrap_pipe_as_standard_io(&pipe).map_err(|_| ())?;
+    Ok(pipe)
 }
 
 #[cfg(test)]
@@ -951,7 +1247,7 @@ mod tests {
             }],
             roles: BTreeMap::from([("primary".into(), "main".into())]),
         };
-        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path())
+        let config = managed_runtime_config(&managed, Uuid::now_v7(), instance.path(), None)
             .expect("managed config");
         persist_managed_config(instance.path(), &config).expect("persist config");
         let path = instance.path().join(MANAGED_CONFIG_FILENAME);

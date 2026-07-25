@@ -37,6 +37,7 @@ pub const MAX_MANAGED_PROVIDERS: usize = 16;
 pub const MAX_MANAGED_MODELS: usize = 64;
 const MAX_SECRET_BYTES: usize = 64 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 256;
+const MAX_PRIVATE_PATH_BYTES: usize = 4_096;
 const MAX_AUTHORIZATION_ITEMS: usize = 512;
 const MAX_CERTIFICATE_PEM_BYTES: usize = 256 * 1024;
 const APPROVALS_RESPOND_SCOPE: &str = "approvals:respond";
@@ -46,6 +47,9 @@ const LEGACY_UNIX_WORKSPACE_IDENTITY_DOMAIN: &[u8] =
 const MACOS_WORKSPACE_IDENTITY_VERSION: u16 = 2;
 const MACOS_WORKSPACE_IDENTITY_DOMAIN: &[u8] =
     b"colossus-sidecar-workspace-macos-device-inode-birthtime-v2\0";
+const WINDOWS_WORKSPACE_IDENTITY_VERSION: u16 = 3;
+const WINDOWS_WORKSPACE_IDENTITY_DOMAIN: &[u8] =
+    b"colossus-sidecar-workspace-windows-volume-file-id-v3\0";
 
 /// Opaque identity of the exact workspace directory opened by the native parent.
 ///
@@ -142,13 +146,35 @@ impl WorkspaceIdentity {
         })
     }
 
+    /// Derive the current Windows identity from `FileIdInfo` on a securely retained
+    /// directory handle.
+    pub fn from_windows_parts(
+        volume_serial_number: u64,
+        file_id: [u8; 16],
+    ) -> Result<Self, ProtocolError> {
+        if volume_serial_number == 0 || file_id == [0; 16] {
+            return Err(ProtocolError::InvalidFrame);
+        }
+        let mut digest = Sha256::new();
+        digest.update(WINDOWS_WORKSPACE_IDENTITY_DOMAIN);
+        digest.update(volume_serial_number.to_le_bytes());
+        digest.update(file_id);
+        Ok(Self {
+            version: WINDOWS_WORKSPACE_IDENTITY_VERSION,
+            sha256: format!("{:x}", digest.finalize()),
+            version_was_missing: false,
+        })
+    }
+
     /// Validate a bounded wire identity. Version 1 is accepted only so an ephemeral
     /// non-macOS SDK sidecar can retain its existing descriptor-lifetime contract.
     pub fn validate(&self) -> Result<(), ProtocolError> {
         if !self.version_was_missing
             && matches!(
                 self.version,
-                LEGACY_UNIX_WORKSPACE_IDENTITY_VERSION | MACOS_WORKSPACE_IDENTITY_VERSION
+                LEGACY_UNIX_WORKSPACE_IDENTITY_VERSION
+                    | MACOS_WORKSPACE_IDENTITY_VERSION
+                    | WINDOWS_WORKSPACE_IDENTITY_VERSION
             )
             && lowercase_sha256(&self.sha256)
         {
@@ -158,16 +184,33 @@ impl WorkspaceIdentity {
         }
     }
 
-    /// Require the non-reusable macOS identity used by persisted Managed Desktop state.
+    /// Require a non-reusable identity used by persisted Managed Desktop state.
     pub fn validate_current(&self) -> Result<(), ProtocolError> {
         if !self.version_was_missing
-            && self.version == MACOS_WORKSPACE_IDENTITY_VERSION
+            && matches!(
+                self.version,
+                MACOS_WORKSPACE_IDENTITY_VERSION | WINDOWS_WORKSPACE_IDENTITY_VERSION
+            )
             && lowercase_sha256(&self.sha256)
         {
             Ok(())
         } else {
             Err(ProtocolError::InvalidFrame)
         }
+    }
+
+    /// Whether this is a current macOS device/inode/birthtime identity.
+    pub fn is_current_macos(&self) -> bool {
+        !self.version_was_missing
+            && self.version == MACOS_WORKSPACE_IDENTITY_VERSION
+            && lowercase_sha256(&self.sha256)
+    }
+
+    /// Whether this is a current Windows volume/file-ID identity.
+    pub fn is_current_windows(&self) -> bool {
+        !self.version_was_missing
+            && self.version == WINDOWS_WORKSPACE_IDENTITY_VERSION
+            && lowercase_sha256(&self.sha256)
     }
 
     /// Whether this is a syntactically valid path-only preview identity that must be
@@ -593,6 +636,12 @@ pub struct BootstrapRequest {
     pub workspace: String,
     /// Opaque identity of the exact workspace directory opened by the native parent.
     pub workspace_identity: WorkspaceIdentity,
+    /// Optional app-private PEM bundle copied and validated by the native host.
+    ///
+    /// This path travels only on the authenticated local bootstrap channel and is
+    /// never part of the public API or renderer DTOs.
+    #[serde(default)]
+    pub ca_bundle_path: Option<String>,
     /// Compact secret-free app-managed runtime configuration.
     pub runtime: ManagedRuntimeConfig,
     /// Exact application authority.
@@ -617,6 +666,9 @@ impl BootstrapRequest {
             || self.api_major != 1
             || !absolute_non_root(Path::new(&self.instance_dir))
             || !absolute_non_root(Path::new(&self.workspace))
+            || self.ca_bundle_path.as_deref().is_some_and(|path| {
+                path.len() > MAX_PRIVATE_PATH_BYTES || !absolute_non_root(Path::new(path))
+            })
             || self.host_credentials.len() > MAX_HOST_CREDENTIALS
         {
             return Err(ProtocolError::InvalidFrame);
@@ -659,6 +711,7 @@ impl fmt::Debug for BootstrapRequest {
             .field("instance_dir", &"[PRIVATE PATH]")
             .field("workspace", &"[PRIVATE PATH]")
             .field("workspace_identity", &self.workspace_identity)
+            .field("ca_bundle_configured", &self.ca_bundle_path.is_some())
             .field("runtime", &self.runtime)
             .field("grant", &self.grant)
             .field("host_credentials", &"[REDACTED]")
@@ -1099,15 +1152,24 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    fn absolute_test_path(name: &str) -> String {
+        if cfg!(windows) {
+            format!(r"C:\colossus-test\{name}")
+        } else {
+            format!("/tmp/colossus-test/{name}")
+        }
+    }
+
     fn request() -> BootstrapRequest {
         BootstrapRequest {
             protocol_version: PROTOCOL_VERSION,
             exchange_id: Uuid::now_v7().to_string(),
             instance_id: Uuid::now_v7().to_string(),
             api_major: 1,
-            instance_dir: "/tmp/colossus-sidecar-instance".into(),
-            workspace: "/tmp/colossus-sidecar-workspace".into(),
+            instance_dir: absolute_test_path("sidecar-instance"),
+            workspace: absolute_test_path("sidecar-workspace"),
             workspace_identity: WorkspaceIdentity::from_unix_parts(42, 84),
+            ca_bundle_path: None,
             runtime: ManagedRuntimeConfig {
                 access_profile: ManagedAccessProfile::Development,
                 providers: vec![ManagedProviderConfig {
@@ -1157,13 +1219,15 @@ mod tests {
 
     #[test]
     fn secret_frames_round_trip_without_debug_disclosure() {
-        let request = request();
+        let mut request = request();
+        let ca_bundle_path = absolute_test_path("company-ca.pem");
+        request.ca_bundle_path = Some(ca_bundle_path.clone());
         request.validate().expect("request");
         let frame = ParentFrame::Bootstrap(Box::new(request));
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &frame).expect("write");
         let decoded: ParentFrame = read_frame(&mut Cursor::new(bytes)).expect("read");
-        let ParentFrame::Bootstrap(decoded) = decoded else {
+        let ParentFrame::Bootstrap(mut decoded) = decoded else {
             panic!("wrong frame");
         };
         assert_eq!(decoded.host_credentials[0].secret.expose(), "secret-value");
@@ -1181,6 +1245,14 @@ mod tests {
         assert!(!format!("{decoded:?}").contains("secret-value"));
         assert!(!format!("{decoded:?}").contains(&"5a".repeat(32)));
         assert!(!format!("{decoded:?}").contains(&decoded.workspace_identity.sha256));
+        assert!(!format!("{decoded:?}").contains("company-ca.pem"));
+        assert_eq!(
+            decoded.ca_bundle_path.as_deref(),
+            Some(ca_bundle_path.as_str())
+        );
+
+        decoded.ca_bundle_path = Some("../company-ca.pem".into());
+        assert_eq!(decoded.validate(), Err(ProtocolError::InvalidFrame));
     }
 
     #[test]
@@ -1209,9 +1281,26 @@ mod tests {
             WorkspaceIdentity::from_macos_parts(42, 84, 0, 0),
             Err(ProtocolError::InvalidFrame)
         );
+        let windows = WorkspaceIdentity::from_windows_parts(42, [7; 16]).expect("Windows identity");
+        windows.validate().expect("Windows wire identity");
+        windows
+            .validate_current()
+            .expect("current Windows identity");
+        assert_ne!(
+            windows,
+            WorkspaceIdentity::from_windows_parts(42, [8; 16]).expect("different file ID")
+        );
+        assert_eq!(
+            WorkspaceIdentity::from_windows_parts(0, [7; 16]),
+            Err(ProtocolError::InvalidFrame)
+        );
+        assert_eq!(
+            WorkspaceIdentity::from_windows_parts(42, [0; 16]),
+            Err(ProtocolError::InvalidFrame)
+        );
 
         let mut wrong_version = identity.clone();
-        wrong_version.version += 1;
+        wrong_version.version = u16::MAX;
         assert_eq!(wrong_version.validate(), Err(ProtocolError::InvalidFrame));
 
         let mut malformed = identity;

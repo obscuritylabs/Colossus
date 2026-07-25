@@ -71,7 +71,10 @@ accepted when deterministic selection matters.
 
 `/events compact` shows only a short preview of raw `web.fetch`, `docs.fetch`, and
 `network.http` response bodies. Use `/events verbose` when inspecting the full released
-response is necessary, or `/events off` to hide successful tool results entirely.
+response is necessary. Verbose run-error cards also show a structured `HTTP status`
+field when an upstream provider returned a non-success response; provider response
+headers and bodies remain quarantined. Use `/events off` to hide successful tool results
+entirely.
 
 `/research QUESTION` uses `standard` depth with the `repo`, `web`, and `mcp` lanes.
 Use the CLI `research run` route when depth or lane selection must be explicit.

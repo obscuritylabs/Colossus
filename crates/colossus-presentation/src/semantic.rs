@@ -195,6 +195,8 @@ impl SemanticRenderer {
                 code,
                 message,
                 recoverable,
+                http_status,
+                retry_after_ms,
                 turn,
                 elapsed_seconds,
             } => {
@@ -204,29 +206,38 @@ impl SemanticRenderer {
                             title: "Run error".into(),
                             tone: PresentationTone::Error,
                             body: vec![
-                                PresentationBlock::KeyValue(vec![
-                                    ("Code".into(), code.clone()),
-                                    (
-                                        "Recoverable".into(),
-                                        if *recoverable { "yes" } else { "no" }.into(),
-                                    ),
-                                    (
-                                        "Turn".into(),
-                                        turn.map_or_else(|| "—".into(), |value| value.to_string()),
-                                    ),
-                                    ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
-                                ]),
+                                PresentationBlock::KeyValue(self.run_error_fields(
+                                    code,
+                                    *recoverable,
+                                    *http_status,
+                                    *retry_after_ms,
+                                    *turn,
+                                    *elapsed_seconds,
+                                )),
                                 PresentationBlock::Markdown(message.clone()),
                             ],
                         }),
                     )))
                 } else {
+                    let status = if self.preferences.events_mode == EventDisplayMode::Verbose {
+                        format!(
+                            "{}{}",
+                            http_status
+                                .map_or_else(String::new, |value| format!(" http_status={value}")),
+                            retry_after_ms.map_or_else(String::new, |value| {
+                                format!(" retry_after_ms={value}")
+                            })
+                        )
+                    } else {
+                        String::new()
+                    };
                     Ok(Some(self.with_detail(
                         format!(
-                            "{} code={} recoverable={} turn={} elapsed={:.2}s",
+                            "{} code={} recoverable={}{} turn={} elapsed={:.2}s",
                             self.label("error"),
                             code,
                             if *recoverable { "yes" } else { "no" },
+                            status,
                             turn.map_or_else(|| "none".into(), |value| value.to_string()),
                             elapsed_seconds,
                         ),
@@ -300,24 +311,22 @@ impl SemanticRenderer {
                 code,
                 message,
                 recoverable,
+                http_status,
+                retry_after_ms,
                 turn,
                 elapsed_seconds,
             } => Some(PresentationDocument::from_block(PresentationBlock::Card {
                 title: "Run error".into(),
                 tone: PresentationTone::Error,
                 body: vec![
-                    PresentationBlock::KeyValue(vec![
-                        ("Code".into(), code.clone()),
-                        (
-                            "Recoverable".into(),
-                            if *recoverable { "yes" } else { "no" }.into(),
-                        ),
-                        (
-                            "Turn".into(),
-                            turn.map_or_else(|| "—".into(), |value| value.to_string()),
-                        ),
-                        ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
-                    ]),
+                    PresentationBlock::KeyValue(self.run_error_fields(
+                        code,
+                        *recoverable,
+                        *http_status,
+                        *retry_after_ms,
+                        *turn,
+                        *elapsed_seconds,
+                    )),
                     PresentationBlock::Markdown(message.clone()),
                 ],
             })),
@@ -522,6 +531,42 @@ impl SemanticRenderer {
         } else {
             format!("{summary}\n  {detail}")
         }
+    }
+
+    fn run_error_fields(
+        &self,
+        code: &str,
+        recoverable: bool,
+        http_status: Option<u16>,
+        retry_after_ms: Option<u64>,
+        turn: Option<u16>,
+        elapsed_seconds: f64,
+    ) -> Vec<(String, String)> {
+        let mut fields = vec![
+            ("Code".into(), code.into()),
+            (
+                "Recoverable".into(),
+                if recoverable { "yes" } else { "no" }.into(),
+            ),
+        ];
+        if self.preferences.events_mode == EventDisplayMode::Verbose
+            && let Some(status) = http_status
+        {
+            fields.push(("HTTP status".into(), status.to_string()));
+        }
+        if self.preferences.events_mode == EventDisplayMode::Verbose
+            && let Some(retry_after_ms) = retry_after_ms
+        {
+            fields.push(("Retry after".into(), format!("{retry_after_ms} ms")));
+        }
+        fields.extend([
+            (
+                "Turn".into(),
+                turn.map_or_else(|| "—".into(), |value| value.to_string()),
+            ),
+            ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
+        ]);
+        fields
     }
 
     fn render_document(&self, document: PresentationDocument) -> String {

@@ -18,6 +18,7 @@ time.workspace = true
 tokio.workspace = true
 url.workspace = true
 colossus-contracts.workspace = true
+colossus-network.workspace = true
 colossus-policy.workspace = true
 colossus-ports.workspace = true
 

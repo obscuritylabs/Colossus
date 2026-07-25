@@ -12,8 +12,14 @@ const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
     "desktop_release_channel",
+    "desktop_release_metadata",
+    "check_desktop_update",
+    "install_desktop_update",
+    "export_diagnostics",
     "initialize_desktop",
     "desktop_status",
+    "import_ca_bundle",
+    "remove_ca_bundle",
     "add_external_target",
     "remove_external_target",
     "choose_workspace",
@@ -31,6 +37,8 @@ const COMMANDS: &[&str] = &[
     "watch_run",
     "cancel_run",
     "respond_interaction",
+    "list_workspace_directory",
+    "read_workspace_file",
     "show_terminal_window",
     "terminal_context",
     "open_terminal",
@@ -54,40 +62,100 @@ fn main() {
 fn export_release_trust_configuration() {
     const TEAM_VARIABLE: &str = "COLOSSUS_DESKTOP_TEAM_ID";
     const CHANNEL_VARIABLE: &str = "COLOSSUS_DESKTOP_RELEASE_CHANNEL";
+    const SIGNING_VARIABLE: &str = "COLOSSUS_DESKTOP_CODE_SIGNING_STATUS";
+    const UPDATE_ENDPOINT_VARIABLE: &str = "COLOSSUS_DESKTOP_UPDATE_ENDPOINT";
+    const UPDATE_PUBLIC_KEY_VARIABLE: &str = "COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY";
 
     println!("cargo:rerun-if-env-changed={TEAM_VARIABLE}");
     println!("cargo:rerun-if-env-changed={CHANNEL_VARIABLE}");
+    println!("cargo:rerun-if-env-changed={UPDATE_ENDPOINT_VARIABLE}");
+    println!("cargo:rerun-if-env-changed={UPDATE_PUBLIC_KEY_VARIABLE}");
     if env::var("PROFILE").as_deref() == Ok("debug") {
         println!("cargo:rustc-env={CHANNEL_VARIABLE}=development");
+        println!("cargo:rustc-env={SIGNING_VARIABLE}=development");
+        println!("cargo:rustc-env={UPDATE_ENDPOINT_VARIABLE}=");
+        println!("cargo:rustc-env={UPDATE_PUBLIC_KEY_VARIABLE}=");
         return;
     }
     let team_id = env::var(TEAM_VARIABLE).unwrap_or_else(|_| {
-        panic!(
-            "release desktop builds require {TEAM_VARIABLE}=ADHOC for a developer preview or the canonical Apple Team ID for stable"
-        )
+        panic!("release desktop builds require an explicit platform signing identity marker")
     });
     let release_channel = env::var(CHANNEL_VARIABLE).unwrap_or_else(|_| {
         panic!(
             "release desktop builds require {CHANNEL_VARIABLE}=stable, developer_preview, or validation_only"
         )
     });
-    let canonical_team = team_id.len() == 10
-        && team_id
-            .bytes()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit());
-    match release_channel.as_str() {
-        "stable" => assert!(
-            canonical_team,
-            "stable releases require {TEAM_VARIABLE} to be a canonical 10-character Apple Team ID"
-        ),
-        "developer_preview" | "validation_only" => assert!(
-            team_id == "ADHOC",
-            "developer-preview and validation-only builds require {TEAM_VARIABLE}=ADHOC"
-        ),
-        _ => panic!("{CHANNEL_VARIABLE} must be stable, developer_preview, or validation_only"),
+    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo must provide target OS");
+    if target_os == "windows" {
+        match release_channel.as_str() {
+            "developer_preview" | "validation_only" => assert!(
+                team_id == "UNSIGNED",
+                "unsigned Windows preview builds require {TEAM_VARIABLE}=UNSIGNED"
+            ),
+            "stable" => panic!(
+                "stable Windows Desktop is disabled until an Authenticode signer is configured"
+            ),
+            _ => panic!("{CHANNEL_VARIABLE} must be stable, developer_preview, or validation_only"),
+        }
+    } else {
+        let canonical_team = team_id.len() == 10
+            && team_id
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit());
+        match release_channel.as_str() {
+            "stable" => assert!(
+                canonical_team,
+                "stable releases require {TEAM_VARIABLE} to be a canonical 10-character Apple Team ID"
+            ),
+            "developer_preview" | "validation_only" => assert!(
+                team_id == "ADHOC",
+                "developer-preview and validation-only builds require {TEAM_VARIABLE}=ADHOC"
+            ),
+            _ => panic!("{CHANNEL_VARIABLE} must be stable, developer_preview, or validation_only"),
+        }
+    }
+    let signing_status = match (target_os.as_str(), release_channel.as_str()) {
+        ("windows", "developer_preview" | "validation_only") => "unsigned",
+        ("macos", "stable") => "verified",
+        ("macos", "developer_preview" | "validation_only") => "ad_hoc",
+        _ => "unsupported",
+    };
+    let updates_enabled = matches!(release_channel.as_str(), "stable" | "developer_preview");
+    let update_endpoint = env::var(UPDATE_ENDPOINT_VARIABLE).unwrap_or_default();
+    let update_public_key = env::var(UPDATE_PUBLIC_KEY_VARIABLE).unwrap_or_default();
+    if updates_enabled {
+        assert!(
+            valid_update_endpoint(&update_endpoint),
+            "{release_channel} Desktop builds require a bounded HTTPS {UPDATE_ENDPOINT_VARIABLE}"
+        );
+        assert!(
+            valid_update_public_key(&update_public_key),
+            "{release_channel} Desktop builds require a one-line base64 Tauri updater public key in {UPDATE_PUBLIC_KEY_VARIABLE}"
+        );
+    } else {
+        assert!(
+            update_endpoint.is_empty() && update_public_key.is_empty(),
+            "validation-only Desktop builds must not advertise an update channel"
+        );
     }
     println!("cargo:rustc-env={TEAM_VARIABLE}={team_id}");
     println!("cargo:rustc-env={CHANNEL_VARIABLE}={release_channel}");
+    println!("cargo:rustc-env={SIGNING_VARIABLE}={signing_status}");
+    println!("cargo:rustc-env={UPDATE_ENDPOINT_VARIABLE}={update_endpoint}");
+    println!("cargo:rustc-env={UPDATE_PUBLIC_KEY_VARIABLE}={update_public_key}");
+}
+
+fn valid_update_endpoint(value: &str) -> bool {
+    value.len() <= 2_048
+        && value.starts_with("https://")
+        && !value.bytes().any(|byte| byte.is_ascii_whitespace())
+}
+
+fn valid_update_public_key(value: &str) -> bool {
+    (32..=4_096).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
 }
 
 #[derive(Serialize)]

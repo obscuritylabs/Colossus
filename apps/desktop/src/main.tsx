@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import "./styles.css";
 
 const root = document.getElementById("root");
@@ -13,10 +14,18 @@ const terminalSurface =
 
 if (terminalSurface) {
   void import("./TerminalWindow").then(({ default: TerminalWindow }) => {
-    createRoot(root).render(<TerminalWindow />);
+    createRoot(root).render(
+      <AppErrorBoundary>
+        <TerminalWindow />
+      </AppErrorBoundary>,
+    );
   });
 } else {
   void import("./App").then(({ default: App }) => {
-    createRoot(root).render(<App />);
+    createRoot(root).render(
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>,
+    );
   });
 }

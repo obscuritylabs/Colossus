@@ -141,8 +141,14 @@ pub enum RunEvent {
         code: String,
         /// Bounded user-safe message.
         message: String,
-        /// Whether the runtime will continue automatically.
+        /// Whether the failure is safe for bounded recovery or an explicit caller retry.
         recoverable: bool,
+        /// HTTP response status when the failure came from an upstream response.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_status: Option<u16>,
+        /// Bounded provider retry lower bound when supplied.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_ms: Option<u64>,
         /// One-based model turn when applicable.
         turn: Option<u16>,
         /// Wall time since the run began.

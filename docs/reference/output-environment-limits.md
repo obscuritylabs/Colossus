@@ -11,7 +11,7 @@ type: reference
 
 | Context | `auto` behavior |
 | --- | --- |
-| Interactive terminal | Human renderer |
+| Interactive terminal | Human renderer; `run` prints only the assistant response |
 | Redirected structured command | Stable JSON |
 | TUI slash command | Human renderer |
 | Non-TTY line runner | Bounded line/JSON contract |
@@ -19,6 +19,9 @@ type: reference
 `--output human` and `--output json` override automatic selection where the command
 supports structured output. Interactive TUI JSON is rejected. ANSI and control
 sequences are emitted only after an interactive-terminal check.
+
+For `run`, human output deliberately omits run/session identifiers, provider routing,
+event counts, and timing. Use `--output json` when those fields are required.
 
 Renderers consume post-policy released contracts. They do not change execution,
 authorization, persistence, or audit semantics. Untrusted released content is sanitized

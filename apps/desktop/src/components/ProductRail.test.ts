@@ -4,7 +4,19 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ProductRail } from "./ProductRail";
 
-function renderRail(terminalAvailable: boolean): string {
+function renderRail(
+  terminalAvailable: boolean,
+  capabilities = {
+    delegation: false,
+    skills: false,
+    tui: true,
+    files: true,
+    artifacts: true,
+    updateAvailable: false,
+    agentWorkflows: false,
+    attachments: false,
+  },
+): string {
   return renderToStaticMarkup(
     createElement(ProductRail, {
       surface: "work",
@@ -12,6 +24,7 @@ function renderRail(terminalAvailable: boolean): string {
       connectionState: "connected",
       terminalEnabled: true,
       terminalAvailable,
+      capabilities,
       onSelect: vi.fn(),
       onOpenTerminal: vi.fn(),
     }),
@@ -25,6 +38,12 @@ function terminalButton(markup: string): string {
 }
 
 describe("ProductRail terminal availability", () => {
+  it("keeps workspace files within Work instead of adding a global destination", () => {
+    const markup = renderRail(true);
+
+    expect(markup).not.toContain(">Files</span>");
+  });
+
   it("does not expose the global terminal action for an external target", () => {
     const markup = renderRail(false);
 
@@ -36,5 +55,22 @@ describe("ProductRail terminal availability", () => {
 
   it("enables the global terminal action for an opted-in Managed Local target", () => {
     expect(terminalButton(renderRail(true))).not.toContain("disabled");
+  });
+
+  it("hides optional runtime areas until they are explicitly advertised", () => {
+    const markup = renderRail(true, {
+      delegation: false,
+      skills: false,
+      tui: false,
+      files: false,
+      artifacts: false,
+      updateAvailable: false,
+      agentWorkflows: false,
+      attachments: false,
+    });
+
+    expect(markup).not.toContain(">Fleet</span>");
+    expect(markup).not.toContain(">Library</span>");
+    expect(markup).not.toContain(">TUI</span>");
   });
 });

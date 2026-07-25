@@ -61,6 +61,25 @@ pub(super) fn render_structured_output(
         .render(&document_from_json(value, None)))
 }
 
+pub(super) fn render_run_output(
+    value: &Value,
+    response: &str,
+    mode: OutputMode,
+    terminal: bool,
+    width: usize,
+    preferences: TerminalPreferences,
+) -> Result<String, serde_json::Error> {
+    let human = mode == OutputMode::Human || mode == OutputMode::Auto && terminal;
+    if !human {
+        return serde_json::to_string_pretty(value);
+    }
+    Ok(TerminalDocumentRenderer::new(preferences, width)
+        .with_color(terminal)
+        .render(&PresentationDocument::from_block(
+            PresentationBlock::Markdown(response.into()),
+        )))
+}
+
 pub(super) fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Error>> {
     let value = serde_json::to_value(value)?;
     println!(
@@ -69,6 +88,26 @@ pub(super) fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Er
             &value,
             output_mode(),
             io::stdout().is_terminal(),
+            terminal_width(),
+            terminal_preferences(),
+        )?
+    );
+    Ok(())
+}
+
+pub(super) fn print_run_response(
+    value: &impl serde::Serialize,
+    response: &str,
+) -> Result<(), Box<dyn Error>> {
+    let value = serde_json::to_value(value)?;
+    let terminal = io::stdout().is_terminal();
+    println!(
+        "{}",
+        render_run_output(
+            &value,
+            response,
+            output_mode(),
+            terminal,
             terminal_width(),
             terminal_preferences(),
         )?

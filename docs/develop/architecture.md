@@ -87,6 +87,9 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 - Access resolution produces visibility and action decisions; sandbox-profile
   resolution independently produces explicit and derived resource obligations.
 - CLI and TUI construct requests, invoke application services, and render typed results.
+- Desktop workspace browsing remains an interface-only, read-only view. Its native
+  commands accept one opaque selected-workspace identity plus a validated relative
+  path; they do not add model, tool, policy, state, or mutation logic to the renderer.
 - External applications enter through the authenticated public worker API or a
   caller-bound embedded SDK backend; they never depend on agent internals.
 - Crate roots expose a focused API or composition surface; nontrivial logic belongs in

@@ -131,6 +131,20 @@ impl Runtime {
                 workspace.display()
             )));
         }
+        let tls_roots = config
+            .network
+            .ca_bundle_path
+            .as_ref()
+            .map(|path| {
+                AdditionalRootCertificates::from_pem_bundle_path(workspace_absolute_path(
+                    &workspace, path,
+                ))
+            })
+            .transpose()
+            .map_err(|error| {
+                RuntimeError::Config(format!("network.caBundlePath is invalid: {error}"))
+            })?
+            .unwrap_or_default();
         let workspace_lease = workspace_lease::WorkspaceOwnershipLease::acquire_expected(
             &workspace,
             options.expected_workspace_identity.as_ref(),
@@ -199,10 +213,11 @@ impl Runtime {
                         "storage.postgres is required when storage.adapter is postgres".into(),
                     )
                 })?;
-                let postgres = Arc::new(PostgresEventJournal::open(
+                let postgres = Arc::new(PostgresEventJournal::open_with_tls_roots(
                     postgres_config,
                     Arc::clone(&keys),
                     signer,
+                    &tls_roots,
                 )?);
                 let recovery_reason = postgres.recovery_reason()?;
                 let diagnostic = postgres.diagnostic();
@@ -227,14 +242,17 @@ impl Runtime {
         let user_skill_root = workspace_absolute_path(&workspace, &config.skills.user);
         let packs = Arc::new(
             PackService::new(Arc::clone(&extensions), pack_install_root)
-                .with_skill_install_root(user_skill_root.clone()),
+                .with_skill_install_root(user_skill_root.clone())
+                .with_tls_roots(tls_roots.clone()),
         );
         let raw_pack_executor = Arc::new(PackExecutor::new(Arc::clone(&packs)));
         let pack_executor: Arc<dyn EffectExecutor> = Arc::new(WorkspaceBoundEffectExecutor::new(
             workspace_identity.clone(),
             raw_pack_executor,
         ));
-        let integration_executor = Arc::new(IntegrationExecutor::new(Arc::clone(&extensions))?);
+        let integration_executor = Arc::new(
+            IntegrationExecutor::new(Arc::clone(&extensions))?.with_tls_roots(tls_roots.clone()),
+        );
         let integration_effect_executor: Arc<dyn EffectExecutor> =
             Arc::new(WorkspaceBoundEffectExecutor::new(
                 workspace_identity.clone(),
@@ -336,8 +354,9 @@ impl Runtime {
             &config.providers,
             &config.models,
             provider_credentials,
+            &tls_roots,
         )?);
-        let searches = Arc::new(search_registry(config)?);
+        let searches = Arc::new(search_registry(config, &tls_roots)?);
         let access_config = &config.access;
         let mut candidate_tool_specs = builtin_specs();
         let mut tool_descriptors = candidate_tool_specs
@@ -537,6 +556,7 @@ impl Runtime {
                     base_url: base_url.clone(),
                     decision_path: decision_path.clone(),
                     ca_pem: read_optional(ca_pem_path.as_ref())?,
+                    tls_roots: tls_roots.clone(),
                     identity_pem: read_optional(identity_pem_path.as_ref())?,
                     full_content_disclosure_acknowledged: *full_content_disclosure_acknowledged,
                     decision_log_masking_verified: *decision_log_masking_verified,
@@ -613,7 +633,7 @@ impl Runtime {
                 workspace_identity.clone(),
                 Arc::clone(&mcp_executor),
             ));
-        let http_executor = Arc::new(HttpExecutor::new());
+        let http_executor = Arc::new(HttpExecutor::new().with_tls_roots(tls_roots.clone()));
         let known_capabilities = access
             .actions
             .iter()
@@ -630,7 +650,7 @@ impl Runtime {
             gateway: Arc::clone(&gateway),
             searches,
         });
-        let memory_indexes = compose_memory_indexes(config, Arc::clone(&gateway))?;
+        let memory_indexes = compose_memory_indexes(config, Arc::clone(&gateway), &tls_roots)?;
         let external_work: Arc<dyn ExternalWorkQueue> = Arc::new(JournalExternalWorkQueue::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),

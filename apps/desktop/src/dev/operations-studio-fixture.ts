@@ -1,12 +1,12 @@
-import { MAX_FEED_ITEMS, MAX_RECENT_RUNS } from "./state";
-import type { ChatState, RunView } from "./state";
+import { MAX_FEED_ITEMS, MAX_RECENT_RUNS } from "../state";
+import type { ChatState, RunView } from "../state";
 import type {
   ArtifactReference,
   Interaction,
   Run,
   RunUpdate,
   TokenUsage,
-} from "./types";
+} from "../types";
 
 const SELECTED_RUN_ID = "fixture-run-desktop-release";
 const SESSION_ID = "fixture-session-operations-studio";
@@ -37,6 +37,7 @@ function recentRun(
   return {
     runId,
     sessionId,
+    title: `${role.charAt(0).toUpperCase()}${role.slice(1).replaceAll("-", " ")}`,
     role,
     mode: "execute",
     status,
@@ -225,6 +226,7 @@ export function buildOperationsStudioFixture(): ChatState {
   const selectedRun: Run = {
     runId: SELECTED_RUN_ID,
     sessionId: SESSION_ID,
+    title: "Harden desktop agent bootstrap",
     role: "harden-desktop-agent-bootstrap",
     mode: "execute",
     status: "waiting",

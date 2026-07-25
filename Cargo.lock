@@ -924,6 +924,7 @@ dependencies = [
  "colossus-sidecar-protocol",
  "colossus-tools",
  "colossus-tui",
+ "colossus-windows-native",
  "colossus-worker",
  "colossus-workflow",
  "crossterm",
@@ -1033,6 +1034,7 @@ dependencies = [
  "async-trait",
  "base64",
  "colossus-contracts",
+ "colossus-network",
  "colossus-policy",
  "colossus-ports",
  "colossus-testkit",
@@ -1056,6 +1058,7 @@ dependencies = [
  "colossus-contracts",
  "colossus-journal-redb",
  "colossus-memory",
+ "colossus-network",
  "colossus-ports",
  "colossus-projection",
  "colossus-session",
@@ -1145,6 +1148,7 @@ version = "0.10.1-preview.2"
 dependencies = [
  "async-trait",
  "colossus-contracts",
+ "colossus-network",
  "colossus-policy",
  "colossus-ports",
  "colossus-testkit",
@@ -1159,6 +1163,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-network"
+version = "0.10.1-preview.2"
+dependencies = [
+ "hex",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "colossus-packs"
 version = "0.10.1-preview.2"
 dependencies = [
@@ -1166,6 +1183,7 @@ dependencies = [
  "base64",
  "colossus-contracts",
  "colossus-integrations",
+ "colossus-network",
  "colossus-policy",
  "colossus-ports",
  "colossus-skills",
@@ -1194,6 +1212,7 @@ dependencies = [
  "async-trait",
  "base64",
  "colossus-contracts",
+ "colossus-network",
  "colossus-ports",
  "colossus-testkit",
  "hex",
@@ -1257,15 +1276,19 @@ version = "0.10.1-preview.2"
 dependencies = [
  "async-trait",
  "colossus-contracts",
+ "colossus-network",
  "colossus-policy",
  "colossus-ports",
  "colossus-testkit",
  "futures",
+ "rcgen",
  "reqwest 0.12.28",
+ "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls",
  "url",
  "zeroize",
 ]
@@ -1303,6 +1326,7 @@ dependencies = [
  "colossus-mcp",
  "colossus-memory",
  "colossus-memory-chroma",
+ "colossus-network",
  "colossus-packs",
  "colossus-policy",
  "colossus-ports",
@@ -1317,6 +1341,7 @@ dependencies = [
  "colossus-telemetry",
  "colossus-testkit",
  "colossus-tools",
+ "colossus-windows-native",
  "colossus-work",
  "colossus-workflow",
  "fs4",
@@ -1342,6 +1367,7 @@ dependencies = [
  "base64",
  "capctl",
  "colossus-contracts",
+ "colossus-network",
  "colossus-policy",
  "colossus-ports",
  "colossus-testkit",
@@ -1379,6 +1405,7 @@ dependencies = [
  "colossus-darwin-process",
  "colossus-grpc",
  "colossus-sidecar-protocol",
+ "colossus-windows-native",
  "futures",
  "hex",
  "keyring",
@@ -1407,6 +1434,7 @@ version = "0.10.1-preview.2"
 dependencies = [
  "async-trait",
  "colossus-contracts",
+ "colossus-network",
  "colossus-policy",
  "colossus-ports",
  "colossus-testkit",
@@ -1436,12 +1464,14 @@ dependencies = [
  "colossus-access",
  "colossus-api",
  "colossus-grpc",
+ "colossus-network",
  "colossus-ports",
  "colossus-provider",
  "colossus-runtime",
  "colossus-sandbox",
  "colossus-sdk",
  "colossus-sidecar-protocol",
+ "colossus-windows-native",
  "colossus-worker",
  "getrandom 0.4.3",
  "keyring",
@@ -1534,6 +1564,16 @@ dependencies = [
  "tokio",
  "unicode-width",
  "vt100",
+]
+
+[[package]]
+name = "colossus-windows-native"
+version = "0.10.1-preview.2"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.18",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

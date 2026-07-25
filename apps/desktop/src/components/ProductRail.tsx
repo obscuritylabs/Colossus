@@ -8,7 +8,7 @@ import {
 } from "@tabler/icons-react";
 
 import colossusMark from "../assets/colossus-mark.svg";
-import type { ConnectionState } from "../types";
+import type { ConnectionState, DesktopCapabilities } from "../types";
 
 export type WorkspaceSurface =
   "work" | "fleet" | "library" | "activity" | "settings";
@@ -19,6 +19,7 @@ interface ProductRailProps {
   connectionState: ConnectionState;
   terminalEnabled: boolean;
   terminalAvailable: boolean;
+  capabilities: DesktopCapabilities;
   onSelect: (surface: WorkspaceSurface) => void;
   onOpenTerminal: () => void;
 }
@@ -36,6 +37,7 @@ export function ProductRail({
   connectionState,
   terminalEnabled,
   terminalAvailable,
+  capabilities,
   onSelect,
   onOpenTerminal,
 }: ProductRailProps) {
@@ -46,7 +48,15 @@ export function ProductRail({
       </div>
 
       <nav className="product-nav" aria-label="Workspace areas">
-        {MAIN_ITEMS.map(({ id, label, Icon }) => (
+        {MAIN_ITEMS.filter(({ id }) => {
+          if (id === "fleet") {
+            return capabilities.agentWorkflows;
+          }
+          if (id === "library") {
+            return capabilities.artifacts;
+          }
+          return true;
+        }).map(({ id, label, Icon }) => (
           <button
             className="product-nav-item"
             type="button"
@@ -65,24 +75,26 @@ export function ProductRail({
             <span>{label}</span>
           </button>
         ))}
-        <button
-          className="product-nav-item"
-          type="button"
-          disabled={!terminalAvailable || !terminalEnabled}
-          title={
-            !terminalAvailable
-              ? "Terminal is available only for the selected Managed Local target"
-              : terminalEnabled
-                ? "Open the authenticated local Colossus TUI"
-                : "Enable the local Colossus TUI in Settings"
-          }
-          onClick={onOpenTerminal}
-        >
-          <span className="product-nav-icon" aria-hidden="true">
-            <IconTerminal2 size={21} stroke={1.7} />
-          </span>
-          <span>TUI</span>
-        </button>
+        {capabilities.tui ? (
+          <button
+            className="product-nav-item"
+            type="button"
+            disabled={!terminalAvailable || !terminalEnabled}
+            title={
+              !terminalAvailable
+                ? "Terminal is available only for the selected Managed Local target"
+                : terminalEnabled
+                  ? "Open the authenticated local Colossus TUI"
+                  : "Enable the local Colossus TUI in Settings"
+            }
+            onClick={onOpenTerminal}
+          >
+            <span className="product-nav-icon" aria-hidden="true">
+              <IconTerminal2 size={21} stroke={1.7} />
+            </span>
+            <span>TUI</span>
+          </button>
+        ) : null}
       </nav>
 
       <div className="product-rail-footer">

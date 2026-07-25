@@ -457,6 +457,7 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
     Ok(Run {
         run_id: value.id,
         session_id: value.session_id,
+        title: value.title,
         role: value.role,
         mode: mode as i32,
         status: status as i32,
@@ -517,6 +518,9 @@ fn proto_failure(value: colossus_api::RunFailure) -> RunFailure {
         reason: value.code,
         message: value.message,
         outcome_certainty: proto_outcome(value.outcome) as i32,
+        recoverable: value.recoverable,
+        http_status: value.http_status.map(u32::from),
+        retry_after_ms: value.retry_after_ms,
     }
 }
 

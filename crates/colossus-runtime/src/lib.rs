@@ -55,6 +55,7 @@ use colossus_memory_chroma::{
     ChromaExecutor, ChromaMemoryIndex, ChromaProfile, GatewayOpenAiEmbeddingProvider,
     LocalHashEmbeddingProvider, OpenAiEmbeddingExecutor, OpenAiEmbeddingProfile,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
@@ -167,10 +168,10 @@ pub use colossus_contracts::ModelCapabilities;
 pub use composition::Runtime;
 pub use config::{
     AgentConfig, AuditConfig, AuditExporterConfig, KeyConfig, MemoryConfig, MemoryEmbeddingConfig,
-    ModelProfileConfig, ModelsConfig, PacksConfig, PolicyConfig, ProviderProfileConfig,
-    ProvidersConfig, ResearchConfig, ResearchSearchConfig, RuntimeConfig, SandboxConfig,
-    SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillsConfig, StorageAdapter,
-    StorageConfig, SubagentConfig, WorkflowLibraryConfig,
+    ModelProfileConfig, ModelsConfig, NetworkConfig, PacksConfig, PolicyConfig,
+    ProviderProfileConfig, ProvidersConfig, ResearchConfig, ResearchSearchConfig, RuntimeConfig,
+    SandboxConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillsConfig,
+    StorageAdapter, StorageConfig, SubagentConfig, WorkflowLibraryConfig,
 };
 pub use error::RuntimeError;
 pub use workspace::RuntimeOpenOptions;

@@ -11,6 +11,7 @@ description = "Minimal application-bundled Colossus managed runtime host"
 colossus-access.workspace = true
 colossus-api.workspace = true
 colossus-grpc.workspace = true
+colossus-network.workspace = true
 colossus-ports.workspace = true
 colossus-provider.workspace = true
 colossus-runtime.workspace = true
@@ -18,11 +19,16 @@ colossus-sandbox.workspace = true
 colossus-sidecar-protocol.workspace = true
 colossus-worker.workspace = true
 getrandom.workspace = true
-rustix.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+colossus-windows-native.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
 
 [dev-dependencies]
 colossus-sdk = { workspace = true, features = ["sidecar"] }

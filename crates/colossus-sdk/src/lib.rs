@@ -28,7 +28,10 @@ mod macos_verified_process;
 mod native_daemon;
 #[cfg(all(feature = "sidecar", unix))]
 mod native_sidecar;
-#[cfg(all(feature = "sidecar", not(unix)))]
+#[cfg(all(feature = "sidecar", windows))]
+#[path = "native_sidecar_windows.rs"]
+mod native_sidecar;
+#[cfg(all(feature = "sidecar", not(any(unix, windows))))]
 #[path = "native_sidecar_unsupported.rs"]
 mod native_sidecar;
 mod secret;

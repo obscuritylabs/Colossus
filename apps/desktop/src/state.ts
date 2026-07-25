@@ -16,6 +16,7 @@ export const MAX_OUTPUT_CHARACTERS = 2_000_000;
 export const MAX_TURNS = 100;
 export const MAX_PROMPT_BYTES = 65_536;
 export const MAX_CACHED_RUN_VIEWS = 12;
+export const MAX_CONVERSATION_RUNS = MAX_CACHED_RUN_VIEWS;
 export const MAX_RECENT_RUNS = 200;
 export const MAX_CACHED_IDEMPOTENCY_ATTEMPTS = 256;
 const MAX_TRACKED_SEQUENCES = 512;
@@ -66,6 +67,23 @@ export const initialChatState: ChatState = {
   recentRuns: [],
   nextPageToken: "",
 };
+
+export function selectConversationViews(
+  state: ChatState,
+  sessionId: string | null,
+): RunView[] {
+  if (sessionId === null) {
+    return [];
+  }
+  return [...state.views.values()]
+    .filter((view) => view.run.sessionId === sessionId)
+    .sort(
+      (left, right) =>
+        left.run.createdAt.localeCompare(right.run.createdAt) ||
+        left.run.runId.localeCompare(right.run.runId),
+    )
+    .slice(-MAX_CONVERSATION_RUNS);
+}
 
 function terminalOutput(terminal: RunTerminal | null): string {
   return terminal?.type === "result"

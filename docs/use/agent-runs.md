@@ -29,8 +29,8 @@ colossus -w /absolute/path/to/repository \
   "Summarize this repository"
 ```
 
-Interactive stdout defaults to a Markdown-capable human card. Piped or redirected stdout
-defaults to stable JSON.
+Interactive stdout contains only the Markdown-capable assistant response. Piped or
+redirected stdout defaults to the complete stable JSON result.
 
 ### 2. Set explicit bounds when needed
 

@@ -1180,6 +1180,9 @@ fn interrupted_failure() -> RunUpdateKind {
             code: "runtime.interrupted".into(),
             message: "the runtime stopped while the run was waiting for input".into(),
             outcome: OutcomeCertainty::Known,
+            recoverable: true,
+            http_status: None,
+            retry_after_ms: None,
         },
     }
 }
@@ -1200,6 +1203,9 @@ fn unknown_outcome_failure() -> RunUpdateKind {
             code: "runtime.outcome_unknown".into(),
             message: "the runtime stopped while an external operation may have been active".into(),
             outcome: OutcomeCertainty::Unknown,
+            recoverable: false,
+            http_status: None,
+            retry_after_ms: None,
         },
     }
 }
@@ -1237,25 +1243,158 @@ fn recovery_invariant(caller: &CallerContext) -> ApiError {
 }
 
 fn runtime_failure(error: &RuntimeError) -> RunUpdateKind {
-    let outcome_unknown = runtime_error_outcome_unknown(error);
-    if outcome_unknown {
-        RunUpdateKind::Failure {
-            status: RunStatus::OutcomeUnknown,
-            failure: RunFailure {
-                code: "runtime.outcome_unknown".into(),
-                message: "an external effect has no trustworthy terminal outcome".into(),
-                outcome: OutcomeCertainty::Unknown,
-            },
-        }
+    let failure = released_runtime_failure(error);
+    let status = if failure.outcome == OutcomeCertainty::Unknown {
+        RunStatus::OutcomeUnknown
     } else {
-        RunUpdateKind::Failure {
-            status: RunStatus::Failed,
-            failure: RunFailure {
-                code: "runtime.failed".into(),
-                message: "the run failed with a known outcome".into(),
-                outcome: OutcomeCertainty::Known,
-            },
+        RunStatus::Failed
+    };
+    RunUpdateKind::Failure { status, failure }
+}
+
+fn released_runtime_failure(error: &RuntimeError) -> RunFailure {
+    match error {
+        RuntimeError::Agent(colossus_agent::AgentError::Provider(error))
+        | RuntimeError::Context(colossus_ports::ContextError::Provider(error)) => {
+            released_provider_failure(error)
         }
+        RuntimeError::Agent(colossus_agent::AgentError::Tool(
+            colossus_ports::ToolError::OutcomeUnknown(_),
+        ))
+        | RuntimeError::Store(StoreError::OutcomeUnknown(_))
+        | RuntimeError::SearchPort(colossus_ports::SearchError::OutcomeUnknown(_)) => {
+            generic_failure(
+                "runtime.outcome_unknown",
+                "an external effect has no trustworthy terminal outcome",
+                OutcomeCertainty::Unknown,
+            )
+        }
+        RuntimeError::Gateway(error) => released_gateway_failure(error),
+        RuntimeError::Agent(colossus_agent::AgentError::MaxTurns { .. }) => generic_failure(
+            "agent.max_turns",
+            "the model reached the configured turn limit before producing a final response",
+            OutcomeCertainty::Known,
+        ),
+        RuntimeError::Agent(colossus_agent::AgentError::EmptyTurn) => generic_failure(
+            "provider.empty_turn",
+            "the provider returned no visible response or tool call",
+            OutcomeCertainty::Known,
+        ),
+        RuntimeError::Agent(colossus_agent::AgentError::ToolArgumentRecoveryExhausted {
+            ..
+        }) => generic_failure(
+            "provider.invalid_tool_arguments",
+            "the provider repeatedly returned invalid tool arguments",
+            OutcomeCertainty::Known,
+        ),
+        _ if runtime_error_outcome_unknown(error) => generic_failure(
+            "runtime.outcome_unknown",
+            "an external effect has no trustworthy terminal outcome",
+            OutcomeCertainty::Unknown,
+        ),
+        _ => generic_failure(
+            "runtime.failed",
+            "the run failed with a known outcome",
+            OutcomeCertainty::Known,
+        ),
+    }
+}
+
+fn released_provider_failure(error: &ModelProviderError) -> RunFailure {
+    match error {
+        ModelProviderError::Recoverable {
+            code,
+            message,
+            http_status,
+            retry_after_ms,
+        } => RunFailure {
+            code: code.clone(),
+            message: message.clone(),
+            outcome: OutcomeCertainty::Known,
+            recoverable: true,
+            http_status: *http_status,
+            retry_after_ms: *retry_after_ms,
+        },
+        ModelProviderError::HttpStatus { status, message } => RunFailure {
+            code: "provider.http_status".into(),
+            message: message.clone(),
+            outcome: OutcomeCertainty::Known,
+            recoverable: false,
+            http_status: Some(*status),
+            retry_after_ms: None,
+        },
+        ModelProviderError::Configuration(_) => generic_failure(
+            "provider.configuration",
+            "the configured provider request is invalid",
+            OutcomeCertainty::Known,
+        ),
+        ModelProviderError::Failed(_) => generic_failure(
+            "provider.failed",
+            "the provider request failed with a known outcome",
+            OutcomeCertainty::Known,
+        ),
+        ModelProviderError::OutcomeUnknown(_) => generic_failure(
+            "provider.outcome_unknown",
+            "provider transport failed after execution began; the outcome is unknown",
+            OutcomeCertainty::Unknown,
+        ),
+    }
+}
+
+fn released_gateway_failure(error: &colossus_policy::GatewayError) -> RunFailure {
+    match error {
+        colossus_policy::GatewayError::RecoverableExecution {
+            code,
+            message,
+            http_status,
+            retry_after_ms,
+        } => RunFailure {
+            code: code.clone(),
+            message: message.clone(),
+            outcome: OutcomeCertainty::Known,
+            recoverable: true,
+            http_status: *http_status,
+            retry_after_ms: *retry_after_ms,
+        },
+        colossus_policy::GatewayError::HttpStatus { status, message } => RunFailure {
+            code: "effect.http_status".into(),
+            message: message.clone(),
+            outcome: OutcomeCertainty::Known,
+            recoverable: false,
+            http_status: Some(*status),
+            retry_after_ms: None,
+        },
+        colossus_policy::GatewayError::OutcomeUnknown(_) => generic_failure(
+            "effect.outcome_unknown",
+            "an external effect has no trustworthy terminal outcome",
+            OutcomeCertainty::Unknown,
+        ),
+        colossus_policy::GatewayError::Denied(_) => generic_failure(
+            "effect.denied",
+            "policy denied the requested effect",
+            OutcomeCertainty::Known,
+        ),
+        colossus_policy::GatewayError::Approval(_) => generic_failure(
+            "effect.approval_required",
+            "the requested effect was not approved",
+            OutcomeCertainty::Known,
+        ),
+        _ => generic_failure(
+            "runtime.failed",
+            "the run failed with a known outcome",
+            OutcomeCertainty::Known,
+        ),
+    }
+}
+
+fn generic_failure(code: &str, message: &str, outcome: OutcomeCertainty) -> RunFailure {
+    RunFailure {
+        code: code.into(),
+        message: message.into(),
+        outcome,
+        recoverable: false,
+        http_status: None,
+        retry_after_ms: None,
     }
 }
 
@@ -1316,6 +1455,7 @@ fn gateway_error_outcome_unknown(error: &colossus_policy::GatewayError) -> bool 
         | colossus_policy::GatewayError::Policy(_)
         | colossus_policy::GatewayError::Execution(_)
         | colossus_policy::GatewayError::RecoverableExecution { .. }
+        | colossus_policy::GatewayError::HttpStatus { .. }
         | colossus_policy::GatewayError::Contract(_) => false,
     }
 }
@@ -1341,6 +1481,8 @@ mod tests {
             code: "provider.failed".into(),
             message: private.into(),
             recoverable: false,
+            http_status: None,
+            retry_after_ms: None,
             turn: Some(1),
             elapsed_seconds: 0.25,
         });
@@ -1350,5 +1492,37 @@ mod tests {
         assert_eq!(notice.reason, "provider.failed");
         assert!(!notice.message.contains(private));
         assert!(!notice.message.contains("/private/provider/socket"));
+    }
+
+    #[test]
+    fn public_terminal_failure_preserves_safe_provider_response_metadata() {
+        let update = released_runtime_failure(&RuntimeError::Agent(
+            colossus_agent::AgentError::Provider(ModelProviderError::Recoverable {
+                code: "provider.temporarily_unavailable".into(),
+                message: "provider endpoint returned HTTP 503".into(),
+                http_status: Some(503),
+                retry_after_ms: Some(7_000),
+            }),
+        ));
+        assert_eq!(update.code, "provider.temporarily_unavailable");
+        assert_eq!(update.message, "provider endpoint returned HTTP 503");
+        assert_eq!(update.outcome, OutcomeCertainty::Known);
+        assert!(update.recoverable);
+        assert_eq!(update.http_status, Some(503));
+        assert_eq!(update.retry_after_ms, Some(7_000));
+    }
+
+    #[test]
+    fn unknown_provider_outcomes_do_not_release_transport_targets() {
+        let private = "error sending request for url (http://localhost:8080/chat/completions)";
+        let update =
+            released_runtime_failure(&RuntimeError::Agent(colossus_agent::AgentError::Provider(
+                ModelProviderError::OutcomeUnknown(private.into()),
+            )));
+        assert_eq!(update.code, "provider.outcome_unknown");
+        assert_eq!(update.outcome, OutcomeCertainty::Unknown);
+        assert!(!update.recoverable);
+        assert!(!update.message.contains("localhost"));
+        assert!(!update.message.contains("chat/completions"));
     }
 }

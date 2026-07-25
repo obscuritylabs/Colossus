@@ -13,16 +13,23 @@ import {
   addExternalTarget,
   applyManagedModelConfiguration,
   cancelRun,
+  checkDesktopUpdate,
   chooseWorkspace,
   configureManagedRuntime,
   connectColossus,
   createRun,
   desktopReleaseChannel,
   desktopStatus,
+  exportDiagnostics,
   getRun,
+  importCaBundle,
+  installDesktopUpdate,
   initializeDesktop,
+  listWorkspaceDirectory,
   listRuns,
+  readWorkspaceFile,
   restartManagedRuntime,
+  removeCaBundle,
   removeExternalTarget,
   respondInteraction,
   runManagedSelfTest,
@@ -45,14 +52,17 @@ import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
 import { WorkSidebar } from "./components/WorkSidebar";
 import { WorkSurface } from "./components/WorkSurface";
-import { buildOperationsStudioFixture } from "./fixtures";
+import { WorkspaceFiles } from "./components/WorkspaceFiles";
+import { buildOperationsStudioFixture } from "./dev/operations-studio-fixture";
 import { managedOnboardingRequired } from "./onboarding";
 import {
   agentRoleLabel,
+  safeDisplayLabel,
   selectOperationalActivity,
   selectReleasedArtifacts,
 } from "./presenters";
 import {
+  MAX_CONVERSATION_RUNS,
   MAX_PROMPT_BYTES,
   MAX_TURNS,
   chatReducer,
@@ -62,6 +72,7 @@ import {
   isConnectionError,
   isPromptWithinByteLimit,
   operationFingerprint,
+  selectConversationViews,
   stableIdempotentAttempt,
   utf8ByteLength,
   withBoundedEntry,
@@ -88,6 +99,10 @@ import type {
   TerminalKind,
 } from "./types";
 import { isTerminalStatus } from "./types";
+import {
+  listFixtureWorkspaceDirectory,
+  readFixtureWorkspaceFile,
+} from "./dev/workspace-files-fixture";
 
 const FIXTURE_MODE =
   import.meta.env.DEV &&
@@ -173,6 +188,21 @@ const INITIAL_DESKTOP: DesktopStatus = {
   },
   accessProfile: "development",
   terminalEnabled: false,
+  additionalCaBundle: {
+    configured: false,
+    certificateCount: 0,
+    fingerprintsSha256: [],
+  },
+  capabilities: {
+    delegation: false,
+    skills: false,
+    tui: true,
+    files: true,
+    artifacts: true,
+    updateAvailable: false,
+    agentWorkflows: false,
+    attachments: false,
+  },
 };
 
 const FALLBACK_ACTION_ERROR: CommandError = {
@@ -382,6 +412,8 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);
   const [actionError, setActionError] = useState<CommandError | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const watchedRuns = useRef(new Map<string, symbol>());
   const targetRoutes = useRef<TargetRouteRegistry | null>(null);
@@ -779,8 +811,42 @@ export default function App() {
       }
       targetRoutes.current.bindRun(details.run.runId, route);
       dispatch({ type: "hydrate_run", details });
-      if (!isTerminalStatus(details.run.status)) {
-        startWatch(run.runId, existingCursor, route);
+      startWatch(run.runId, existingCursor, route);
+
+      try {
+        const history = await listRuns(route.targetId, {
+          sessionId: details.run.sessionId,
+          pageToken: "",
+        });
+        if (targetRoutes.current?.isCurrent(route) !== true) {
+          return;
+        }
+        const sessionRuns = history.runs
+          .filter((candidate) => candidate.sessionId === details.run.sessionId)
+          .slice(0, MAX_CONVERSATION_RUNS);
+        targetRoutes.current.bindRuns(
+          sessionRuns.map((candidate) => candidate.runId),
+          route,
+        );
+        for (const historicalRun of [...sessionRuns].reverse()) {
+          dispatch({ type: "upsert_run", run: historicalRun });
+        }
+        for (const historicalRun of sessionRuns) {
+          if (historicalRun.runId === details.run.runId) {
+            continue;
+          }
+          const cursor =
+            chatRef.current.views.get(historicalRun.runId)?.lastSequence ?? 0;
+          startWatch(historicalRun.runId, cursor, route);
+        }
+      } catch (historyError: unknown) {
+        if (targetRoutes.current?.isCurrent(route) === true) {
+          const failure = commandError(historyError);
+          markConnectionFailure(failure, route);
+          setRunLoadError(
+            "This work opened, but its earlier turns could not be loaded.",
+          );
+        }
       }
     } catch (error: unknown) {
       if (targetRoutes.current?.isCurrent(route) !== true) {
@@ -827,10 +893,7 @@ export default function App() {
       currentView === undefined
         ? (targetRoutes.current?.capture() ?? null)
         : (targetRoutes.current?.routeForRun(currentView.run.runId) ?? null);
-    if (
-      !FIXTURE_MODE &&
-      (route === null || targetRoutes.current?.isCurrent(route) !== true)
-    ) {
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       setComposerError({
         ...FALLBACK_ACTION_ERROR,
         code: "disconnected",
@@ -844,7 +907,7 @@ export default function App() {
         : undefined;
     const fingerprint = operationFingerprint([
       cleanPrompt,
-      route?.targetId ?? "fixture-managed-local",
+      route.targetId,
       sessionId ?? "",
       cleanRole,
       mode,
@@ -853,12 +916,12 @@ export default function App() {
     const previousRoutedAttempt = createAttempt.current;
     const previousAttempt =
       previousRoutedAttempt !== null &&
-      previousRoutedAttempt.targetId === route?.targetId
+      previousRoutedAttempt.targetId === route.targetId
         ? previousRoutedAttempt.attempt
         : null;
     const attempt = stableIdempotentAttempt(previousAttempt, fingerprint);
     createAttempt.current = {
-      targetId: route?.targetId ?? "fixture-managed-local",
+      targetId: route.targetId,
       attempt,
     };
     const commonRequest: CreateRunRequest = {
@@ -882,6 +945,7 @@ export default function App() {
         const run: Run = {
           runId,
           sessionId: sessionId ?? `fixture-session-${Date.now()}`,
+          title: safeDisplayLabel(cleanPrompt, "Untitled work", 80),
           role: cleanRole,
           mode,
           status: "completed",
@@ -908,6 +972,7 @@ export default function App() {
         };
         createAttempt.current = null;
         setPrompt("");
+        targetRoutes.current?.bindRun(runId, route);
         dispatch({ type: "upsert_run", run });
         dispatch({ type: "record_local_prompt", runId, prompt: cleanPrompt });
         dispatch({ type: "select_run", runId });
@@ -1275,6 +1340,63 @@ export default function App() {
     }
   }
 
+  async function handleCheckDesktopUpdate() {
+    if (FIXTURE_MODE) {
+      setUpdateMessage(
+        "Development fixtures do not advertise an update channel.",
+      );
+      return;
+    }
+    setUpdateChecking(true);
+    setUpdateMessage("");
+    setActionError(null);
+    try {
+      const result = await checkDesktopUpdate();
+      setDesktop((current) => ({
+        ...current,
+        capabilities: {
+          ...current.capabilities,
+          updateAvailable: result.available,
+        },
+      }));
+      setUpdateMessage(
+        !result.configured
+          ? "This build does not advertise an update channel."
+          : result.available && result.version !== null
+            ? `Colossus Desktop ${result.version} is available.`
+            : `Colossus Desktop ${result.currentVersion} is up to date.`,
+      );
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      setActionError(failure);
+      setUpdateMessage("The signed update channel could not be checked.");
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
+  async function handleInstallDesktopUpdate() {
+    if (FIXTURE_MODE) {
+      return;
+    }
+    setUpdateChecking(true);
+    setActionError(null);
+    try {
+      const installed = await installDesktopUpdate();
+      setUpdateMessage(
+        installed
+          ? "The verified update was installed. Restart Colossus Desktop to use it."
+          : "The update was not installed.",
+      );
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      setActionError(failure);
+      setUpdateMessage("The update could not be verified or installed.");
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
   async function handleSelectTarget(targetId: string) {
     if (
       targetId === desktop.selectedTargetId ||
@@ -1396,6 +1518,57 @@ export default function App() {
     }
   }
 
+  async function handleImportCaBundle() {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        return;
+      }
+      invalidateTargetRoute();
+      const status = await importCaBundle();
+      if (status !== null) {
+        await acceptDesktopStatus(status, true);
+      }
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
+  async function handleRemoveCaBundle() {
+    if (connectingRef.current || submitInFlight.current) {
+      return;
+    }
+    connectingRef.current = true;
+    setConnecting(true);
+    setActionError(null);
+    try {
+      if (FIXTURE_MODE) {
+        return;
+      }
+      invalidateTargetRoute();
+      await acceptDesktopStatus(await removeCaBundle(), true);
+    } catch (error: unknown) {
+      const failure = commandError(error);
+      markConnectionFailure(failure);
+      setActionError(failure);
+      await resyncDesktopAfterFailedMutation();
+    } finally {
+      connectingRef.current = false;
+      setConnecting(false);
+    }
+  }
+
   async function handleSetTerminalEnabled(enabled: boolean) {
     const status = desktopRef.current;
     const selectedTarget = status.targets.find(
@@ -1437,6 +1610,24 @@ export default function App() {
   const activeView =
     chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
   const activeRun = activeView?.run;
+  const conversationViews = useMemo(
+    () => selectConversationViews(chat, activeRun?.sessionId ?? null),
+    [activeRun?.sessionId, chat],
+  );
+  const openingRun = useMemo(() => {
+    if (activeRun === undefined) {
+      return undefined;
+    }
+    return chat.recentRuns
+      .filter((run) => run.sessionId === activeRun.sessionId)
+      .reduce<Run | undefined>(
+        (opening, run) =>
+          opening === undefined || run.createdAt < opening.createdAt
+            ? run
+            : opening,
+        undefined,
+      );
+  }, [activeRun, chat.recentRuns]);
   const canCompose =
     connection.state === "connected" &&
     !connecting &&
@@ -1448,8 +1639,8 @@ export default function App() {
   const promptOverLimit = promptBytes > MAX_PROMPT_BYTES;
   const views = useMemo(() => Array.from(chat.views.values()), [chat.views]);
   const selectedArtifacts = useMemo(
-    () => selectReleasedArtifacts(activeView),
-    [activeView],
+    () => selectReleasedArtifacts(conversationViews),
+    [conversationViews],
   );
   const allArtifacts = useMemo(() => selectReleasedArtifacts(views), [views]);
   const activity = useMemo(() => selectOperationalActivity(views), [views]);
@@ -1497,11 +1688,25 @@ export default function App() {
     (target) => target.targetId === desktop.selectedTargetId,
   );
   const terminalAvailable = selectedTarget?.terminalAvailable === true;
-  const activeCount = chat.recentRuns.filter((run) =>
-    ["queued", "running", "waiting", "cancelling"].includes(run.status),
-  ).length;
+  const workspaceFilesAvailable = desktop.capabilities.files;
+  const workCount = new Set(chat.recentRuns.map((run) => run.sessionId)).size;
+  const activeCount = new Set(
+    chat.recentRuns
+      .filter((run) =>
+        ["queued", "running", "waiting", "cancelling"].includes(run.status),
+      )
+      .map((run) => run.sessionId),
+  ).size;
   const title =
-    activeRun === undefined ? "New work" : agentRoleLabel(activeRun.role);
+    activeRun === undefined
+      ? "New work"
+      : safeDisplayLabel(
+          openingRun?.title ??
+            conversationViews[0]?.run.title ??
+            activeRun.title,
+          agentRoleLabel(activeRun.role),
+          160,
+        );
   const closeWorkNavigation = useCallback(
     () => setWorkNavigationOpen(false),
     [],
@@ -1534,6 +1739,7 @@ export default function App() {
         activeRun !== undefined && !isTerminalStatus(activeRun.status)
       }
       activeWorkNeedsInput={(activeView?.pendingInteractions.length ?? 0) > 0}
+      attachmentsAvailable={desktop.capabilities.attachments}
       error={composerError}
       onPromptChange={(nextPrompt) => {
         setPrompt(nextPrompt);
@@ -1563,6 +1769,7 @@ export default function App() {
         connectionState={connection.state}
         terminalEnabled={desktop.terminalEnabled}
         terminalAvailable={terminalAvailable}
+        capabilities={desktop.capabilities}
         onSelect={selectSurface}
         onOpenTerminal={() => void handleOpenTerminal("colossus_tui")}
       />
@@ -1581,7 +1788,8 @@ export default function App() {
       {onboardingActive ? null : surface === "work" ? (
         <WorkSidebar
           runs={chat.recentRuns}
-          activeRunId={chat.activeRunId}
+          workspace={desktop.workspace}
+          activeSessionId={activeRun?.sessionId ?? null}
           query={workQuery}
           busy={listBusy}
           error={listError}
@@ -1599,7 +1807,7 @@ export default function App() {
         <ContextSidebar
           surface={surface}
           connection={connection}
-          runCount={chat.recentRuns.length}
+          runCount={workCount}
           activeCount={activeCount}
           artifactCount={allArtifacts.length}
           activityCount={activity.length}
@@ -1628,6 +1836,7 @@ export default function App() {
         <WorkSurface
           title={title}
           view={activeView}
+          conversationViews={conversationViews}
           connection={connection}
           connecting={connecting}
           cancelling={cancelling}
@@ -1636,6 +1845,23 @@ export default function App() {
           participants={participants}
           artifacts={artifactItems}
           composer={composer}
+          filesAvailable={desktop.capabilities.files}
+          artifactsAvailable={desktop.capabilities.artifacts}
+          filesPanel={
+            <WorkspaceFiles
+              workspace={desktop.workspace}
+              available={workspaceFilesAvailable}
+              listDirectory={
+                FIXTURE_MODE
+                  ? listFixtureWorkspaceDirectory
+                  : listWorkspaceDirectory
+              }
+              readFile={
+                FIXTURE_MODE ? readFixtureWorkspaceFile : readWorkspaceFile
+              }
+              onOpenSettings={() => setSurface("settings")}
+            />
+          }
           workNavigationOpen={workNavigationOpen}
           onConnect={() => void connect(desktop.selectedTargetId ?? undefined)}
           onCancel={() => void cancelActiveRun()}
@@ -1658,6 +1884,8 @@ export default function App() {
           connection={connection}
           desktop={desktop}
           connecting={connecting}
+          updateChecking={updateChecking}
+          updateMessage={updateMessage}
           runs={chat.recentRuns}
           artifacts={allArtifacts}
           activity={activity}
@@ -1676,6 +1904,19 @@ export default function App() {
             void handleSetTerminalEnabled(enabled)
           }
           onOpenTerminal={(kind) => void handleOpenTerminal(kind)}
+          onExportDiagnostics={() => {
+            void exportDiagnostics().catch((error: unknown) => {
+              setActionError(
+                error instanceof CommandFailure
+                  ? error.detail
+                  : FALLBACK_ACTION_ERROR,
+              );
+            });
+          }}
+          onCheckForUpdates={() => void handleCheckDesktopUpdate()}
+          onInstallUpdate={() => void handleInstallDesktopUpdate()}
+          onImportCaBundle={() => void handleImportCaBundle()}
+          onRemoveCaBundle={() => void handleRemoveCaBundle()}
         />
       )}
     </div>

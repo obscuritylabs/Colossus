@@ -26,6 +26,7 @@ interface WorkComposerProps {
   continuation: boolean;
   activeWorkRunning: boolean;
   activeWorkNeedsInput: boolean;
+  attachmentsAvailable: boolean;
   error: CommandError | null;
   onPromptChange: (prompt: string) => void;
   onRoleChange: (role: string) => void;
@@ -51,6 +52,7 @@ export function WorkComposer({
   continuation,
   activeWorkRunning,
   activeWorkNeedsInput,
+  attachmentsAvailable,
   error,
   onPromptChange,
   onRoleChange,
@@ -164,26 +166,28 @@ export function WorkComposer({
         onChange={(event) => onPromptChange(event.target.value)}
       />
       <div className="composer-action-row">
-        <div className="composer-context-actions">
-          <button
-            className="icon-button"
-            type="button"
-            disabled
-            aria-label="Attach a file (not available in this API preview)"
-            title="File attachment is not available in this API preview"
-          >
-            <IconPaperclip size={19} stroke={1.7} aria-hidden="true" />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            disabled
-            aria-label="Choose workspace context (not available in this API preview)"
-            title="Workspace context selection is not available in this API preview"
-          >
-            <IconFolder size={19} stroke={1.7} aria-hidden="true" />
-          </button>
-        </div>
+        {attachmentsAvailable ? (
+          <div className="composer-context-actions">
+            <button
+              className="icon-button"
+              type="button"
+              disabled
+              aria-label="Attach a file"
+              title="File attachment is not available in this Desktop version"
+            >
+              <IconPaperclip size={19} stroke={1.7} aria-hidden="true" />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              disabled
+              aria-label="Choose workspace context"
+              title="Workspace context selection is not available in this Desktop version"
+            >
+              <IconFolder size={19} stroke={1.7} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
         <fieldset className="mode-switch">
           <legend className="sr-only">Run mode</legend>
           <label>

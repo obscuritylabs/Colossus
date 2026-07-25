@@ -116,7 +116,8 @@ impl QuarantinedEffectObserver for GatewayStreamSink<'_> {
                 ExecutionError::ReleaseDenied(message) => StreamSinkFailure::Denied(message),
                 ExecutionError::Failed(message)
                 | ExecutionError::OutcomeUnknown(message)
-                | ExecutionError::Recoverable { message, .. } => StreamSinkFailure::Unknown(
+                | ExecutionError::Recoverable { message, .. }
+                | ExecutionError::HttpStatus { message, .. } => StreamSinkFailure::Unknown(
                     format!("released stream observation failed: {message}"),
                 ),
             };
@@ -649,14 +650,43 @@ impl EffectGateway {
                 )?;
                 return Err(GatewayError::Execution(message));
             }
-            Ok(Err(ExecutionError::Recoverable { code, message })) => {
+            Ok(Err(ExecutionError::Recoverable {
+                code,
+                message,
+                http_status,
+                retry_after_ms,
+            })) => {
                 self.event(
                     &request,
                     "effect.failed.v1",
                     EventClassification::Effect,
-                    json!({"code": code, "message": message, "recoverable": true}),
+                    json!({
+                        "code": code,
+                        "message": message,
+                        "recoverable": true,
+                        "http_status": http_status,
+                        "retry_after_ms": retry_after_ms,
+                    }),
                 )?;
-                return Err(GatewayError::RecoverableExecution { code, message });
+                return Err(GatewayError::RecoverableExecution {
+                    code,
+                    message,
+                    http_status,
+                    retry_after_ms,
+                });
+            }
+            Ok(Err(ExecutionError::HttpStatus { status, message })) => {
+                self.event(
+                    &request,
+                    "effect.failed.v1",
+                    EventClassification::Effect,
+                    json!({
+                        "message": message,
+                        "recoverable": false,
+                        "http_status": status,
+                    }),
+                )?;
+                return Err(GatewayError::HttpStatus { status, message });
             }
             Ok(Err(ExecutionError::OutcomeUnknown(message))) => {
                 self.event(

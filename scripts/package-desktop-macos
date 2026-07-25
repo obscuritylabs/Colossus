@@ -320,6 +320,24 @@ sign_app() {
     rm -f "$archive"
     /usr/bin/ditto -c -k --keepParent "$app" "$archive"
 
+    updater_archive="$(dirname -- "$app")/Colossus Desktop.app.tar.gz"
+    updater_signature="$updater_archive.sig"
+    rm -f "$updater_archive" "$updater_signature"
+    if [ "$release_channel" = stable ] || [ "$release_channel" = developer_preview ]; then
+        [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] ||
+            fail "$release_channel packaging requires TAURI_SIGNING_PRIVATE_KEY"
+        [ -x "$tauri" ] || fail "run npm ci in apps/desktop before signing update artifacts"
+        (
+            cd "$(dirname -- "$app")"
+            COPYFILE_DISABLE=1 /usr/bin/tar -czf "$updater_archive" "${app##*/}"
+        )
+        [ -f "$updater_archive" ] && [ ! -L "$updater_archive" ] ||
+            fail "the macOS updater archive was not created safely"
+        "$tauri" signer sign "$updater_archive"
+        [ -f "$updater_signature" ] && [ ! -L "$updater_signature" ] ||
+            fail "the macOS updater signature was not created"
+    fi
+
     if [ "$release_channel" = developer_preview ]; then
         printf 'Packaged ad-hoc signed Developer Preview (not notarized): %s\n' "$archive"
     elif [ "$release_channel" = validation_only ]; then

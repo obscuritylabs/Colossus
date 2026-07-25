@@ -472,6 +472,72 @@ async fn public_tool_ceiling_cannot_expand_through_unscoped_delegation() {
 }
 
 #[tokio::test]
+async fn an_unoffered_tool_call_is_returned_to_the_model_as_a_recoverable_result() {
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![ProviderEvent::ToolCallRequested {
+            call_id: "call-delegate".into(),
+            name: "agent.delegate".into(),
+            arguments: json!({"task": "say hi"}),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "Delegation is unavailable in this run.".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(
+            StaticToolRegistry::builtins(&["agent.delegate".into(), "echo".into()])
+                .expect("catalog"),
+        ),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    service
+        .run_public_with_skills_stream_controlled(
+            "primary",
+            "test",
+            "delegate",
+            2,
+            "public-run-unoffered",
+            "public-session-unoffered",
+            true,
+            &[],
+            &["echo".into()],
+            false,
+            Actor {
+                actor_type: ActorType::Application,
+                id: "app:test-ui".into(),
+            },
+            &mut observer,
+            &RunControl::default(),
+        )
+        .await
+        .expect("model must be allowed to recover from an unoffered call");
+
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 2);
+    let recovery = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.role == ModelMessageRole::Tool)
+        .expect("tool recovery message");
+    assert!(recovery.content.contains("unknown_tool"));
+    assert!(recovery.content.contains("not available in this run mode"));
+    assert!(!observer.events.iter().any(|event| {
+        matches!(
+            event.event,
+            RunEvent::Error {
+                recoverable: false,
+                ..
+            }
+        )
+    }));
+}
+
+#[tokio::test]
 async fn every_provider_turn_records_context_preparation() {
     let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
         ProviderEvent::FinalOutput {
@@ -861,10 +927,14 @@ async fn malformed_arguments_retry_twice_without_tool_execution() {
         Err(ModelProviderError::Recoverable {
             code: INVALID_TOOL_ARGUMENTS_CODE.into(),
             message: "call-1 arguments were not an object".into(),
+            http_status: None,
+            retry_after_ms: None,
         }),
         Err(ModelProviderError::Recoverable {
             code: INVALID_TOOL_ARGUMENTS_CODE.into(),
             message: "call-2 arguments were invalid JSON".into(),
+            http_status: None,
+            retry_after_ms: None,
         }),
         turn(vec![ProviderEvent::FinalOutput {
             text: "recovered".into(),
@@ -935,6 +1005,8 @@ async fn transient_provider_failure_stays_recoverable_without_implicit_retry() {
             code: "provider.temporarily_unavailable".into(),
             message: "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
                 .into(),
+            http_status: Some(503),
+            retry_after_ms: Some(7_000),
         },
     )]));
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
@@ -969,6 +1041,7 @@ async fn transient_provider_failure_stays_recoverable_without_implicit_retry() {
         RunEvent::Error {
             code,
             recoverable: true,
+            http_status: Some(503),
             ..
         } if code == "provider.temporarily_unavailable"
     )));
@@ -980,6 +1053,7 @@ async fn transient_provider_failure_stays_recoverable_without_implicit_retry() {
     let payload = journal.decrypt_payload(error_event).expect("error payload");
     assert_eq!(payload["code"], "provider.temporarily_unavailable");
     assert_eq!(payload["recoverable"], true);
+    assert_eq!(payload["http_status"], 503);
 }
 
 #[tokio::test]

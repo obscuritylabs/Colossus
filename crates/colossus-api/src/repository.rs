@@ -1399,6 +1399,7 @@ fn initial_run(envelope: &EventEnvelope, new_run: &NewRun, request: &CreateRunRe
     Run {
         id: new_run.id().into(),
         session_id: new_run.session_id().into(),
+        title: request.display_title(),
         status: RunStatus::Queued,
         mode: request.mode,
         role: new_run.role().into(),
@@ -1420,6 +1421,7 @@ fn initial_run_from_created(envelope: &EventEnvelope, created: &RunCreated) -> R
     Run {
         id: created.id.clone(),
         session_id: created.session_id.clone(),
+        title: created.execution.request.display_title(),
         status: RunStatus::Queued,
         mode: created.mode,
         role: created.role.clone(),
@@ -1465,6 +1467,22 @@ pub(crate) fn stored_update_payload_for_test(
             .ok_or_else(|| invariant(caller, "the released run byte count overflowed"))
     })?;
     stored_update_payload(caller, prior, released_bytes_before, kind)
+}
+
+#[cfg(test)]
+pub(crate) fn replay_preview_stored_update_for_test(
+    initial: &Run,
+    sequence: u64,
+    occurred_at: &str,
+    payload: serde_json::Value,
+) -> ApiResult<Run> {
+    let stored: StoredUpdate = serde_json::from_value(payload)
+        .map_err(|_| ApiError::internal("a durable run update is invalid"))?;
+    let mut run = stored
+        .prior_state
+        .restore(initial, sequence.saturating_sub(1));
+    apply_update(&mut run, sequence, occurred_at, &stored.kind)?;
+    Ok(run)
 }
 
 fn released_update_bytes(caller: &CallerContext, kind: &RunUpdateKind) -> ApiResult<u64> {

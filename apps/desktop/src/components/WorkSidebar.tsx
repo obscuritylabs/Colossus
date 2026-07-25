@@ -1,6 +1,7 @@
 import {
   IconAlertCircle,
   IconCheck,
+  IconFolder,
   IconLoader2,
   IconPointFilled,
   IconPlus,
@@ -10,11 +11,12 @@ import {
 import { useEffect, useMemo, useRef } from "react";
 
 import { selectRecentWork } from "../presenters";
-import type { Run } from "../types";
+import type { Run, WorkspaceSummary } from "../types";
 
 interface WorkSidebarProps {
   runs: readonly Run[];
-  activeRunId: string | null;
+  workspace: WorkspaceSummary | null;
+  activeSessionId: string | null;
   query: string;
   busy: boolean;
   error: string;
@@ -41,7 +43,8 @@ function statusIcon(tone: string) {
 
 export function WorkSidebar({
   runs,
-  activeRunId,
+  workspace,
+  activeSessionId,
   query,
   busy,
   error,
@@ -182,6 +185,15 @@ export function WorkSidebar({
       <div className="work-sidebar-header">
         <p>Colossus Operations Studio</p>
         <h1>Work</h1>
+        {workspace !== null ? (
+          <div className="work-workspace" title={workspace.displayPath}>
+            <IconFolder size={15} stroke={1.7} aria-hidden="true" />
+            <span>
+              <small>Workspace</small>
+              <strong>{workspace.displayName}</strong>
+            </span>
+          </div>
+        ) : null}
       </div>
       <button
         className="button primary new-work"
@@ -224,7 +236,7 @@ export function WorkSidebar({
                     type="button"
                     key={item.runId}
                     aria-current={
-                      activeRunId === item.runId ? "page" : undefined
+                      activeSessionId === run.sessionId ? "page" : undefined
                     }
                     disabled={disabled}
                     onClick={() => onSelect(run)}

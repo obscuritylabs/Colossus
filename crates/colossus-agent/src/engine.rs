@@ -50,7 +50,7 @@ impl AgentService {
         };
         let stream_id = format!("run:{run_id}");
         let route = self.provider.route(role)?;
-        let context = ExecutionContext {
+        let mut context = ExecutionContext {
             correlation_id: run_id.clone(),
             session_id: Some(session_id.clone()),
             run_id: Some(run_id.clone()),
@@ -110,6 +110,10 @@ impl AgentService {
             .iter()
             .map(|definition| definition.name.as_str())
             .collect::<BTreeSet<_>>();
+        context.offered_tools = offered_tools
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
         let mut stream_version = 0_u64;
         let mut recovery_attempts = 0_u8;
         self.append(
@@ -289,9 +293,12 @@ impl AgentService {
             };
             let provider_turn = match provider_result {
                 Ok(provider_turn) => provider_turn,
-                Err(ModelProviderError::Recoverable { code, message })
-                    if code == INVALID_TOOL_ARGUMENTS_CODE =>
-                {
+                Err(ModelProviderError::Recoverable {
+                    code,
+                    message,
+                    http_status,
+                    retry_after_ms,
+                }) if code == INVALID_TOOL_ARGUMENTS_CODE => {
                     recovery_attempts = recovery_attempts.saturating_add(1);
                     let can_retry =
                         recovery_attempts <= TOOL_ARGUMENT_RECOVERY_LIMIT && turn < max_turns;
@@ -305,6 +312,8 @@ impl AgentService {
                             "code": code,
                             "message": message,
                             "recoverable": can_retry,
+                            "http_status": http_status,
+                            "retry_after_ms": retry_after_ms,
                             "attempt": recovery_attempts,
                             "max_attempts": TOOL_ARGUMENT_RECOVERY_LIMIT,
                         }),
@@ -317,6 +326,8 @@ impl AgentService {
                             code: code.clone(),
                             message: message.clone(),
                             recoverable: can_retry,
+                            http_status,
+                            retry_after_ms,
                             turn: Some(turn),
                             elapsed_seconds: started.elapsed().as_secs_f64(),
                         },
@@ -336,6 +347,8 @@ impl AgentService {
                     continue;
                 }
                 Err(error) => {
+                    let http_status = provider_error_http_status(&error);
+                    let retry_after_ms = provider_error_retry_after_ms(&error);
                     let message = error.to_string();
                     let (code, recoverable) = match &error {
                         ModelProviderError::Recoverable { code, .. } => (code.clone(), true),
@@ -351,6 +364,8 @@ impl AgentService {
                             "code": &code,
                             "message": &message,
                             "recoverable": recoverable,
+                            "http_status": http_status,
+                            "retry_after_ms": retry_after_ms,
                         }),
                     )?;
                     emit_run_event(
@@ -361,6 +376,8 @@ impl AgentService {
                             code,
                             message,
                             recoverable,
+                            http_status,
+                            retry_after_ms,
                             turn: Some(turn),
                             elapsed_seconds: started.elapsed().as_secs_f64(),
                         },
@@ -477,6 +494,8 @@ impl AgentService {
                         message: "provider returned no visible assistant output or tool calls"
                             .into(),
                         recoverable: false,
+                        http_status: None,
+                        retry_after_ms: None,
                         turn: Some(turn),
                         elapsed_seconds: started.elapsed().as_secs_f64(),
                     },
@@ -573,7 +592,7 @@ impl AgentService {
                 let validation = if offered_tools.contains(call.name.as_str()) {
                     self.tools.validate(&call)
                 } else {
-                    Err(ToolError::Denied(format!(
+                    Err(ToolError::Unknown(format!(
                         "tool {} is not available in this run mode",
                         call.name
                     )))
@@ -635,6 +654,8 @@ impl AgentService {
                                     code: tool_error_code(&error).into(),
                                     message,
                                     recoverable: false,
+                                    http_status: None,
+                                    retry_after_ms: None,
                                     turn: Some(turn),
                                     elapsed_seconds: started.elapsed().as_secs_f64(),
                                 },
@@ -723,6 +744,8 @@ impl AgentService {
                 code: "agent.max_turns".into(),
                 message: format!("model turn limit exhausted after {max_turns} turns"),
                 recoverable: false,
+                http_status: None,
+                retry_after_ms: None,
                 turn: Some(max_turns),
                 elapsed_seconds: started.elapsed().as_secs_f64(),
             },

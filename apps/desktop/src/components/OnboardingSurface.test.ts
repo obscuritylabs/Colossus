@@ -28,6 +28,21 @@ function desktop(selectedWorkspace: WorkspaceSummary | null): DesktopStatus {
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
     terminalEnabled: false,
+    additionalCaBundle: {
+      configured: false,
+      certificateCount: 0,
+      fingerprintsSha256: [],
+    },
+    capabilities: {
+      delegation: false,
+      skills: false,
+      tui: false,
+      files: false,
+      artifacts: false,
+      updateAvailable: false,
+      agentWorkflows: false,
+      attachments: false,
+    },
   };
 }
 

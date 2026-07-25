@@ -20,16 +20,20 @@ import {
   addExternalTarget,
   applyManagedModelConfiguration,
   cancelRun,
+  checkDesktopUpdate,
   closeTerminal,
   configureManagedRuntime,
   connectColossus,
   createRun,
   desktopReleaseChannel,
   getRun,
+  installDesktopUpdate,
+  listWorkspaceDirectory,
   listRuns,
   openTerminal,
   resizeTerminal,
   removeExternalTarget,
+  readWorkspaceFile,
   respondInteraction,
   runManagedSelfTest,
   selectTarget,
@@ -193,6 +197,16 @@ describe("desktop API target routing", () => {
     );
   });
 
+  it("keeps update checks and installation behind explicit native commands", async () => {
+    await checkDesktopUpdate();
+    await installDesktopUpdate();
+
+    expect(tauri.invoke.mock.calls).toEqual([
+      ["check_desktop_update", undefined],
+      ["install_desktop_update", undefined],
+    ]);
+  });
+
   it("enrolls and removes external targets through opaque native commands", async () => {
     await addExternalTarget();
     await removeExternalTarget("01968a3e-0ab3-7f10-bb27-4eadbd550007");
@@ -263,5 +277,34 @@ describe("desktop API target routing", () => {
       ],
       ["close_terminal", { request: { sessionId: "terminal-session-1" } }],
     ]);
+  });
+
+  it("keeps workspace browsing relative and bound to the opaque workspace ID", async () => {
+    await listWorkspaceDirectory("workspace-opaque-1", "apps/desktop/src");
+    await readWorkspaceFile("workspace-opaque-1", "apps/desktop/src/App.tsx");
+
+    expect(tauri.invoke.mock.calls).toEqual([
+      [
+        "list_workspace_directory",
+        {
+          request: {
+            workspaceId: "workspace-opaque-1",
+            path: "apps/desktop/src",
+          },
+        },
+      ],
+      [
+        "read_workspace_file",
+        {
+          request: {
+            workspaceId: "workspace-opaque-1",
+            path: "apps/desktop/src/App.tsx",
+          },
+        },
+      ],
+    ]);
+    expect(JSON.stringify(tauri.invoke.mock.calls)).not.toContain(
+      "/Users/alex",
+    );
   });
 });

@@ -68,7 +68,8 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "release_channel=validation_only",
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 14",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 17",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 22",
     ] {
         assert!(
             source.contains(required),

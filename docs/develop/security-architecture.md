@@ -101,6 +101,12 @@ pin DNS results, validate TLS authority, reject ambient proxies and redirects, b
 connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
 
+One explicit bounded PEM CA bundle may augment built-in roots across Colossus-owned
+outbound clients. It is loaded once at runtime startup and never sourced from ambient
+proxy or TLS environment variables. Adapter-specific OPA and PostgreSQL CA policies
+remain exclusive overrides, and public API clients continue to verify their separately
+provisioned leaf pin. Sandboxed and MCP child processes retain independent TLS stacks.
+
 `risk-auto` is deliberately narrow: only model or child-agent `shell.run`,
 `web.search`, and bodyless `network.http` GET effects without workflow lineage can use
 a low-risk `allow` recommendation to mint a request-bound approval proof. The evaluator
@@ -208,6 +214,18 @@ capability-scoped Rust commands and receives ordered released updates. It never 
 daemon credentials, private discovery paths, raw effect inputs or outputs, hidden
 reasoning, or a generic process, filesystem, network, or SDK invocation escape hatch.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
+
+The read-only Desktop file viewer is a separate, narrow local-user disclosure surface,
+not a generic filesystem bridge or an agent tool. It is available only while the exact
+Managed Local target is selected with Development access, accepts the opaque current
+workspace ID plus a bounded relative path, and revalidates the persisted object-bound
+workspace identity before and after every operation. It rejects absolute paths, parent
+components, links, non-files, non-directories, non-UTF-8 or unsafe-control text, large
+files, and oversized directories. Control state, version-control internals, generated
+dependency/build trees, environment files, credential files, and key/certificate
+formats are excluded. The native boundary returns at most 256 KiB of text and exposes
+no write, execute, process, network, arbitrary-open, or SDK command. Source changes
+continue through ordinary permit-bound agent effects; the viewer cannot mutate them.
 
 A managed desktop sidecar is a separate signed process, not an in-process extension of
 renderer authority. Its exact signed executable and the bundled TUI CLI are named in a

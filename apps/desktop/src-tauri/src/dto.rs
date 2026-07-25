@@ -524,6 +524,9 @@ pub(crate) struct RunFailureDto {
     pub(crate) reason: String,
     pub(crate) message: String,
     pub(crate) outcome_certainty: OutcomeCertaintyDto,
+    pub(crate) recoverable: bool,
+    pub(crate) http_status: Option<u16>,
+    pub(crate) retry_after_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -548,6 +551,9 @@ impl From<RunFailure> for RunFailureDto {
             reason: value.reason,
             message: value.message,
             outcome_certainty: value.outcome_certainty.into(),
+            recoverable: value.recoverable,
+            http_status: value.http_status,
+            retry_after_ms: value.retry_after_ms,
         }
     }
 }
@@ -597,6 +603,7 @@ impl From<RunTerminal> for RunTerminalDto {
 pub(crate) struct RunDto {
     pub(crate) run_id: String,
     pub(crate) session_id: String,
+    pub(crate) title: String,
     pub(crate) role: String,
     pub(crate) mode: RunModeDto,
     pub(crate) status: RunStatusDto,
@@ -616,6 +623,7 @@ impl From<Run> for RunDto {
         Self {
             run_id: value.run_id,
             session_id: value.session_id,
+            title: value.title,
             role: value.role,
             mode: value.mode.into(),
             status: value.status.into(),

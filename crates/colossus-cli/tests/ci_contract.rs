@@ -321,6 +321,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
             "artifacts",
             "desktop_macos",
             "desktop_macos_build",
+            "desktop_windows_preview",
             "validate",
         ]
         .into_iter()
@@ -368,7 +369,14 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "shasum -a 256",
         "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
         "desktop_macos=${{ needs.desktop_macos.result }}",
-        "-eq 14",
+        "desktop_windows_preview=\"$WINDOWS_DESKTOP_RESULT\"",
+        "runs-on: windows-2025",
+        "./scripts/package-desktop-windows.ps1",
+        "codeSigning = \"unsigned_developer_preview\"",
+        "smartScreenWarningExpected = $true",
+        "Colossus-Desktop-UNSIGNED-$label-$env:RELEASE_TAG-x86_64-pc-windows-msvc-setup.exe",
+        "-eq 17",
+        "-eq 22",
     ] {
         assert!(
             source.contains(required),
@@ -381,12 +389,17 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         .find("  desktop_macos:")
         .map(|offset| build_start + offset)
         .expect("sign job");
-    let gate_start = source[sign_start..]
-        .find("  gate:")
+    let windows_start = source[sign_start..]
+        .find("  desktop_windows_preview:")
         .map(|offset| sign_start + offset)
+        .expect("Windows preview job");
+    let gate_start = source[windows_start..]
+        .find("  gate:")
+        .map(|offset| windows_start + offset)
         .expect("gate job");
     let build_job = &source[build_start..sign_start];
-    let sign_job = &source[sign_start..gate_start];
+    let sign_job = &source[sign_start..windows_start];
+    let windows_job = &source[windows_start..gate_start];
     for forbidden in [
         "${{ secrets.",
         "MACOS_DEVELOPER_ID_P12",
@@ -398,18 +411,17 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
             "credential-free Desktop build contains {forbidden}"
         );
     }
-    for forbidden in [
-        "actions/setup-node@",
-        "rust-toolchain@",
-        "npm ci",
-        "cargo build",
-        "tauri build",
-    ] {
+    assert!(sign_job.contains("actions/setup-node@"));
+    assert!(sign_job.contains("npm ci --ignore-scripts"));
+    for forbidden in ["rust-toolchain@", "cargo build", "tauri build"] {
         assert!(
             !sign_job.contains(forbidden),
             "Desktop signing job contains build authority {forbidden}"
         );
     }
+    assert!(windows_job.contains("if: needs.validate.outputs.release_channel != 'stable'"));
+    assert!(windows_job.contains("COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED"));
+    assert!(!windows_job.contains("AUTHENTICODE"));
 }
 
 #[test]

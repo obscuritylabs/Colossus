@@ -152,12 +152,23 @@ struct EmbeddingUsage {
 /// Permit-requiring OpenAI-compatible embedding transport.
 pub struct OpenAiEmbeddingExecutor {
     profile: OpenAiEmbeddingProfile,
+    tls_roots: AdditionalRootCertificates,
 }
 
 impl OpenAiEmbeddingExecutor {
     /// Construct a transport. Execution remains impossible without a gateway permit.
     pub fn new(profile: OpenAiEmbeddingProfile) -> Self {
-        Self { profile }
+        Self {
+            profile,
+            tls_roots: AdditionalRootCertificates::default(),
+        }
+    }
+
+    /// Add validated runtime-wide CA roots to the embedding client's built-in roots.
+    #[must_use]
+    pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
+        self.tls_roots = tls_roots;
+        self
     }
 }
 
@@ -187,10 +198,13 @@ impl EffectExecutor for OpenAiEmbeddingExecutor {
             Method::POST,
             &self.profile.endpoint(),
             Some(&payload),
-            self.profile.credential_reference(),
-            "authorization",
             &permit,
-            self.profile.timeout_ms,
+            HttpTransport::new(
+                self.profile.credential_reference(),
+                "authorization",
+                self.profile.timeout_ms,
+                &self.tls_roots,
+            ),
         )
         .await
         .map_err(execution)?;

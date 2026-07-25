@@ -1,13 +1,13 @@
 use super::*;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use colossus_sidecar_protocol::{
     DESKTOP_TUI_PROTOCOL_VERSION, DesktopTuiAuthenticated, DesktopTuiChildFrame,
     DesktopTuiParentFrame, DesktopTuiReady, WorkspaceIdentity, decode_worker_authentication,
     read_frame, write_frame,
 };
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use colossus_worker::WorkerAuthenticationKey;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use uuid::Uuid;
 
 /// Exact selected workspace object opened by the signed CLI before it requests worker
@@ -89,10 +89,51 @@ impl DesktopTuiWorkspaceBinding {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(super) struct DesktopTuiWorkspaceBinding {
+    directory: colossus_windows_native::BoundPath,
+    identity: WorkspaceIdentity,
+}
+
+#[cfg(target_os = "windows")]
+impl DesktopTuiWorkspaceBinding {
+    fn open(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let directory = colossus_windows_native::BoundPath::open_directory(path)
+            .map_err(|_| "the native TUI workspace is unavailable")?;
+        directory
+            .revalidate()
+            .map_err(|_| "the native TUI workspace is unavailable")?;
+        let kernel = directory.identity();
+        let identity =
+            WorkspaceIdentity::from_windows_parts(kernel.volume_serial_number, kernel.file_id)
+                .map_err(|_| "the native TUI workspace is unavailable")?;
+        Ok(Self {
+            directory,
+            identity,
+        })
+    }
+
+    pub(super) fn enter(&self) -> Result<(), Box<dyn Error>> {
+        self.directory
+            .revalidate()
+            .map_err(|_| "the native TUI workspace is unavailable")?;
+        std::env::set_current_dir(self.directory.canonical_path())
+            .map_err(|_| "the native TUI workspace is unavailable")?;
+        self.directory
+            .revalidate()
+            .map_err(|_| "the native TUI workspace is unavailable")?;
+        Ok(())
+    }
+
+    fn identity(&self) -> &WorkspaceIdentity {
+        &self.identity
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(super) struct DesktopTuiWorkspaceBinding;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 impl DesktopTuiWorkspaceBinding {
     pub(super) fn enter(&self) -> Result<(), Box<dyn Error>> {
         Err("the native TUI workspace is unsupported on this platform".into())
@@ -106,14 +147,21 @@ pub(super) fn bind_desktop_tui_workspace(
     DesktopTuiWorkspaceBinding::open(workspace)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(super) fn bind_desktop_tui_workspace(
+    workspace: &Path,
+) -> Result<DesktopTuiWorkspaceBinding, Box<dyn Error>> {
+    DesktopTuiWorkspaceBinding::open(workspace)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(super) fn bind_desktop_tui_workspace(
     _workspace: &Path,
 ) -> Result<DesktopTuiWorkspaceBinding, Box<dyn Error>> {
     Err("the native TUI workspace is unsupported on this platform".into())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn desktop_tui_ready(
     exchange_id: String,
     workspace: &DesktopTuiWorkspaceBinding,
@@ -127,15 +175,22 @@ fn desktop_tui_ready(
 
 /// Consume one native-host worker key from fixed inherited anonymous pipes before the
 /// ordinary TUI receives terminal input. Authentication never traverses the PTY.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(super) fn inherited_desktop_worker_client(
     config: &RuntimeConfig,
     workspace: &DesktopTuiWorkspaceBinding,
 ) -> Result<WorkerClient, Box<dyn Error>> {
+    #[cfg(target_os = "macos")]
     let colossus_darwin_process::DesktopTuiAuthenticationChannels {
         mut input,
         mut output,
     } = colossus_darwin_process::take_desktop_tui_authentication_channels()
+        .map_err(|_| "the native TUI authentication channel is unavailable")?;
+    #[cfg(target_os = "windows")]
+    let colossus_windows_native::DesktopTuiAuthenticationChannels {
+        mut input,
+        mut output,
+    } = colossus_windows_native::take_desktop_tui_authentication_channels()
         .map_err(|_| "the native TUI authentication channel is unavailable")?;
 
     let exchange_id = Uuid::now_v7().to_string();
@@ -165,7 +220,7 @@ pub(super) fn inherited_desktop_worker_client(
         .map_err(|error| error.into())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(super) fn inherited_desktop_worker_client(
     _config: &RuntimeConfig,
     _workspace: &DesktopTuiWorkspaceBinding,

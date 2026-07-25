@@ -17,6 +17,7 @@ import type { ArtifactReference, Run, RunUpdate, RunUpdateKind } from "./types";
 const BASE_RUN: Run = {
   runId: "run-1",
   sessionId: "opaque-session-1",
+  title: "Review the workspace",
   role: "primary",
   mode: "execute",
   status: "running",
@@ -133,18 +134,21 @@ describe("selectRecentWork", () => {
         runFixture({
           runId: "old-active",
           sessionId: "session-do-not-display",
+          title: "Investigate fleet health",
           role: "fleet-primary",
           status: "running",
           updatedAt: earlier,
         }),
         runFixture({
           runId: "today",
+          sessionId: "session-today",
           role: "document-editor",
           status: "completed",
           updatedAt: today,
         }),
         runFixture({
           runId: "yesterday",
+          sessionId: "session-yesterday",
           role: "code-review",
           mode: "plan",
           status: "completed",
@@ -152,6 +156,7 @@ describe("selectRecentWork", () => {
         }),
         runFixture({
           runId: "earlier",
+          sessionId: "session-earlier",
           role: "research",
           status: "failed",
           updatedAt: earlier,
@@ -166,7 +171,7 @@ describe("selectRecentWork", () => {
       "yesterday",
       "earlier",
     ]);
-    expect(groups[0]?.items[0]?.title).toBe("Fleet primary");
+    expect(groups[0]?.items[0]?.title).toBe("Investigate fleet health");
     expect(JSON.stringify(groups)).not.toContain("session-do-not-display");
     expect(groups.flatMap(({ items }) => items)).toHaveLength(4);
   });
@@ -178,6 +183,7 @@ describe("selectRecentWork", () => {
         runFixture({
           runId: `run-${index}`,
           sessionId: `secret-session-${index}`,
+          title: index === 3 ? "Plan the migration" : `Work item ${index}`,
           role: index === 3 ? "planner" : "primary",
           mode: index === 3 ? "plan" : "execute",
           status: "completed",
@@ -189,13 +195,45 @@ describe("selectRecentWork", () => {
       selectRecentWork(runs, { now }).flatMap(({ items }) => items),
     ).toHaveLength(MAX_PRESENTED_WORK_ITEMS);
     expect(
-      selectRecentWork(runs, { now, query: "planner" }).flatMap(
+      selectRecentWork(runs, { now, query: "plan the migration" }).flatMap(
         ({ items }) => items,
       ),
     ).toHaveLength(1);
     expect(selectRecentWork(runs, { now, query: "secret-session-3" })).toEqual(
       [],
     );
+  });
+
+  it("presents continuation runs as one work item with its opening title", () => {
+    const groups = selectRecentWork(
+      [
+        runFixture({
+          runId: "continuation",
+          sessionId: "shared-session",
+          title: "Answer the follow-up",
+          status: "running",
+          createdAt: "2026-07-20T12:05:00Z",
+          updatedAt: "2026-07-20T12:05:10Z",
+        }),
+        runFixture({
+          runId: "opening",
+          sessionId: "shared-session",
+          title: "Audit the desktop release",
+          status: "completed",
+          createdAt: "2026-07-20T12:00:00Z",
+          updatedAt: "2026-07-20T12:01:00Z",
+        }),
+      ],
+      { now },
+    );
+
+    const items = groups.flatMap(({ items }) => items);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      runId: "continuation",
+      title: "Audit the desktop release",
+      status: "running",
+    });
   });
 });
 

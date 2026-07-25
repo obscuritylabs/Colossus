@@ -1,3 +1,4 @@
+mod desktop;
 mod rust;
 mod sdk;
 mod surfaces;
@@ -15,6 +16,9 @@ pub(super) fn run(repository: &Repository, invocation: Invocation) -> Result<(),
         Invocation::Dev => rust::dev(repository),
         Invocation::Pr { base } => pr(repository, base),
         Invocation::Check { component, base } => component_check(repository, component, base),
+        Invocation::DesktopPrepare { profile, target } => {
+            desktop::prepare(repository, profile, target.as_deref())
+        }
     }
 }
 

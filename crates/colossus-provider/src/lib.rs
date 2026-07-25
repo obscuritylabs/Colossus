@@ -9,6 +9,7 @@ use colossus_contracts::{
     ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderStreamItem, ProviderTurn,
     ProviderUsage, QuarantinedEffectResult,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
     QuarantinedEffectObserver, StreamingEffectExecutor, network_destination_match,

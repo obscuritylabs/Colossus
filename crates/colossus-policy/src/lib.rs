@@ -8,6 +8,7 @@ use colossus_contracts::{
     QuarantinedEffectResult, RiskLevel, RiskRecommendation, RiskReviewFailure,
     RiskReviewFallbackNotice, RiskStatus,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_ports::{
     ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
     RiskEvaluator, StoreError,

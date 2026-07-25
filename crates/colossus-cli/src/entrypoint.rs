@@ -1029,30 +1029,33 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 .into());
             }
             if let Some(plan_id) = execute_plan {
-                let result = if goal {
+                if goal {
                     let approved = runtime
                         .get_plan(&plan_id)?
                         .ok_or_else(|| cli_error(format!("plan not found: {plan_id}")))?;
-                    serde_json::to_value(
-                        runtime
-                            .run_goal(
-                                &role,
-                                "",
-                                &approved.session_id,
-                                goal_max_iterations,
-                                Some(&plan_id),
-                            )
-                            .await?,
-                    )?
+                    let result = runtime
+                        .run_goal(
+                            &role,
+                            "",
+                            &approved.session_id,
+                            goal_max_iterations,
+                            Some(&plan_id),
+                        )
+                        .await?;
+                    runtime.drain_subagents().await?;
+                    let response = result
+                        .iterations
+                        .last()
+                        .map(|iteration| iteration.output.as_str())
+                        .unwrap_or(result.goal.summary.as_str());
+                    print_run_response(&result, response)?;
                 } else {
-                    serde_json::to_value(
-                        runtime
-                            .run_approved_plan(&role, &plan_id, max_turns)
-                            .await?,
-                    )?
-                };
-                runtime.drain_subagents().await?;
-                print_json(&result)?;
+                    let result = runtime
+                        .run_approved_plan(&role, &plan_id, max_turns)
+                        .await?;
+                    runtime.drain_subagents().await?;
+                    print_run_response(&result, &result.output)?;
+                }
                 return Ok(());
             }
             let prompt = prompt
@@ -1121,7 +1124,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .await?
             };
             runtime.drain_subagents().await?;
-            print_json(&result)?;
+            print_run_response(&result, &result.output)?;
         }
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;

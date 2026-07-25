@@ -18,6 +18,7 @@ colossus-journal-postgres.workspace = true
 colossus-memory.workspace = true
 colossus-memory-chroma.workspace = true
 colossus-mcp.workspace = true
+colossus-network.workspace = true
 colossus-packs.workspace = true
 colossus-research.workspace = true
 colossus-policy.workspace = true
@@ -50,6 +51,9 @@ url.workspace = true
 
 [dev-dependencies]
 colossus-testkit.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+colossus-windows-native.workspace = true
 
 [lints]
 workspace = true

@@ -19,7 +19,9 @@ members = [
     "crates/colossus-audit",
     "crates/colossus-sandbox",
     "crates/colossus-windows-process",
+    "crates/colossus-windows-native",
     "crates/colossus-access",
+    "crates/colossus-network",
     "crates/colossus-policy",
     "crates/colossus-provider",
     "crates/colossus-search",
@@ -138,6 +140,7 @@ colossus-journal-redb = { version = "=0.10.1-preview.2", path = "crates/colossus
 colossus-journal-postgres = { version = "=0.10.1-preview.2", path = "crates/colossus-journal-postgres" }
 colossus-memory = { version = "=0.10.1-preview.2", path = "crates/colossus-memory" }
 colossus-memory-chroma = { version = "=0.10.1-preview.2", path = "crates/colossus-memory-chroma" }
+colossus-network = { version = "=0.10.1-preview.2", path = "crates/colossus-network" }
 colossus-research = { version = "=0.10.1-preview.2", path = "crates/colossus-research" }
 colossus-telemetry = { version = "=0.10.1-preview.2", path = "crates/colossus-telemetry" }
 colossus-testkit = { version = "=0.10.1-preview.2", path = "crates/colossus-testkit" }
@@ -156,6 +159,7 @@ colossus-ports = { version = "=0.10.1-preview.2", path = "crates/colossus-ports"
 colossus-projection = { version = "=0.10.1-preview.2", path = "crates/colossus-projection" }
 colossus-sandbox = { version = "=0.10.1-preview.2", path = "crates/colossus-sandbox" }
 colossus-windows-process = { version = "=0.10.1-preview.2", path = "crates/colossus-windows-process" }
+colossus-windows-native = { version = "=0.10.1-preview.2", path = "crates/colossus-windows-native" }
 colossus-runtime = { version = "=0.10.1-preview.2", path = "crates/colossus-runtime" }
 colossus-worker = { version = "=0.10.1-preview.2", path = "crates/colossus-worker" }
 colossus-workflow = { version = "=0.10.1-preview.2", path = "crates/colossus-workflow" }

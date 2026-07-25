@@ -6,11 +6,19 @@ use colossus_policy::{
 };
 use colossus_ports::{EventJournal, PolicyDecisionPoint};
 use colossus_testkit::InMemoryEventJournal;
+use rcgen::{
+    BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+};
+use rustls::{
+    ServerConfig,
+    pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpListener,
 };
+use tokio_rustls::TlsAcceptor;
 
 struct CountingCredentialResolver {
     calls: AtomicUsize,
@@ -172,14 +180,28 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
 #[test]
 fn service_unavailable_is_recoverable_without_reclassifying_bad_requests() {
     assert!(matches!(
-        crate::executor::provider_execution_error(ProviderError::Status { status: 503 }),
-        ExecutionError::Recoverable { ref code, ref message }
+        crate::executor::provider_execution_error(ProviderError::Status {
+            status: 503,
+            retry_after_ms: Some(7_000),
+        }),
+        ExecutionError::Recoverable {
+            ref code,
+            ref message,
+            http_status: Some(503),
+            retry_after_ms: Some(7_000),
+        }
             if code == "provider.temporarily_unavailable"
                 && message.contains("retry after the endpoint reports ready")
     ));
     assert!(matches!(
-        crate::executor::provider_execution_error(ProviderError::Status { status: 400 }),
-        ExecutionError::Failed(ref message)
+        crate::executor::provider_execution_error(ProviderError::Status {
+            status: 400,
+            retry_after_ms: None,
+        }),
+        ExecutionError::HttpStatus {
+            status: 400,
+            ref message,
+        }
             if message == "provider endpoint returned HTTP 400"
     ));
 }
@@ -281,6 +303,125 @@ async fn one_response_server(body: Value) -> (String, tokio::task::JoinHandle<St
         request_text
     });
     (format!("http://{address}/v1"), task)
+}
+
+async fn one_status_server(
+    status: u16,
+    reason: &'static str,
+    retry_after: Option<&'static str>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut request = Vec::new();
+        let mut scratch = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut scratch).await.expect("read request");
+            assert_ne!(read, 0, "client closed before completing request");
+            request.extend_from_slice(&scratch[..read]);
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        let retry_after_header = retry_after
+            .map(|value| format!("retry-after: {value}\r\n"))
+            .unwrap_or_default();
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\n{retry_after_header}content-length: 0\r\nconnection: close\r\n\r\n"
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    });
+    (format!("http://{address}/v1"), task)
+}
+
+async fn one_tls_response_server(
+    body: Value,
+) -> (
+    String,
+    AdditionalRootCertificates,
+    tokio::task::JoinHandle<String>,
+) {
+    let mut ca_params = CertificateParams::new(vec!["Colossus Test CA".into()]).expect("CA params");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca = CertifiedIssuer::self_signed(ca_params, KeyPair::generate().expect("CA key"))
+        .expect("CA certificate");
+    let mut server_params =
+        CertificateParams::new(vec!["127.0.0.1".into()]).expect("server params");
+    server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    let server_key = KeyPair::generate().expect("server key");
+    let server_certificate = server_params
+        .signed_by(&server_key, &ca)
+        .expect("server certificate");
+    let roots =
+        AdditionalRootCertificates::from_pem_bundle(ca.pem().as_bytes()).expect("test CA bundle");
+    let server_config =
+        ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("TLS protocol versions")
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![server_certificate.der().clone()],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+            )
+            .expect("TLS server config");
+    let acceptor = TlsAcceptor::from(Arc::new(server_config));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut stream = acceptor.accept(stream).await.expect("TLS handshake");
+        let mut request = Vec::new();
+        let mut scratch = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut scratch).await.expect("read request");
+            assert_ne!(read, 0, "client closed before completing request");
+            request.extend_from_slice(&scratch[..read]);
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        let request_text = String::from_utf8_lossy(&request).into_owned();
+        let response_body = serde_json::to_vec(&body).expect("response JSON");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            response_body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write headers");
+        stream.write_all(&response_body).await.expect("write body");
+        request_text
+    });
+    (format!("https://{address}/v1"), roots, task)
 }
 
 async fn one_sse_server(body: String) -> (String, tokio::task::JoinHandle<String>) {
@@ -738,6 +879,92 @@ async fn allowed_provider_call_is_permit_bound_and_post_released() {
         .collect::<Vec<_>>();
     assert!(event_types.contains(&"effect.release_requested.v1".into()));
     assert!(event_types.contains(&"effect.completed.v1".into()));
+}
+
+#[tokio::test]
+async fn provider_retry_after_header_is_preserved_as_safe_recoverable_metadata() {
+    let (base_url, server) = one_status_server(503, "Service Unavailable", Some("7")).await;
+    let profile = ProviderProfile::new(
+        "temporarily-unavailable",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network provider origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [14_u8; 32],
+    );
+    let error = gateway
+        .execute(provider_request(&profile), &executor)
+        .await
+        .expect_err("503 must remain a recoverable provider failure");
+    assert!(matches!(
+        error,
+        GatewayError::RecoverableExecution {
+            ref code,
+            http_status: Some(503),
+            retry_after_ms: Some(7_000),
+            ..
+        } if code == "provider.temporarily_unavailable"
+    ));
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn provider_https_accepts_the_runtime_ca_bundle() {
+    let (base_url, tls_roots, server) = one_tls_response_server(json!({
+        "id": "response-private-ca",
+        "choices": [{"message": {"role": "assistant", "content": "trusted"}}]
+    }))
+    .await;
+    let profile = ProviderProfile::new(
+        "private-ca",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network provider origin");
+    let executor = ProviderExecutor::new(profile.clone()).with_tls_roots(tls_roots);
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [13_u8; 32],
+    );
+    let released = gateway
+        .execute(provider_request(&profile), &executor)
+        .await
+        .expect("provider call through private CA");
+    let turn: ProviderTurn = serde_json::from_slice(&released.bytes).expect("provider turn");
+    assert!(matches!(
+        turn.events.last(),
+        Some(ProviderEvent::FinalOutput { text }) if text == "trusted"
+    ));
+    let request = server.await.expect("server task");
+    assert!(request.contains("POST /v1/chat/completions HTTP/1.1"));
 }
 
 #[tokio::test]

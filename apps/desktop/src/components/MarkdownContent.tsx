@@ -184,7 +184,14 @@ const MARKDOWN_COMPONENTS: Components = {
   pre: MarkdownPre,
   table: MarkdownTable,
   input: ({ checked }) => (
-    <input type="checkbox" checked={checked} disabled tabIndex={-1} readOnly />
+    <input
+      type="checkbox"
+      checked={checked}
+      disabled
+      tabIndex={-1}
+      readOnly
+      aria-label={checked ? "Completed task" : "Incomplete task"}
+    />
   ),
 };
 

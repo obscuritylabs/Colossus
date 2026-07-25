@@ -26,6 +26,7 @@ keyring = ["dep:keyring"]
 sidecar = [
     "daemon",
     "dep:colossus-darwin-process",
+    "dep:colossus-windows-native",
     "dep:colossus-sidecar-protocol",
     "dep:nix",
     "dep:rustix",
@@ -43,11 +44,9 @@ colossus-sidecar-protocol = { workspace = true, optional = true }
 futures.workspace = true
 hex.workspace = true
 keyring = { workspace = true, optional = true }
-nix = { workspace = true, features = ["fs", "process", "signal"], optional = true }
 prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
-rustix = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 sysinfo = { workspace = true, optional = true }
@@ -62,6 +61,13 @@ zeroize.workspace = true
 colossus-darwin-process = { workspace = true, optional = true }
 security-framework.workspace = true
 tempfile = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["fs", "process", "signal"], optional = true }
+rustix = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+colossus-windows-native = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true

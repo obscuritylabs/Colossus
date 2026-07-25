@@ -710,6 +710,12 @@ fn run_from_proto(value: proto::Run) -> ApiResult<Run> {
     validate_identifier(&value.run_id)?;
     validate_identifier(&value.session_id)?;
     validate_identifier(&value.role)?;
+    let title = if value.title.trim().is_empty() {
+        value.role.clone()
+    } else {
+        validate_text(&value.title, 256)?;
+        value.title
+    };
     validate_opaque(&value.etag)?;
     if value.selected_skills.len() > MAX_COLLECTION_ITEMS || value.pending_interaction_count > 1 {
         return Err(protocol_error());
@@ -735,6 +741,7 @@ fn run_from_proto(value: proto::Run) -> ApiResult<Run> {
     Ok(Run {
         run_id: value.run_id,
         session_id: value.session_id,
+        title,
         role: value.role,
         mode: run_mode_from_proto(value.mode)?,
         status,
@@ -787,10 +794,21 @@ fn run_result_from_proto(value: proto::RunResult) -> ApiResult<RunResult> {
 fn run_failure_from_proto(value: proto::RunFailure) -> ApiResult<RunFailure> {
     validate_identifier(&value.reason)?;
     validate_text(&value.message, MAX_SUMMARY_BYTES)?;
+    let http_status = value
+        .http_status
+        .map(u16::try_from)
+        .transpose()
+        .map_err(|_| protocol_error())?;
+    if http_status.is_some_and(|status| !(100..=599).contains(&status)) {
+        return Err(protocol_error());
+    }
     Ok(RunFailure {
         reason: value.reason,
         message: value.message,
         outcome_certainty: outcome_from_proto(value.outcome_certainty)?,
+        recoverable: value.recoverable,
+        http_status,
+        retry_after_ms: value.retry_after_ms,
     })
 }
 
@@ -1555,6 +1573,7 @@ mod tests {
         CoreRun {
             id: run_id,
             session_id: "session-1".into(),
+            title: "Test run".into(),
             status: colossus_api::RunStatus::Running,
             mode: colossus_api::RunMode::Execute,
             role: "assistant".into(),
@@ -1657,6 +1676,7 @@ mod tests {
         let run = proto::Run {
             run_id: "run-1".into(),
             session_id: "session-1".into(),
+            title: "Test run".into(),
             role: "assistant".into(),
             mode: proto::RunMode::Execute as i32,
             status: proto::RunStatus::Running as i32,
@@ -1680,6 +1700,32 @@ mod tests {
         assert_eq!(
             run_from_proto(run).expect_err("mismatch").reason,
             ApiErrorReason::InternalInvariant
+        );
+    }
+
+    #[test]
+    fn proto_run_uses_role_when_an_older_server_omits_title() {
+        let run = proto::Run {
+            run_id: "run-1".into(),
+            session_id: "session-1".into(),
+            title: String::new(),
+            role: "assistant".into(),
+            mode: proto::RunMode::Execute as i32,
+            status: proto::RunStatus::Running as i32,
+            created_at: Some("2026-01-01T00:00:00Z".parse().expect("timestamp")),
+            updated_at: Some("2026-01-01T00:00:00Z".parse().expect("timestamp")),
+            started_at: None,
+            finished_at: None,
+            last_sequence: 1,
+            pending_interaction_count: 0,
+            terminal: None,
+            etag: "etag".into(),
+            selected_skills: Vec::new(),
+        };
+
+        assert_eq!(
+            run_from_proto(run).expect("older server run").title,
+            "assistant"
         );
     }
 

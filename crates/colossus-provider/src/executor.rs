@@ -36,6 +36,8 @@ pub enum ProviderError {
     Status {
         /// HTTP status code only; response bodies are never included.
         status: u16,
+        /// Bounded provider retry lower bound parsed from `Retry-After`.
+        retry_after_ms: Option<u64>,
     },
     /// Provider response failed the normalized contract.
     #[error("malformed provider output: {0}")]
@@ -157,6 +159,7 @@ impl CredentialResolver for HostCredentialResolver {
 pub struct ProviderExecutor {
     pub(super) profile: ProviderProfile,
     pub(super) credentials: Arc<dyn CredentialResolver>,
+    tls_roots: AdditionalRootCertificates,
 }
 
 impl ProviderExecutor {
@@ -173,7 +176,15 @@ impl ProviderExecutor {
         Self {
             profile,
             credentials,
+            tls_roots: AdditionalRootCertificates::default(),
         }
+    }
+
+    /// Add validated runtime-wide CA roots to this provider's built-in public roots.
+    #[must_use]
+    pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
+        self.tls_roots = tls_roots;
+        self
     }
 
     /// Profile metadata without credentials.
@@ -232,15 +243,26 @@ pub(super) fn provider_execution_error(error: ProviderError) -> ExecutionError {
         ProviderError::Transport(message) => ExecutionError::OutcomeUnknown(format!(
             "provider transport failed after execution began; outcome is unknown: {message}"
         )),
-        ProviderError::Status { status: 503 } => ExecutionError::Recoverable {
+        ProviderError::Status {
+            status: 503,
+            retry_after_ms,
+        } => ExecutionError::Recoverable {
             code: "provider.temporarily_unavailable".into(),
             message: "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
                 .into(),
+            http_status: Some(503),
+            retry_after_ms,
+        },
+        ProviderError::Status { status, .. } => ExecutionError::HttpStatus {
+            status,
+            message: format!("provider endpoint returned HTTP {status}"),
         },
         ProviderError::Malformed(message) if invalid_tool_argument_message(&message) => {
             ExecutionError::Recoverable {
                 code: "provider.invalid_tool_arguments".into(),
                 message,
+                http_status: None,
+                retry_after_ms: None,
             }
         }
         error => ExecutionError::Failed(error.to_string()),
@@ -544,7 +566,9 @@ impl ProviderExecutor {
                 || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
         let addresses = resolve_provider_addresses(host, port, allow_non_public).await?;
         let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
-        let client = Client::builder()
+        let client = self
+            .tls_roots
+            .configure_reqwest(Client::builder())
             .no_proxy()
             .redirect(RedirectPolicy::none())
             .resolve_to_addrs(host, &addresses)
@@ -579,8 +603,14 @@ impl ProviderExecutor {
         }
         let response = builder.send().await?;
         if !response.status().is_success() {
+            let retry_after_ms = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(parse_retry_after_ms);
             return Err(ProviderError::Status {
                 status: response.status().as_u16(),
+                retry_after_ms,
             });
         }
         Ok((response, secret))
@@ -666,6 +696,15 @@ impl ProviderExecutor {
         )
         .await
     }
+}
+
+fn parse_retry_after_ms(value: &str) -> Option<u64> {
+    const MAX_RETRY_AFTER_SECONDS: u64 = 24 * 60 * 60;
+
+    let seconds = value.trim().parse::<u64>().ok()?;
+    (seconds <= MAX_RETRY_AFTER_SECONDS)
+        .then(|| seconds.checked_mul(1_000))
+        .flatten()
 }
 
 fn generation_metadata(

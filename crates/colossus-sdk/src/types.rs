@@ -95,6 +95,12 @@ pub struct RunFailure {
     pub message: String,
     /// External outcome certainty.
     pub outcome_certainty: OutcomeCertainty,
+    /// Whether an explicit caller retry is known to be safe.
+    pub recoverable: bool,
+    /// Released upstream HTTP response status, when one was received.
+    pub http_status: Option<u16>,
+    /// Provider-supplied retry lower bound in milliseconds.
+    pub retry_after_ms: Option<u64>,
 }
 
 /// Durable cancellation evidence.
@@ -124,6 +130,8 @@ pub struct Run {
     pub run_id: String,
     /// Durable session identity associated with the run.
     pub session_id: String,
+    /// Bounded display title derived from the opening request.
+    pub title: String,
     /// Selected logical role.
     pub role: String,
     /// Requested execution mode.

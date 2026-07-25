@@ -5,8 +5,12 @@
   "windows": ["main"],
   "permissions": [
     "allow-desktop-release-channel",
+    "allow-desktop-release-metadata",
+    "allow-export-diagnostics",
     "allow-initialize-desktop",
     "allow-desktop-status",
+    "allow-import-ca-bundle",
+    "allow-remove-ca-bundle",
     "allow-add-external-target",
     "allow-remove-external-target",
     "allow-choose-workspace",
@@ -23,6 +27,8 @@
     "allow-watch-run",
     "allow-cancel-run",
     "allow-respond-interaction",
+    "allow-list-workspace-directory",
+    "allow-read-workspace-file",
     "allow-show-terminal-window"
   ]
 }

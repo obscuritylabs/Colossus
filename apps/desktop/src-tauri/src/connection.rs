@@ -94,6 +94,18 @@ pub(crate) fn import_target(path: &Path) -> Result<ExternalTargetSetting, Comman
     if canonical != path {
         return Err(connection_file_error());
     }
+    #[cfg(windows)]
+    let binding = colossus_windows_native::BoundPath::open_file(&canonical)
+        .map_err(|_| connection_file_error())?;
+    #[cfg(windows)]
+    binding
+        .validate_private_owner_dacl()
+        .map_err(|_| connection_file_error())?;
+    #[cfg(windows)]
+    let file = binding
+        .try_clone_file()
+        .map_err(|_| connection_file_error())?;
+    #[cfg(not(windows))]
     let file = File::open(&canonical).map_err(|_| connection_file_error())?;
     let opened_metadata = file.metadata().map_err(|_| connection_file_error())?;
     if !same_file_metadata(&metadata, &opened_metadata) {
@@ -108,6 +120,8 @@ pub(crate) fn import_target(path: &Path) -> Result<ExternalTargetSetting, Comman
     if !same_file_metadata(&opened_metadata, &final_metadata) {
         return Err(connection_file_error());
     }
+    #[cfg(windows)]
+    binding.revalidate().map_err(|_| connection_file_error())?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CONNECTION_FILE_BYTES {
         return Err(connection_file_error());
     }

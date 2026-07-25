@@ -73,6 +73,18 @@ pub enum ModelProviderError {
         code: String,
         /// Bounded safe diagnostic.
         message: String,
+        /// HTTP response status when the failure came from a provider response.
+        http_status: Option<u16>,
+        /// Bounded provider retry lower bound when supplied.
+        retry_after_ms: Option<u64>,
+    },
+    /// Provider returned a known non-success HTTP response.
+    #[error("provider turn failed: {message}")]
+    HttpStatus {
+        /// HTTP response status.
+        status: u16,
+        /// Bounded safe diagnostic without response headers or body.
+        message: String,
     },
     /// Provider failed with a known terminal outcome.
     #[error("provider turn failed: {0}")]

@@ -1,6 +1,7 @@
 import {
   IconClock,
-  IconExternalLink,
+  IconFiles,
+  IconFolderOpen,
   IconMenu2,
   IconPlayerStop,
   IconPlugConnected,
@@ -31,6 +32,7 @@ import { RunTimeline } from "./RunTimeline";
 interface WorkSurfaceProps {
   title: string;
   view: RunView | undefined;
+  conversationViews: readonly RunView[];
   connection: ConnectionStatus;
   connecting: boolean;
   cancelling: boolean;
@@ -39,6 +41,9 @@ interface WorkSurfaceProps {
   participants: readonly AgentParticipant[];
   artifacts: readonly ArtifactViewItem[];
   composer: ReactNode;
+  filesPanel: ReactNode;
+  filesAvailable: boolean;
+  artifactsAvailable: boolean;
   workNavigationOpen: boolean;
   onConnect: () => void;
   onCancel: () => void;
@@ -61,6 +66,7 @@ const STARTERS = [
 export function WorkSurface({
   title,
   view,
+  conversationViews,
   connection,
   connecting,
   cancelling,
@@ -69,6 +75,9 @@ export function WorkSurface({
   participants,
   artifacts,
   composer,
+  filesPanel,
+  filesAvailable,
+  artifactsAvailable,
   workNavigationOpen,
   onConnect,
   onCancel,
@@ -81,10 +90,15 @@ export function WorkSurface({
   const [compactLayout, setCompactLayout] = useState(
     () => window.matchMedia("(max-width: 980px)").matches,
   );
-  const [artifactDrawerOpen, setArtifactDrawerOpen] = useState(false);
-  const artifactDrawerRef = useRef<HTMLDivElement>(null);
-  const artifactCloseRef = useRef<HTMLButtonElement>(null);
+  const [activeDrawer, setActiveDrawer] = useState<
+    "files" | "artifacts" | null
+  >(null);
+  const [filesDrawerMounted, setFilesDrawerMounted] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const drawerCloseRef = useRef<HTMLButtonElement>(null);
+  const filesTriggerRef = useRef<HTMLButtonElement>(null);
   const artifactTriggerRef = useRef<HTMLButtonElement>(null);
+  const lastDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const workNavigationTriggerRef = useRef<HTMLButtonElement>(null);
   const previousWorkNavigationOpen = useRef(workNavigationOpen);
   const run = view?.run;
@@ -98,7 +112,7 @@ export function WorkSurface({
     const onChange = (event: MediaQueryListEvent) => {
       setCompactLayout(event.matches);
       if (!event.matches) {
-        setArtifactDrawerOpen(false);
+        setActiveDrawer(null);
         onCloseWorkNavigation();
       }
     };
@@ -113,12 +127,21 @@ export function WorkSurface({
     }
     previousWorkNavigationOpen.current = workNavigationOpen;
     if (workNavigationOpen) {
-      setArtifactDrawerOpen(false);
+      setActiveDrawer(null);
     }
   }, [workNavigationOpen]);
 
   useEffect(() => {
-    if (!artifactDrawerOpen) {
+    if (
+      (activeDrawer === "files" && !filesAvailable) ||
+      (activeDrawer === "artifacts" && !artifactsAvailable)
+    ) {
+      setActiveDrawer(null);
+    }
+  }, [activeDrawer, artifactsAvailable, filesAvailable]);
+
+  useEffect(() => {
+    if (activeDrawer === null || !compactLayout) {
       return;
     }
     const obscured = [
@@ -136,24 +159,27 @@ export function WorkSurface({
       element.setAttribute("inert", "");
     }
     const focusTimer = window.setTimeout(
-      () => artifactCloseRef.current?.focus(),
+      () => drawerCloseRef.current?.focus(),
       180,
     );
     function onDrawerKeyDown(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        setArtifactDrawerOpen(false);
-        requestAnimationFrame(() => artifactTriggerRef.current?.focus());
+        const trigger = lastDrawerTriggerRef.current;
+        setActiveDrawer(null);
+        requestAnimationFrame(() => trigger?.focus());
         return;
       }
       if (event.key !== "Tab") {
         return;
       }
       const focusable = Array.from(
-        artifactDrawerRef.current?.querySelectorAll<HTMLElement>(
+        drawerRef.current?.querySelectorAll<HTMLElement>(
           'button:not(:disabled):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
         ) ?? [],
-      ).filter((element) => !element.hidden);
+      ).filter(
+        (element) => !element.hidden && element.closest("[hidden]") === null,
+      );
       const first = focusable[0];
       const last = focusable.at(-1);
       if (first === undefined || last === undefined) {
@@ -177,24 +203,35 @@ export function WorkSurface({
         }
       }
     };
-  }, [artifactDrawerOpen]);
+  }, [activeDrawer, compactLayout]);
 
-  function closeArtifactDrawer() {
-    setArtifactDrawerOpen(false);
-    requestAnimationFrame(() => artifactTriggerRef.current?.focus());
+  function closeDrawer() {
+    const trigger = lastDrawerTriggerRef.current;
+    setActiveDrawer(null);
+    requestAnimationFrame(() => trigger?.focus());
   }
 
-  function openArtifacts() {
-    if (compactLayout) {
-      onCloseWorkNavigation();
-      setArtifactDrawerOpen(true);
+  function toggleDrawer(drawer: "files" | "artifacts") {
+    const trigger =
+      drawer === "files" ? filesTriggerRef.current : artifactTriggerRef.current;
+    lastDrawerTriggerRef.current = trigger;
+    if (activeDrawer === drawer) {
+      closeDrawer();
       return;
     }
-    document.getElementById("artifact-preview")?.focus();
+    onCloseWorkNavigation();
+    if (drawer === "files") {
+      setFilesDrawerMounted(true);
+    }
+    setActiveDrawer(drawer);
   }
 
   return (
-    <main className="work-surface" id="primary-workspace" tabIndex={-1}>
+    <main
+      className={`work-surface${view === undefined ? " is-new-work" : ""}`}
+      id="primary-workspace"
+      tabIndex={-1}
+    >
       <header className="surface-header work-surface-header">
         <div className="surface-title-copy">
           <p className="surface-breadcrumb">
@@ -238,22 +275,37 @@ export function WorkSurface({
             <IconPlugConnected size={15} stroke={1.8} aria-hidden="true" />
             {connection.state === "connected" ? "Agent online" : "Disconnected"}
           </span>
-          {artifacts.length > 0 ? (
+          {filesAvailable ? (
+            <button
+              ref={filesTriggerRef}
+              className="button secondary compact files-open-button"
+              type="button"
+              aria-label={`${activeDrawer === "files" ? "Close" : "Open"} files panel`}
+              aria-controls="work-side-drawer"
+              aria-expanded={activeDrawer === "files"}
+              onClick={() => toggleDrawer("files")}
+            >
+              <IconFiles size={15} stroke={1.7} aria-hidden="true" />
+              <span className="compact-action-copy">Files</span>
+            </button>
+          ) : null}
+          {artifactsAvailable ? (
             <button
               ref={artifactTriggerRef}
               className="button secondary compact artifact-open-button"
               type="button"
-              aria-label={
-                compactLayout
-                  ? "Open artifact drawer"
-                  : "Focus artifact preview"
-              }
-              aria-controls="artifact-drawer"
-              aria-expanded={compactLayout ? artifactDrawerOpen : undefined}
-              onClick={openArtifacts}
+              aria-label={`${activeDrawer === "artifacts" ? "Close" : "Open"} artifacts panel, ${artifacts.length} ${
+                artifacts.length === 1 ? "artifact" : "artifacts"
+              }`}
+              aria-controls="work-side-drawer"
+              aria-expanded={activeDrawer === "artifacts"}
+              onClick={() => toggleDrawer("artifacts")}
             >
-              <span className="compact-action-copy">Open artifact</span>
-              <IconExternalLink size={14} stroke={1.7} aria-hidden="true" />
+              <IconFolderOpen size={15} stroke={1.7} aria-hidden="true" />
+              <span className="compact-action-copy">Artifacts</span>
+              <span className="artifact-count" aria-hidden="true">
+                {artifacts.length}
+              </span>
             </button>
           ) : null}
           {run !== undefined &&
@@ -275,7 +327,9 @@ export function WorkSurface({
 
       {view !== undefined ? <AgentFlow participants={participants} /> : null}
 
-      <div className="work-layout">
+      <div
+        className={`work-layout${activeDrawer !== null ? " is-work-drawer-open" : ""}`}
+      >
         <section className="work-thread" aria-label="Work conversation">
           <div className="work-feed-scroll">
             {connection.state !== "connected" ? (
@@ -334,7 +388,14 @@ export function WorkSurface({
               </section>
             ) : (
               <>
-                <RunTimeline view={view} />
+                <div className="conversation-timeline" id="work-activity">
+                  {conversationViews.map((conversationView) => (
+                    <RunTimeline
+                      view={conversationView}
+                      key={conversationView.run.runId}
+                    />
+                  ))}
+                </div>
                 {view.streamState === "error" && view.streamError !== null ? (
                   <section className="stream-error" role="alert">
                     <div>
@@ -387,35 +448,58 @@ export function WorkSurface({
           </div>
         </section>
 
-        {artifactDrawerOpen ? (
+        {activeDrawer !== null && compactLayout ? (
           <button
             className="workspace-drawer-backdrop artifact-drawer-backdrop"
             type="button"
-            aria-label="Close artifact drawer"
+            aria-label={`Close ${activeDrawer} drawer`}
             aria-hidden="true"
             tabIndex={-1}
-            onClick={closeArtifactDrawer}
+            onClick={closeDrawer}
           />
         ) : null}
-        <div
-          ref={artifactDrawerRef}
-          className={`artifact-drawer${artifactDrawerOpen ? " is-drawer-open" : ""}`}
-          id="artifact-drawer"
-          role={artifactDrawerOpen ? "dialog" : undefined}
-          aria-modal={artifactDrawerOpen ? true : undefined}
-          aria-label={artifactDrawerOpen ? "Artifact preview" : undefined}
-        >
-          <button
-            ref={artifactCloseRef}
-            className="icon-button compact-drawer-close artifact-drawer-close"
-            type="button"
-            aria-label="Close artifact drawer"
-            onClick={closeArtifactDrawer}
+        {filesAvailable || artifactsAvailable ? (
+          <div
+            ref={drawerRef}
+            className={`artifact-drawer work-side-drawer${activeDrawer !== null ? " is-drawer-open" : ""}`}
+            id="work-side-drawer"
+            role={activeDrawer !== null && compactLayout ? "dialog" : undefined}
+            aria-modal={
+              activeDrawer !== null && compactLayout ? true : undefined
+            }
+            aria-label={
+              activeDrawer === "files"
+                ? "Workspace files"
+                : activeDrawer === "artifacts"
+                  ? "Artifact preview"
+                  : undefined
+            }
           >
-            <IconX size={19} stroke={1.8} aria-hidden="true" />
-          </button>
-          <ArtifactWorkspace artifacts={artifacts} />
-        </div>
+            <button
+              ref={drawerCloseRef}
+              className="icon-button compact-drawer-close artifact-drawer-close"
+              type="button"
+              aria-label={`Close ${activeDrawer ?? "side"} drawer`}
+              onClick={closeDrawer}
+            >
+              <IconX size={19} stroke={1.8} aria-hidden="true" />
+            </button>
+            <div
+              className="work-drawer-panel"
+              hidden={activeDrawer !== "artifacts"}
+            >
+              <ArtifactWorkspace artifacts={artifacts} />
+            </div>
+            {filesAvailable && filesDrawerMounted ? (
+              <div
+                className="work-drawer-panel"
+                hidden={activeDrawer !== "files"}
+              >
+                {filesPanel}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </main>
   );

@@ -205,9 +205,10 @@ jobs:
 
       - name: Run Windows runtime and sandbox acceptance
         if: runner.os == 'Windows'
-        run: >-
-          cargo test --locked -p colossus-cli
-          --test worker_smoke --test windows_sandbox -- --nocapture
+        run: |
+          cargo test --locked -p colossus-windows-native -- --nocapture
+          cargo test --locked -p colossus-cli \
+            --test worker_smoke --test windows_sandbox -- --nocapture
 
       - name: Build locked release binary
         run: >-
@@ -251,6 +252,8 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
+      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) }}
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || vars.DESKTOP_UPDATE_PUBLIC_KEY }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -341,9 +344,30 @@ jobs:
     env:
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || vars.DESKTOP_UPDATE_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || secrets.DESKTOP_UPDATE_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD }}
     steps:
       - name: Check out signing and verification scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node.js 22.18 for updater signing
+        if: needs.validate.outputs.release_channel != 'validation_only'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install locked updater signing tools
+        if: needs.validate.outputs.release_channel != 'validation_only'
+        working-directory: apps/desktop
+        run: npm ci --ignore-scripts
+
+      - name: Require the application update-signing key
+        if: needs.validate.outputs.release_channel != 'validation_only'
+        shell: bash
+        run: test -n "$TAURI_SIGNING_PRIVATE_KEY"
 
       - name: Download the exact unsigned application archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -370,6 +394,7 @@ jobs:
             "$repository/scripts/patch-desktop-manifest-binding.mjs"
             "$repository/scripts/verify-desktop-bundle.mjs"
             "$repository/scripts/verify-desktop-unsigned-archive.mjs"
+            "$repository/scripts/verify-tauri-updater-signature.mjs"
             "$node_path"
           )
           protected_hashes=()
@@ -501,12 +526,15 @@ jobs:
           case "$RELEASE_CHANNEL" in
             stable)
               archive="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              updater="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.app.tar.gz"
               ;;
             developer_preview)
               archive="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              updater="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.app.tar.gz"
               ;;
             validation_only)
               archive="Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              updater=
               ;;
             *)
               echo "unexpected release channel: $RELEASE_CHANNEL" >&2
@@ -517,6 +545,17 @@ jobs:
           install -d -m 0700 "$destination"
           install -m 0644 "$source" "$destination/$archive"
           (cd "$destination" && shasum -a 256 "$archive" > "$archive.sha256")
+          if [ -n "$updater" ]; then
+            updater_source="$RUNNER_TEMP/desktop-sign/Colossus Desktop.app.tar.gz"
+            test -f "$updater_source"
+            test -f "$updater_source.sig"
+            node scripts/verify-tauri-updater-signature.mjs \
+              --file "$updater_source" \
+              --signature "$updater_source.sig" \
+              --public-key "$COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY"
+            install -m 0644 "$updater_source" "$destination/$updater"
+            install -m 0644 "$updater_source.sig" "$destination/$updater.sig"
+          fi
 
       - name: Upload channel-labeled Desktop archive and checksum
         if: needs.validate.outputs.publish_draft == 'true'
@@ -547,22 +586,267 @@ jobs:
             "$RUNNER_TEMP/colossus-developer-id.p12" \
             "$RUNNER_TEMP/colossus-notary-api-key.p8"
 
+  desktop_windows_preview:
+    name: Package unsigned Windows Desktop Developer Preview
+    if: needs.validate.outputs.release_channel != 'stable'
+    needs: validate
+    runs-on: windows-2025
+    timeout-minutes: 75
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}\apps\desktop\src-tauri\target
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
+      COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      COLOSSUS_DESKTOP_TARGET: x86_64-pc-windows-msvc
+      COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED
+      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) }}
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || vars.DESKTOP_UPDATE_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || secrets.DESKTOP_UPDATE_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD }}
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+          targets: x86_64-pc-windows-msvc
+
+      - name: Enable shared compiler cache
+        id: sccache
+        continue-on-error: true
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Activate shared compiler cache
+        if: steps.sccache.outcome == 'success'
+        shell: bash
+        run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+
+      - name: Cache the Windows Desktop target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+          key: release-desktop-x86_64-pc-windows-msvc
+          cache-targets: false
+
+      - name: Install locked Desktop dependencies
+        working-directory: apps/desktop
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+
+      - name: Build sealed unsigned NSIS installer
+        shell: pwsh
+        run: ./scripts/package-desktop-windows.ps1
+
+      - name: Install, launch preview, uninstall, and verify process cleanup
+        id: smoke
+        shell: pwsh
+        env:
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc\release\bundle\nsis"
+          $installer = @(Get-ChildItem -LiteralPath $bundle -Filter "*.exe" -File)
+          if ($installer.Count -ne 1) {
+            throw "expected exactly one NSIS installer"
+          }
+          $install = Start-Process -FilePath $installer[0].FullName `
+            -ArgumentList "/S" -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "silent NSIS installation failed"
+          }
+
+          $installed = @(
+            Get-ChildItem -LiteralPath $env:LOCALAPPDATA `
+              -Filter "colossus-desktop.exe" -File -Recurse -ErrorAction SilentlyContinue
+          )
+          if ($installed.Count -ne 1) {
+            throw "installation did not produce exactly one per-user Desktop executable"
+          }
+          $installRoot = $installed[0].Directory.FullName
+          if (-not $installRoot.StartsWith($env:LOCALAPPDATA, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "installer escaped the per-user application root"
+          }
+
+          if ($env:RELEASE_CHANNEL -eq "developer_preview") {
+            $application = Start-Process -FilePath $installed[0].FullName -PassThru
+            Start-Sleep -Seconds 8
+            if ($application.HasExited) {
+              throw "Developer Preview exited during first-launch smoke testing"
+            }
+            Stop-Process -Id $application.Id -Force
+            $application.WaitForExit()
+          }
+
+          $uninstallers = @(
+            Get-ChildItem -LiteralPath $installRoot -Filter "*uninstall*.exe" `
+              -File -ErrorAction SilentlyContinue
+          )
+          if ($uninstallers.Count -ne 1) {
+            throw "installation did not expose exactly one uninstaller"
+          }
+          $uninstall = Start-Process -FilePath $uninstallers[0].FullName `
+            -ArgumentList "/S" -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) {
+            throw "silent NSIS uninstall failed"
+          }
+          Start-Sleep -Seconds 2
+          if (Test-Path -LiteralPath $installed[0].FullName) {
+            throw "Desktop executable remained after uninstall"
+          }
+          if (@(Get-Process -Name "colossus-desktop", "colossus-sidecar", "colossus" `
+                -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw "Colossus processes remained after uninstall"
+          }
+          "install_uninstall=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if ($env:RELEASE_CHANNEL -eq "developer_preview") {
+            "first_launch=passed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "first_launch=not_runnable_validation_bundle" |
+              Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Name installer, checksum, manifest, and provenance
+        shell: pwsh
+        env:
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SMOKE_FIRST_LAUNCH: ${{ steps.smoke.outputs.first_launch }}
+          SMOKE_INSTALL_UNINSTALL: ${{ steps.smoke.outputs.install_uninstall }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc\release\bundle\nsis"
+          $source = @(Get-ChildItem -LiteralPath $bundle -Filter "*.exe" -File)
+          if ($source.Count -ne 1) {
+            throw "expected exactly one verified NSIS installer"
+          }
+          $destination = Join-Path $env:RUNNER_TEMP "desktop-windows-release"
+          New-Item -ItemType Directory -Path $destination | Out-Null
+          $label = if ($env:RELEASE_CHANNEL -eq "developer_preview") {
+            "DEVELOPER-PREVIEW"
+          } else {
+            "VALIDATION-ONLY"
+          }
+          $name = "Colossus-Desktop-UNSIGNED-$label-$env:RELEASE_TAG-x86_64-pc-windows-msvc-setup.exe"
+          $installer = Join-Path $destination $name
+          Copy-Item -LiteralPath $source[0].FullName -Destination $installer
+          if ($env:RELEASE_CHANNEL -eq "developer_preview") {
+            $signatureSource = "$($source[0].FullName).sig"
+            if (-not (Test-Path -LiteralPath $signatureSource -PathType Leaf)) {
+              throw "signed Windows updater artifact is missing its signature"
+            }
+            node scripts/verify-tauri-updater-signature.mjs `
+              --file $source[0].FullName `
+              --signature $signatureSource `
+              --public-key $env:COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows updater signature does not match the embedded public key"
+            }
+            Copy-Item -LiteralPath $signatureSource -Destination "$installer.sig"
+          }
+          $digest = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  $name" | Set-Content -LiteralPath "$installer.sha256" -Encoding ascii
+
+          $manifestSource = Join-Path $env:CARGO_TARGET_DIR `
+            "x86_64-pc-windows-msvc\release\colossus-bundle-manifest.json"
+          if (-not (Test-Path -LiteralPath $manifestSource -PathType Leaf)) {
+            $manifestSource = Join-Path $env:GITHUB_WORKSPACE `
+              "apps\desktop\src-tauri\binaries\colossus-bundle-manifest.json"
+          }
+          if (-not (Test-Path -LiteralPath $manifestSource -PathType Leaf)) {
+            throw "sealed bundle manifest was not retained for provenance"
+          }
+          Copy-Item -LiteralPath $manifestSource `
+            -Destination (Join-Path $destination "Colossus-Desktop-$env:RELEASE_TAG-windows-bundle-manifest.json")
+
+          $provenance = [ordered]@{
+            schemaVersion = 1
+            sourceCommit = $env:GITHUB_SHA
+            releaseTag = $env:RELEASE_TAG
+            releaseChannel = $env:RELEASE_CHANNEL
+            platform = "windows"
+            architecture = "x86_64"
+            installer = $name
+            installerSha256 = $digest
+            codeSigning = "unsigned_developer_preview"
+            smartScreenWarningExpected = $true
+            bundleIntegrity = "sealed_manifest"
+            updateSignature = if ($env:RELEASE_CHANNEL -eq "developer_preview") {
+              "tauri_minisign"
+            } else {
+              "disabled_validation_only"
+            }
+            installUninstallSmoke = $env:SMOKE_INSTALL_UNINSTALL
+            firstLaunchSmoke = $env:SMOKE_FIRST_LAUNCH
+          }
+          $provenance | ConvertTo-Json |
+            Set-Content -LiteralPath (Join-Path $destination `
+              "Colossus-Desktop-$env:RELEASE_TAG-windows-provenance.json") -Encoding utf8
+
+      - name: Upload unsigned Windows Developer Preview
+        if: needs.validate.outputs.publish_draft == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-desktop-windows-x86_64-preview
+          path: ${{ runner.temp }}\desktop-windows-release\*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload unsigned Windows validation package
+        if: needs.validate.outputs.publish_draft != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-desktop-windows-x86_64-validation-only
+          path: ${{ runner.temp }}\desktop-windows-release\*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
   gate:
     name: Colossus release gate
     if: always()
-    needs: [validate, artifacts, desktop_macos_build, desktop_macos]
+    needs:
+      [
+        validate,
+        artifacts,
+        desktop_macos_build,
+        desktop_macos,
+        desktop_windows_preview,
+      ]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Check out gate contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require release readiness, all six CLI targets, and Desktop
-        run: >-
-          ./scripts/ci/require-success.sh
-          validate=${{ needs.validate.result }}
-          artifacts=${{ needs.artifacts.result }}
-          desktop_macos_build=${{ needs.desktop_macos_build.result }}
-          desktop_macos=${{ needs.desktop_macos.result }}
+        shell: bash
+        env:
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
+          WINDOWS_DESKTOP_RESULT: ${{ needs.desktop_windows_preview.result }}
+        run: |
+          set -euo pipefail
+          ./scripts/ci/require-success.sh \
+            validate=${{ needs.validate.result }} \
+            artifacts=${{ needs.artifacts.result }} \
+            desktop_macos_build=${{ needs.desktop_macos_build.result }} \
+            desktop_macos=${{ needs.desktop_macos.result }}
+          if [ "$RELEASE_CHANNEL" = stable ]; then
+            test "$WINDOWS_DESKTOP_RESULT" = skipped
+          else
+            ./scripts/ci/require-success.sh \
+              desktop_windows_preview="$WINDOWS_DESKTOP_RESULT"
+          fi
 
   draft-release:
     name: Create draft GitHub Release
@@ -580,6 +864,22 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Create channel-scoped signed update metadata
+        shell: bash
+        env:
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/write-desktop-update-manifest.mjs \
+            --channel "$RELEASE_CHANNEL" \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --directory dist \
+            --output "dist/$RELEASE_CHANNEL.json"
+
       - name: Verify complete release asset set
         shell: bash
         env:
@@ -587,13 +887,22 @@ jobs:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 14
           case "$RELEASE_CHANNEL" in
             stable)
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 17
               desktop="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              updater="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.app.tar.gz"
               ;;
             developer_preview)
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 22
               desktop="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
+              updater="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.app.tar.gz"
+              windows="Colossus-Desktop-UNSIGNED-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe"
+              test -f "dist/$windows"
+              test -f "dist/$windows.sha256"
+              test -f "dist/$windows.sig"
+              test -f "dist/Colossus-Desktop-${RELEASE_TAG}-windows-bundle-manifest.json"
+              test -f "dist/Colossus-Desktop-${RELEASE_TAG}-windows-provenance.json"
               ;;
             *)
               echo "refusing to publish release channel: $RELEASE_CHANNEL" >&2
@@ -602,6 +911,9 @@ jobs:
           esac
           test -f "dist/$desktop"
           test -f "dist/$desktop.sha256"
+          test -f "dist/$updater"
+          test -f "dist/$updater.sig"
+          test -f "dist/$RELEASE_CHANNEL.json"
           for checksum in dist/*.sha256; do
             (cd dist && sha256sum --check --strict "$(basename "$checksum")")
           done
@@ -668,9 +980,9 @@ jobs:
               # shellcheck disable=SC2016
               preview_notes=$(printf '%s\n' \
                 '> [!WARNING]' \
-                '> **Developer Preview (Unnotarized):** This entire release is pre-release software for testing. The macOS Desktop build is ad-hoc signed and not notarized by Apple. macOS will require an explicit user-approved Gatekeeper override. Do not treat it as a stable or production release.' \
+                '> **Developer Preview:** This entire release is pre-release software for testing. The macOS Desktop build is ad-hoc signed and not notarized by Apple. The Windows Desktop installer is unsigned and Microsoft Defender SmartScreen is expected to warn. Do not treat either Desktop build as stable or production-ready.' \
                 '' \
-                'The archive name includes `DEVELOPER-PREVIEW`.' \
+                'Desktop package names include `DEVELOPER-PREVIEW`; the Windows installer additionally includes `UNSIGNED`.' \
                 "$checksum_note" \
                 '' \
                 'For first launch, extract the archive, Control-click **Colossus Desktop**, choose **Open**, then confirm **Open**. If macOS still blocks it, use **System Settings > Privacy & Security > Open Anyway**. Do not disable Gatekeeper globally.')

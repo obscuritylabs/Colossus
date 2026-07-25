@@ -39,6 +39,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tempfile::tempdir;
@@ -555,6 +556,26 @@ workflows:
 surprise: true
 "#;
     assert!(RuntimeConfig::from_yaml(yaml).is_err());
+}
+
+#[test]
+fn runtime_wide_ca_bundle_path_round_trips_and_rejects_an_empty_path() {
+    let mut config = RuntimeConfig::offline_template("state.redb");
+    config.network.ca_bundle_path = Some(PathBuf::from(".colossus/certs/company-ca.pem"));
+    let yaml = config.to_yaml().expect("configuration YAML");
+    let parsed = RuntimeConfig::from_yaml(&yaml).expect("configuration");
+    assert_eq!(
+        parsed.network.ca_bundle_path,
+        Some(PathBuf::from(".colossus/certs/company-ca.pem"))
+    );
+
+    config.network.ca_bundle_path = Some(PathBuf::new());
+    assert!(
+        RuntimeConfig::from_yaml(&config.to_yaml().expect("configuration YAML"))
+            .expect_err("empty CA path")
+            .to_string()
+            .contains("network.caBundlePath")
+    );
 }
 
 #[test]
@@ -1730,7 +1751,16 @@ async fn agent_list_and_search_tools_return_only_workspace_relative_results() {
                 name: "filesystem.list".into(),
                 arguments: json!({"path": ".colossus"}),
             },
-            ExecutionContext::default(),
+            ExecutionContext {
+                offered_tools: vec![
+                    "tool.search".into(),
+                    "repo.map".into(),
+                    "repo.symbol_search".into(),
+                    "repo.references".into(),
+                    "repo.file_summary".into(),
+                ],
+                ..ExecutionContext::default()
+            },
         )
         .await
         .expect_err("control directory denied");
@@ -3708,7 +3738,17 @@ async fn tool_search_returns_only_ranked_active_catalog_entries() {
                 name: "tool.search".into(),
                 arguments: json!({"query": "repository", "max_results": 2}),
             },
-            ExecutionContext::default(),
+            ExecutionContext {
+                offered_tools: vec![
+                    "tool.search".into(),
+                    "repo.map".into(),
+                    "repo.symbol_search".into(),
+                    "repo.references".into(),
+                    "repo.file_summary".into(),
+                    "echo".into(),
+                ],
+                ..ExecutionContext::default()
+            },
         )
         .await
         .expect("tool search");
@@ -3722,6 +3762,39 @@ async fn tool_search_returns_only_ranked_active_catalog_entries() {
                 .is_some_and(|name| name.starts_with("repo."))
         })
     }));
+}
+
+#[tokio::test]
+async fn tool_search_never_discovers_tools_outside_the_model_visible_ceiling() {
+    let registry: Arc<dyn colossus_ports::ToolRegistry> = Arc::new(
+        colossus_tools::StaticToolRegistry::builtins(&[
+            "tool.search".into(),
+            "echo".into(),
+            "agent.delegate".into(),
+        ])
+        .expect("catalog"),
+    );
+    let executor = DiscoverableToolExecutor {
+        registry,
+        inner: Arc::new(UnusedToolExecutor),
+    };
+    let result = executor
+        .execute(
+            ToolCall {
+                call_id: "search".into(),
+                name: "tool.search".into(),
+                arguments: json!({"query": "agent", "max_results": 10}),
+            },
+            ExecutionContext {
+                offered_tools: vec!["tool.search".into(), "echo".into()],
+                ..ExecutionContext::default()
+            },
+        )
+        .await
+        .expect("tool search");
+    let output: Value = serde_json::from_str(&result.output).expect("search JSON");
+    assert_eq!(output["tools"], json!([]));
+    assert_eq!(output["truncated"], false);
 }
 
 #[tokio::test]
