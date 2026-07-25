@@ -382,6 +382,18 @@ fn hidden_entry(name: &str) -> bool {
             | ".netrc"
             | ".npmrc"
             | ".pypirc"
+            | ".authinfo"
+            | ".authinfo.gpg"
+            | ".aws"
+            | ".azure"
+            | ".docker"
+            | ".git-credentials"
+            | ".gitconfig"
+            | ".gnupg"
+            | ".kube"
+            | ".password-store"
+            | ".ssh"
+            | "gcloud"
             | "node_modules"
             | "target"
             | "dist"
@@ -393,6 +405,7 @@ fn hidden_entry(name: &str) -> bool {
             | "id_ed25519"
             | "credentials"
             | "credentials.json"
+            | "application_default_credentials.json"
     ) || lowercase == ".env"
         || lowercase.starts_with(".env.")
         || lowercase.starts_with("secrets.")
@@ -560,6 +573,48 @@ mod tests {
         assert!(read_file(&canonical, ".env").is_err());
         #[cfg(unix)]
         assert!(read_file(&canonical, "source-link.txt").is_err());
+    }
+
+    #[test]
+    fn nested_credential_stores_are_excluded_from_listing_and_preview() {
+        let root = tempdir().expect("root");
+        for directory in [".docker", ".kube", ".config/gcloud"] {
+            fs::create_dir_all(root.path().join(directory)).expect("credential directory");
+        }
+        fs::write(
+            root.path().join(".docker/config.json"),
+            "{\"auths\":{\"registry.example\":{\"auth\":\"secret\"}}}\n",
+        )
+        .expect("docker credentials");
+        fs::write(
+            root.path().join(".kube/config"),
+            "users:\n- token: secret\n",
+        )
+        .expect("kube credentials");
+        fs::write(
+            root.path()
+                .join(".config/gcloud/application_default_credentials.json"),
+            "{\"client_secret\":\"secret\"}\n",
+        )
+        .expect("gcloud credentials");
+
+        let canonical = fs::canonicalize(root.path()).expect("canonical root");
+        let listed = list_directory(&canonical, "").expect("root listing");
+        assert!(
+            listed
+                .entries
+                .iter()
+                .all(|entry| !matches!(entry.name.as_str(), ".docker" | ".kube"))
+        );
+        let config = list_directory(&canonical, ".config").expect("config listing");
+        assert!(config.entries.iter().all(|entry| entry.name != "gcloud"));
+        for protected in [
+            ".docker/config.json",
+            ".kube/config",
+            ".config/gcloud/application_default_credentials.json",
+        ] {
+            assert!(read_file(&canonical, protected).is_err(), "{protected}");
+        }
     }
 
     #[cfg(target_os = "macos")]

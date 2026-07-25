@@ -1304,20 +1304,20 @@ fn released_provider_failure(error: &ModelProviderError) -> RunFailure {
     match error {
         ModelProviderError::Recoverable {
             code,
-            message,
             http_status,
             retry_after_ms,
+            ..
         } => RunFailure {
             code: code.clone(),
-            message: message.clone(),
+            message: released_recoverable_provider_message(code, *http_status).into(),
             outcome: OutcomeCertainty::Known,
             recoverable: true,
             http_status: *http_status,
             retry_after_ms: *retry_after_ms,
         },
-        ModelProviderError::HttpStatus { status, message } => RunFailure {
+        ModelProviderError::HttpStatus { status, .. } => RunFailure {
             code: "provider.http_status".into(),
-            message: message.clone(),
+            message: format!("provider endpoint returned HTTP {status}"),
             outcome: OutcomeCertainty::Known,
             recoverable: false,
             http_status: Some(*status),
@@ -1338,6 +1338,17 @@ fn released_provider_failure(error: &ModelProviderError) -> RunFailure {
             "provider transport failed after execution began; the outcome is unknown",
             OutcomeCertainty::Unknown,
         ),
+    }
+}
+
+fn released_recoverable_provider_message(code: &str, http_status: Option<u16>) -> &'static str {
+    match code {
+        "provider.temporarily_unavailable" => {
+            "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
+        }
+        "provider.invalid_tool_arguments" => "the provider returned invalid tool arguments",
+        _ if http_status.is_some() => "the provider returned a recoverable HTTP response",
+        _ => "the provider request failed with a recoverable error",
     }
 }
 
@@ -1505,11 +1516,50 @@ mod tests {
             }),
         ));
         assert_eq!(update.code, "provider.temporarily_unavailable");
-        assert_eq!(update.message, "provider endpoint returned HTTP 503");
+        assert_eq!(
+            update.message,
+            "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
+        );
         assert_eq!(update.outcome, OutcomeCertainty::Known);
         assert!(update.recoverable);
         assert_eq!(update.http_status, Some(503));
         assert_eq!(update.retry_after_ms, Some(7_000));
+    }
+
+    #[test]
+    fn recoverable_provider_failures_do_not_release_provider_controlled_text() {
+        let private = "call_id=hidden-prompt tool=/private/provider/socket";
+        let update = released_runtime_failure(&RuntimeError::Agent(
+            colossus_agent::AgentError::Provider(ModelProviderError::Recoverable {
+                code: "provider.invalid_tool_arguments".into(),
+                message: private.into(),
+                http_status: None,
+                retry_after_ms: None,
+            }),
+        ));
+        assert_eq!(update.code, "provider.invalid_tool_arguments");
+        assert_eq!(
+            update.message,
+            "the provider returned invalid tool arguments"
+        );
+        assert!(!update.message.contains(private));
+        assert!(!update.message.contains("hidden-prompt"));
+        assert!(!update.message.contains("/private/provider/socket"));
+    }
+
+    #[test]
+    fn provider_http_failures_release_only_the_numeric_status() {
+        let private = "HTTP 418 body=password=must-not-leak";
+        let update = released_runtime_failure(&RuntimeError::Agent(
+            colossus_agent::AgentError::Provider(ModelProviderError::HttpStatus {
+                status: 418,
+                message: private.into(),
+            }),
+        ));
+        assert_eq!(update.code, "provider.http_status");
+        assert_eq!(update.message, "provider endpoint returned HTTP 418");
+        assert_eq!(update.http_status, Some(418));
+        assert!(!update.message.contains("password"));
     }
 
     #[test]

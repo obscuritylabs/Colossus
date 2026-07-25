@@ -252,8 +252,8 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
-      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) }}
-      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || vars.DESKTOP_UPDATE_PUBLIC_KEY }}
+      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel != 'validation_only' && format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) || '' }}
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -344,9 +344,9 @@ jobs:
     env:
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
-      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || vars.DESKTOP_UPDATE_PUBLIC_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || secrets.DESKTOP_UPDATE_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD }}
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && secrets.DESKTOP_UPDATE_PRIVATE_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel != 'validation_only' && secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD || '' }}
     steps:
       - name: Check out signing and verification scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -599,10 +599,10 @@ jobs:
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       COLOSSUS_DESKTOP_TARGET: x86_64-pc-windows-msvc
       COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED
-      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) }}
-      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || vars.DESKTOP_UPDATE_PUBLIC_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || secrets.DESKTOP_UPDATE_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel == 'validation_only' && '' || secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD }}
+      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel != 'validation_only' && format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) || '' }}
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && secrets.DESKTOP_UPDATE_PRIVATE_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel != 'validation_only' && secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD || '' }}
       SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out repository
