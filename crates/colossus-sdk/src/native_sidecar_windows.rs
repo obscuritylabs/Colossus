@@ -17,6 +17,7 @@ use std::{
     fmt,
     fs::File,
     io::{Read as _, Seek as _, SeekFrom},
+    os::windows::io::BorrowedHandle,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -229,14 +230,23 @@ async fn launch(
     colossus_windows_native::configure_suspended_process(command.as_std_mut());
     let mut child = command.spawn().map_err(|_| SdkError::SidecarFailed)?;
     let process_id = child.id().ok_or(SdkError::SidecarFailed)?;
-    let job =
-        match KillOnCloseJob::assign_verify_and_resume(&child, process_id, executable.identity) {
+    let job = {
+        let raw_process_handle = child.raw_handle().ok_or(SdkError::SidecarFailed)?;
+        // SAFETY: Tokio owns this process handle for at least as long as `child`.
+        // The borrowed view is used synchronously here and cannot outlive `child`.
+        let process_handle = unsafe { BorrowedHandle::borrow_raw(raw_process_handle) };
+        match KillOnCloseJob::assign_verify_and_resume(
+            &process_handle,
+            process_id,
+            executable.identity,
+        ) {
             Ok(job) => job,
             Err(_) => {
                 let _ = child.start_kill();
                 return Err(SdkError::IdentityMismatch);
             }
-        };
+        }
+    };
     timeout(BOOTSTRAP_TIMEOUT, pipe.connect())
         .await
         .map_err(|_| SdkError::SidecarFailed)?

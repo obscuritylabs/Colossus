@@ -190,12 +190,9 @@ fn stage_bundle_manifest() {
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("Cargo must provide CARGO_MANIFEST_DIR"),
     );
-    let extension =
-        if env::var_os("CARGO_CFG_TARGET_OS").as_deref() == Some(std::ffi::OsStr::new("windows")) {
-            ".exe"
-        } else {
-            ""
-        };
+    let windows_target =
+        env::var_os("CARGO_CFG_TARGET_OS").as_deref() == Some(std::ffi::OsStr::new("windows"));
+    let extension = if windows_target { ".exe" } else { "" };
     let staged_directory = manifest_dir.join("binaries");
     let sidecar_source = staged_directory.join(format!("{SIDECAR_FILE_STEM}-{target}{extension}"));
     let cli_source = staged_directory.join(format!("{CLI_FILE_STEM}-{target}{extension}"));
@@ -231,6 +228,15 @@ fn stage_bundle_manifest() {
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"))
         .join("bundle-manifest.json");
     fs::write(&output, encoded).expect("failed to stage the desktop bundle manifest");
+    if windows_target {
+        stage_unsealed_windows_resource(
+            &staged_directory,
+            &target,
+            &release_channel,
+            format!("{SIDECAR_FILE_STEM}{extension}"),
+            format!("{CLI_FILE_STEM}{extension}"),
+        );
+    }
 
     println!("cargo:rerun-if-changed={}", sidecar_source.display());
     println!("cargo:rerun-if-changed={}", cli_source.display());
@@ -239,6 +245,32 @@ fn stage_bundle_manifest() {
         "cargo:rustc-env=COLOSSUS_DESKTOP_BUNDLE_MANIFEST={}",
         output.display()
     );
+}
+
+fn stage_unsealed_windows_resource(
+    staged_directory: &Path,
+    target: &str,
+    release_channel: &str,
+    sidecar_name: String,
+    cli_name: String,
+) {
+    // Tauri validates configured resources while compiling, before the Windows
+    // packaging script creates and binds the sealed release manifest. Keep this
+    // compile-time resource explicitly unusable and free of development paths.
+    // `package-desktop-windows.ps1` replaces it with the strict manifest only
+    // after the release executable has been built.
+    let manifest = BundleManifest {
+        schema_version: 2,
+        target_triple: target,
+        profile: "unsealed_release",
+        release_channel,
+        sidecar: unusable_release_entry(sidecar_name),
+        cli: unusable_release_entry(cli_name),
+    };
+    let encoded =
+        serde_json::to_vec(&manifest).expect("failed to encode unsealed Windows resource");
+    let output = staged_directory.join("colossus-bundle-manifest.json");
+    fs::write(output, encoded).expect("failed to stage unsealed Windows bundle resource");
 }
 
 fn debug_entry(source: &Path, file_name: String) -> BundledExecutable {
