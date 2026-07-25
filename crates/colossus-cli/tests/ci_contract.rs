@@ -195,6 +195,11 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         Some("windows-2025")
     );
     assert_eq!(
+        field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
+        Some(75),
+        "Windows acceptance must allow the native and Desktop checks to finish"
+    );
+    assert_eq!(
         field(job(jobs, "gate"), "name").as_str(),
         Some("Colossus pre-merge gate")
     );

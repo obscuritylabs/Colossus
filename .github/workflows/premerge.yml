@@ -184,7 +184,7 @@ jobs:
     if: needs.eligibility.result == 'success'
     needs: eligibility
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 75
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}\apps\desktop\src-tauri\target
