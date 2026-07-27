@@ -166,6 +166,14 @@ and generation transport independently of `sandbox.timeoutMs`. The adapter still
 enforces the exact selected connection's timeout. OPA deployments may return a stricter
 timeout obligation.
 
+For both network provider kinds, canonical Colossus tool names remain dotted in access
+configuration, policy, audit evidence, and tool dispatch. At the provider boundary,
+each `.` is projected to `_` so function names satisfy the portable 64-byte
+`[A-Za-z0-9_-]` contract used by OpenAI-compatible APIs. Provider-returned aliases are
+restored to their canonical names before runtime handling. A name that cannot be
+represented by that contract, or two canonical names that would produce the same
+alias, rejects the request locally rather than risking ambiguous tool authority.
+
 For `open_ai_compatible` profiles, provider-facing tool schemas omit `maxLength`
 annotations to interoperate with Chat Completions servers that compile tool definitions
 into bounded grammars. The canonical Colossus tool schema remains unchanged and is

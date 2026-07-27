@@ -340,3 +340,7 @@ pub(super) fn now_ms() -> i128 {
 pub(super) fn bounded_error(message: &str) -> String {
     message.chars().take(4_096).collect()
 }
+
+pub(super) fn bounded_diagnostic_error(message: &str) -> String {
+    message.chars().take(72 * 1024).collect()
+}

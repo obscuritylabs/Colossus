@@ -505,6 +505,7 @@ where
             session_id,
             explicit_skills,
             sticky_skills,
+            include_provider_response_diagnostics,
         } => {
             let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
             let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(16);
@@ -517,20 +518,37 @@ where
             };
             let control = RunControl::default();
             let mut observer = ChannelWorkerObserver { sender: event_tx };
-            let run = ACTIVE_INTERACTIVE_RUN.scope(
-                bridge.clone(),
-                runtime.run_model_with_skills_stream_controlled(
-                    &role,
-                    &instructions,
-                    &prompt,
-                    max_turns,
-                    Some(&session_id),
-                    &explicit_skills,
-                    &sticky_skills,
-                    &mut observer,
-                    &control,
-                ),
-            );
+            let run = ACTIVE_INTERACTIVE_RUN.scope(bridge.clone(), async {
+                if include_provider_response_diagnostics {
+                    runtime
+                        .run_model_with_skills_stream_controlled_with_provider_diagnostics(
+                            &role,
+                            &instructions,
+                            &prompt,
+                            max_turns,
+                            Some(&session_id),
+                            &explicit_skills,
+                            &sticky_skills,
+                            &mut observer,
+                            &control,
+                        )
+                        .await
+                } else {
+                    runtime
+                        .run_model_with_skills_stream_controlled(
+                            &role,
+                            &instructions,
+                            &prompt,
+                            max_turns,
+                            Some(&session_id),
+                            &explicit_skills,
+                            &sticky_skills,
+                            &mut observer,
+                            &control,
+                        )
+                        .await
+                }
+            });
             tokio::pin!(run);
             let (mut reader, mut writer) = tokio::io::split(stream);
             let (client_tx, mut client_rx) = tokio::sync::mpsc::channel(16);
@@ -567,9 +585,16 @@ where
                             Ok(outcome) => WorkerFrameContent::Complete {
                                 result: serde_json::to_value(outcome)?,
                             },
-                            Err(error) => WorkerFrameContent::Error {
-                                message: bounded_error(&error.to_string()),
-                            },
+                            Err(error) => {
+                                let message = match error.provider_response_diagnostic() {
+                                    Some(diagnostic) => bounded_diagnostic_error(&format!(
+                                        "{error}\n\n{}",
+                                        format_provider_response_diagnostic(diagnostic)
+                                    )),
+                                    None => bounded_error(&error.to_string()),
+                                };
+                                WorkerFrameContent::Error { message }
+                            }
                         };
                         write_signed_frame(&mut writer, key, &request_id, sequence, content).await?;
                         reader_task.abort();

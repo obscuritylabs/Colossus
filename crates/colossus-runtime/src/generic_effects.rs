@@ -148,6 +148,12 @@ fn workflow_agent_execution_error(error: AgentError) -> ExecutionError {
         AgentError::Provider(ModelProviderError::HttpStatus { status, message }) => {
             ExecutionError::HttpStatus { status, message }
         }
+        AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic }) => {
+            ExecutionError::HttpStatus {
+                status: diagnostic.status,
+                message: format!("provider endpoint returned HTTP {}", diagnostic.status),
+            }
+        }
         AgentError::Provider(ModelProviderError::OutcomeUnknown(message)) => {
             ExecutionError::OutcomeUnknown(message)
         }

@@ -68,6 +68,8 @@ pub struct InteractiveRunRequest {
     pub explicit_skills: Vec<String>,
     /// Sticky skills active in the terminal.
     pub sticky_skills: Vec<String>,
+    /// Include explicitly released provider response evidence on a failed turn.
+    pub include_provider_response_diagnostics: bool,
 }
 
 /// One parsed terminal command whose behavior belongs to the application host.
@@ -95,6 +97,8 @@ pub enum LocalCommand {
     SavePreferences,
     /// Restore and persist default terminal preferences.
     ResetPreferences,
+    /// Enable or disable in-run provider response diagnostics for this TUI process.
+    ProviderDiagnostics(bool),
 }
 
 /// Result of parsing a submitted interactive line.
@@ -122,6 +126,12 @@ pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
         "/tui" | "/tui prefs" => InteractiveCommand::Local(LocalCommand::Preferences),
         "/tui save" => InteractiveCommand::Local(LocalCommand::SavePreferences),
         "/tui reset" => InteractiveCommand::Local(LocalCommand::ResetPreferences),
+        "/provider diagnostics on" => {
+            InteractiveCommand::Local(LocalCommand::ProviderDiagnostics(true))
+        }
+        "/provider diagnostics off" => {
+            InteractiveCommand::Local(LocalCommand::ProviderDiagnostics(false))
+        }
         command if command.starts_with('/') => {
             let command = command.trim_start_matches('/');
             let (name, arguments) = command.split_once(' ').unwrap_or((command, ""));

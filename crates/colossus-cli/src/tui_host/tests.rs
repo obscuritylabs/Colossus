@@ -1,5 +1,13 @@
 use super::*;
 
+#[test]
+fn provider_doctor_commands_accept_at_most_one_optional_profile() {
+    assert_eq!(doctor_profile("doctor", "models"), Ok(None));
+    assert_eq!(doctor_profile("doctor local", "models"), Ok(Some("local")));
+    assert!(doctor_profile("doctor local extra", "models").is_err());
+    assert!(doctor_profile("status", "provider").is_err());
+}
+
 fn session(
     id: &str,
     message_count: u64,

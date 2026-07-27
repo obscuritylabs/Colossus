@@ -407,6 +407,28 @@ impl WorkerInteractiveHost {
                 )
                 .await
             }
+            "models" => {
+                let profile = doctor_profile(arguments, "models")?;
+                self.document(
+                    WorkerOperation::ModelDoctor {
+                        profile: profile.map(str::to_owned),
+                        include_provider_response: true,
+                    },
+                    Some("Model diagnostics"),
+                )
+                .await
+            }
+            "provider" => {
+                let profile = doctor_profile(arguments, "provider")?;
+                self.document(
+                    WorkerOperation::ProviderDoctor {
+                        profile: profile.map(str::to_owned),
+                        include_provider_response: true,
+                    },
+                    Some("Provider diagnostics"),
+                )
+                .await
+            }
             "tools" => {
                 self.document(WorkerOperation::ToolsList, Some("Tools"))
                     .await
@@ -887,6 +909,8 @@ impl InteractiveHost for WorkerInteractiveHost {
                     session_id: request.session_id.clone(),
                     explicit_skills: request.explicit_skills,
                     sticky_skills: request.sticky_skills,
+                    include_provider_response_diagnostics: request
+                        .include_provider_response_diagnostics,
                 },
                 &mut observer,
                 &prompts,

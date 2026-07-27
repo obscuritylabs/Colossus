@@ -113,9 +113,9 @@ positional:
 | `workflow schedule` | `create SCHEDULE_ID NAME VERSION`, `list`, `show SCHEDULE_ID`, `enable SCHEDULE_ID`, `disable SCHEDULE_ID`, `tick` |
 | `workflow webhook` | `create WEBHOOK_ID NAME VERSION`, `list`, `show WEBHOOK_ID`, `enable WEBHOOK_ID`, `disable WEBHOOK_ID`, `ingest WEBHOOK_ID`, `serve` |
 | `workflow subscription` | `create SUBSCRIPTION_ID NAME VERSION`, `list`, `show SUBSCRIPTION_ID`, `enable SUBSCRIPTION_ID`, `disable SUBSCRIPTION_ID`, `tick` |
-| `provider` | `profiles`, `doctor [PROFILE]`, `models [PROFILE]` |
+| `provider` | `profiles`, `doctor [PROFILE] [--include-provider-response]`, `models [PROFILE]` |
 | `search` | `profiles`, `query QUERY` |
-| `models` | `routes`, `route [ROLE]` |
+| `models` | `profiles`, `doctor [PROFILE] [--include-provider-response]`, `routes`, `route [ROLE]` |
 | `artifacts` | `upload PATH`, `show ARTIFACT_ID`, `download ARTIFACT_ID OUTPUT` |
 | `tools` | `list` |
 | `sessions` | `list`, `show SESSION_ID`, `messages SESSION_ID`, `new [TITLE]` |
@@ -268,6 +268,14 @@ Optional values are JSON `null`; enums and tagged states use documented lowercas
 snake-case strings. `config show` is the deliberate exception: it emits strict YAML so
 references can be reviewed intact. `audit export` emits one redacted JSON object per
 line. Do not parse human or TUI rendering.
+
+Provider and model Doctor commands remain status-only by default. With
+`--include-provider-response`, a non-success check may add `provider_response` containing
+the exact credential-free request URL and JSON body plus at most 16 KiB of response body,
+the response status and content type, encoding information, and a truncation marker. The
+configured provider credential is replaced with `[REDACTED]`. This explicit diagnostic
+output crosses post-effect policy but is not attached to ordinary runs, TUI events, or
+durable audit payloads.
 
 ## Common routes
 

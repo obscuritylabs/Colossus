@@ -182,6 +182,61 @@ impl Runtime {
         .await
     }
 
+    /// Execute a trusted local run that captures bounded non-success provider evidence.
+    ///
+    /// The returned typed error is the only carrier for the diagnostic; journaled run events
+    /// and ordinary error text remain body-free.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_model_with_skills_stream_controlled_with_provider_diagnostics(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: Option<u16>,
+        session_id: Option<&str>,
+        explicit_skills: &[String],
+        sticky_skills: &[String],
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, RuntimeError> {
+        let composition = self.skill_composer.compose(
+            instructions,
+            prompt,
+            explicit_skills,
+            sticky_skills,
+            self.skills_enabled,
+            &self.tools.list_specs(),
+        )?;
+        let active = composition
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<Vec<_>>();
+
+        let run = self
+            .agent
+            .run_in_session_with_skills_stream_controlled_with_provider_diagnostics(
+                role,
+                &composition.instructions,
+                prompt,
+                max_turns.unwrap_or(self.agent_max_turns),
+                session_id,
+                &active,
+                observer,
+                control,
+            );
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.subagent_notify.notified() => {
+                    self.drain_subagents().await?;
+                }
+                result = &mut run => return result.map_err(Into::into),
+            }
+        }
+    }
+
     /// Execute a normal run for one immutable authenticated caller.
     ///
     /// Public transports must derive `initiator` from authenticated caller context and

@@ -49,16 +49,24 @@ pub(super) async fn dispatch(
         WorkerOperation::StateDoctor => Ok(runtime.state_doctor()?),
         WorkerOperation::SandboxDoctor => Ok(serde_json::to_value(runtime.sandbox_doctor())?),
         WorkerOperation::ProviderProfiles => Ok(serde_json::to_value(runtime.provider_profiles())?),
-        WorkerOperation::ProviderDoctor { profile } => Ok(serde_json::to_value(
-            runtime.provider_doctor(profile.as_deref()).await?,
+        WorkerOperation::ProviderDoctor {
+            profile,
+            include_provider_response,
+        } => Ok(serde_json::to_value(
+            runtime
+                .provider_doctor_with_diagnostics(profile.as_deref(), include_provider_response)
+                .await?,
         )?),
         WorkerOperation::ProviderModels { profile } => Ok(serde_json::to_value(
             runtime.provider_models(profile.as_deref()).await?,
         )?),
         WorkerOperation::ModelProfiles => Ok(serde_json::to_value(runtime.model_profiles())?),
-        WorkerOperation::ModelDoctor { profile } => {
-            Ok(runtime.model_doctor(profile.as_deref()).await?)
-        }
+        WorkerOperation::ModelDoctor {
+            profile,
+            include_provider_response,
+        } => Ok(runtime
+            .model_doctor_with_diagnostics(profile.as_deref(), include_provider_response)
+            .await?),
         WorkerOperation::ProviderRoutes => Ok(runtime.provider_routes()),
         WorkerOperation::ProviderRoute { role } => {
             Ok(serde_json::to_value(runtime.provider_route(&role)?)?)

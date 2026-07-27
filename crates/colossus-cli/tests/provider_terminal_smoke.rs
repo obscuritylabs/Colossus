@@ -733,19 +733,161 @@ fn provider_doctor_does_not_treat_a_public_catalog_as_credential_readiness() {
             .is_some_and(|detail| detail.contains("HTTP 401")),
         "{model_readiness}"
     );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("invalid credential"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("terminal-secret"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("terminal-secret"));
 
     let requests = server.join().expect("doctor server");
     assert!(requests[0].starts_with("GET /v1/models "));
     assert!(requests[1].starts_with("POST /v1/chat/completions "));
-    assert!(requests[1].contains(r#""name":"colossus.readiness""#));
+    assert!(requests[1].contains(r#""name":"colossus_readiness""#));
     assert!(!requests[1].contains(r#""maxLength""#));
     assert!(
         requests
             .iter()
             .all(|request| request.contains("authorization: Bearer terminal-secret"))
     );
+}
+
+#[test]
+fn model_doctor_can_release_bounded_redacted_provider_response_diagnostics() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let response = format!(
+        "tool schema rejected terminal-secret\n{}",
+        "x".repeat(20 * 1024)
+    );
+    let response = Box::leak(response.into_boxed_str());
+    let (origin, server) = doctor_server("400 Bad Request", response);
+    let config = write_doctor_config(directory.path(), &origin);
+
+    let worker = command(binary, &config)
+        .arg("worker")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start worker");
+    let mut worker = ChildGuard(worker);
+    wait_for_worker(binary, &config);
+
+    let catalog = run(binary, &config, &["provider", "doctor", "live"]);
+    assert!(
+        catalog.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&catalog.stdout),
+        String::from_utf8_lossy(&catalog.stderr)
+    );
+
+    let output = run(
+        binary,
+        &config,
+        &["models", "doctor", "live", "--include-provider-response"],
+    );
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let readiness: Value = serde_json::from_slice(&output.stdout).expect("model readiness JSON");
+    let diagnostic = &readiness["checks"][1]["provider_response"];
+    assert_eq!(readiness["ready"], false);
+    assert_eq!(diagnostic["request_method"], "POST");
+    assert_eq!(
+        diagnostic["request_url"],
+        format!("{origin}/v1/chat/completions")
+    );
+    assert_eq!(
+        diagnostic["request_body"]["tools"][0]["function"]["name"],
+        "colossus_readiness"
+    );
+    assert_eq!(diagnostic["status"], 400);
+    assert_eq!(diagnostic["content_type"], "application/json");
+    assert_eq!(diagnostic["body_encoding"], "utf8");
+    assert_eq!(diagnostic["body_truncated"], true);
+    let body = diagnostic["body"].as_str().expect("diagnostic body");
+    assert!(body.starts_with("tool schema rejected [REDACTED]"));
+    assert!(body.len() <= 16 * 1024);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("terminal-secret"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("terminal-secret"));
+
+    let requests = server.join().expect("doctor server");
+    assert!(requests[0].starts_with("GET /v1/models "));
+    assert!(requests[1].starts_with("POST /v1/chat/completions "));
+    assert!(
+        run(binary, &config, &["worker", "--shutdown"])
+            .status
+            .success()
+    );
+    wait_for_exit(&mut worker.0);
+}
+
+#[test]
+fn tui_model_doctor_releases_bounded_redacted_provider_response_diagnostics() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let (origin, server) = doctor_server("400 Bad Request", "tool schema rejected terminal-secret");
+    let config = write_doctor_config(directory.path(), &origin);
+
+    let worker = command(binary, &config)
+        .arg("worker")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start worker");
+    let mut worker = ChildGuard(worker);
+    wait_for_worker(binary, &config);
+
+    let catalog = run(binary, &config, &["provider", "doctor", "live"]);
+    assert!(
+        catalog.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&catalog.stdout),
+        String::from_utf8_lossy(&catalog.stderr)
+    );
+
+    let mut terminal = command(binary, &config);
+    terminal
+        .args(["--output", "json", "tui"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut terminal = terminal.spawn().expect("spawn terminal line runner");
+    terminal
+        .stdin
+        .take()
+        .expect("terminal stdin")
+        .write_all(b"/models doctor live\n/exit\n")
+        .expect("write terminal script");
+    let terminal = terminal.wait_with_output().expect("terminal output");
+    assert!(
+        terminal.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&terminal.stdout),
+        String::from_utf8_lossy(&terminal.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&terminal.stdout);
+    let stderr = String::from_utf8_lossy(&terminal.stderr);
+    assert!(
+        stdout.contains("tool schema rejected [REDACTED]"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("/v1/chat/completions"), "{stdout}");
+    assert!(stdout.contains("\"status\": 400"), "{stdout}");
+    assert!(!stdout.contains("terminal-secret"), "{stdout}");
+    assert!(!stderr.contains("terminal-secret"), "{stderr}");
+    assert!(!stdout.contains("\x1b["), "{stdout}");
+
+    let requests = server.join().expect("doctor server");
+    assert!(requests[0].starts_with("GET /v1/models "));
+    assert!(requests[1].starts_with("POST /v1/chat/completions "));
+    assert!(requests[1].contains(r#""name":"colossus_readiness""#));
+    assert!(
+        run(binary, &config, &["worker", "--shutdown"])
+            .status
+            .success()
+    );
+    wait_for_exit(&mut worker.0);
 }
 
 #[test]
@@ -798,7 +940,7 @@ fn provider_doctor_reports_ready_through_worker_after_catalog_and_generation_suc
     let requests = server.join().expect("doctor server");
     assert!(requests[0].starts_with("GET /v1/models "));
     assert!(requests[1].starts_with("POST /v1/chat/completions "));
-    assert!(requests[1].contains(r#""name":"colossus.readiness""#));
+    assert!(requests[1].contains(r#""name":"colossus_readiness""#));
     assert!(!requests[1].contains(r#""maxLength""#));
     assert!(
         run(binary, &config, &["worker", "--shutdown"])

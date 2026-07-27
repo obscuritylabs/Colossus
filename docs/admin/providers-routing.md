@@ -100,6 +100,12 @@ string bounds before generation. Colossus retains the canonical schema and enfor
 original bound before a tool can execute; this projection changes provider guidance, not
 runtime authority or validation.
 
+Colossus also projects canonical dotted tool names to portable provider function names:
+for example, `filesystem.write` is sent as `filesystem_write`. Continuation history uses
+the same alias, and a returned alias is restored to `filesystem.write` before policy,
+audit, or dispatch sees it. Configure access and policy with canonical dotted names.
+Unrepresentable names and alias collisions fail locally before a request is sent.
+
 For `risk_evaluator`, Colossus expects the same strict three-field JSON assessment from
 every provider. Local compatible models that wrap that single object in one whole-output
 `json` code fence are accepted as a narrow transport compatibility case. Surrounding

@@ -1,7 +1,8 @@
 use super::*;
 use async_trait::async_trait;
 use colossus_contracts::{
-    ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext, ProviderRoute, ProviderTurn,
+    ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext, ProviderResponseDiagnostic,
+    ProviderRoute, ProviderTurn,
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
@@ -91,6 +92,10 @@ struct EchoTools;
 
 struct PartialFailureProvider;
 
+struct MidRunDiagnosticProvider {
+    calls: AtomicUsize,
+}
+
 struct TextOnlyProvider {
     inner: ScriptedProvider,
 }
@@ -145,6 +150,73 @@ impl ModelProvider for PartialFailureProvider {
         Err(ModelProviderError::OutcomeUnknown(
             "stream interrupted".into(),
         ))
+    }
+}
+
+#[async_trait]
+impl ModelProvider for MidRunDiagnosticProvider {
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+        Ok(test_route(role, "mid-run-diagnostic"))
+    }
+
+    async fn turn(
+        &self,
+        _role: &str,
+        _request: ModelRequest,
+        _context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        Err(ModelProviderError::Failed(
+            "diagnostic test requires turn options".into(),
+        ))
+    }
+
+    async fn turn_stream_with_options(
+        &self,
+        _role: &str,
+        request: ModelRequest,
+        _context: ExecutionContext,
+        options: ProviderTurnOptions,
+        observer: &mut dyn ProviderEventObserver,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        assert!(options.include_response_diagnostics);
+        match self.calls.fetch_add(1, Ordering::AcqRel) {
+            0 => {
+                let event = ProviderEvent::ToolCallRequested {
+                    call_id: "call-1".into(),
+                    name: "echo".into(),
+                    arguments: json!({"text": "tool result"}),
+                };
+                observer.observe(event.clone()).await?;
+                turn(vec![event])
+            }
+            1 => {
+                assert!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|message| message.role == ModelMessageRole::Tool),
+                    "diagnostic failure must happen on the post-tool continuation"
+                );
+                Err(ModelProviderError::ResponseDiagnostic {
+                    diagnostic: Box::new(ProviderResponseDiagnostic {
+                        request_method: "POST".into(),
+                        request_url: "http://127.0.0.1:9000/v1/chat/completions".into(),
+                        request_body: Some(json!({
+                            "tools": [{
+                                "type": "function",
+                                "function": {"name": "tool.with.dots"}
+                            }]
+                        })),
+                        status: 400,
+                        content_type: Some("application/json".into()),
+                        body: r#"{"error":"mid-run-private-diagnostic"}"#.into(),
+                        body_encoding: "utf8".into(),
+                        body_truncated: false,
+                    }),
+                })
+            }
+            _ => panic!("unexpected provider turn"),
+        }
     }
 }
 
@@ -1199,4 +1271,57 @@ async fn released_partial_stream_is_durable_before_unknown_outcome() {
         "partial"
     );
     assert!(events.iter().any(|event| event.event_type == "error.v1"));
+}
+
+#[tokio::test]
+async fn explicit_diagnostics_capture_a_post_tool_failure_without_persisting_the_body() {
+    let provider = Arc::new(MidRunDiagnosticProvider {
+        calls: AtomicUsize::new(0),
+    });
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    let error = service
+        .run_in_session_with_skills_stream_controlled_with_provider_diagnostics(
+            "primary",
+            "test",
+            "call a tool",
+            3,
+            None,
+            &[],
+            &mut observer,
+            &RunControl::default(),
+        )
+        .await
+        .expect_err("second provider turn must fail");
+    let AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic }) = error else {
+        panic!("expected typed provider response diagnostic");
+    };
+    assert_eq!(diagnostic.status, 400);
+    assert!(diagnostic.body.contains("mid-run-private-diagnostic"));
+    assert_eq!(provider.calls.load(Ordering::Acquire), 2);
+
+    let events = journal.read_global(1, 100).expect("events");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == "tool.call.completed.v1")
+    );
+    assert!(events.iter().any(|event| event.event_type == "error.v1"));
+    for event in &events {
+        let payload = journal.decrypt_payload(event).expect("event payload");
+        assert!(!payload.to_string().contains("mid-run-private-diagnostic"));
+    }
+    assert!(
+        observer
+            .events
+            .iter()
+            .all(|event| !format!("{event:?}").contains("mid-run-private-diagnostic"))
+    );
 }

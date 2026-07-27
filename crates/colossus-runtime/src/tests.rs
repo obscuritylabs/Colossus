@@ -15,8 +15,9 @@ use colossus_contracts::{
     Actor, ActorType, CredentialReference, DecisionOutcome, EffectPhase, EffectRequest,
     EventClassification, ExecutionContext, FilesystemGrant, GoalStatus, MemoryScope, MemoryStatus,
     ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, NewEvent, PlanRecord, PlanStatus,
-    PlanStep, PolicyDecision, ProviderEvent, ProviderRoute, ProviderTurn, QuarantinedEffectResult,
-    RiskLevel, RiskRecommendation, SubagentStatus, TaskStatus, TerminalPreferences, ToolCall,
+    PlanStep, PolicyDecision, ProviderEvent, ProviderResponseDiagnostic, ProviderRoute,
+    ProviderTurn, QuarantinedEffectResult, RiskLevel, RiskRecommendation, SubagentStatus,
+    TaskStatus, TerminalPreferences, ToolCall,
 };
 use colossus_mcp::{McpResearchToolConfig, McpServerConfig};
 use colossus_policy::{
@@ -99,6 +100,44 @@ impl PolicyDecisionPoint for RuntimePostDenyPolicy {
 struct UnusedToolExecutor;
 
 struct FixedUserPrompt;
+
+#[test]
+fn provider_diagnostic_display_prioritizes_response_and_dotted_tool_names() {
+    let diagnostic = ProviderResponseDiagnostic {
+        request_method: "POST".into(),
+        request_url: "http://127.0.0.1:9000/v1/chat/completions".into(),
+        request_body: Some(json!({
+            "tools": [
+                {"type": "function", "function": {"name": "tool.with.dots"}},
+                {"type": "function", "name": "responses.tool"}
+            ],
+            "messages": [{"role": "tool", "content": "continuation"}]
+        })),
+        status: 400,
+        content_type: Some("application/json".into()),
+        body: r#"{"error":"dotted tool rejected"}"#.into(),
+        body_encoding: "utf8".into(),
+        body_truncated: false,
+    };
+    let rendered = super::format_provider_response_diagnostic(&diagnostic);
+    assert!(rendered.contains("HTTP 400"));
+    assert!(rendered.contains(r#"{"error":"dotted tool rejected"}"#));
+    assert!(rendered.contains("tool.with.dots, responses.tool"));
+    assert!(rendered.contains("\"role\": \"tool\""));
+
+    let error = super::RuntimeError::Agent(super::AgentError::Provider(
+        ModelProviderError::ResponseDiagnostic {
+            diagnostic: Box::new(diagnostic),
+        },
+    ));
+    assert_eq!(
+        error
+            .provider_response_diagnostic()
+            .map(|diagnostic| diagnostic.status),
+        Some(400)
+    );
+    assert!(!error.to_string().contains("dotted tool rejected"));
+}
 
 #[cfg(unix)]
 #[test]

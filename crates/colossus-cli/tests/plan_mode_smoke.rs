@@ -343,8 +343,8 @@ data: [DONE]
 
     let requests = server.join().expect("provider server");
     let denied_body = requests[0].split("\r\n\r\n").nth(1).expect("body");
-    assert!(!denied_body.contains("filesystem.write"));
-    assert!(denied_body.contains("plan.create"));
+    assert!(!denied_body.contains("filesystem_write"));
+    assert!(denied_body.contains("plan_create"));
     let correction_body = requests[1].split("\r\n\r\n").nth(1).expect("body");
     assert!(correction_body.contains("not available in this run mode"));
     assert!(correction_body.contains("unknown_tool"));

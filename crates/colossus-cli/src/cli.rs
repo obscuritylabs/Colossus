@@ -64,6 +64,8 @@ pub(super) const TERMINAL_COMPLETIONS: &[&str] = &[
     "/tui prefs",
     "/tui save",
     "/tui reset",
+    "/provider diagnostics on",
+    "/provider diagnostics off",
     "/theme",
     "/theme list",
     "/theme preview",
@@ -154,6 +156,8 @@ pub(super) const TERMINAL_COMPLETIONS: &[&str] = &[
     "/workflow subscription tick",
     "/audit verify",
     "/projection status",
+    "/models doctor",
+    "/provider doctor",
     "/tools",
     "/exit",
 ];

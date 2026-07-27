@@ -164,6 +164,37 @@ pub(super) async fn worker_line_runner(
             print_json(&client.call(WorkerOperation::AuditVerify).await?)?;
         } else if line == "/projection status" {
             print_json(&client.call(WorkerOperation::ProjectionStatus).await?)?;
+        } else if line == "/models doctor" || line.starts_with("/models doctor ") {
+            match doctor_profile(line.strip_prefix("/models ").unwrap_or_default(), "models") {
+                Ok(profile) => {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ModelDoctor {
+                                profile: profile.map(str::to_owned),
+                                include_provider_response: true,
+                            })
+                            .await?,
+                    )?;
+                }
+                Err(error) => println!("recoverable: {error}"),
+            }
+        } else if line == "/provider doctor" || line.starts_with("/provider doctor ") {
+            match doctor_profile(
+                line.strip_prefix("/provider ").unwrap_or_default(),
+                "provider",
+            ) {
+                Ok(profile) => {
+                    print_json(
+                        &client
+                            .call(WorkerOperation::ProviderDoctor {
+                                profile: profile.map(str::to_owned),
+                                include_provider_response: true,
+                            })
+                            .await?,
+                    )?;
+                }
+                Err(error) => println!("recoverable: {error}"),
+            }
         } else if line == "/tools" {
             print_json(&client.call(WorkerOperation::ToolsList).await?)?;
         } else if line == "/sessions" {

@@ -111,24 +111,25 @@ pub(super) fn responses_payload(
     model: &str,
     max_output_tokens: u64,
     streaming: bool,
+    tool_names: &ProviderToolNames,
 ) -> Result<Value, ProviderError> {
     let mut input = Vec::new();
     for message in &request.messages {
-        input.extend(responses_messages(message)?);
+        input.extend(responses_messages(message, tool_names)?);
     }
     let tools = request
         .tools
         .iter()
         .map(|tool| {
-            json!({
+            Ok(json!({
                 "type": "function",
-                "name": tool.name,
+                "name": tool_names.provider_name(&tool.name)?,
                 "description": tool.description,
                 "parameters": tool.input_schema,
                 "strict": true,
-            })
+            }))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, ProviderError>>()?;
     let mut payload = json!({
         "model": model,
         "instructions": request.instructions,
@@ -143,7 +144,10 @@ pub(super) fn responses_payload(
     Ok(payload)
 }
 
-pub(super) fn responses_messages(message: &ModelMessage) -> Result<Vec<Value>, ProviderError> {
+pub(super) fn responses_messages(
+    message: &ModelMessage,
+    tool_names: &ProviderToolNames,
+) -> Result<Vec<Value>, ProviderError> {
     match message.role {
         ModelMessageRole::System => Ok(vec![
             json!({"role": "developer", "content": message.content}),
@@ -154,7 +158,13 @@ pub(super) fn responses_messages(message: &ModelMessage) -> Result<Vec<Value>, P
             if !message.content.is_empty() {
                 items.push(json!({"role": "assistant", "content": message.content}));
             }
-            items.extend(message.tool_calls.iter().map(responses_tool_call));
+            items.extend(
+                message
+                    .tool_calls
+                    .iter()
+                    .map(|call| responses_tool_call(call, tool_names))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
             if items.is_empty() {
                 return Err(ProviderError::Configuration(
                     "assistant continuation message is empty".into(),
@@ -175,13 +185,16 @@ pub(super) fn responses_messages(message: &ModelMessage) -> Result<Vec<Value>, P
     }
 }
 
-pub(super) fn responses_tool_call(call: &ModelToolCall) -> Value {
-    json!({
+pub(super) fn responses_tool_call(
+    call: &ModelToolCall,
+    tool_names: &ProviderToolNames,
+) -> Result<Value, ProviderError> {
+    Ok(json!({
         "type": "function_call",
         "call_id": call.call_id,
-        "name": call.name,
+        "name": tool_names.provider_name(&call.name)?,
         "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".into()),
-    })
+    }))
 }
 
 pub(super) fn chat_payload(
@@ -189,6 +202,7 @@ pub(super) fn chat_payload(
     model: &str,
     max_output_tokens: u64,
     streaming: bool,
+    tool_names: &ProviderToolNames,
 ) -> Result<Value, ProviderError> {
     let mut messages = Vec::new();
     if !request.instructions.is_empty() {
@@ -198,10 +212,14 @@ pub(super) fn chat_payload(
         request
             .messages
             .iter()
-            .map(chat_message)
+            .map(|message| chat_message(message, tool_names))
             .collect::<Result<Vec<_>, _>>()?,
     );
-    let tools = request.tools.iter().map(chat_tool).collect::<Vec<_>>();
+    let tools = request
+        .tools
+        .iter()
+        .map(|tool| chat_tool(tool, tool_names))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut payload = json!({
         "model": model,
         "messages": messages,
@@ -217,7 +235,10 @@ pub(super) fn chat_payload(
     Ok(payload)
 }
 
-pub(super) fn chat_message(message: &ModelMessage) -> Result<Value, ProviderError> {
+pub(super) fn chat_message(
+    message: &ModelMessage,
+    tool_names: &ProviderToolNames,
+) -> Result<Value, ProviderError> {
     let role = match message.role {
         ModelMessageRole::System => "system",
         ModelMessageRole::User => "user",
@@ -232,31 +253,43 @@ pub(super) fn chat_message(message: &ModelMessage) -> Result<Value, ProviderErro
             })?);
     }
     if message.role == ModelMessageRole::Assistant && !message.tool_calls.is_empty() {
-        value["tool_calls"] = Value::Array(message.tool_calls.iter().map(chat_tool_call).collect());
+        value["tool_calls"] = Value::Array(
+            message
+                .tool_calls
+                .iter()
+                .map(|call| chat_tool_call(call, tool_names))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
     }
     Ok(value)
 }
 
-pub(super) fn chat_tool_call(call: &ModelToolCall) -> Value {
-    json!({
+pub(super) fn chat_tool_call(
+    call: &ModelToolCall,
+    tool_names: &ProviderToolNames,
+) -> Result<Value, ProviderError> {
+    Ok(json!({
         "id": call.call_id,
         "type": "function",
         "function": {
-            "name": call.name,
+            "name": tool_names.provider_name(&call.name)?,
             "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".into()),
         }
-    })
+    }))
 }
 
-pub(super) fn chat_tool(tool: &ModelToolDefinition) -> Value {
-    json!({
+pub(super) fn chat_tool(
+    tool: &ModelToolDefinition,
+    tool_names: &ProviderToolNames,
+) -> Result<Value, ProviderError> {
+    Ok(json!({
         "type": "function",
         "function": {
-            "name": tool.name,
+            "name": tool_names.provider_name(&tool.name)?,
             "description": tool.description,
             "parameters": compatible_chat_tool_schema(&tool.input_schema),
         }
-    })
+    }))
 }
 
 fn compatible_chat_tool_schema(value: &Value) -> Value {
@@ -280,6 +313,7 @@ pub(super) fn normalize_responses(
     model_profile: &str,
     model: &str,
     bytes: &[u8],
+    tool_names: &ProviderToolNames,
 ) -> Result<ProviderTurn, ProviderError> {
     let data: Value = serde_json::from_slice(bytes)
         .map_err(|error| ProviderError::Malformed(error.to_string()))?;
@@ -325,12 +359,15 @@ pub(super) fn normalize_responses(
                     item.get("call_id"),
                     item.get("name"),
                     item.get("arguments"),
+                    tool_names,
                 )?);
             }
             Some("custom_tool_call") => {
                 tool_calls = tool_calls.saturating_add(1);
                 let call_id = required_string(item, "call_id")?;
-                let name = required_string(item, "name")?;
+                let name = tool_names
+                    .canonical_name(&required_string(item, "name")?)
+                    .to_owned();
                 let input = item
                     .get("input")
                     .and_then(Value::as_str)
@@ -369,6 +406,7 @@ pub(super) fn normalize_chat(
     model_profile: &str,
     model: &str,
     bytes: &[u8],
+    tool_names: &ProviderToolNames,
 ) -> Result<ProviderTurn, ProviderError> {
     let data: Value = serde_json::from_slice(bytes)
         .map_err(|error| ProviderError::Malformed(error.to_string()))?;
@@ -399,6 +437,7 @@ pub(super) fn normalize_chat(
                 call.get("id"),
                 function.get("name"),
                 function.get("arguments"),
+                tool_names,
             )?);
         }
     }
@@ -556,6 +595,7 @@ pub(super) fn function_call_event(
     call_id: Option<&Value>,
     name: Option<&Value>,
     arguments: Option<&Value>,
+    tool_names: &ProviderToolNames,
 ) -> Result<ProviderEvent, ProviderError> {
     let call_id = call_id
         .and_then(Value::as_str)
@@ -565,8 +605,8 @@ pub(super) fn function_call_event(
     let name = name
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| ProviderError::Malformed("tool call name is absent".into()))?
-        .to_owned();
+        .ok_or_else(|| ProviderError::Malformed("tool call name is absent".into()))?;
+    let name = tool_names.canonical_name(name).to_owned();
     let arguments_text = arguments.and_then(Value::as_str).unwrap_or("{}");
     let arguments: Value = serde_json::from_str(arguments_text).map_err(|error| {
         ProviderError::Malformed(format!(

@@ -304,8 +304,18 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Command::Workflow(command) => workflow_command(&runtime, command.command).await?,
         Command::Provider(command) => match command.command {
             ProviderAction::Profiles => print_json(&runtime.provider_profiles())?,
-            ProviderAction::Doctor { profile } => {
-                print_json(&runtime.provider_doctor(profile.as_deref()).await?)?;
+            ProviderAction::Doctor {
+                profile,
+                include_provider_response,
+            } => {
+                print_json(
+                    &runtime
+                        .provider_doctor_with_diagnostics(
+                            profile.as_deref(),
+                            include_provider_response,
+                        )
+                        .await?,
+                )?;
             }
             ProviderAction::Models { profile } => {
                 print_json(&runtime.provider_models(profile.as_deref()).await?)?;
@@ -319,8 +329,18 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         },
         Command::Models(command) => match command.command {
             ModelsAction::Profiles => print_json(&runtime.model_profiles())?,
-            ModelsAction::Doctor { profile } => {
-                print_json(&runtime.model_doctor(profile.as_deref()).await?)?;
+            ModelsAction::Doctor {
+                profile,
+                include_provider_response,
+            } => {
+                print_json(
+                    &runtime
+                        .model_doctor_with_diagnostics(
+                            profile.as_deref(),
+                            include_provider_response,
+                        )
+                        .await?,
+                )?;
             }
             ModelsAction::Routes => print_json(&runtime.provider_routes())?,
             ModelsAction::Route { role } => print_json(&runtime.provider_route(&role)?)?,

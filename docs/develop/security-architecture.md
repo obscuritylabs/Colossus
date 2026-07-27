@@ -70,6 +70,27 @@ references. Filesystem reads, provider output, network responses, process output
 memory retrieval remain quarantined until mandatory post-effect policy permits release.
 A denial cannot leak private bytes through output, errors, audit payloads, or observers.
 
+Provider and model diagnostics have an explicit local-operator release. The CLI
+`--include-provider-response` option and the local TUI `/models doctor` and `/provider
+doctor` commands can return the credential-free request plus at most 16 KiB of a
+non-success response body after exact configured-credential redaction. The TUI
+`/provider diagnostics on` command applies the same release to failed provider turns in
+the current TUI process, including post-tool continuations, until the operator runs
+`/provider diagnostics off` or exits. These captures are represented as quarantined
+adapter output and must pass the ordinary post-effect decision before the authenticated
+local worker or direct TUI receives them. Default Doctor output, default run failures
+and events, and durable audit payloads remain status-only and never receive the body.
+An in-run diagnostic request can contain user, session, and tool-result content, so the
+TUI warns the operator to review it before sharing.
+
+Canonical tool identities are never renamed to accommodate a provider. Network adapters
+build a request-local, one-to-one transport alias map that projects `.` to `_` under the
+portable 64-byte function-name grammar. Definitions and continuation history use that
+map, and streamed or non-streamed provider tool calls are restored to canonical names
+before they cross back into agent policy or dispatch. Unrepresentable names and alias
+collisions fail closed before network execution. Diagnostic request bodies intentionally
+show the actual provider aliases because they are wire evidence, not authority records.
+
 ## Adapter confinement
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and

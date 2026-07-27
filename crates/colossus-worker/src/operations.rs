@@ -1,5 +1,9 @@
 use super::*;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ClientHello {
@@ -105,6 +109,9 @@ pub enum WorkerOperation {
     ProviderDoctor {
         /// Optional exact profile.
         profile: Option<String>,
+        /// Include bounded non-success provider response diagnostics.
+        #[serde(default, skip_serializing_if = "is_false")]
+        include_provider_response: bool,
     },
     /// List normalized models for one provider.
     ProviderModels {
@@ -117,6 +124,9 @@ pub enum WorkerOperation {
     ModelDoctor {
         /// Optional exact model profile.
         profile: Option<String>,
+        /// Include bounded non-success provider response diagnostics.
+        #[serde(default, skip_serializing_if = "is_false")]
+        include_provider_response: bool,
     },
     /// Show role-to-model-profile routing.
     ProviderRoutes,
@@ -197,6 +207,9 @@ pub enum WorkerOperation {
         explicit_skills: Vec<String>,
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
+        /// Include bounded provider evidence on a failed turn for the trusted local TUI.
+        #[serde(default, skip_serializing_if = "is_false")]
+        include_provider_response_diagnostics: bool,
     },
     /// Execute structurally read-only Plan Mode.
     RunPlan {

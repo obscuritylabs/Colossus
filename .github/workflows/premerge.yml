@@ -423,6 +423,7 @@ jobs:
         run: |
           podman pull python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
           podman build --file oci-proxy.Dockerfile \
+            --ignorefile oci-proxy.Dockerfile.dockerignore \
             --build-arg TARGET_TRIPLE=x86_64-unknown-linux-musl \
             --tag colossus-oci-proxy:acceptance .
           proxy=$(podman image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')

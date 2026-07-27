@@ -86,12 +86,32 @@ pub enum ModelProviderError {
         /// Bounded safe diagnostic without response headers or body.
         message: String,
     },
+    /// An explicitly requested local diagnostic captured a non-success HTTP response.
+    ///
+    /// The display text remains body-free so durable errors and ordinary observers cannot
+    /// disclose the diagnostic accidentally. Trusted local interfaces may inspect the typed
+    /// value after the run has terminated.
+    #[error("provider turn failed: endpoint returned HTTP {}", diagnostic.status)]
+    ResponseDiagnostic {
+        /// Post-policy, bounded provider request and response evidence.
+        diagnostic: Box<ProviderResponseDiagnostic>,
+    },
     /// Provider failed with a known terminal outcome.
     #[error("provider turn failed: {0}")]
     Failed(String),
     /// The external outcome cannot be proven and must not be retried.
     #[error("provider outcome is unknown: {0}")]
     OutcomeUnknown(String),
+}
+
+impl ModelProviderError {
+    /// Return explicitly released provider response evidence without changing safe error text.
+    pub fn response_diagnostic(&self) -> Option<&ProviderResponseDiagnostic> {
+        match self {
+            Self::ResponseDiagnostic { diagnostic } => Some(diagnostic),
+            _ => None,
+        }
+    }
 }
 
 /// Search routing, authorization, transport, or normalization failure.

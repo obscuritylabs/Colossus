@@ -126,8 +126,12 @@ pub(super) async fn dispatch_to_worker_if_active(
         Command::Provider(command) => {
             let operation = match &command.command {
                 ProviderAction::Profiles => WorkerOperation::ProviderProfiles,
-                ProviderAction::Doctor { profile } => WorkerOperation::ProviderDoctor {
+                ProviderAction::Doctor {
+                    profile,
+                    include_provider_response,
+                } => WorkerOperation::ProviderDoctor {
                     profile: profile.clone(),
+                    include_provider_response: *include_provider_response,
                 },
                 ProviderAction::Models { profile } => WorkerOperation::ProviderModels {
                     profile: profile.clone(),
@@ -153,11 +157,15 @@ pub(super) async fn dispatch_to_worker_if_active(
                 ModelsAction::Profiles => {
                     print_json(&client.call(WorkerOperation::ModelProfiles).await?)?;
                 }
-                ModelsAction::Doctor { profile } => {
+                ModelsAction::Doctor {
+                    profile,
+                    include_provider_response,
+                } => {
                     print_json(
                         &client
                             .call(WorkerOperation::ModelDoctor {
                                 profile: profile.clone(),
+                                include_provider_response: *include_provider_response,
                             })
                             .await?,
                     )?;

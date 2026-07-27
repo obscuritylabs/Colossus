@@ -87,6 +87,37 @@ fn model_attachment_protocol_carries_paths_without_client_read_content() {
 }
 
 #[test]
+fn controlled_run_diagnostics_are_explicit_and_backward_compatible() {
+    let operation = WorkerOperation::RunModelControlled {
+        role: "primary".into(),
+        instructions: "test".into(),
+        prompt: "reproduce".into(),
+        max_turns: None,
+        session_id: "session".into(),
+        explicit_skills: Vec::new(),
+        sticky_skills: Vec::new(),
+        include_provider_response_diagnostics: true,
+    };
+    let encoded = serde_json::to_value(operation).expect("serialize controlled run");
+    assert_eq!(encoded["include_provider_response_diagnostics"], true);
+
+    let mut prior = encoded;
+    prior
+        .as_object_mut()
+        .expect("operation object")
+        .remove("include_provider_response_diagnostics");
+    let decoded: WorkerOperation =
+        serde_json::from_value(prior).expect("deserialize prior controlled run");
+    assert!(matches!(
+        decoded,
+        WorkerOperation::RunModelControlled {
+            include_provider_response_diagnostics: false,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn workflow_schedule_operation_round_trips_the_worker_contract() {
     let encoded = serde_json::to_value(WorkerOperation::WorkflowScheduleCreate {
         schedule_id: "nightly".into(),

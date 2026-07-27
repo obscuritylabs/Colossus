@@ -244,21 +244,13 @@ impl RiskEvaluator for GatewayRiskEvaluator {
     }
 }
 
-#[async_trait]
-impl ModelProvider for GatewayModelProvider {
-    fn route(&self, role: &str) -> Result<ModelRoute, ModelProviderError> {
-        let resolved = self
-            .providers
-            .resolve(role)
-            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
-        Ok(resolved.route())
-    }
-
-    async fn turn(
+impl GatewayModelProvider {
+    async fn turn_with_options(
         &self,
         role: &str,
-        request: colossus_contracts::ModelRequest,
+        request: ModelRequest,
         context: ExecutionContext,
+        options: ProviderTurnOptions,
     ) -> Result<ProviderTurn, ModelProviderError> {
         let resolved = self
             .providers
@@ -284,6 +276,7 @@ impl ModelProvider for GatewayModelProvider {
                 model: Some(route.model),
                 max_output_tokens: Some(max_output_tokens),
                 request: Some(request),
+                include_response_diagnostics: options.include_response_diagnostics,
             })
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?,
         );
@@ -295,11 +288,40 @@ impl ModelProvider for GatewayModelProvider {
             .execute(effect, provider.as_ref())
             .await
             .map_err(model_gateway_error)?;
+        if options.include_response_diagnostics
+            && let Ok(diagnostic) =
+                serde_json::from_slice::<ProviderResponseDiagnostic>(&released.bytes)
+        {
+            return Err(ModelProviderError::ResponseDiagnostic {
+                diagnostic: Box::new(diagnostic),
+            });
+        }
         serde_json::from_slice(&released.bytes).map_err(|_| {
             ModelProviderError::Failed(
                 "released provider output violated the normalized turn contract".into(),
             )
         })
+    }
+}
+
+#[async_trait]
+impl ModelProvider for GatewayModelProvider {
+    fn route(&self, role: &str) -> Result<ModelRoute, ModelProviderError> {
+        let resolved = self
+            .providers
+            .resolve(role)
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+        Ok(resolved.route())
+    }
+
+    async fn turn(
+        &self,
+        role: &str,
+        request: colossus_contracts::ModelRequest,
+        context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        self.turn_with_options(role, request, context, ProviderTurnOptions::default())
+            .await
     }
 
     async fn turn_stream(
@@ -309,9 +331,29 @@ impl ModelProvider for GatewayModelProvider {
         context: ExecutionContext,
         observer: &mut dyn ProviderEventObserver,
     ) -> Result<ProviderTurn, ModelProviderError> {
+        self.turn_stream_with_options(
+            role,
+            request,
+            context,
+            ProviderTurnOptions::default(),
+            observer,
+        )
+        .await
+    }
+
+    async fn turn_stream_with_options(
+        &self,
+        role: &str,
+        request: ModelRequest,
+        context: ExecutionContext,
+        options: ProviderTurnOptions,
+        observer: &mut dyn ProviderEventObserver,
+    ) -> Result<ProviderTurn, ModelProviderError> {
         let route = self.route(role)?;
         if !route.capabilities.streaming {
-            let turn = self.turn(role, request, context).await?;
+            let turn = self
+                .turn_with_options(role, request, context, options)
+                .await?;
             for event in &turn.events {
                 observer.observe(event.clone()).await?;
             }
@@ -341,6 +383,7 @@ impl ModelProvider for GatewayModelProvider {
                 model: Some(route.model),
                 max_output_tokens: Some(max_output_tokens),
                 request: Some(request),
+                include_response_diagnostics: options.include_response_diagnostics,
             })
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?,
         );
@@ -353,7 +396,7 @@ impl ModelProvider for GatewayModelProvider {
             .execute_stream(effect, provider.as_ref(), &mut bridge)
             .await
             .map_err(model_gateway_error)?;
-        bridge.finish(&terminal.bytes)
+        bridge.finish(&terminal.bytes, options.include_response_diagnostics)
     }
 }
 
@@ -361,6 +404,7 @@ pub(super) struct ReleasedProviderStream<'a> {
     pub(super) observer: &'a mut dyn ProviderEventObserver,
     pub(super) events: Vec<ProviderEvent>,
     pub(super) completed: Option<(String, String, String, String, Option<String>)>,
+    pub(super) diagnostic: Option<ProviderResponseDiagnostic>,
 }
 
 impl<'a> ReleasedProviderStream<'a> {
@@ -369,15 +413,34 @@ impl<'a> ReleasedProviderStream<'a> {
             observer,
             events: Vec::new(),
             completed: None,
+            diagnostic: None,
         }
     }
 
-    fn finish(self, terminal: &[u8]) -> Result<ProviderTurn, ModelProviderError> {
+    fn finish(
+        self,
+        terminal: &[u8],
+        include_response_diagnostics: bool,
+    ) -> Result<ProviderTurn, ModelProviderError> {
         let expected: ProviderStreamItem = serde_json::from_slice(terminal).map_err(|_| {
             ModelProviderError::Failed(
                 "released provider stream terminal violated its contract".into(),
             )
         })?;
+        if let ProviderStreamItem::Diagnostic { diagnostic } = expected {
+            if include_response_diagnostics
+                && self.events.is_empty()
+                && self.completed.is_none()
+                && self.diagnostic.as_ref() == Some(&diagnostic)
+            {
+                return Err(ModelProviderError::ResponseDiagnostic {
+                    diagnostic: Box::new(diagnostic),
+                });
+            }
+            return Err(ModelProviderError::Failed(
+                "released provider stream diagnostic violated its contract".into(),
+            ));
+        }
         let ProviderStreamItem::Completed {
             profile,
             model_profile,
@@ -430,6 +493,15 @@ impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
                     .await
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?;
                 self.events.push(event);
+            }
+            ProviderStreamItem::Diagnostic { diagnostic } => {
+                if self.diagnostic.is_some() || self.completed.is_some() || !self.events.is_empty()
+                {
+                    return Err(ExecutionError::Failed(
+                        "provider stream diagnostic violated its terminal contract".into(),
+                    ));
+                }
+                self.diagnostic = Some(diagnostic);
             }
             ProviderStreamItem::Completed {
                 profile,

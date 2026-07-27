@@ -1399,6 +1399,14 @@ fn released_provider_failure(error: &ModelProviderError) -> RunFailure {
             http_status: Some(*status),
             retry_after_ms: None,
         },
+        ModelProviderError::ResponseDiagnostic { diagnostic } => RunFailure {
+            code: "provider.http_status".into(),
+            message: format!("provider endpoint returned HTTP {}", diagnostic.status),
+            outcome: OutcomeCertainty::Known,
+            recoverable: false,
+            http_status: Some(diagnostic.status),
+            retry_after_ms: None,
+        },
         ModelProviderError::Configuration(_) => generic_failure(
             "provider.configuration",
             "the configured provider request is invalid",

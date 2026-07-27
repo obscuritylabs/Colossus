@@ -132,8 +132,8 @@ func (x *TextContent) GetText() string {
 
 // ContentPart is a forward-compatible public message part.
 //
-// CreateRun accepts only text in v1alpha1. Artifact references are reserved for
-// capability-negotiated follow-on support and never represent server paths.
+// CreateRun accepts visible text and capability-negotiated opaque artifact references.
+// Artifact references never represent server paths.
 type ContentPart struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// content contains exactly one part representation.

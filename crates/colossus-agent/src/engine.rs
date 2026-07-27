@@ -288,7 +288,16 @@ impl AgentService {
                     responding_emitted: false,
                 };
                 self.provider
-                    .turn_stream(role, request, context.clone(), &mut observer)
+                    .turn_stream_with_options(
+                        role,
+                        request,
+                        context.clone(),
+                        ProviderTurnOptions {
+                            include_response_diagnostics: scope
+                                .include_provider_response_diagnostics,
+                        },
+                        &mut observer,
+                    )
                     .await
             };
             let provider_turn = match provider_result {

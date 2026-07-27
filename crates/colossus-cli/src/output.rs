@@ -268,6 +268,11 @@ pub(super) fn print_terminal_help(preferences: &TerminalPreferences) {
             "Inspect durable runs and runtime health",
         ],
         [
+            "Provider diagnostics",
+            "/models doctor [PROFILE] · /provider doctor [PROFILE]",
+            "Run a bounded probe and show released provider error details",
+        ],
+        [
             "Appearance",
             "/theme · /stream · /events · /reasoning · /transcript · /multiline",
             "Tune the terminal experience",

@@ -867,7 +867,7 @@ func (*Run_Cancellation) isRun_Terminal() {}
 // CreateRunRequest allocates and starts one durable agent run.
 type CreateRunRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// input contains bounded user-visible content; v1alpha1 accepts text parts only.
+	// input contains bounded visible text or authorized opaque artifact references.
 	Input []*ContentPart `protobuf:"bytes,1,rep,name=input,proto3" json:"input,omitempty"`
 	// session_id attaches to an existing canonical session. Omission allocates a durable
 	// run-owned session identity; the canonical session is materialized during agent

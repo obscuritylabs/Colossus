@@ -19,7 +19,7 @@ use colossus_ports::{
 };
 use colossus_runtime::{
     CredentialResolver, EnvironmentCredentialResolver, Runtime, RuntimeConfig, RuntimeError,
-    RuntimeOpenOptions,
+    RuntimeOpenOptions, format_provider_response_diagnostic,
 };
 use hmac::{Hmac, Mac as _};
 use serde::{Deserialize, Serialize};

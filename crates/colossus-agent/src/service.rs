@@ -154,6 +154,46 @@ impl AgentService {
         .await
     }
 
+    /// Execute a trusted local run with explicit provider response diagnostics.
+    ///
+    /// The diagnostic remains typed on a terminal provider error. Durable run events and
+    /// ordinary error display stay body-free.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_in_session_with_skills_stream_controlled_with_provider_diagnostics(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
+        match self
+            .run_with_lineage(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                requested_session_id,
+                RunScope {
+                    active_skills,
+                    include_provider_response_diagnostics: true,
+                    ..RunScope::default()
+                },
+                terminal_actor(),
+                Some(observer),
+                Some(control),
+            )
+            .await
+        {
+            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
+            Err(AgentError::Cancelled { result }) => Ok(AgentRunOutcome::Cancelled { result }),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Execute a skilled run for one immutable authenticated initiator.
     ///
     /// Interfaces must construct the actor from authenticated caller context. The actor

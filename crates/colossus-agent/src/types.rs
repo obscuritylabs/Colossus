@@ -21,6 +21,7 @@ pub(super) struct RunScope<'a> {
     pub(super) allowed_tools: Option<&'a [String]>,
     pub(super) plan_mode: bool,
     pub(super) create_requested_session: bool,
+    pub(super) include_provider_response_diagnostics: bool,
 }
 
 /// Application-loop failure with terminal states distinguishable by callers.

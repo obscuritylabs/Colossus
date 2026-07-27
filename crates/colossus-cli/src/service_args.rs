@@ -11,7 +11,13 @@ pub(super) enum ProviderAction {
     /// Show configured profiles without resolving credentials.
     Profiles,
     /// Exercise the profile model-catalog endpoint through policy.
-    Doctor { profile: Option<String> },
+    Doctor {
+        /// Optional exact provider profile.
+        profile: Option<String>,
+        /// Include the bounded request and non-success provider response after redaction.
+        #[arg(long)]
+        include_provider_response: bool,
+    },
     /// List normalized models through policy.
     Models { profile: Option<String> },
 }
@@ -53,6 +59,9 @@ pub(super) enum ModelsAction {
     Doctor {
         /// Optional exact model profile; defaults to the primary role.
         profile: Option<String>,
+        /// Include the bounded request and non-success provider response after redaction.
+        #[arg(long)]
+        include_provider_response: bool,
     },
     /// Show role-to-model-profile mappings.
     Routes,

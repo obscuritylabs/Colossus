@@ -17,6 +17,9 @@ pub struct ProviderEffectInput {
     pub max_output_tokens: Option<u64>,
     /// Full logical model request. Absent only for model-catalog diagnostics.
     pub request: Option<ModelRequest>,
+    /// Return a bounded non-success response as explicit quarantined diagnostic output.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub include_response_diagnostics: bool,
 }
 
 /// Provider configuration, transport, credential, or normalization failure.
@@ -42,6 +45,21 @@ pub enum ProviderError {
     /// Provider response failed the normalized contract.
     #[error("malformed provider output: {0}")]
     Malformed(String),
+}
+
+enum ProviderJsonResponse {
+    Success(Vec<u8>),
+    HttpError(ProviderResponseDiagnostic),
+}
+
+struct ProviderStreamMetadata<'a> {
+    model_profile: &'a str,
+    model: &'a str,
+    include_response_diagnostics: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl From<reqwest::Error> for ProviderError {
@@ -220,6 +238,7 @@ impl ProviderExecutor {
                 } else {
                     "Run provider doctor through the effect gateway.".into()
                 },
+                provider_response: None,
             }],
         }
     }
@@ -294,6 +313,7 @@ impl StreamingEffectExecutor for ProviderExecutor {
         }
         let (model_profile, model, max_output_tokens) =
             generation_metadata(&input).map_err(provider_execution_error)?;
+        let include_response_diagnostics = input.include_response_diagnostics;
         let model_request = input.request.ok_or_else(|| {
             provider_execution_error(ProviderError::Configuration(
                 "provider generation request is absent".into(),
@@ -352,12 +372,14 @@ impl StreamingEffectExecutor for ProviderExecutor {
         }
         self.validate_resource(effect, &endpoint, &permit)
             .map_err(provider_execution_error)?;
+        let tool_names =
+            ProviderToolNames::from_request(&model_request).map_err(provider_execution_error)?;
         let payload = match self.profile.kind {
             ProviderKind::OpenAiResponses => {
-                responses_payload(&model_request, &model, max_output_tokens, true)
+                responses_payload(&model_request, &model, max_output_tokens, true, &tool_names)
             }
             ProviderKind::OpenAiCompatible => {
-                chat_payload(&model_request, &model, max_output_tokens, true)
+                chat_payload(&model_request, &model, max_output_tokens, true, &tool_names)
             }
             ProviderKind::Echo => unreachable!("handled above"),
         }
@@ -365,8 +387,12 @@ impl StreamingEffectExecutor for ProviderExecutor {
         self.stream_generation(
             &endpoint,
             payload,
-            &model_profile,
-            &model,
+            ProviderStreamMetadata {
+                model_profile: &model_profile,
+                model: &model,
+                include_response_diagnostics,
+            },
+            tool_names,
             &permit,
             observer,
         )
@@ -409,6 +435,7 @@ impl ProviderExecutor {
             ));
         }
         validate_credential_disclosure(effect, &self.profile)?;
+        let include_response_diagnostics = input.include_response_diagnostics;
         if effect.action == "provider.models" {
             if input.request.is_some()
                 || input.model_profile.is_some()
@@ -425,7 +452,15 @@ impl ProviderExecutor {
                 .models_endpoint()?
                 .ok_or_else(|| ProviderError::Configuration("provider has no catalog".into()))?;
             self.validate_resource(effect, &endpoint, permit)?;
-            let bytes = self.request_json(&endpoint, None, permit).await?;
+            let bytes = match self
+                .request_json(&endpoint, None, permit, include_response_diagnostics)
+                .await?
+            {
+                ProviderJsonResponse::Success(bytes) => bytes,
+                ProviderJsonResponse::HttpError(diagnostic) => {
+                    return bounded_result(&diagnostic, permit);
+                }
+            };
             let models = normalize_models(&bytes)?;
             return bounded_result(&models, permit);
         }
@@ -468,22 +503,44 @@ impl ProviderExecutor {
             );
         }
         self.validate_resource(effect, &endpoint, permit)?;
+        let tool_names = ProviderToolNames::from_request(&model_request)?;
         let payload = match self.profile.kind {
-            ProviderKind::OpenAiResponses => {
-                responses_payload(&model_request, &model, max_output_tokens, false)
-            }
-            ProviderKind::OpenAiCompatible => {
-                chat_payload(&model_request, &model, max_output_tokens, false)
-            }
+            ProviderKind::OpenAiResponses => responses_payload(
+                &model_request,
+                &model,
+                max_output_tokens,
+                false,
+                &tool_names,
+            ),
+            ProviderKind::OpenAiCompatible => chat_payload(
+                &model_request,
+                &model,
+                max_output_tokens,
+                false,
+                &tool_names,
+            ),
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
-        let bytes = self.request_json(&endpoint, Some(payload), permit).await?;
+        let bytes = match self
+            .request_json(
+                &endpoint,
+                Some(payload),
+                permit,
+                include_response_diagnostics,
+            )
+            .await?
+        {
+            ProviderJsonResponse::Success(bytes) => bytes,
+            ProviderJsonResponse::HttpError(diagnostic) => {
+                return bounded_result(&diagnostic, permit);
+            }
+        };
         let turn = match self.profile.kind {
             ProviderKind::OpenAiResponses => {
-                normalize_responses(&self.profile, &model_profile, &model, &bytes)
+                normalize_responses(&self.profile, &model_profile, &model, &bytes, &tool_names)
             }
             ProviderKind::OpenAiCompatible => {
-                normalize_chat(&self.profile, &model_profile, &model, &bytes)
+                normalize_chat(&self.profile, &model_profile, &model, &bytes, &tool_names)
             }
             ProviderKind::Echo => unreachable!("handled above"),
         }?;
@@ -521,8 +578,20 @@ impl ProviderExecutor {
         endpoint: &str,
         payload: Option<Value>,
         permit: &ExecutionPermit,
-    ) -> Result<Vec<u8>, ProviderError> {
-        let (response, secret) = self.send_request(endpoint, payload, permit).await?;
+        include_response_diagnostics: bool,
+    ) -> Result<ProviderJsonResponse, ProviderError> {
+        let (response, secret) = self
+            .send_request(endpoint, payload.as_ref(), permit)
+            .await?;
+        if !response.status().is_success() {
+            if include_response_diagnostics {
+                return self
+                    .capture_http_error(endpoint, payload, response, secret)
+                    .await
+                    .map(ProviderJsonResponse::HttpError);
+            }
+            return Err(provider_status_error(&response));
+        }
         let limit = usize::try_from(permit.obligations().max_output_bytes)
             .map_err(|error| ProviderError::Configuration(error.to_string()))?;
         let mut bytes = Vec::new();
@@ -537,13 +606,13 @@ impl ProviderExecutor {
             bytes.extend_from_slice(&chunk);
         }
         redact_exact_bytes(&mut bytes, secret.as_ref().map(|secret| secret.as_str()));
-        Ok(bytes)
+        Ok(ProviderJsonResponse::Success(bytes))
     }
 
     async fn send_request(
         &self,
         endpoint: &str,
-        payload: Option<Value>,
+        payload: Option<&Value>,
         permit: &ExecutionPermit,
     ) -> Result<(reqwest::Response, Option<zeroize::Zeroizing<String>>), ProviderError> {
         let url = Url::parse(endpoint)?;
@@ -590,7 +659,7 @@ impl ProviderExecutor {
             None
         };
         if let Some(payload) = payload {
-            let body = serde_json::to_vec(&payload)
+            let body = serde_json::to_vec(payload)
                 .map_err(|error| ProviderError::Malformed(error.to_string()))?;
             if body.len() > MAX_PROVIDER_REQUEST_BYTES {
                 return Err(ProviderError::Configuration(
@@ -602,33 +671,89 @@ impl ProviderExecutor {
                 .body(body);
         }
         let response = builder.send().await?;
-        if !response.status().is_success() {
-            let retry_after_ms = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|value| value.to_str().ok())
-                .and_then(parse_retry_after_ms);
-            return Err(ProviderError::Status {
-                status: response.status().as_u16(),
-                retry_after_ms,
-            });
-        }
         Ok((response, secret))
+    }
+
+    async fn capture_http_error(
+        &self,
+        endpoint: &str,
+        request_body: Option<Value>,
+        response: reqwest::Response,
+        secret: Option<zeroize::Zeroizing<String>>,
+    ) -> Result<ProviderResponseDiagnostic, ProviderError> {
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.chars().take(256).collect());
+        let mut body = Vec::new();
+        let mut body_truncated = false;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            let remaining = MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES.saturating_sub(body.len());
+            if chunk.len() > remaining {
+                body.extend_from_slice(&chunk[..remaining]);
+                body_truncated = true;
+                break;
+            }
+            body.extend_from_slice(&chunk);
+        }
+        redact_exact_bytes(&mut body, secret.as_ref().map(|secret| secret.as_str()));
+        if body.len() > MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES {
+            body.truncate(MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES);
+            body_truncated = true;
+        }
+        let body_encoding = if std::str::from_utf8(&body).is_ok() {
+            "utf8"
+        } else {
+            "utf8_lossy"
+        };
+        Ok(ProviderResponseDiagnostic {
+            request_method: if request_body.is_some() {
+                "POST".into()
+            } else {
+                "GET".into()
+            },
+            request_url: endpoint.into(),
+            request_body,
+            status,
+            content_type,
+            body: String::from_utf8_lossy(&body).into_owned(),
+            body_encoding: body_encoding.into(),
+            body_truncated,
+        })
     }
 
     async fn stream_generation(
         &self,
         endpoint: &str,
         payload: Value,
-        model_profile: &str,
-        model: &str,
+        metadata: ProviderStreamMetadata<'_>,
+        tool_names: ProviderToolNames,
         permit: &ExecutionPermit,
         observer: &mut dyn QuarantinedEffectObserver,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let (response, secret) = self
-            .send_request(endpoint, Some(payload), permit)
+            .send_request(endpoint, Some(&payload), permit)
             .await
             .map_err(provider_execution_error)?;
+        if !response.status().is_success() {
+            if metadata.include_response_diagnostics {
+                let diagnostic = self
+                    .capture_http_error(endpoint, Some(payload), response, secret)
+                    .await
+                    .map_err(provider_execution_error)?;
+                return emit_stream_item(
+                    ProviderStreamItem::Diagnostic { diagnostic },
+                    permit,
+                    observer,
+                )
+                .await;
+            }
+            return Err(provider_execution_error(provider_status_error(&response)));
+        }
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -646,7 +771,7 @@ impl ProviderExecutor {
         let limit = usize::try_from(permit.obligations().max_output_bytes)
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         let mut decoder = SseDecoder::default();
-        let mut state = ProviderStreamState::new(self.profile.kind);
+        let mut state = ProviderStreamState::new(self.profile.kind, tool_names);
         let mut raw_bytes = 0_usize;
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
@@ -684,17 +809,29 @@ impl ProviderExecutor {
         let response_id = state.response_id().map(str::to_owned);
         emit_stream_item(
             ProviderStreamItem::Completed {
-                profile: model_profile.into(),
-                model_profile: model_profile.into(),
+                profile: metadata.model_profile.into(),
+                model_profile: metadata.model_profile.into(),
                 provider_profile: self.profile.name.clone(),
                 provider: self.profile.kind.as_str().into(),
-                model: model.into(),
+                model: metadata.model.into(),
                 response_id,
             },
             permit,
             observer,
         )
         .await
+    }
+}
+
+fn provider_status_error(response: &reqwest::Response) -> ProviderError {
+    let retry_after_ms = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_retry_after_ms);
+    ProviderError::Status {
+        status: response.status().as_u16(),
+        retry_after_ms,
     }
 }
 
