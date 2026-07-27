@@ -928,6 +928,13 @@ pub(crate) struct ArtifactReferenceDto {
     pub(crate) created_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArtifactContentDto {
+    pub(crate) artifact: ArtifactReferenceDto,
+    pub(crate) text: String,
+}
+
 impl From<ArtifactReference> for ArtifactReferenceDto {
     fn from(value: ArtifactReference) -> Self {
         Self {
@@ -1129,6 +1136,8 @@ impl From<RunModeInput> for RunMode {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CreateRunInput {
     prompt: String,
+    #[serde(default)]
+    artifact_ids: Vec<String>,
     session_id: Option<String>,
     role: String,
     mode: RunModeInput,
@@ -1153,8 +1162,19 @@ impl CreateRunInput {
         }
         let idempotency_key =
             IdempotencyKey::new(self.idempotency_key).map_err(CommandErrorDto::from_api)?;
+        if self.artifact_ids.len() > 16 {
+            return Err(CommandErrorDto::invalid(
+                "artifactIds",
+                "A run can include at most 16 attachments.",
+            ));
+        }
+        let mut input = vec![InputContentPart::Text(self.prompt)];
+        for artifact_id in self.artifact_ids {
+            validate_identifier(&artifact_id, "artifactIds")?;
+            input.push(InputContentPart::Artifact(artifact_id));
+        }
         Ok(CreateRunRequest {
-            input: vec![InputContentPart::Text(self.prompt)],
+            input,
             session_id: self.session_id,
             role: self.role,
             mode: self.mode.into(),

@@ -433,11 +433,17 @@ export interface RunPage {
 
 export interface CreateRunRequest {
   prompt: string;
+  artifactIds?: string[];
   sessionId?: string;
   role: string;
   mode: RunMode;
   maxTurns: number;
   idempotencyKey: string;
+}
+
+export interface ArtifactContent {
+  artifact: ArtifactReference;
+  text: string;
 }
 
 export interface GetRunRequest {

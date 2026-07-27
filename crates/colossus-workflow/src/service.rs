@@ -13,6 +13,11 @@ pub struct WorkflowEffect {
     pub idempotency: Option<String>,
     /// Late-bound credential references whose values are deliberately absent.
     pub credential_references: Vec<CredentialReference>,
+    /// Exact tool ceiling inherited from the pinned workflow definition.
+    ///
+    /// This is authority metadata, not a grant. The runtime still applies normal
+    /// tool policy and sandbox checks to every invocation.
+    pub allowed_tools: Vec<String>,
     /// Workflow run identifier.
     pub run_id: String,
     /// Workflow step identifier.

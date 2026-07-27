@@ -194,6 +194,13 @@ pub struct SubagentJob {
     pub task: String,
     /// Configured model role.
     pub role: String,
+    /// Exact inherited model-visible tool ceiling.
+    ///
+    /// `None` is retained for trusted terminal-created and preview-era jobs. Public
+    /// application delegation always stores `Some`, where an empty list denies every
+    /// tool. Child runs additionally remove nested delegation.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
     /// Current lifecycle state.
     pub status: SubagentStatus,
     /// Isolated durable child session.

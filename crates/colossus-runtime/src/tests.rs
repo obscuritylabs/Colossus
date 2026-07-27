@@ -194,6 +194,8 @@ async fn subworkflow_start_and_compensation_are_independent_gateway_effects() {
     );
     let runner = GatewayWorkflowEffects {
         gateway: Arc::new(gateway),
+        agent: None,
+        agent_max_turns: 1,
     };
     for compensation in [false, true] {
         runner
@@ -203,6 +205,7 @@ async fn subworkflow_start_and_compensation_are_independent_gateway_effects() {
                 content: json!({"workflow": "child", "version": "1.0.0", "inputs": {}}),
                 idempotency: Some(format!("call-{compensation}")),
                 credential_references: Vec::new(),
+                allowed_tools: Vec::new(),
                 run_id: "parent-run".into(),
                 step_id: if compensation {
                     "rollback-child".into()
@@ -257,6 +260,8 @@ async fn webhook_ingress_uses_gateway_with_a_credential_reference_only() {
     );
     GatewayWorkflowEffects {
         gateway: Arc::new(gateway),
+        agent: None,
+        agent_max_turns: 1,
     }
     .run(WorkflowEffect {
         kind: "workflow".into(),
@@ -267,6 +272,7 @@ async fn webhook_ingress_uses_gateway_with_a_credential_reference_only() {
             reference: "env:COLOSSUS_WEBHOOK_SECRET".into(),
             value_hash: Some("key-digest".into()),
         }],
+        allowed_tools: Vec::new(),
         run_id: "webhook-run".into(),
         step_id: "$webhook".into(),
         definition_step_id: "$webhook".into(),
@@ -307,6 +313,8 @@ async fn subscription_dispatch_uses_the_ordinary_gateway() {
     );
     GatewayWorkflowEffects {
         gateway: Arc::new(gateway),
+        agent: None,
+        agent_max_turns: 1,
     }
     .run(WorkflowEffect {
         kind: "workflow".into(),
@@ -317,6 +325,7 @@ async fn subscription_dispatch_uses_the_ordinary_gateway() {
         }),
         idempotency: Some("subscription:new-tasks:event-1".into()),
         credential_references: Vec::new(),
+        allowed_tools: Vec::new(),
         run_id: "subscription-run".into(),
         step_id: "$subscription".into(),
         definition_step_id: "$subscription".into(),
@@ -341,6 +350,104 @@ async fn subscription_dispatch_uses_the_ordinary_gateway() {
     assert_eq!(content_fields.len(), 2);
     assert!(content_fields.contains(&json!("event")));
     assert!(content_fields.contains(&json!("subscription_id")));
+}
+
+#[tokio::test]
+async fn workflow_agent_steps_use_the_normal_agent_runtime_with_durable_lineage() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let provider = Arc::new(WorkScriptedProvider {
+        turns: Mutex::new(VecDeque::from([ProviderTurn {
+            profile: "scripted".into(),
+            model_profile: "scripted".into(),
+            provider_profile: "scripted-provider".into(),
+            provider: "test".into(),
+            model: "test-model".into(),
+            response_id: Some("workflow-response".into()),
+            events: vec![ProviderEvent::FinalOutput {
+                text: "workflow agent finished".into(),
+            }],
+        }])),
+        requests: Mutex::new(Vec::new()),
+    });
+    let sessions: Arc<dyn colossus_ports::SessionRepository> = Arc::new(
+        colossus_session::EventSourcedSessionRepository::new(Arc::clone(&journal)),
+    );
+    let agent = Arc::new(colossus_agent::AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(
+            colossus_tools::StaticToolRegistry::new(
+                colossus_tools::builtin_specs()
+                    .into_iter()
+                    .filter(|tool| tool.name == "echo"),
+            )
+            .expect("workflow tool registry"),
+        ),
+        Arc::new(UnusedToolExecutor),
+        sessions,
+    ));
+    let gateway = colossus_policy::EffectGateway::new(
+        Arc::clone(&journal),
+        Arc::new(
+            colossus_policy::BuiltInPolicy::offline_default()
+                .with_action("agent.run", DecisionOutcome::Allow),
+        ),
+        Arc::new(colossus_policy::DenyApproval),
+        colossus_policy::SafetyKernel::new(["workflow.execute".into()]),
+        [47_u8; 32],
+    );
+    let released = GatewayWorkflowEffects {
+        gateway: Arc::new(gateway),
+        agent: Some(agent),
+        agent_max_turns: 2,
+    }
+    .run(WorkflowEffect {
+        kind: "agent".into(),
+        action: "agent.run".into(),
+        content: json!({"prompt": "Review the release boundary"}),
+        idempotency: None,
+        credential_references: Vec::new(),
+        allowed_tools: vec!["echo".into()],
+        run_id: "workflow-run-agent".into(),
+        step_id: "agent-review".into(),
+        definition_step_id: "agent-review".into(),
+        workflow_hash: "workflow-hash-agent".into(),
+        attempt: 2,
+        compensation: false,
+    })
+    .await
+    .expect("workflow agent step");
+
+    let agent_result: Value =
+        serde_json::from_str(released["text"].as_str().expect("released JSON text"))
+            .expect("agent result JSON");
+    assert_eq!(agent_result["output"], "workflow agent finished");
+    assert_eq!(
+        provider.requests.lock().expect("requests")[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["echo"],
+        "the pinned workflow capability ceiling is the agent's exact tool ceiling"
+    );
+    let model_event = journal
+        .read_global(1, 100)
+        .expect("events")
+        .into_iter()
+        .find(|event| event.event_type == "model.request.prepared.v1")
+        .expect("model request event");
+    assert_eq!(
+        model_event.context.workflow_id.as_deref(),
+        Some("workflow-run-agent")
+    );
+    assert_eq!(
+        model_event.context.workflow_hash.as_deref(),
+        Some("workflow-hash-agent")
+    );
+    assert_eq!(model_event.context.step_id.as_deref(), Some("agent-review"));
+    assert_eq!(model_event.context.attempt, Some(2));
+    assert_eq!(model_event.context.offered_tools, vec!["echo"]);
 }
 
 #[tokio::test]
@@ -1518,11 +1625,14 @@ fn startup_marks_running_subagents_interrupted_without_retrying() {
     };
     let job = service
         .create_subagent(
-            "session-1",
-            "run-1",
-            "call-1",
-            "unfinished",
-            "subagent_default",
+            colossus_work::CreateSubagentRequest {
+                session_id: "session-1".into(),
+                parent_run_id: "run-1".into(),
+                parent_call_id: "call-1".into(),
+                task: "unfinished".into(),
+                role: "subagent_default".into(),
+                allowed_tools: None,
+            },
             actor.clone(),
         )
         .expect("queue");
@@ -2654,6 +2764,7 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
         correlation_id: "run-parent".into(),
         session_id: Some(session.into()),
         run_id: Some("run-parent".into()),
+        offered_tools: vec!["agent.delegate".into(), "echo".into()],
         ..ExecutionContext::default()
     };
     let created = executor
@@ -2672,6 +2783,11 @@ async fn model_subagent_tools_inject_lineage_scope_results_and_deny_recursion() 
     assert_eq!(created["parent_run_id"], "run-parent");
     assert_eq!(created["parent_call_id"], "delegate-1");
     assert_eq!(created["status"], "queued");
+    assert_eq!(
+        created["allowed_tools"],
+        json!(["agent.delegate", "echo"]),
+        "the durable child job must preserve the parent's exact offered-tool ceiling"
+    );
     assert!(
         sessions
             .get_session(created["child_session_id"].as_str().expect("child"))

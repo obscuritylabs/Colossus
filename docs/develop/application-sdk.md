@@ -317,8 +317,8 @@ credential-bearing application RPC can run first.
 Trusted enrollment code creates an exact application grant:
 
 - application ID and placement;
-- `runs:execute`, `runs:read`, `runs:control`, `prompts:respond`, and/or
-  `approvals:respond`;
+- `runs:execute`, `runs:read`, `runs:control`, `prompts:respond`,
+  `approvals:respond`, `artifacts:read`, and/or `artifacts:write`;
 - allowed logical roles; and
 - allowed tools.
 
@@ -343,10 +343,17 @@ storage. The built-in generic provider protects against files, logs, argv, envir
 leaks, other OS users, and accidental credential reuse; it does not claim same-UID
 process isolation.
 
-Public runs cannot use `agent.delegate`, even if that tool name appears in a grant.
-Delegation remains disabled until Colossus can durably propagate the application's
-exact scope, role, and tool ceilings into each child run. This fail-closed restriction
-prevents a child job from acquiring the worker's broader internal authority.
+Public runs may use `agent.delegate` only when that exact tool appears in the
+application grant. The accepted run and every delegated job durably preserve the
+caller's exact tool ceiling. Child runs receive that ceiling but remove
+`agent.delegate` from model discovery, which keeps nested delegation fail closed and
+prevents a child from acquiring the worker's broader internal authority.
+
+Authenticated server discovery reports optional capabilities such as artifacts,
+attachments, and delegation. Clients must hide or disable optional UI until the
+server advertises it. Artifact uploads are caller-owned, size- and digest-bound, and
+chunked; downloads revalidate the released length and digest. Run attachments contain
+only opaque artifact IDs, never client or server filesystem paths.
 
 Public v1alpha1 runs also cannot activate installed skills. `selected_skills` must be
 empty, and prompt text such as `@skill-name` does not trigger skill discovery or
@@ -382,8 +389,15 @@ independently caps active watches at 64, leaving 16 request slots that watches c
 consume for cancellation, interaction responses, and system RPCs. These effective
 transport limits are advertised through
 `GetServerInfo`. The Rust client verifier also rejects TLS 1.2 signatures, preserving
-the TLS 1.3-only contract even if a future server configuration regresses. Run input is
-limited to 128 parts and 1 MiB, and `max_turns` cannot exceed 100.
+the TLS 1.3-only contract even if a future server configuration regresses. The
+deterministic local leaf uses P-256 so the same pinned identity works with the Rust,
+Python gRPC C-core, Node.js, and Go SDK transports. Run input is limited to 128 parts
+and 1 MiB, and `max_turns` cannot exceed 100.
+
+Preview applications enrolled against the earlier Ed25519-derived leaf must perform
+one authenticated re-enrollment after upgrading and store the newly reported
+certificate fingerprint. The P-256 leaf remains byte-for-byte stable for the same
+stored seed after that one-time pin rotation.
 
 Default application-resource limits are 32 active runs globally and eight per
 application, with fresh-create token buckets of four runs/second (burst 16) globally

@@ -26,6 +26,8 @@ pub(super) enum Command {
     Search(SearchCommand),
     /// Inspect model role routing.
     Models(ModelsCommand),
+    /// Upload, inspect, and download caller-owned released artifacts.
+    Artifacts(ArtifactsCommand),
     /// Inspect the active strict tool catalog.
     Tools(ToolsCommand),
     /// Create, inspect, and resume durable sessions.
@@ -104,6 +106,9 @@ pub(super) enum Command {
         /// Explicitly activate one declarative skill. Repeat as needed.
         #[arg(long = "skill")]
         skills: Vec<String>,
+        /// Attach one bounded UTF-8 file as private CLI run input. Repeat as needed.
+        #[arg(long = "attach", value_name = "PATH")]
+        attachments: Vec<PathBuf>,
         /// Render policy-released text deltas to stderr while preserving JSON on stdout.
         #[arg(long)]
         stream: bool,

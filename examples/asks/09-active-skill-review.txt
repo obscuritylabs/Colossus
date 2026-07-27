@@ -1,0 +1,1 @@
+Apply the explicitly activated skill to review the current workspace. Follow its instructions and use only tools that the active skill and runtime actually expose. Return the skill-informed result with workspace-relative evidence. Do not modify files unless the skill explicitly requires a mutation and the operator separately approves it.

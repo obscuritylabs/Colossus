@@ -23,14 +23,19 @@ use crate::{
 const APPLICATION_ID: &str = "app:colossus-desktop-managed";
 const SELF_TEST_APPLICATION_ID: &str = "app:colossus-desktop-self-test";
 const SELF_TEST_INSTANCE_ID: &str = "00000000-0000-7000-8000-000000000001";
-const PRIMARY_SCOPES: [&str; 4] = [
+const PRIMARY_SCOPES: [&str; 6] = [
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
     scopes::RUNS_CONTROL,
     scopes::PROMPTS_RESPOND,
+    scopes::ARTIFACTS_READ,
+    scopes::ARTIFACTS_WRITE,
 ];
 
 const DEVELOPMENT_TOOL_GRANT: &[&str] = &[
+    "agent.delegate",
+    "agent.list",
+    "agent.result",
     "context.compact",
     "context.restore",
     "context.show",
@@ -600,16 +605,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_grant_excludes_delegation_skills_and_worker_admin() {
+    fn desktop_grant_includes_bounded_delegation_and_excludes_worker_admin() {
         let grant = application_grant(AccessProfileSetting::Development).expect("grant");
         let debug = format!("{grant:?}");
-        for denied in ["agent.delegate", "skill.install", "mcp.call"] {
+        for denied in ["skill.install", "mcp.call"] {
             assert!(!debug.contains(denied));
         }
+        assert!(debug.contains("agent.delegate"));
         assert!(debug.contains("filesystem.read"));
         assert!(debug.contains("shell.run"));
         assert!(!debug.contains(scopes::APPROVALS_RESPOND));
-        assert_eq!(PRIMARY_SCOPES.len(), 4);
+        assert_eq!(PRIMARY_SCOPES.len(), 6);
         for required in PRIMARY_SCOPES {
             assert!(debug.contains(required));
         }

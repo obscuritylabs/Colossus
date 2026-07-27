@@ -1,0 +1,3 @@
+Call the offered openapi.sdk-demo.getstatus tool exactly once with service set to sdk.
+Reply with exactly: SDK_INTEGRATION_OK: STATUS
+Replace STATUS with the status returned by the tool.

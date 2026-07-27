@@ -9,12 +9,13 @@ use crate::{
 };
 use async_trait::async_trait;
 use colossus_api::{
-    AgentRunApi, ApiError, ApiErrorReason, ApiResult, ApplicationPrincipal, CallerContext,
-    CancelRunRequest, ContentPart, CreateRunRequest, CreateRunResponse, EventSourcedRunRepository,
-    GetRunRequest, Interaction, InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun,
-    OutcomeCertainty, RequestId, RespondInteractionRequest, Run, RunCancellation,
-    RunExecutionRequest, RunFailure, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind,
-    RunUpdateStream, TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest, scopes,
+    AgentRunApi, ApiError, ApiErrorReason, ApiResult, ApplicationPrincipal, ArtifactApi,
+    ArtifactPurpose, ArtifactState, CallerContext, CancelRunRequest, ContentPart, CreateRunRequest,
+    CreateRunResponse, EventSourcedArtifactApi, EventSourcedRunRepository, GetRunRequest,
+    Interaction, InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun, OutcomeCertainty,
+    RequestId, RespondInteractionRequest, Run, RunCancellation, RunExecutionRequest, RunFailure,
+    RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind, RunUpdateStream, TokenUsage,
+    ToolActivity, ToolActivityState, WatchRunRequest, scopes,
 };
 use colossus_contracts::{
     ActorType, AgentRunOutcome, ProviderEvent, RunEvent, RunEventEnvelope, RunPhase,
@@ -35,6 +36,7 @@ use uuid::Uuid;
 const WATCH_PAGE_SIZE: usize = 16;
 const WATCH_CHANNEL_SIZE: usize = 8;
 const MAX_PENDING_RECOVERIES: usize = 256;
+const MAX_RENDERED_INPUT_BYTES: usize = 1_048_576;
 
 #[derive(Clone)]
 struct ActiveRun {
@@ -97,6 +99,7 @@ enum ExecutionAdmission {
 pub struct RuntimeAgentRunApi {
     runtime: Arc<Runtime>,
     repository: Arc<dyn RunRepository>,
+    artifacts: Arc<dyn ArtifactApi>,
     interactions: Arc<PublicInteractionRouter>,
     feeds: Arc<RunFeeds>,
     execution: Arc<Mutex<ExecutionRegistry>>,
@@ -181,6 +184,7 @@ impl RuntimeAgentRunApi {
         let watches = WatchAdmission::new(&admission);
         let lists = ListAdmission::new(&admission);
         Self {
+            artifacts: Arc::new(EventSourcedArtifactApi::new(runtime.journal())),
             runtime,
             repository,
             interactions,
@@ -258,6 +262,56 @@ impl RuntimeAgentRunApi {
             .with_correlation_id(caller.request_id().clone()));
         }
         Ok((session_id.into(), false))
+    }
+
+    async fn rendered_input(
+        &self,
+        caller: &CallerContext,
+        request: &CreateRunRequest,
+    ) -> ApiResult<String> {
+        let mut rendered = String::new();
+        for part in &request.input {
+            let segment = match part {
+                ContentPart::Text { text } => text.clone(),
+                ContentPart::Artifact { artifact_id } => {
+                    let download = self.artifacts.download(caller, artifact_id, 0).await?;
+                    if download.artifact.state != ArtifactState::Available
+                        || download.artifact.purpose != ArtifactPurpose::RunInput
+                        || !supported_text_attachment(&download.artifact.media_type)
+                    {
+                        return Err(ApiError::failed_precondition(
+                            ApiErrorReason::ArtifactUnavailable,
+                            "the artifact is not an available text run input",
+                        )
+                        .with_correlation_id(caller.request_id().clone()));
+                    }
+                    let text = String::from_utf8(download.bytes).map_err(|_| {
+                        ApiError::invalid(
+                            ApiErrorReason::InvalidArgument,
+                            "input.artifact",
+                            "text run-input artifacts must contain UTF-8",
+                        )
+                        .with_correlation_id(caller.request_id().clone())
+                    })?;
+                    format!(
+                        "Attached file {} ({}):\n{}",
+                        download.artifact.file_name, download.artifact.media_type, text
+                    )
+                }
+            };
+            if !rendered.is_empty() {
+                rendered.push_str("\n\n");
+            }
+            if rendered.len().saturating_add(segment.len()) > MAX_RENDERED_INPUT_BYTES {
+                return Err(ApiError::bounded_resource_exhausted(
+                    ApiErrorReason::CapacityExceeded,
+                    "combined text and attachment input exceeds the run-input bound",
+                )
+                .with_correlation_id(caller.request_id().clone()));
+            }
+            rendered.push_str(&segment);
+        }
+        Ok(rendered)
     }
 
     fn reserve_execution_locked(
@@ -729,14 +783,23 @@ impl RuntimeAgentRunApi {
         if panic_after_start {
             panic!("injected public execution panic after durable start");
         }
-        let prompt = request
-            .input
-            .iter()
-            .map(|part| match part {
-                ContentPart::Text { text } => text.as_str(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let prompt = match self.rendered_input(&caller, &request).await {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                let _ = writer.append(RunUpdateKind::Failure {
+                    status: RunStatus::Failed,
+                    failure: RunFailure {
+                        code: "artifact.input_unavailable".into(),
+                        message: error.message,
+                        outcome: OutcomeCertainty::Known,
+                        recoverable: false,
+                        http_status: None,
+                        retry_after_ms: None,
+                    },
+                });
+                return true;
+            }
+        };
         let max_turns = if request.max_turns == 0 {
             None
         } else {
@@ -835,6 +898,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
         request
             .validate()
             .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        self.rendered_input(caller, &request).await?;
         let role = request
             .role
             .clone()
@@ -1171,6 +1235,18 @@ fn recovered_caller(
     let request_id =
         RequestId::new(format!("recovery-{run_id}")).map_err(|_| recovery_invariant(external))?;
     Ok(CallerContext::authenticated(principal, request_id))
+}
+
+fn supported_text_attachment(media_type: &str) -> bool {
+    media_type.starts_with("text/")
+        || matches!(
+            media_type,
+            "application/json"
+                | "application/yaml"
+                | "application/x-yaml"
+                | "application/toml"
+                | "application/xml"
+        )
 }
 
 fn interrupted_failure() -> RunUpdateKind {

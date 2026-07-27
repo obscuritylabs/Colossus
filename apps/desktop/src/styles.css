@@ -1955,6 +1955,22 @@ textarea {
   gap: 3px;
 }
 
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0 7px;
+}
+
+.composer-attachments .artifact-chip button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
 .icon-button,
 .send-button {
   display: grid;
@@ -2925,6 +2941,28 @@ textarea {
   border-radius: 9px;
   background: var(--surface-muted);
   text-align: left;
+}
+
+.capability-summary-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-muted);
+}
+
+.capability-summary-card > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.capability-summary-card small {
+  white-space: normal;
 }
 
 .target-grid > button:hover,

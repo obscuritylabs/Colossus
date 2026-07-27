@@ -123,6 +123,7 @@ pub(super) enum WorkOperation {
         parent_call_id: String,
         task: String,
         role: String,
+        allowed_tools: Option<Vec<String>>,
     },
     SubagentRead {
         id: String,

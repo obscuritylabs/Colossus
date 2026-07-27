@@ -1,0 +1,1 @@
+What are the strongest source-backed indicators that this workspace is ready or not ready for a production desktop release? Compare repository evidence with current external primary sources, separate verified facts from inference, cite every material claim, and finish with the five highest-priority release gaps. Do not modify the workspace.

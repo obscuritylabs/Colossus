@@ -7,6 +7,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod agent_run;
+mod artifact;
 mod auth;
 mod endpoint;
 mod journal_credentials;
@@ -17,6 +18,7 @@ mod system;
 mod tls_identity;
 
 pub use agent_run::{AgentRunServiceAdapter, MAX_ACTIVE_WATCH_STREAMS};
+pub use artifact::ArtifactServiceAdapter;
 pub use auth::{
     ApplicationGrant, AuthenticationError, AuthenticationInterceptor, CredentialAuthenticator,
     CredentialRecord, CredentialRepository, CredentialStoreError, InMemoryCredentialRepository,

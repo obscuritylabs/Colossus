@@ -17,6 +17,9 @@ pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest 
             .into_iter()
             .map(|part| match part {
                 InputContentPart::Text(text) => core::ContentPart::Text { text },
+                InputContentPart::Artifact(artifact_id) => {
+                    core::ContentPart::Artifact { artifact_id }
+                }
             })
             .collect(),
         session_id: value.session_id,

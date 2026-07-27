@@ -68,6 +68,7 @@ model output.
 | `provider` | Inspect and diagnose model profiles |
 | `search` | Inspect and query provider-neutral search routes |
 | `models` | Inspect role-to-profile routing |
+| `artifacts` | Upload, inspect, and download caller-owned released artifacts |
 | `tools` | Inspect the resolved strict tool catalog |
 | `sessions` | Create and inspect durable sessions; `run` and TUI attach or resume |
 | `work` | Render bounded actionable work for a session |
@@ -115,6 +116,7 @@ positional:
 | `provider` | `profiles`, `doctor [PROFILE]`, `models [PROFILE]` |
 | `search` | `profiles`, `query QUERY` |
 | `models` | `routes`, `route [ROLE]` |
+| `artifacts` | `upload PATH`, `show ARTIFACT_ID`, `download ARTIFACT_ID OUTPUT` |
 | `tools` | `list` |
 | `sessions` | `list`, `show SESSION_ID`, `messages SESSION_ID`, `new [TITLE]` |
 | `work` | `work [--session SESSION_ID]` |
@@ -158,7 +160,8 @@ positional:
 | `goals run` | `--role primary`; `--max-iterations 5` in `1..=50` |
 | `agents queue` | `--role subagent_default` |
 | `research run` | `--depth standard`; planned-query budgets are `quick=1`, `standard=3`, `deep=6`; `--source repo,web,mcp` |
-| `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume` |
+| `artifacts upload` | Policy-authorized bounded files; `--purpose run-input`; encrypted bytes are owner-bound to the CLI application identity |
+| `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume`; `--attach PATH` repeats up to 16 policy-read files within a 1 MiB aggregate UTF-8 input bound |
 | `tui` | fresh session unless `--session` or `--resume` |
 | `worker` | serves authenticated local IPC; add `--public-api-dir ABS_OWNER_PRIVATE_DIR` to host authenticated loopback gRPC; `--once`, `--status`, `--shutdown`, enrollment, and revocation modes conflict |
 

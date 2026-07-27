@@ -50,12 +50,13 @@ function renderOnboarding(
   selectedWorkspace: WorkspaceSummary | null,
   overrides: Partial<DesktopStatus> = {},
   dismissible = false,
+  error = "",
 ): string {
   return renderToStaticMarkup(
     createElement(OnboardingSurface, {
       desktop: { ...desktop(selectedWorkspace), ...overrides },
       busy: false,
-      error: "",
+      error,
       onChooseWorkspace: vi.fn(),
       onConfigure: vi.fn(),
       onApplyConfiguration: vi.fn(),
@@ -84,6 +85,19 @@ describe("OnboardingSurface", () => {
     expect(openingButtonTag(markup, "Run offline self-test")).toContain(
       "disabled",
     );
+  });
+
+  it("shows workspace selection failures before provider setup", () => {
+    const markup = renderOnboarding(
+      null,
+      {},
+      false,
+      "The workspace selection is no longer valid.",
+    );
+
+    expect(markup).toContain('class="page-error"');
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("The workspace selection is no longer valid.");
   });
 
   it("shows provider setup and enables offline verification after folder selection", () => {

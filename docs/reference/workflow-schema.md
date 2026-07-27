@@ -49,6 +49,10 @@ compensation: []
 ```
 <!-- rust-workflow-example:end -->
 
+`capabilities` is an exact, pinned ceiling rather than an authority grant. It limits
+effect actions declared by the workflow and, for `agent` steps, the tool names that
+may be offered to the model. Policy, approval, and sandbox checks remain mandatory.
+
 | Field | Contract |
 | --- | --- |
 | `apiVersion` | `colossus.dev/v1alpha1` |

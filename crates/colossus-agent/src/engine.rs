@@ -57,6 +57,10 @@ impl AgentService {
             goal_id: scope.goal_id.map(str::to_owned),
             plan_id: scope.plan_id.map(str::to_owned),
             subagent_id: scope.subagent_id.map(str::to_owned),
+            workflow_id: scope.workflow_id.map(str::to_owned),
+            workflow_hash: scope.workflow_hash.map(str::to_owned),
+            step_id: scope.step_id.map(str::to_owned),
+            attempt: scope.attempt,
             skill_ids: scope.active_skills.to_vec(),
             ..ExecutionContext::default()
         };
@@ -94,10 +98,6 @@ impl AgentService {
             (scope.goal_id.is_some()
                 || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
                 && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
-                // Public application runs carry an explicit tool ceiling. Delegated
-                // jobs do not yet persist and inherit that ceiling, so exposing
-                // delegation here would let one allowed tool expand authority.
-                && (scope.allowed_tools.is_none() || definition.name != "agent.delegate")
                 && (!scope.plan_mode || plan_mode_tool(&definition.name))
                 && scope
                     .allowed_tools

@@ -16,7 +16,10 @@ mod terminal_protocol;
 mod updates;
 mod workspace_files;
 
-use commands::{cancel_run, create_run, get_run, list_runs, respond_interaction, watch_run};
+use commands::{
+    cancel_run, choose_run_attachment, create_run, get_run, list_runs, read_artifact_content,
+    respond_interaction, watch_run,
+};
 use desktop_commands::{
     add_external_target, apply_managed_model_configuration, choose_workspace,
     configure_managed_runtime, connect_colossus, connection_status, desktop_release_channel,
@@ -67,6 +70,8 @@ pub fn run() {
             connect_colossus,
             connection_status,
             create_run,
+            choose_run_attachment,
+            read_artifact_content,
             get_run,
             list_runs,
             watch_run,

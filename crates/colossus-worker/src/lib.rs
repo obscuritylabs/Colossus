@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use colossus_api::ArtifactPurpose;
 use colossus_contracts::{
     AgentRunOutcome, AgentRunResult, ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice,
     DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth, MemoryScope,
@@ -26,6 +27,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -63,6 +65,7 @@ mod dispatch;
 mod frames;
 mod handshake;
 mod interactive;
+mod local_artifacts;
 mod observers;
 mod operation_names;
 mod operations;
@@ -89,6 +92,7 @@ use dispatch::*;
 use frames::*;
 use handshake::*;
 use interactive::*;
+use local_artifacts::*;
 use observers::*;
 use operation_names::*;
 use operations::*;

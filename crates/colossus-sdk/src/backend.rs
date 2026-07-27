@@ -8,9 +8,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::{
-    ApiResult, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
-    GetRunRequest, GetRunResponse, ListRunsRequest, ListRunsResponse, RespondInteractionRequest,
-    RespondInteractionResponse, RunUpdateStream, SdkResult, WatchRunRequest,
+    ApiResult, ArtifactReference, CancelRunRequest, CancelRunResponse, CreateRunRequest,
+    CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse, ListRunsRequest,
+    ListRunsResponse, RespondInteractionRequest, RespondInteractionResponse, RunUpdateStream,
+    SdkResult, ServerCapabilities, UploadArtifactRequest, WatchRunRequest,
 };
 
 /// Runtime placement used by this client.
@@ -69,6 +70,19 @@ pub trait AgentRunClient: Send + Sync {
         &self,
         request: RespondInteractionRequest,
     ) -> ApiResult<RespondInteractionResponse>;
+}
+
+/// Caller-bound released artifact operations.
+#[async_trait]
+pub trait ArtifactClient: Send + Sync {
+    /// Reserve, upload, verify, and release one complete bounded artifact.
+    async fn upload(&self, request: UploadArtifactRequest) -> ApiResult<ArtifactReference>;
+
+    /// Fetch caller-visible artifact metadata.
+    async fn get(&self, artifact_id: &str) -> ApiResult<ArtifactReference>;
+
+    /// Download and verify complete released bytes.
+    async fn download(&self, artifact_id: &str) -> ApiResult<DownloadedArtifact>;
 }
 
 /// Bind a trusted embedded caller context to the transport-neutral public API.
@@ -226,6 +240,18 @@ pub trait Backend: Send + Sync {
 
     /// Caller-bound run service.
     fn agent_runs(&self) -> Arc<dyn AgentRunClient>;
+
+    /// Cached authenticated server capabilities.
+    ///
+    /// Custom and preview-era embedded backends default to no optional behaviors.
+    fn capabilities(&self) -> ServerCapabilities {
+        ServerCapabilities::default()
+    }
+
+    /// Caller-bound artifact service when advertised.
+    fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
+        None
+    }
 
     /// Close this client or isolated runtime idempotently.
     async fn close(&self) -> SdkResult<()>;

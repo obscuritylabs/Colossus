@@ -26,7 +26,7 @@ interface ProductRailProps {
 
 const MAIN_ITEMS = [
   { id: "work", label: "Work", Icon: IconBriefcase2 },
-  { id: "fleet", label: "Fleet", Icon: IconTopologyStar3 },
+  { id: "fleet", label: "Agents", Icon: IconTopologyStar3 },
   { id: "library", label: "Library", Icon: IconLibrary },
   { id: "activity", label: "Activity", Icon: IconActivity },
 ] as const;
@@ -50,7 +50,11 @@ export function ProductRail({
       <nav className="product-nav" aria-label="Workspace areas">
         {MAIN_ITEMS.filter(({ id }) => {
           if (id === "fleet") {
-            return capabilities.agentWorkflows;
+            return (
+              capabilities.delegation ||
+              capabilities.agentWorkflows ||
+              capabilities.skills
+            );
           }
           if (id === "library") {
             return capabilities.artifacts;

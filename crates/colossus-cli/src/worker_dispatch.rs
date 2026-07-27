@@ -183,6 +183,33 @@ pub(super) async fn dispatch_to_worker_if_active(
             }
             Ok(true)
         }
+        Command::Artifacts(command) => {
+            let operation = match &command.command {
+                ArtifactsAction::Upload {
+                    path,
+                    purpose,
+                    idempotency_key,
+                } => WorkerOperation::ArtifactUpload {
+                    path: path.to_string_lossy().into_owned(),
+                    purpose: (*purpose).into(),
+                    idempotency_key: idempotency_key
+                        .clone()
+                        .unwrap_or_else(|| format!("cli-artifact-{}", Uuid::now_v7())),
+                },
+                ArtifactsAction::Show { artifact_id } => WorkerOperation::ArtifactGet {
+                    artifact_id: artifact_id.clone(),
+                },
+                ArtifactsAction::Download {
+                    artifact_id,
+                    output,
+                } => WorkerOperation::ArtifactDownload {
+                    artifact_id: artifact_id.clone(),
+                    output: output.to_string_lossy().into_owned(),
+                },
+            };
+            print_json(&client.call(operation).await?)?;
+            Ok(true)
+        }
         Command::Process(command) => {
             let operation = match &command.command {
                 ProcessAction::Run {
@@ -224,8 +251,15 @@ pub(super) async fn dispatch_to_worker_if_active(
             session,
             resume,
             skills,
+            attachments,
             stream,
         } => {
+            if execute_plan.is_some() && !attachments.is_empty() {
+                return Err(cli_error(
+                    "--attach is not supported with --execute-plan; attach files to the planning run instead",
+                )
+                .into());
+            }
             if execute_plan.is_some() && *stream {
                 return Err(cli_error(
                     "--stream is not supported with --execute-plan; inspect the returned run JSON",
@@ -268,6 +302,14 @@ pub(super) async fn dispatch_to_worker_if_active(
             let prompt = prompt
                 .as_deref()
                 .ok_or_else(|| cli_error("a prompt or --execute-plan is required"))?;
+            let attachment_paths = attachments
+                .iter()
+                .map(|path| {
+                    path.to_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| cli_error("worker attachment paths must be valid UTF-8"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             let session_id = if *resume {
                 Some(
                     serde_json::from_value::<colossus_contracts::SessionSummary>(
@@ -283,6 +325,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                     role: role.clone(),
                     instructions: instructions.clone(),
                     prompt: prompt.into(),
+                    attachments: attachment_paths,
                     max_turns: *max_turns,
                     session_id,
                     explicit_skills: skills.clone(),
@@ -293,6 +336,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                     role: role.clone(),
                     instructions: instructions.clone(),
                     prompt: prompt.into(),
+                    attachments: attachment_paths,
                     max_turns: *max_turns,
                     session_id,
                     explicit_skills: skills.clone(),

@@ -128,14 +128,20 @@ Use `workflow status RUN_ID` and verbose events to inspect the evidence.
 by parser tests. It deliberately uses non-idempotent model steps, because a lost model
 response has an unknown outcome and must not be silently replayed.
 
-The current composed workflow executor does not yet attach the normal agent runtime to
-the `agent.run` effect. On this build, running the definition fails with
-`no adapter registered for agent.run`; this is a runtime gap, not a provider or YAML
-failure. Your local model remains usable through ordinary `colossus run` commands.
-Once the adapter is connected, register and run the example with:
+The composed workflow executor routes `agent.run` through the normal model runtime,
+policy gateway, approval handling, provider error classification, and workflow
+lineage. Register and run the example with:
 
 ```bash
 ./target/debug/colossus workflow register \
   examples/workflows/07-local-llm-parallel-review.yaml
-./target/debug/colossus workflow run local-llm-parallel-review 1.0.0
+./target/debug/colossus --approval-mode full-access \
+  workflow run local-llm-parallel-review 1.0.0
 ```
+
+The explicit approval mode is required for this non-interactive example because model
+steps are approval-gated effects. Use it only in a disposable development workspace
+after reviewing the workflow. Without it, the expected failure is `operator declined`.
+With it, each `agent.run` step uses the configured primary model and sees only tools
+whose exact names appear in the workflow's `capabilities` ceiling; every invocation
+still crosses the normal policy and sandbox boundary.

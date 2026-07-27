@@ -299,7 +299,7 @@ fn create_request(
         return Err(invalid(
             caller,
             "input",
-            "input must contain at most 128 text parts",
+            "input must contain at most 128 content parts",
         ));
     }
     if !request.selected_skills.is_empty() {
@@ -327,15 +327,16 @@ fn create_request(
             Some(content_part::Content::Text(text)) => {
                 Ok(CoreContentPart::Text { text: text.text })
             }
-            Some(content_part::Content::Artifact(_)) => Err(invalid(
-                caller,
-                "input.content",
-                "v1alpha1 create-run input accepts text content only",
-            )),
+            Some(content_part::Content::Artifact(artifact)) => {
+                validate_identifier(caller, "input.artifact.artifact_id", &artifact.artifact_id)?;
+                Ok(CoreContentPart::Artifact {
+                    artifact_id: artifact.artifact_id,
+                })
+            }
             None => Err(invalid(
                 caller,
                 "input.content",
-                "each input part must contain text",
+                "each input part must contain text or an artifact reference",
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;

@@ -26,6 +26,67 @@ fn only_explicit_transport_absence_allows_worker_fallback() {
 }
 
 #[test]
+fn artifact_operations_round_trip_without_artifact_bytes_or_credentials() {
+    let encoded = serde_json::to_value(WorkerOperation::ArtifactUpload {
+        path: "docs/review.md".into(),
+        purpose: ArtifactPurpose::RunInput,
+        idempotency_key: "upload-review".into(),
+    })
+    .expect("serialize artifact upload");
+    assert_eq!(encoded["operation"], "artifact_upload");
+    assert_eq!(encoded["purpose"], "run_input");
+    assert!(encoded.get("bytes").is_none());
+    assert!(encoded.get("credential").is_none());
+
+    let decoded: WorkerOperation =
+        serde_json::from_value(encoded).expect("deserialize artifact upload");
+    assert!(matches!(
+        decoded,
+        WorkerOperation::ArtifactUpload {
+            purpose: ArtifactPurpose::RunInput,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn model_attachment_protocol_carries_paths_without_client_read_content() {
+    let operation = WorkerOperation::RunModel {
+        role: "primary".into(),
+        instructions: "Review safely".into(),
+        prompt: "Inspect the attachment".into(),
+        attachments: vec!["docs/review.md".into()],
+        max_turns: Some(2),
+        session_id: None,
+        explicit_skills: Vec::new(),
+        sticky_skills: Vec::new(),
+    };
+    let encoded = serde_json::to_value(&operation).expect("serialize model attachment");
+    assert_eq!(
+        encoded["attachments"],
+        serde_json::json!(["docs/review.md"])
+    );
+    assert!(
+        !encoded["prompt"]
+            .as_str()
+            .expect("prompt")
+            .contains("private")
+    );
+
+    let mut preview_payload = encoded;
+    preview_payload
+        .as_object_mut()
+        .expect("operation object")
+        .remove("attachments");
+    let decoded: WorkerOperation =
+        serde_json::from_value(preview_payload).expect("read preview-era operation");
+    assert!(matches!(
+        decoded,
+        WorkerOperation::RunModel { attachments, .. } if attachments.is_empty()
+    ));
+}
+
+#[test]
 fn workflow_schedule_operation_round_trips_the_worker_contract() {
     let encoded = serde_json::to_value(WorkerOperation::WorkflowScheduleCreate {
         schedule_id: "nightly".into(),

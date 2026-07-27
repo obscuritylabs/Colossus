@@ -78,6 +78,29 @@ colossus --config .colossus/config.yaml --output json \
   run --stream "Report repository status" > result.json
 ```
 
+For a private CLI run, attach bounded UTF-8 workspace files directly:
+
+```bash
+colossus run --attach design.md --attach src/lib.rs \
+  "Review the attached files and identify inconsistent assumptions"
+```
+
+Attachment paths are sent to the active runtime, which performs each read through the
+normal filesystem policy and audit boundary. The CLI never pre-reads attachment content
+to bypass workspace restrictions.
+
+For reusable opaque content, upload through the encrypted artifact service:
+
+```bash
+colossus artifacts upload design.md
+colossus artifacts show ARTIFACT_ID
+colossus artifacts download ARTIFACT_ID restored-design.md
+```
+
+Artifact commands preserve only the display name and declared media type in released
+metadata. The authoritative bytes remain encrypted and bound to the CLI application
+identity; downloads still pass through the normal filesystem policy boundary.
+
 ### 4. Attach to durable context
 
 ```bash

@@ -17,6 +17,7 @@ getrandom.workspace = true
 futures.workspace = true
 hmac.workspace = true
 http-body = "1.0.1"
+p256.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 rcgen.workspace = true

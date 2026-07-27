@@ -63,6 +63,8 @@ const RELEASE_ORCHESTRATOR_EXAMPLE: &str =
     include_str!("../../../examples/workflows/05-release-orchestrator.yaml");
 const RECOVERY_COMPENSATION_EXAMPLE: &str =
     include_str!("../../../examples/workflows/06-recovery-compensation-lab.yaml");
+const LOCAL_LLM_PARALLEL_REVIEW_EXAMPLE: &str =
+    include_str!("../../../examples/workflows/07-local-llm-parallel-review.yaml");
 
 const WEBHOOK_WORKFLOW: &str = r#"
 apiVersion: colossus.dev/v1alpha1
@@ -1399,6 +1401,30 @@ async fn orchestrator_and_recovery_examples_exercise_linkage_retry_and_compensat
     );
 }
 
+#[tokio::test]
+async fn local_llm_example_pins_agent_effects_to_the_definition_capability_ceiling() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository: Arc<dyn WorkflowRepository> =
+        Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
+    let effects = Arc::new(RecordingEffects::default());
+    let service = WorkflowService::new(journal, repository, effects.clone());
+    service
+        .register_definition(LOCAL_LLM_PARALLEL_REVIEW_EXAMPLE, "repository-example")
+        .expect("register local LLM example");
+    let run = service
+        .start_run("local-llm-parallel-review", "1.0.0", json!({}))
+        .await
+        .expect("run local LLM example");
+    assert_eq!(run.status, WorkflowStatus::Completed);
+    let calls = effects.calls();
+    assert_eq!(calls.len(), 3);
+    assert!(calls.iter().all(|call| {
+        call.action == "agent.run"
+            && call.allowed_tools == vec!["agent.run"]
+            && call.workflow_hash == run.workflow_hash
+    }));
+}
+
 struct FileKeyProvider {
     anchor: PathBuf,
 }
@@ -2593,6 +2619,10 @@ compensation:
         .await
         .expect("run");
     assert_eq!(run.status, colossus_contracts::WorkflowStatus::Failed);
+    assert_eq!(
+        run.failure_reason.as_deref(),
+        Some("workflow effect failed: injected failure for primary.fail")
+    );
     let calls = effects.calls();
     assert_eq!(
         calls

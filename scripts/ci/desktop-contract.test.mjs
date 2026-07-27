@@ -184,6 +184,28 @@ test("terminal PTY authority is isolated from the main WebView", () => {
   assert.match(bridge, /url\.query\(\) == Some\("surface=terminal"\)/u);
 });
 
+test("main WebView exposes the advanced configuration and updater commands it calls", () => {
+  const main = json("apps/desktop/src-tauri/capabilities/main-chat.json");
+  for (const permission of [
+    "allow-apply-managed-model-configuration",
+    "allow-check-desktop-update",
+    "allow-install-desktop-update",
+  ]) {
+    assert.ok(main.permissions.includes(permission), permission);
+  }
+
+  const bridge = read("apps/desktop/src-tauri/src/lib.rs");
+  const api = read("apps/desktop/src/api.ts");
+  for (const command of [
+    "apply_managed_model_configuration",
+    "check_desktop_update",
+    "install_desktop_update",
+  ]) {
+    assert.match(bridge, new RegExp(`\\b${command}\\b`, "u"));
+    assert.match(api, new RegExp(`"${command}"`, "u"));
+  }
+});
+
 test("workspace file preview is read-only, bounded, and workspace-bound", () => {
   const main = json("apps/desktop/src-tauri/capabilities/main-chat.json");
   assert.ok(main.permissions.includes("allow-list-workspace-directory"));

@@ -1,0 +1,1 @@
+Reply with exactly SDK_SUITE_OK and nothing else.

@@ -1481,20 +1481,30 @@ async fn desktop_status_from(
         _ => ConnectionStatusDto::not_configured(),
     };
     let selected_managed = selected.as_deref() == Some(MANAGED_TARGET_ID) && managed_ready;
+    let advertised = if connection.state == ConnectionStateDto::Connected {
+        match selected.as_deref() {
+            Some(target_id) => state
+                .target(target_id)
+                .await
+                .map(|target| target.client.capabilities())
+                .unwrap_or_default(),
+            None => Default::default(),
+        }
+    } else {
+        Default::default()
+    };
     let capabilities = DesktopCapabilitiesDto {
-        // The current authenticated API does not yet advertise these optional
-        // authorities. Development fixtures never grant renderer capability.
-        delegation: false,
-        skills: false,
+        delegation: advertised.contains("agent_runs.delegation"),
+        skills: advertised.contains("skills.select"),
         tui: selected_managed && cfg!(any(target_os = "macos", target_os = "windows")),
         files: selected_managed
             && workspace.is_some()
             && settings.access_profile
                 == crate::desktop_settings::AccessProfileSetting::Development,
-        artifacts: connection.state == ConnectionStateDto::Connected,
+        artifacts: advertised.contains("artifacts.read"),
         update_available: state.update_available(),
-        agent_workflows: false,
-        attachments: false,
+        agent_workflows: advertised.contains("automation.workflows"),
+        attachments: advertised.contains("attachments.run_input"),
     };
     Ok(DesktopStatusDto {
         release_channel: DesktopReleaseChannelDto::current(),

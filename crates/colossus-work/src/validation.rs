@@ -143,6 +143,17 @@ pub(super) fn validate_goal(goal: &GoalRecord) -> Result<(), StoreError> {
 }
 
 pub(super) fn validate_subagent(job: &SubagentJob) -> Result<(), StoreError> {
+    let tools_valid = job.allowed_tools.as_ref().is_none_or(|tools| {
+        let mut unique = BTreeSet::new();
+        tools.len() <= 512
+            && tools.iter().all(|tool| {
+                !tool.is_empty()
+                    && tool.len() <= 128
+                    && tool.trim() == tool
+                    && !tool.chars().any(char::is_control)
+                    && unique.insert(tool)
+            })
+    });
     let lifecycle_valid = match job.status {
         SubagentStatus::Queued => {
             job.child_run_id.is_none()
@@ -175,6 +186,7 @@ pub(super) fn validate_subagent(job: &SubagentJob) -> Result<(), StoreError> {
         || job.error.len() > MAX_TEXT_BYTES
         || job.created_at.is_empty()
         || job.updated_at.is_empty()
+        || !tools_valid
         || !lifecycle_valid
     {
         return Err(StoreError::Adapter(

@@ -633,6 +633,11 @@ pub enum ContentPart {
         /// Visible text.
         text: String,
     },
+    /// Opaque caller-owned released artifact supplied as run input.
+    Artifact {
+        /// Exact authorized artifact identifier.
+        artifact_id: String,
+    },
 }
 
 /// Request to create and start one agent run.
@@ -709,7 +714,9 @@ impl CreateRunRequest {
         let mut truncated = false;
 
         'parts: for part in &self.input {
-            let ContentPart::Text { text } = part;
+            let ContentPart::Text { text } = part else {
+                continue;
+            };
             for character in text.chars() {
                 let is_unsafe_formatting = matches!(
                     character,
@@ -757,14 +764,14 @@ impl CreateRunRequest {
             return Err(ApiError::invalid(
                 ApiErrorReason::InvalidArgument,
                 "input",
-                "input must contain at least one text part",
+                "input must contain at least one content part",
             ));
         }
         if self.input.len() > MAX_INPUT_PARTS {
             return Err(ApiError::invalid(
                 ApiErrorReason::InvalidArgument,
                 "input",
-                format!("input must contain at most {MAX_INPUT_PARTS} text parts"),
+                format!("input must contain at most {MAX_INPUT_PARTS} content parts"),
             ));
         }
         let mut total_input_bytes = 0_usize;
@@ -773,6 +780,9 @@ impl CreateRunRequest {
                 ContentPart::Text { text } => {
                     bounded_text(text, "input.text", MAX_INPUT_BYTES, false)?;
                     total_input_bytes = total_input_bytes.saturating_add(text.len());
+                }
+                ContentPart::Artifact { artifact_id } => {
+                    crate::artifacts::validate_artifact_id(artifact_id, "input.artifact_id")?;
                 }
             }
         }

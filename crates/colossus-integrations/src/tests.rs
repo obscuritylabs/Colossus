@@ -1,6 +1,7 @@
 use super::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest, compile_native,
-    compile_openapi, normalize_native_response, prepare_native_request, redact_exact_secret,
+    compile_openapi, normalize_native_response, operation_url, prepare_native_request,
+    redact_exact_secret,
 };
 use colossus_contracts::{DecisionOutcome, IntegrationAuth, IntegrationStatus};
 use colossus_policy::{EffectExecutor, system_actor};
@@ -89,6 +90,38 @@ fn openapi_compilation_maps_path_query_and_body_without_auth_arguments() {
         update.tool.input_schema["required"]
             .as_array()
             .is_some_and(|required| required.contains(&json!("body")))
+    );
+}
+
+#[test]
+fn openapi_operation_preserves_a_server_path_without_a_trailing_slash() {
+    let mut without_trailing_slash = document();
+    without_trailing_slash["servers"][0]["url"] = json!("https://api.example.test/v1");
+    let connection = compile_openapi(
+        "demo",
+        &without_trailing_slash,
+        None,
+        IntegrationAuth::None,
+        None,
+        Vec::new(),
+        "2026-01-01T00:00:00Z".into(),
+        "2026-01-01T00:00:00Z".into(),
+    )
+    .expect("compile");
+    let operation = connection
+        .operations
+        .iter()
+        .find(|operation| operation.method == "GET")
+        .expect("GET operation");
+    let url = operation_url(
+        &connection,
+        operation,
+        &json!({"id": "sdk example", "expand": true}),
+    )
+    .expect("operation URL");
+    assert_eq!(
+        url.as_str(),
+        "https://api.example.test/v1/widgets/sdk%20example"
     );
 }
 

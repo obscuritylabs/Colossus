@@ -53,6 +53,7 @@ interface WorkSurfaceProps {
   ) => Promise<void>;
   onResume: () => void;
   onSuggestion: (suggestion: string) => void;
+  onSelectArtifact: (artifactId: string) => void;
   onOpenWorkNavigation: () => void;
   onCloseWorkNavigation: () => void;
 }
@@ -84,6 +85,7 @@ export function WorkSurface({
   onRespond,
   onResume,
   onSuggestion,
+  onSelectArtifact,
   onOpenWorkNavigation,
   onCloseWorkNavigation,
 }: WorkSurfaceProps) {
@@ -222,6 +224,8 @@ export function WorkSurface({
     onCloseWorkNavigation();
     if (drawer === "files") {
       setFilesDrawerMounted(true);
+    } else if (artifacts[0] !== undefined) {
+      onSelectArtifact(artifacts[0].id);
     }
     setActiveDrawer(drawer);
   }
@@ -488,7 +492,10 @@ export function WorkSurface({
               className="work-drawer-panel"
               hidden={activeDrawer !== "artifacts"}
             >
-              <ArtifactWorkspace artifacts={artifacts} />
+              <ArtifactWorkspace
+                artifacts={artifacts}
+                onSelect={onSelectArtifact}
+              />
             </div>
             {filesAvailable && filesDrawerMounted ? (
               <div

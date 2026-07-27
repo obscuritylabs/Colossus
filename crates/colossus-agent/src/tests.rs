@@ -420,7 +420,7 @@ async fn authenticated_application_is_the_immutable_run_initiator() {
 }
 
 #[tokio::test]
-async fn public_tool_ceiling_cannot_expand_through_unscoped_delegation() {
+async fn public_tool_ceiling_offers_delegation_only_when_explicitly_granted() {
     let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
         ProviderEvent::FinalOutput {
             text: "done".into(),
@@ -467,7 +467,7 @@ async fn public_tool_ceiling_cannot_expand_through_unscoped_delegation() {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
-        ["echo"]
+        ["agent.delegate", "echo"]
     );
 }
 
@@ -624,6 +624,7 @@ async fn goal_tools_are_visible_only_on_goal_lineage_runs() {
             1,
             plain.session_id.as_deref().expect("session"),
             "agent-1",
+            None,
         )
         .await
         .expect("subagent");

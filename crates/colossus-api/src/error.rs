@@ -51,6 +51,10 @@ pub enum ApiErrorReason {
     ToolDenied,
     /// A run does not exist or is not visible to the caller.
     RunNotFound,
+    /// An artifact does not exist or is not visible to the caller.
+    ArtifactNotFound,
+    /// An artifact reservation or release state does not permit the operation.
+    ArtifactUnavailable,
     /// An idempotency key was reused for a different logical request.
     IdempotencyKeyReused,
     /// Optimistic concurrency failed.

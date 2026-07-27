@@ -44,6 +44,9 @@ use std::{
 };
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
+use uuid::Uuid;
+mod artifact_args;
+mod artifact_commands;
 mod cli;
 mod commands;
 mod configuration;
@@ -65,6 +68,8 @@ mod worker_shell;
 mod workflow_args;
 mod workflow_commands;
 
+use artifact_args::*;
+use artifact_commands::*;
 use cli::*;
 use commands::*;
 use configuration::*;

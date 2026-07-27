@@ -15,6 +15,7 @@
     "allow-remove-external-target",
     "allow-choose-workspace",
     "allow-configure-managed-runtime",
+    "allow-apply-managed-model-configuration",
     "allow-run-managed-self-test",
     "allow-restart-managed-runtime",
     "allow-select-target",
@@ -22,6 +23,8 @@
     "allow-connect-colossus",
     "allow-connection-status",
     "allow-create-run",
+    "allow-choose-run-attachment",
+    "allow-read-artifact-content",
     "allow-get-run",
     "allow-list-runs",
     "allow-watch-run",
@@ -29,6 +32,8 @@
     "allow-respond-interaction",
     "allow-list-workspace-directory",
     "allow-read-workspace-file",
-    "allow-show-terminal-window"
+    "allow-show-terminal-window",
+    "allow-check-desktop-update",
+    "allow-install-desktop-update"
   ]
 }

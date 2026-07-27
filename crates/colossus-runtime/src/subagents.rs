@@ -33,6 +33,7 @@ impl Runtime {
                 parent_call_id: lineage,
                 task: task.into(),
                 role: role.into(),
+                allowed_tools: None,
             })
             .await?,
         )
@@ -122,6 +123,7 @@ impl Runtime {
                             max_turns,
                             &job.child_session_id,
                             &job.id,
+                            job.allowed_tools.as_deref(),
                         )
                         .await;
                     (job.id, result)

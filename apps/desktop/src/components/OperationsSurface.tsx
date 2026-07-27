@@ -95,11 +95,66 @@ function FleetView({
   return (
     <>
       <SurfaceHeader
-        eyebrow="Fleet / Overview"
-        title="Agent fleet"
-        description="Coordinate active work while keeping every handoff visible."
+        eyebrow="Agents & workflows / Overview"
+        title="Operational capabilities"
+        description="Inspect only the orchestration features advertised by the connected runtime."
       />
       <div className="overview-scroll">
+        <section className="overview-section">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Authenticated discovery</p>
+              <h3>Available orchestration</h3>
+            </div>
+          </div>
+          <div className="target-grid">
+            {desktop.capabilities.delegation ? (
+              <article className="capability-summary-card">
+                <span className="target-node-icon" aria-hidden="true">
+                  <IconRobot size={20} stroke={1.6} />
+                </span>
+                <span>
+                  <strong>Delegated agents</strong>
+                  <small>
+                    Child runs inherit the caller&apos;s exact tool ceiling and
+                    cannot delegate recursively.
+                  </small>
+                </span>
+                <span className="status-chip tone-success">Available</span>
+              </article>
+            ) : null}
+            {desktop.capabilities.agentWorkflows ? (
+              <article className="capability-summary-card">
+                <span className="target-node-icon" aria-hidden="true">
+                  <IconTopologyStar3 size={20} stroke={1.6} />
+                </span>
+                <span>
+                  <strong>Durable workflows</strong>
+                  <small>
+                    Registered workflow definitions can run through the same
+                    policy and approval gateway.
+                  </small>
+                </span>
+                <span className="status-chip tone-success">Available</span>
+              </article>
+            ) : null}
+            {desktop.capabilities.skills ? (
+              <article className="capability-summary-card">
+                <span className="target-node-icon" aria-hidden="true">
+                  <IconArchive size={20} stroke={1.6} />
+                </span>
+                <span>
+                  <strong>Declarative skills</strong>
+                  <small>
+                    Skill selection is enabled for this authenticated
+                    application.
+                  </small>
+                </span>
+                <span className="status-chip tone-success">Available</span>
+              </article>
+            ) : null}
+          </div>
+        </section>
         <section className="overview-section">
           <div className="section-heading">
             <div>

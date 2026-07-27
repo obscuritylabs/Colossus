@@ -4,6 +4,8 @@ import type {
   CancelRunRequest,
   CommandError,
   ApplyManagedModelConfigurationRequest,
+  ArtifactContent,
+  ArtifactReference,
   ConfigureManagedRuntimeRequest,
   ConnectionStatus,
   CreateRunRequest,
@@ -218,6 +220,19 @@ export function createRun(
   request: CreateRunRequest,
 ): Promise<Run> {
   return call("create_run", { targetId, request });
+}
+
+export function chooseRunAttachment(
+  targetId: string,
+): Promise<ArtifactReference | null> {
+  return call("choose_run_attachment", { targetId });
+}
+
+export function readArtifactContent(
+  targetId: string,
+  artifactId: string,
+): Promise<ArtifactContent> {
+  return call("read_artifact_content", { targetId, artifactId });
 }
 
 export function getRun(

@@ -325,6 +325,26 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             ModelsAction::Routes => print_json(&runtime.provider_routes())?,
             ModelsAction::Route { role } => print_json(&runtime.provider_route(&role)?)?,
         },
+        Command::Artifacts(command) => match command.command {
+            ArtifactsAction::Upload {
+                path,
+                purpose,
+                idempotency_key,
+            } => {
+                let key =
+                    idempotency_key.unwrap_or_else(|| format!("cli-artifact-{}", Uuid::now_v7()));
+                print_json(&upload_artifact_file(&runtime, &path, purpose.into(), &key).await?)?;
+            }
+            ArtifactsAction::Show { artifact_id } => {
+                print_json(&get_artifact(&runtime, &artifact_id).await?)?;
+            }
+            ArtifactsAction::Download {
+                artifact_id,
+                output,
+            } => {
+                print_json(&download_artifact_file(&runtime, &artifact_id, &output).await?)?;
+            }
+        },
         Command::Tools(command) => match command.command {
             ToolsAction::List => print_json(&runtime.tool_catalog())?,
         },
@@ -1020,8 +1040,15 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             session,
             resume,
             skills,
+            attachments,
             stream,
         } => {
+            if execute_plan.is_some() && !attachments.is_empty() {
+                return Err(cli_error(
+                    "--attach is not supported with --execute-plan; attach files to the planning run instead",
+                )
+                .into());
+            }
             if execute_plan.is_some() && stream {
                 return Err(cli_error(
                     "--stream is not supported with --execute-plan; inspect the returned run JSON",
@@ -1061,6 +1088,9 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             let prompt = prompt
                 .as_deref()
                 .ok_or_else(|| cli_error("a prompt or --execute-plan is required"))?;
+            let prompt = runtime
+                .prompt_with_text_attachments(prompt, &attachments)
+                .await?;
             let session_id = if resume {
                 Some(runtime.latest_session()?.id)
             } else {
@@ -1072,7 +1102,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .run_plan_with_skills_stream(
                         &role,
                         &instructions,
-                        prompt,
+                        &prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,
@@ -1087,7 +1117,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .run_plan_with_skills(
                         &role,
                         &instructions,
-                        prompt,
+                        &prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,
@@ -1100,7 +1130,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .run_model_with_skills_stream(
                         &role,
                         &instructions,
-                        prompt,
+                        &prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,
@@ -1115,7 +1145,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .run_model_with_skills(
                         &role,
                         &instructions,
-                        prompt,
+                        &prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,

@@ -1,16 +1,180 @@
-use colossus_sdk::{ApprovalInteraction, GetRunRequest, InteractionAnswer, InteractionContent};
+use colossus_sdk::{
+    ApprovalInteraction, ArtifactPurpose, GetRunRequest, IdempotencyKey, InteractionAnswer,
+    InteractionContent, UploadArtifactRequest,
+};
+use sha2::{Digest as _, Sha256};
+use std::{fs::File, io::Read as _, path::Path};
 use tauri::{AppHandle, State, ipc::Channel};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 
 use crate::{
     dto::{
-        CancelRunInput, CommandErrorDto, CreateRunInput, GetRunDto, GetRunInput, InteractionDto,
-        ListRunsDto, ListRunsInput, RespondInteractionInput, RunDto, WatchEventDto, WatchRunInput,
+        ArtifactContentDto, ArtifactReferenceDto, CancelRunInput, CommandErrorDto, CreateRunInput,
+        GetRunDto, GetRunInput, InteractionDto, ListRunsDto, ListRunsInput,
+        RespondInteractionInput, RunDto, WatchEventDto, WatchRunInput,
     },
     state::{AppState, SelectedTargetLease, TargetConsentContext, TargetHandle},
 };
 
 const MAX_NATIVE_APPROVAL_REASON_BYTES: usize = 4 * 1024;
+const MAX_ATTACHMENT_BYTES: usize = 16 * 1_048_576;
+const MAX_RENDERED_ARTIFACT_BYTES: usize = 1_048_576;
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn choose_run_attachment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+) -> Result<Option<ArtifactReferenceDto>, CommandErrorDto> {
+    let selected = app.dialog().file().blocking_pick_file();
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|_| {
+        CommandErrorDto::invalid("attachment", "The selected attachment is unavailable.")
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && name.len() <= 255)
+        .ok_or_else(|| {
+            CommandErrorDto::invalid("attachment", "The attachment name is invalid.")
+        })?
+        .to_owned();
+    let media_type = attachment_media_type(&path).ok_or_else(|| {
+        CommandErrorDto::invalid(
+            "attachment",
+            "This version supports UTF-8 text and source-code attachments.",
+        )
+    })?;
+    let file = File::open(&path).map_err(|_| {
+        CommandErrorDto::invalid("attachment", "The selected attachment could not be opened.")
+    })?;
+    let metadata = file.metadata().map_err(|_| {
+        CommandErrorDto::invalid("attachment", "The selected attachment is unavailable.")
+    })?;
+    if !metadata.is_file()
+        || metadata.len() > MAX_ATTACHMENT_BYTES as u64
+    {
+        return Err(CommandErrorDto::invalid(
+            "attachment",
+            "Attachments must be regular files no larger than 16 MiB.",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take((MAX_ATTACHMENT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            CommandErrorDto::invalid("attachment", "The attachment could not be read.")
+        })?;
+    if bytes.len() > MAX_ATTACHMENT_BYTES || std::str::from_utf8(&bytes).is_err() {
+        return Err(CommandErrorDto::invalid(
+            "attachment",
+            "Attachments must contain bounded UTF-8 text.",
+        ));
+    }
+    let idempotency_key = attachment_idempotency_key(&file_name, media_type, &bytes)?;
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    let artifact = target
+        .target
+        .client
+        .upload_artifact(UploadArtifactRequest {
+            file_name,
+            media_type: media_type.into(),
+            purpose: ArtifactPurpose::RunInput,
+            bytes,
+            idempotency_key,
+        })
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    Ok(Some(artifact.into()))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn read_artifact_content(
+    state: State<'_, AppState>,
+    target_id: String,
+    artifact_id: String,
+) -> Result<ArtifactContentDto, CommandErrorDto> {
+    let target = target(&state, &target_id).await?;
+    let _unary_slot = unary_slot(&target.target)?;
+    let download = target
+        .target
+        .client
+        .download_artifact(&artifact_id)
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    if download.bytes.len() > MAX_RENDERED_ARTIFACT_BYTES {
+        return Err(CommandErrorDto::invalid(
+            "artifactId",
+            "This artifact is too large for the read-only preview.",
+        ));
+    }
+    let text = String::from_utf8(download.bytes).map_err(|_| {
+        CommandErrorDto::invalid(
+            "artifactId",
+            "This artifact does not contain previewable UTF-8 text.",
+        )
+    })?;
+    Ok(ArtifactContentDto {
+        artifact: download.artifact.into(),
+        text,
+    })
+}
+
+fn attachment_idempotency_key(
+    file_name: &str,
+    media_type: &str,
+    bytes: &[u8],
+) -> Result<IdempotencyKey, CommandErrorDto> {
+    let mut digest = Sha256::new();
+    digest.update(b"colossus-desktop-attachment-v1\0");
+    digest.update(file_name.as_bytes());
+    digest.update(b"\0");
+    digest.update(media_type.as_bytes());
+    digest.update(b"\0");
+    digest.update(bytes);
+    IdempotencyKey::new(format!("desktop-attachment-{}", hex::encode(digest.finalize())))
+        .map_err(CommandErrorDto::from_api)
+}
+
+fn attachment_media_type(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("json") => Some("application/json"),
+        Some("yaml" | "yml") => Some("application/yaml"),
+        Some("toml") => Some("application/toml"),
+        Some("xml") => Some("application/xml"),
+        Some(
+            "txt" | "md" | "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java"
+            | "c" | "h" | "cpp" | "hpp" | "cs" | "rb" | "php" | "sh" | "zsh" | "fish"
+            | "css" | "scss" | "html" | "sql" | "graphql" | "proto",
+        ) => Some("text/plain"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::attachment_idempotency_key;
+
+    #[test]
+    fn attachment_replay_identity_includes_safe_metadata_and_content() {
+        let first = attachment_idempotency_key("first.md", "text/markdown", b"same")
+            .expect("first key");
+        let replay = attachment_idempotency_key("first.md", "text/markdown", b"same")
+            .expect("replay key");
+        let renamed = attachment_idempotency_key("second.md", "text/markdown", b"same")
+            .expect("renamed key");
+        assert_eq!(first, replay);
+        assert_ne!(first, renamed);
+    }
+}
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn create_run(

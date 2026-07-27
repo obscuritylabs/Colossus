@@ -115,6 +115,8 @@ impl SystemService for SystemServiceAdapter {
             ("agent_runs.cancel", scopes::RUNS_CONTROL),
             ("prompts.respond", scopes::PROMPTS_RESPOND),
             ("approvals.respond", scopes::APPROVALS_RESPOND),
+            ("artifacts.read", scopes::ARTIFACTS_READ),
+            ("artifacts.upload", scopes::ARTIFACTS_WRITE),
         ]
         .into_iter()
         .map(|(name, scope)| Capability {
@@ -122,6 +124,19 @@ impl SystemService for SystemServiceAdapter {
             enabled: caller.principal().has_scope(scope),
             detail: String::new(),
         })
+        .chain(std::iter::once(Capability {
+            name: "agent_runs.delegation".into(),
+            enabled: caller.principal().has_scope(scopes::RUNS_EXECUTE)
+                && caller.principal().allows_tool("agent.delegate"),
+            detail: String::new(),
+        }))
+        .chain(std::iter::once(Capability {
+            name: "attachments.run_input".into(),
+            enabled: caller.principal().has_scope(scopes::ARTIFACTS_READ)
+                && caller.principal().has_scope(scopes::ARTIFACTS_WRITE)
+                && caller.principal().has_scope(scopes::RUNS_EXECUTE),
+            detail: String::new(),
+        }))
         .collect();
         let mut limits = self.application_limits.clone();
         limits.extend([
@@ -298,13 +313,23 @@ mod tests {
     }
 
     fn request<T>(body: T) -> Request<T> {
+        request_with(body, [RUNS_READ], Vec::new())
+    }
+
+    fn request_with<T>(
+        body: T,
+        scopes: impl IntoIterator<Item = &'static str>,
+        tools: Vec<String>,
+    ) -> Request<T> {
         let principal = ApplicationPrincipal::authenticated(
             "app:test-ui",
             "credential-1",
             ApplicationKind::Enrolled,
-            [ApiScope::new(RUNS_READ).expect("scope")],
+            scopes
+                .into_iter()
+                .map(|scope| ApiScope::new(scope).expect("scope")),
             ["primary".into()],
-            Vec::<String>::new(),
+            tools,
         )
         .expect("principal");
         let mut request = Request::new(body);
@@ -371,6 +396,55 @@ mod tests {
                 && limit.value == 16
                 && limit.unit == "requests"
         }));
+    }
+
+    #[tokio::test]
+    async fn optional_capabilities_follow_authenticated_scopes_and_tool_ceiling() {
+        let response = service()
+            .get_server_info(request_with(
+                GetServerInfoRequest {},
+                [
+                    scopes::RUNS_EXECUTE,
+                    scopes::ARTIFACTS_READ,
+                    scopes::ARTIFACTS_WRITE,
+                ],
+                vec!["agent.delegate".into()],
+            ))
+            .await
+            .expect("server info")
+            .into_inner()
+            .server_info
+            .expect("server info");
+        let enabled = response
+            .capabilities
+            .into_iter()
+            .filter(|capability| capability.enabled)
+            .map(|capability| capability.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(enabled.contains("agent_runs.delegation"));
+        assert!(enabled.contains("artifacts.read"));
+        assert!(enabled.contains("artifacts.upload"));
+        assert!(enabled.contains("attachments.run_input"));
+
+        let without_run_scope = service()
+            .get_server_info(request_with(
+                GetServerInfoRequest {},
+                [scopes::ARTIFACTS_READ],
+                vec!["agent.delegate".into()],
+            ))
+            .await
+            .expect("server info without run scope")
+            .into_inner()
+            .server_info
+            .expect("server info");
+        assert!(
+            without_run_scope
+                .capabilities
+                .into_iter()
+                .any(|capability| {
+                    capability.name == "agent_runs.delegation" && !capability.enabled
+                })
+        );
     }
 
     #[tokio::test]

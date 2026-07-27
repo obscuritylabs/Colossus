@@ -119,11 +119,6 @@ impl SidecarApplicationGrant {
         let scopes = scopes.into_iter().collect::<Vec<_>>();
         let allowed_roles = allowed_roles.into_iter().collect::<Vec<_>>();
         let allowed_tools = allowed_tools.into_iter().collect::<Vec<_>>();
-        if allowed_tools.iter().any(|tool| tool == "agent.delegate") {
-            return Err(SdkError::InvalidConfiguration(
-                "sidecar grants cannot include agent.delegate",
-            ));
-        }
         colossus_grpc::ApplicationGrant::new(
             application_id.clone(),
             ApplicationKind::Sidecar,

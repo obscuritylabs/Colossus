@@ -5,10 +5,10 @@ use crate::{
 };
 use colossus_api::{
     AgentRunApi, ApiScope, ApplicationKind, ApplicationPrincipal, CallerContext, CancelRunRequest,
-    ContentPart, CreateRunRequest, EventSourcedRunRepository, GetRunRequest, IdempotencyKey,
-    InteractionKind, InteractionResponse, NewRun, OutcomeCertainty, RequestId,
-    RespondInteractionRequest, Run, RunMode, RunRepository, RunStatus, RunUpdateKind,
-    WatchRunRequest, scopes,
+    ContentPart, CreateArtifactUploadRequest, CreateRunRequest, EventSourcedArtifactApi,
+    EventSourcedRunRepository, GetRunRequest, IdempotencyKey, InteractionKind, InteractionResponse,
+    NewRun, OutcomeCertainty, RequestId, RespondInteractionRequest, Run, RunMode, RunRepository,
+    RunStatus, RunUpdateKind, WatchRunRequest, scopes,
 };
 use colossus_contracts::{
     DecisionOutcome, EventEnvelope, NewEvent, PolicyDecision, PolicyObligations,
@@ -21,6 +21,7 @@ use colossus_ports::{
 use colossus_runtime::{KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_testkit::InMemoryEventJournal;
 use futures::StreamExt as _;
+use sha2::{Digest as _, Sha256};
 use std::{
     env, fs,
     process::Command,
@@ -189,6 +190,14 @@ fn runtime_fixture() -> RuntimeFixture {
 }
 
 fn caller(application_id: &str, request_id: &str) -> CallerContext {
+    caller_with_additional_scopes(application_id, request_id, &[])
+}
+
+fn caller_with_additional_scopes(
+    application_id: &str,
+    request_id: &str,
+    additional_scopes: &[&str],
+) -> CallerContext {
     let scopes = [
         scopes::RUNS_EXECUTE,
         scopes::RUNS_READ,
@@ -197,6 +206,7 @@ fn caller(application_id: &str, request_id: &str) -> CallerContext {
         scopes::APPROVALS_RESPOND,
     ]
     .into_iter()
+    .chain(additional_scopes.iter().copied())
     .map(|scope| ApiScope::new(scope).expect("scope"));
     CallerContext::authenticated(
         ApplicationPrincipal::authenticated(
@@ -210,6 +220,71 @@ fn caller(application_id: &str, request_id: &str) -> CallerContext {
         .expect("principal"),
         RequestId::new(request_id).expect("request id"),
     )
+}
+
+async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: Arc<Runtime>) {
+    use colossus_api::{ArtifactApi as _, ArtifactChunk, ArtifactPurpose};
+
+    let service = service(Arc::clone(&runtime), RunAdmissionConfig::default());
+    let application_id = format!("app:attachment-{}", Uuid::now_v7().simple());
+    let owner = caller_with_additional_scopes(
+        &application_id,
+        "attachment-create",
+        &[scopes::ARTIFACTS_READ, scopes::ARTIFACTS_WRITE],
+    );
+    let artifacts = EventSourcedArtifactApi::new(runtime.journal());
+    let bytes = b"# Review\nrelease boundary".to_vec();
+    let reservation = artifacts
+        .create_upload(
+            &owner,
+            CreateArtifactUploadRequest {
+                file_name: "review.md".into(),
+                media_type: "text/markdown".into(),
+                size_bytes: u64::try_from(bytes.len()).expect("artifact length"),
+                sha256: format!("{:x}", Sha256::digest(&bytes)),
+                purpose: ArtifactPurpose::RunInput,
+                idempotency_key: IdempotencyKey::new("attachment-upload").expect("upload key"),
+            },
+        )
+        .await
+        .expect("reserve artifact");
+    let artifact = artifacts
+        .upload(
+            &owner,
+            &reservation.upload_id,
+            vec![ArtifactChunk {
+                offset: 0,
+                data: bytes,
+            }],
+        )
+        .await
+        .expect("upload artifact");
+    let created = service
+        .create_run(
+            &owner,
+            CreateRunRequest {
+                input: vec![
+                    ContentPart::Text {
+                        text: "Inspect the attachment".into(),
+                    },
+                    ContentPart::Artifact {
+                        artifact_id: artifact.artifact_id,
+                    },
+                ],
+                session_id: None,
+                role: Some("primary".into()),
+                mode: RunMode::Execute,
+                skill_ids: Vec::new(),
+                max_turns: 1,
+                idempotency_key: IdempotencyKey::new("attachment-run").expect("run key"),
+            },
+        )
+        .await
+        .expect("create attached run")
+        .run;
+    let terminal = wait_terminal(&service, &owner, &created.id).await;
+    assert_eq!(terminal.status, RunStatus::Completed);
+    wait_inactive(&service).await;
 }
 
 fn request(idempotency_key: &str, prompt: &str) -> CreateRunRequest {
@@ -766,6 +841,10 @@ fn runtime_service_conformance() {
                 .await;
             orphan_recovery_above_the_application_cap_drains_in_order(Arc::clone(&fixture.runtime))
                 .await;
+            caller_owned_text_artifacts_are_rendered_as_bounded_run_input(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
         });
 }
 

@@ -638,6 +638,7 @@ where
             role,
             instructions,
             prompt,
+            attachments,
             max_turns,
             session_id,
             explicit_skills,
@@ -648,6 +649,20 @@ where
                 key,
                 request_id: &request_id,
                 sequence: 0,
+            };
+            let attachment_paths = attachments
+                .into_iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+            let prompt = match runtime
+                .prompt_with_text_attachments(&prompt, &attachment_paths)
+                .await
+            {
+                Ok(prompt) => prompt,
+                Err(error) => {
+                    observer.error(error.to_string()).await?;
+                    return Ok(false);
+                }
             };
             let result = runtime
                 .run_model_with_skills_stream(
@@ -671,6 +686,7 @@ where
             role,
             instructions,
             prompt,
+            attachments,
             max_turns,
             session_id,
             explicit_skills,
@@ -681,6 +697,20 @@ where
                 key,
                 request_id: &request_id,
                 sequence: 0,
+            };
+            let attachment_paths = attachments
+                .into_iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+            let prompt = match runtime
+                .prompt_with_text_attachments(&prompt, &attachment_paths)
+                .await
+            {
+                Ok(prompt) => prompt,
+                Err(error) => {
+                    observer.error(error.to_string()).await?;
+                    return Ok(false);
+                }
             };
             let result = runtime
                 .run_plan_with_skills_stream(

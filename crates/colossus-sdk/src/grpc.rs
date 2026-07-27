@@ -1,14 +1,15 @@
 use crate::{
     AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ApprovalInteraction,
-    ApprovalRisk, ArtifactPurpose, ArtifactReference, ArtifactState, Backend, BackendKind,
-    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider,
-    FieldViolation, GetRunRequest, GetRunResponse, InputContentPart, Interaction,
-    InteractionAnswer, InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest,
-    ListRunsResponse, MessageContentPart, MessageRole, OutcomeCertainty, PageResponse,
-    PromptAnswer, PromptChoice, RespondInteractionRequest, RespondInteractionResponse, Run,
-    RunCancellation, RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate,
-    RunUpdateKind, RunUpdateStream, SdkError, SdkResult, SessionMessage, TlsFingerprint,
-    TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest,
+    ApprovalRisk, ArtifactClient, ArtifactPurpose, ArtifactReference, ArtifactState, Backend,
+    BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse,
+    CredentialProvider, DownloadedArtifact, FieldViolation, GetRunRequest, GetRunResponse,
+    InputContentPart, Interaction, InteractionAnswer, InteractionContent, InteractionKind,
+    InteractionStatus, ListRunsRequest, ListRunsResponse, MessageContentPart, MessageRole,
+    OutcomeCertainty, PageResponse, PromptAnswer, PromptChoice, RespondInteractionRequest,
+    RespondInteractionResponse, Run, RunCancellation, RunFailure, RunMode, RunResult, RunStatus,
+    RunTerminal, RunUpdate, RunUpdateKind, RunUpdateStream, SdkError, SdkResult,
+    ServerCapabilities, SessionMessage, TlsFingerprint, TokenUsage, ToolActivity,
+    ToolActivityState, UploadArtifactRequest, WatchRunRequest,
 };
 use async_trait::async_trait;
 use colossus_api::{RequestId, validate_public_approval_display};
@@ -16,8 +17,8 @@ use colossus_api_proto::{
     google_rpc::Status as RichStatus,
     v1alpha1::{
         self as proto, ColossusErrorDetail, agent_run_service_client::AgentRunServiceClient,
-        content_part, interaction, prompt_answer, respond_interaction_request, run, run_update,
-        system_service_client::SystemServiceClient,
+        artifact_service_client::ArtifactServiceClient, content_part, interaction, prompt_answer,
+        respond_interaction_request, run, run_update, system_service_client::SystemServiceClient,
     },
 };
 use colossus_grpc::{PUBLIC_API_VERSION, validate_endpoint_certificate_pem};
@@ -54,6 +55,8 @@ const MAX_OPAQUE_BYTES: usize = 2 * 1024;
 const MAX_VISIBLE_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_SUMMARY_BYTES: usize = 64 * 1024;
 const MAX_COLLECTION_ITEMS: usize = 1024;
+const MAX_ARTIFACT_BYTES: usize = 16 * 1_048_576;
+const DEFAULT_ARTIFACT_CHUNK_BYTES: usize = 256 * 1024;
 const ERROR_DETAIL_TYPE_URL: &str = "type.googleapis.com/colossus.api.v1alpha1.ColossusErrorDetail";
 
 /// Complete material required to establish one pinned authenticated gRPC channel.
@@ -126,6 +129,8 @@ impl fmt::Debug for GrpcConnectOptions {
 pub struct GrpcBackend {
     kind: BackendKind,
     agent_runs: Arc<GrpcAgentRunClient>,
+    artifacts: Arc<GrpcArtifactClient>,
+    capabilities: ServerCapabilities,
     closed: watch::Sender<bool>,
 }
 
@@ -155,12 +160,18 @@ impl GrpcBackend {
             .await
             .map_err(|_| SdkError::Transport)?;
         let (closed, _) = watch::channel(false);
-        let agent_runs = Arc::new(GrpcAgentRunClient {
-            channel,
-            credential_provider: options.credential_provider,
+        let credential_provider = options.credential_provider;
+        let artifacts = Arc::new(GrpcArtifactClient {
+            channel: channel.clone(),
+            credential_provider: Arc::clone(&credential_provider),
             closed: closed.clone(),
         });
-        verify_server_identity(
+        let agent_runs = Arc::new(GrpcAgentRunClient {
+            channel,
+            credential_provider,
+            closed: closed.clone(),
+        });
+        let capabilities = verify_server_identity(
             agent_runs.as_ref(),
             options.expected_instance_id,
             options.api_major,
@@ -170,6 +181,8 @@ impl GrpcBackend {
         Ok(Self {
             kind: options.backend_kind,
             agent_runs,
+            artifacts,
+            capabilities,
             closed,
         })
     }
@@ -215,6 +228,16 @@ impl Backend for GrpcBackend {
         self.agent_runs.clone()
     }
 
+    fn capabilities(&self) -> ServerCapabilities {
+        self.capabilities.clone()
+    }
+
+    fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
+        (self.capabilities.contains("artifacts.read")
+            || self.capabilities.contains("artifacts.upload"))
+        .then(|| self.artifacts.clone() as Arc<dyn ArtifactClient>)
+    }
+
     async fn close(&self) -> SdkResult<()> {
         self.closed.send_replace(true);
         Ok(())
@@ -222,6 +245,12 @@ impl Backend for GrpcBackend {
 }
 
 struct GrpcAgentRunClient {
+    channel: Channel,
+    credential_provider: Arc<dyn CredentialProvider>,
+    closed: watch::Sender<bool>,
+}
+
+struct GrpcArtifactClient {
     channel: Channel,
     credential_provider: Arc<dyn CredentialProvider>,
     closed: watch::Sender<bool>,
@@ -366,7 +395,7 @@ async fn verify_server_identity(
     expected_instance_id: crate::InstanceId,
     api_major: crate::ApiMajor,
     backend_kind: BackendKind,
-) -> SdkResult<()> {
+) -> SdkResult<ServerCapabilities> {
     let request = client
         .request(proto::GetServerInfoRequest {})
         .await
@@ -409,7 +438,30 @@ async fn verify_server_identity(
     if proto::DeploymentMode::try_from(info.deployment_mode).ok() != Some(expected_deployment) {
         return Err(SdkError::IdentityMismatch);
     }
-    Ok(())
+    if info.capabilities.len() > MAX_COLLECTION_ITEMS
+        || info.capabilities.iter().any(|capability| {
+            validate_identifier(&capability.name).is_err()
+                || capability.detail.len() > MAX_SUMMARY_BYTES
+                || capability.detail.chars().any(char::is_control)
+        })
+    {
+        return Err(SdkError::IdentityMismatch);
+    }
+    let capability_names = info
+        .capabilities
+        .iter()
+        .map(|capability| capability.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if capability_names.len() != info.capabilities.len() {
+        return Err(SdkError::IdentityMismatch);
+    }
+    let enabled = info
+        .capabilities
+        .into_iter()
+        .filter(|capability| capability.enabled)
+        .map(|capability| capability.name)
+        .collect::<Vec<_>>();
+    Ok(ServerCapabilities::from_enabled(enabled))
 }
 
 fn connect_api_error(error: ApiError) -> SdkError {
@@ -668,11 +720,184 @@ impl AgentRunClient for GrpcAgentRunClient {
     }
 }
 
+impl fmt::Debug for GrpcArtifactClient {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GrpcArtifactClient")
+            .field("credential", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+impl GrpcArtifactClient {
+    fn client(&self) -> ArtifactServiceClient<Channel> {
+        ArtifactServiceClient::new(self.channel.clone())
+            .max_decoding_message_size(MAX_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_MESSAGE_BYTES)
+    }
+
+    async fn request<T>(&self, message: T) -> ApiResult<Request<T>> {
+        if *self.closed.borrow() {
+            return Err(closed_error());
+        }
+        let credential = self
+            .credential_provider
+            .load()
+            .await
+            .map_err(|_| authentication_error())?;
+        let mut bearer = Zeroizing::new(Vec::with_capacity(
+            b"Bearer ".len().saturating_add(credential.expose().len()),
+        ));
+        bearer.extend_from_slice(b"Bearer ");
+        bearer.extend_from_slice(credential.expose());
+        let mut metadata = MetadataValue::<Ascii>::try_from(bearer.as_slice())
+            .map_err(|_| authentication_error())?;
+        metadata.set_sensitive(true);
+        let mut request = Request::new(message);
+        request.metadata_mut().insert("authorization", metadata);
+        Ok(request)
+    }
+}
+
+#[async_trait]
+impl ArtifactClient for GrpcArtifactClient {
+    async fn upload(&self, request: UploadArtifactRequest) -> ApiResult<ArtifactReference> {
+        if request.bytes.len() > MAX_ARTIFACT_BYTES {
+            return Err(invalid_request(
+                "bytes",
+                "artifact content exceeds the configured bound",
+            ));
+        }
+        let sha256 = hex::encode(Sha256::digest(&request.bytes));
+        let purpose = proto_artifact_purpose(request.purpose);
+        let create = self
+            .request(proto::CreateArtifactUploadRequest {
+                file_name: request.file_name,
+                media_type: request.media_type,
+                size_bytes: request.bytes.len() as u64,
+                sha256,
+                purpose: purpose as i32,
+                idempotency_key: request.idempotency_key.as_str().into(),
+            })
+            .await?;
+        let reservation = self
+            .client()
+            .create_artifact_upload(create)
+            .await
+            .map_err(api_error_from_status)?
+            .into_inner();
+        validate_identifier(&reservation.upload_id)?;
+        let chunk_size = usize::try_from(reservation.chunk_size_bytes)
+            .ok()
+            .filter(|size| *size > 0 && *size <= DEFAULT_ARTIFACT_CHUNK_BYTES)
+            .ok_or_else(protocol_error)?;
+        let mut chunks = request
+            .bytes
+            .chunks(chunk_size)
+            .enumerate()
+            .map(|(index, data)| {
+                let offset = u64::try_from(index)
+                    .ok()
+                    .and_then(|index| index.checked_mul(chunk_size as u64))
+                    .ok_or_else(protocol_error)?;
+                Ok(proto::UploadArtifactRequest {
+                    upload_id: reservation.upload_id.clone(),
+                    offset,
+                    data: data.to_vec(),
+                })
+            })
+            .collect::<ApiResult<Vec<_>>>()?;
+        if chunks.is_empty() {
+            chunks.push(proto::UploadArtifactRequest {
+                upload_id: reservation.upload_id,
+                offset: 0,
+                data: Vec::new(),
+            });
+        }
+        let upload = self.request(stream::iter(chunks)).await?;
+        let response = self
+            .client()
+            .upload_artifact(upload)
+            .await
+            .map_err(api_error_from_status)?
+            .into_inner();
+        artifact_from_proto(required(response.artifact)?)
+    }
+
+    async fn get(&self, artifact_id: &str) -> ApiResult<ArtifactReference> {
+        validate_identifier(artifact_id)?;
+        let request = self
+            .request(proto::GetArtifactRequest {
+                artifact_id: artifact_id.into(),
+            })
+            .await?;
+        let response = self
+            .client()
+            .get_artifact(request)
+            .await
+            .map_err(read_error_from_status)?
+            .into_inner();
+        artifact_from_proto(required(response.artifact)?)
+    }
+
+    async fn download(&self, artifact_id: &str) -> ApiResult<DownloadedArtifact> {
+        let artifact = self.get(artifact_id).await?;
+        if artifact.state != ArtifactState::Available
+            || artifact.size_bytes > MAX_ARTIFACT_BYTES as u64
+        {
+            return Err(protocol_error());
+        }
+        let request = self
+            .request(proto::DownloadArtifactRequest {
+                artifact_id: artifact_id.into(),
+                offset: 0,
+            })
+            .await?;
+        let mut stream = self
+            .client()
+            .download_artifact(request)
+            .await
+            .map_err(read_error_from_status)?
+            .into_inner();
+        let mut bytes =
+            Vec::with_capacity(usize::try_from(artifact.size_bytes).map_err(|_| protocol_error())?);
+        let mut expected_offset = 0_u64;
+        while let Some(chunk) = stream.message().await.map_err(read_error_from_status)? {
+            if chunk.offset != expected_offset || chunk.data.len() > DEFAULT_ARTIFACT_CHUNK_BYTES {
+                return Err(protocol_error());
+            }
+            expected_offset = expected_offset
+                .checked_add(u64::try_from(chunk.data.len()).map_err(|_| protocol_error())?)
+                .ok_or_else(protocol_error)?;
+            if expected_offset > artifact.size_bytes {
+                return Err(protocol_error());
+            }
+            bytes.extend_from_slice(&chunk.data);
+        }
+        if expected_offset != artifact.size_bytes
+            || hex::encode(Sha256::digest(&bytes)) != artifact.sha256
+        {
+            return Err(protocol_error());
+        }
+        Ok(DownloadedArtifact { artifact, bytes })
+    }
+}
+
+fn proto_artifact_purpose(value: ArtifactPurpose) -> proto::ArtifactPurpose {
+    match value {
+        ArtifactPurpose::RunInput => proto::ArtifactPurpose::RunInput,
+        ArtifactPurpose::RunOutput => proto::ArtifactPurpose::RunOutput,
+        ArtifactPurpose::Workflow => proto::ArtifactPurpose::Workflow,
+        ArtifactPurpose::Extension => proto::ArtifactPurpose::Extension,
+        ArtifactPurpose::Archive => proto::ArtifactPurpose::Archive,
+    }
+}
+
 fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRequest> {
     if value.input.is_empty() || value.input.len() > MAX_COLLECTION_ITEMS {
         return Err(invalid_request(
             "input",
-            "input must contain a bounded number of text parts",
+            "input must contain a bounded number of content parts",
         ));
     }
     let input = value
@@ -685,6 +910,15 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
                 }
                 Ok(proto::ContentPart {
                     content: Some(content_part::Content::Text(proto::TextContent { text })),
+                })
+            }
+            InputContentPart::Artifact(artifact_id) => {
+                validate_identifier(&artifact_id)?;
+                Ok(proto::ContentPart {
+                    content: Some(content_part::Content::Artifact(proto::ArtifactReference {
+                        artifact_id,
+                        ..Default::default()
+                    })),
                 })
             }
         })
@@ -1399,9 +1633,9 @@ mod tests {
     use colossus_api::{
         AgentRunApi as CoreAgentRunApi, ApiScope, ApplicationKind, CallerContext,
         CancelRunRequest as CoreCancelRunRequest, CreateRunRequest as CoreCreateRunRequest,
-        CreateRunResponse as CoreCreateRunResponse, GetRunRequest as CoreGetRunRequest,
-        Interaction as CoreInteraction, ListRunsRequest as CoreListRunsRequest,
-        ListRunsResponse as CoreListRunsResponse,
+        CreateRunResponse as CoreCreateRunResponse, EventSourcedArtifactApi,
+        GetRunRequest as CoreGetRunRequest, Interaction as CoreInteraction,
+        ListRunsRequest as CoreListRunsRequest, ListRunsResponse as CoreListRunsResponse,
         RespondInteractionRequest as CoreRespondInteractionRequest, Run as CoreRun,
         RunUpdateStream as CoreRunUpdateStream, WatchRunRequest as CoreWatchRunRequest,
         scopes::RUNS_READ,
@@ -1412,6 +1646,7 @@ mod tests {
         FixedReadiness, InMemoryCredentialRepository, SystemMetadata, SystemServiceAdapter,
         TlsIdentity, TlsKeySeed, write_endpoint_certificate, write_endpoint_descriptor,
     };
+    use colossus_testkit::InMemoryEventJournal;
     use prost_types::Any;
     use rustls::ClientConfig;
     use std::sync::Arc;
@@ -1824,7 +2059,11 @@ mod tests {
         let grant = ApplicationGrant::new(
             "app:rust-sdk-test",
             ApplicationKind::Enrolled,
-            [ApiScope::new(RUNS_READ).expect("scope")],
+            [
+                ApiScope::new(RUNS_READ).expect("scope"),
+                ApiScope::new(colossus_api::scopes::ARTIFACTS_READ).expect("scope"),
+                ApiScope::new(colossus_api::scopes::ARTIFACTS_WRITE).expect("scope"),
+            ],
             ["assistant".into()],
             Vec::<String>::new(),
         )
@@ -1856,6 +2095,9 @@ mod tests {
             Arc::clone(&authenticator),
             system,
             Arc::new(ReadApi),
+            Arc::new(EventSourcedArtifactApi::new(Arc::new(
+                InMemoryEventJournal::default(),
+            ))),
         )
         .await
         .expect("bind server");
@@ -1902,6 +2144,28 @@ mod tests {
             .expect("authenticated get");
         assert_eq!(response.run.run_id, "run-1");
         assert_eq!(response.run.selected_skills, ["rust"]);
+        assert!(backend.capabilities().contains("artifacts.read"));
+        assert!(backend.capabilities().contains("artifacts.upload"));
+        let artifact = backend
+            .artifacts()
+            .expect("advertised artifact client")
+            .upload(UploadArtifactRequest {
+                file_name: "review.md".into(),
+                media_type: "text/markdown".into(),
+                purpose: ArtifactPurpose::RunInput,
+                bytes: b"# Review\nready".to_vec(),
+                idempotency_key: crate::IdempotencyKey::new("sdk-live-artifact")
+                    .expect("idempotency key"),
+            })
+            .await
+            .expect("authenticated artifact upload");
+        let downloaded = backend
+            .artifacts()
+            .expect("artifact client")
+            .download(&artifact.artifact_id)
+            .await
+            .expect("verified artifact download");
+        assert_eq!(downloaded.bytes, b"# Review\nready");
 
         let identity_error = GrpcBackend::connect(
             GrpcConnectOptions::new(

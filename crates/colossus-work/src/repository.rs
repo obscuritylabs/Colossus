@@ -626,6 +626,7 @@ impl WorkRepository for EventSourcedWorkRepository {
             || current.parent_call_id != job.parent_call_id
             || current.task != job.task
             || current.role != job.role
+            || current.allowed_tools != job.allowed_tools
             || current.child_session_id != job.child_session_id
             || current.created_at != job.created_at
         {

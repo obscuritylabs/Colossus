@@ -31,6 +31,17 @@ pub(super) fn check(repository: &Repository, base: &str) -> Result<(), String> {
     repository.task("./sdk/scripts/generate").run()?;
     repository.task("./sdk/scripts/check-generated").run()?;
     require_clean_generated_bindings(repository)?;
+    repository
+        .task("cargo")
+        .args([
+            "check",
+            "--locked",
+            "-p",
+            "colossus-cli",
+            "--example",
+            "sdk_ephemeral_local",
+        ])
+        .run()?;
     check_typescript(repository)?;
     check_python(repository)?;
     check_go(repository)
@@ -105,6 +116,18 @@ fn check_typescript(repository: &Repository) -> Result<(), String> {
             .run()?;
     }
     repository
+        .task("npm")
+        .args([
+            "exec",
+            "--",
+            "tsc",
+            "-p",
+            "tsconfig.examples.json",
+            "--noEmit",
+        ])
+        .current_dir("sdk/typescript")
+        .run()?;
+    repository
         .task("node")
         .args(["--test", "../scripts/check-typescript-package.test.mjs"])
         .current_dir("sdk/typescript")
@@ -124,6 +147,52 @@ fn check_python(repository: &Repository) -> Result<(), String> {
         ["-m", "ruff", "format", "--check", "."].as_slice(),
         ["-m", "ruff", "check", "."].as_slice(),
         ["-m", "mypy"].as_slice(),
+    ] {
+        repository
+            .task(&python)
+            .args(args)
+            .current_dir("sdk/python")
+            .run()?;
+    }
+    repository
+        .task(&python)
+        .args([
+            "-m",
+            "mypy",
+            "--strict",
+            "examples/durable_run.py",
+            "examples/live_run.py",
+        ])
+        .env("PYTHONPATH", &python_path)
+        .current_dir("sdk/python")
+        .run()?;
+    for fixture in [
+        "examples/sdk/integration/server.py",
+        "examples/sdk/provider-failure/server.py",
+    ] {
+        repository
+            .task(&python)
+            .args(["-m", "mypy", "--strict", fixture])
+            .run()?;
+    }
+    for args in [
+        [
+            "-m",
+            "ruff",
+            "format",
+            "--check",
+            "../../examples/sdk/integration/server.py",
+            "../../examples/sdk/provider-failure/server.py",
+        ]
+        .as_slice(),
+        [
+            "-m",
+            "ruff",
+            "check",
+            "../../examples/sdk/integration/server.py",
+            "../../examples/sdk/provider-failure/server.py",
+        ]
+        .as_slice(),
     ] {
         repository
             .task(&python)

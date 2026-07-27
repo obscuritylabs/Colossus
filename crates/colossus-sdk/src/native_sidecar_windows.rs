@@ -1,10 +1,10 @@
 use crate::{
-    AgentRunClient, ApiResult, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
-    CreateRunRequest, CreateRunResponse, CredentialProvider, GetRunRequest, GetRunResponse,
-    GrpcBackend, GrpcConnectOptions, ListRunsRequest, ListRunsResponse, NativeSidecarFailure,
-    NativeSidecarStatus, RespondInteractionRequest, RespondInteractionResponse, RunUpdateStream,
-    SdkError, SdkResult, Secret, SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions,
-    TlsFingerprint, WatchRunRequest,
+    AgentRunClient, ApiResult, ArtifactClient, Backend, BackendKind, CancelRunRequest,
+    CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider, GetRunRequest,
+    GetRunResponse, GrpcBackend, GrpcConnectOptions, ListRunsRequest, ListRunsResponse,
+    NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
+    RespondInteractionResponse, RunUpdateStream, SdkError, SdkResult, Secret, ServerCapabilities,
+    SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, TlsFingerprint, WatchRunRequest,
 };
 use async_trait::async_trait;
 use colossus_sidecar_protocol::{
@@ -445,6 +445,14 @@ impl Backend for WindowsSidecarBackend {
 
     fn agent_runs(&self) -> Arc<dyn AgentRunClient> {
         self.agent_runs.clone()
+    }
+
+    fn capabilities(&self) -> ServerCapabilities {
+        self.primary.capabilities()
+    }
+
+    fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
+        self.primary.artifacts()
     }
 
     async fn close(&self) -> SdkResult<()> {

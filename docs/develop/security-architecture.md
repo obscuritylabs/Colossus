@@ -164,9 +164,20 @@ connections, concurrent requests, authenticated protobuf decodes globally and pe
 application, HTTP/2 streams, header bytes, request bytes, response bytes, and repeated
 field cardinality before durable work begins. Its independent active-watch ceiling is
 lower than both global and per-connection request admission, reserving unary headroom
-so watches cannot starve cancellation, interaction responses, or system RPCs. Public
-runs cannot expose `agent.delegate` until child-run authority ceilings are durably
-propagated; naming that tool in a caller grant does not widen the runtime boundary.
+so watches cannot starve cancellation, interaction responses, or system RPCs.
+`agent.delegate` is advertised only when it is present in the authenticated
+application's tool ceiling. The delegated job durably records that exact ceiling, the
+child run receives only that ceiling, and child runs always remove `agent.delegate`
+before model tool discovery so delegation cannot recurse.
+
+Artifacts use an explicit owner-bound release boundary. A caller with
+`artifacts:write` first reserves an upload with an exact length and SHA-256 digest,
+then sends bounded ordered chunks. Colossus exposes the opaque artifact ID only after
+the complete bytes match the reservation. Metadata and downloads require
+`artifacts:read` and the same authenticated application ID. Original paths, partial
+uploads, and another application's artifacts are never released. Run-input
+attachments are accepted only from available `run_input` artifacts with supported
+bounded UTF-8 media types.
 
 Public run listing is owner-indexed and never scans the shared global journal. The
 idempotency claim, run creation, and per-application index entry commit atomically.

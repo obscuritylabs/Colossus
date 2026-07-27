@@ -861,6 +861,8 @@ impl Runtime {
             Arc::new(EventSourcedWorkflowRepository::new(Arc::clone(&journal)));
         let effects = Arc::new(GatewayWorkflowEffects {
             gateway: Arc::clone(&gateway),
+            agent: Some(Arc::clone(&agent)),
+            agent_max_turns: config.agent.max_turns,
         });
         let workflows = Arc::new(WorkflowService::new(
             Arc::clone(&journal),

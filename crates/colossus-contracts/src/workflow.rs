@@ -396,6 +396,9 @@ pub struct WorkflowRun {
     pub inputs: Value,
     /// Optional output snapshot.
     pub outputs: Option<Value>,
+    /// Bounded durable reason for a failed run, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
     /// Last completed root step index.
     pub completed_steps: u32,
     /// Exact step currently waiting, if any.

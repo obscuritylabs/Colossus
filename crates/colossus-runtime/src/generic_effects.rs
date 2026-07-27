@@ -62,6 +62,102 @@ impl EffectExecutor for UnavailableExecutor {
     }
 }
 
+pub(super) struct WorkflowAgentExecutor {
+    pub(super) agent: Arc<AgentService>,
+    pub(super) max_turns: u16,
+}
+
+#[async_trait]
+impl EffectExecutor for WorkflowAgentExecutor {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if request.action != "agent.run" {
+            return Err(ExecutionError::Failed(
+                "workflow agent executor received an unsupported action".into(),
+            ));
+        }
+        let prompt = request
+            .content
+            .get("prompt")
+            .and_then(Value::as_str)
+            .filter(|prompt| !prompt.trim().is_empty())
+            .ok_or_else(|| ExecutionError::Failed("workflow agent prompt is missing".into()))?;
+        let workflow_id = request
+            .context
+            .workflow_id
+            .as_deref()
+            .ok_or_else(|| ExecutionError::Failed("workflow lineage is missing".into()))?;
+        let workflow_hash = request
+            .context
+            .workflow_hash
+            .as_deref()
+            .ok_or_else(|| ExecutionError::Failed("workflow hash is missing".into()))?;
+        let step_id = request
+            .context
+            .step_id
+            .as_deref()
+            .ok_or_else(|| ExecutionError::Failed("workflow step lineage is missing".into()))?;
+        let attempt = request
+            .context
+            .attempt
+            .ok_or_else(|| ExecutionError::Failed("workflow attempt is missing".into()))?;
+        let result = self
+            .agent
+            .run_workflow_step(
+                "primary",
+                "You are executing one bounded declarative workflow step. Complete only the supplied step and return its result.",
+                prompt,
+                self.max_turns,
+                workflow_id,
+                workflow_hash,
+                step_id,
+                attempt,
+                &request.context.offered_tools,
+            )
+            .await
+            .map_err(workflow_agent_execution_error)?;
+        Ok(QuarantinedEffectResult {
+            media_type: "application/json".into(),
+            bytes: serde_json::to_vec(&json!({
+                "output": result.output,
+                "run_id": result.run_id,
+                "session_id": result.session_id,
+            }))
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?,
+            effect_succeeded: true,
+        })
+    }
+}
+
+fn workflow_agent_execution_error(error: AgentError) -> ExecutionError {
+    match error {
+        AgentError::Provider(ModelProviderError::Recoverable {
+            code,
+            message,
+            http_status,
+            retry_after_ms,
+        }) => ExecutionError::Recoverable {
+            code,
+            message,
+            http_status,
+            retry_after_ms,
+        },
+        AgentError::Provider(ModelProviderError::HttpStatus { status, message }) => {
+            ExecutionError::HttpStatus { status, message }
+        }
+        AgentError::Provider(ModelProviderError::OutcomeUnknown(message)) => {
+            ExecutionError::OutcomeUnknown(message)
+        }
+        AgentError::Provider(
+            ModelProviderError::Configuration(message) | ModelProviderError::Failed(message),
+        ) => ExecutionError::Failed(message),
+        other => ExecutionError::Failed(other.to_string()),
+    }
+}
+
 pub(super) struct WorkflowControlExecutor;
 
 #[async_trait]
@@ -90,6 +186,8 @@ impl EffectExecutor for WorkflowControlExecutor {
 
 pub(super) struct GatewayWorkflowEffects {
     pub(super) gateway: Arc<EffectGateway>,
+    pub(super) agent: Option<Arc<AgentService>>,
+    pub(super) agent_max_turns: u16,
 }
 
 #[async_trait]
@@ -123,10 +221,20 @@ impl WorkflowEffectRunner for GatewayWorkflowEffects {
             workflow_hash: Some(effect.workflow_hash),
             step_id: Some(effect.step_id),
             attempt: Some(effect.attempt),
+            offered_tools: effect.allowed_tools,
             ..ExecutionContext::default()
         };
+        let workflow_agent = self.agent.as_ref().map(|agent| WorkflowAgentExecutor {
+            agent: Arc::clone(agent),
+            max_turns: self.agent_max_turns,
+        });
         let executor: &dyn EffectExecutor = match request.action.as_str() {
             "provider.echo" => &EchoExecutor,
+            "agent.run" => workflow_agent
+                .as_ref()
+                .map_or(&UnavailableExecutor, |executor| {
+                    executor as &dyn EffectExecutor
+                }),
             "workflow.start" | "workflow.webhook.ingest" | "workflow.subscription.dispatch" => {
                 &WorkflowControlExecutor
             }

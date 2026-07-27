@@ -43,6 +43,7 @@ function renderSurface(
         onRespond: vi.fn(async () => undefined),
         onResume: vi.fn(),
         onSuggestion: vi.fn(),
+        onSelectArtifact: vi.fn(),
         onOpenWorkNavigation: vi.fn(),
         onCloseWorkNavigation: vi.fn(),
       }),

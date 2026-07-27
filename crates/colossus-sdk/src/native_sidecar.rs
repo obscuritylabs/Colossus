@@ -1,11 +1,12 @@
 use crate::{
-    AgentRunClient, ApiResult, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
-    CreateRunRequest, CreateRunResponse, CredentialProvider, GetRunRequest, GetRunResponse,
-    GrpcBackend, GrpcConnectOptions, Interaction, InteractionAnswer, InteractionContent,
-    InteractionStatus, ListRunsRequest, ListRunsResponse, MacosCodeSigningRequirement,
-    NativeSidecarFailure, NativeSidecarStatus, RespondInteractionRequest,
-    RespondInteractionResponse, RunUpdateKind, RunUpdateStream, SdkError, SdkResult, Secret,
-    SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, TlsFingerprint, WatchRunRequest,
+    AgentRunClient, ApiResult, ArtifactClient, ArtifactReference, Backend, BackendKind,
+    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider,
+    DownloadedArtifact, GetRunRequest, GetRunResponse, GrpcBackend, GrpcConnectOptions,
+    Interaction, InteractionAnswer, InteractionContent, InteractionStatus, ListRunsRequest,
+    ListRunsResponse, MacosCodeSigningRequirement, NativeSidecarFailure, NativeSidecarStatus,
+    RespondInteractionRequest, RespondInteractionResponse, RunUpdateKind, RunUpdateStream,
+    SdkError, SdkResult, Secret, ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle,
+    SidecarOptions, TlsFingerprint, UploadArtifactRequest, WatchRunRequest,
 };
 #[cfg(test)]
 use crate::{ApiError, ApiErrorReason};
@@ -150,6 +151,12 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                     return Err(error);
                 }
             };
+            let capabilities = running.transports.primary.capabilities();
+            let artifacts = running
+                .transports
+                .primary
+                .artifacts()
+                .map(|client| Arc::new(SwitchingArtifactClient::new(client)));
             let agent_runs = Arc::new(SwitchingAgentRunClient::new(
                 running.transports.agent_runs(),
             ));
@@ -157,6 +164,7 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                 options: options.clone(),
                 bootstrap: Arc::clone(&self.bootstrap),
                 agent_runs: Arc::clone(&agent_runs),
+                artifacts: artifacts.clone(),
                 process: tokio::sync::Mutex::new(Some(running)),
                 close_guard: tokio::sync::Mutex::new(()),
                 closing: AtomicBool::new(false),
@@ -170,7 +178,12 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
             *state.monitor.lock().map_err(|_| SdkError::SidecarFailed)? = Some(monitor);
             self.status.send_replace(NativeSidecarStatus::Ready);
             start_status.complete();
-            Ok(Arc::new(ManagedSidecarBackend { state, agent_runs }))
+            Ok(Arc::new(ManagedSidecarBackend {
+                state,
+                agent_runs,
+                artifacts,
+                capabilities,
+            }))
         }
     }
 }
@@ -838,6 +851,7 @@ struct ManagedSidecarState {
     options: SidecarOptions,
     bootstrap: Arc<SidecarBootstrapConfig>,
     agent_runs: Arc<SwitchingAgentRunClient>,
+    artifacts: Option<Arc<SwitchingArtifactClient>>,
     process: tokio::sync::Mutex<Option<RunningChild>>,
     close_guard: tokio::sync::Mutex<()>,
     closing: AtomicBool,
@@ -848,6 +862,8 @@ struct ManagedSidecarState {
 struct ManagedSidecarBackend {
     state: Arc<ManagedSidecarState>,
     agent_runs: Arc<SwitchingAgentRunClient>,
+    artifacts: Option<Arc<SwitchingArtifactClient>>,
+    capabilities: ServerCapabilities,
 }
 
 impl fmt::Debug for ManagedSidecarBackend {
@@ -867,6 +883,16 @@ impl Backend for ManagedSidecarBackend {
 
     fn agent_runs(&self) -> Arc<dyn AgentRunClient> {
         self.agent_runs.clone()
+    }
+
+    fn capabilities(&self) -> ServerCapabilities {
+        self.capabilities.clone()
+    }
+
+    fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
+        self.artifacts
+            .as_ref()
+            .map(|client| client.clone() as Arc<dyn ArtifactClient>)
     }
 
     async fn close(&self) -> SdkResult<()> {
@@ -1034,6 +1060,41 @@ impl SwitchingAgentRunClient {
     }
 }
 
+struct SwitchingArtifactClient {
+    current: RwLock<Arc<dyn ArtifactClient>>,
+}
+
+impl SwitchingArtifactClient {
+    fn new(initial: Arc<dyn ArtifactClient>) -> Self {
+        Self {
+            current: RwLock::new(initial),
+        }
+    }
+
+    async fn current(&self) -> Arc<dyn ArtifactClient> {
+        self.current.read().await.clone()
+    }
+
+    async fn replace(&self, next: Arc<dyn ArtifactClient>) {
+        *self.current.write().await = next;
+    }
+}
+
+#[async_trait]
+impl ArtifactClient for SwitchingArtifactClient {
+    async fn upload(&self, request: UploadArtifactRequest) -> ApiResult<ArtifactReference> {
+        self.current().await.upload(request).await
+    }
+
+    async fn get(&self, artifact_id: &str) -> ApiResult<ArtifactReference> {
+        self.current().await.get(artifact_id).await
+    }
+
+    async fn download(&self, artifact_id: &str) -> ApiResult<DownloadedArtifact> {
+        self.current().await.download(artifact_id).await
+    }
+}
+
 fn expose_approval_broker_capability(interaction: &mut Interaction) {
     if interaction.status == InteractionStatus::Pending
         && !interaction.etag.is_empty()
@@ -1177,6 +1238,16 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
                 .agent_runs
                 .replace(restarted.transports.agent_runs())
                 .await;
+            if let Some(artifacts) = &state.artifacts {
+                let Some(next) = restarted.transports.primary.artifacts() else {
+                    let mut restarted = restarted;
+                    restarted.guardian.take();
+                    restarted.kill_tree();
+                    terminal_failure = NativeSidecarFailure::SupervisionFailed;
+                    continue;
+                };
+                artifacts.replace(next).await;
+            }
             *state.process.lock().await = Some(restarted);
             state.status.send_replace(NativeSidecarStatus::Ready);
             recovered = true;

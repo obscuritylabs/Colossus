@@ -1,5 +1,5 @@
 use super::*;
-use colossus_api::AgentRunApi;
+use colossus_api::{AgentRunApi, ArtifactApi, EventSourcedArtifactApi};
 use colossus_api_proto::v1alpha1::{ApiLimit, DeploymentMode, ReadinessCheck, ReadinessStatus};
 use colossus_api_runtime::{PublicInteractionRouter, RunAdmissionConfig, RuntimeAgentRunApi};
 use colossus_grpc::{
@@ -281,6 +281,8 @@ impl PreparedPublicApi {
             options.admission,
         ));
         let api: Arc<dyn AgentRunApi> = runs.clone();
+        let artifacts: Arc<dyn ArtifactApi> =
+            Arc::new(EventSourcedArtifactApi::new(runtime.journal()));
         let system = SystemServiceAdapter::new(
             SystemMetadata {
                 instance_id: options.instance_id.to_string(),
@@ -296,6 +298,7 @@ impl PreparedPublicApi {
             options.authenticator,
             system,
             api,
+            artifacts,
         )
         .await
         .map_err(|error| WorkerError::PublicApi(error.to_string()))?;

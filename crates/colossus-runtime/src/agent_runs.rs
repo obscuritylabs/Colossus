@@ -1,5 +1,17 @@
 use super::*;
 
+const PLAN_MODE_INSTRUCTIONS: &str = "You are Colossus operating in Plan Mode. \
+Treat the user's request as work to plan, not work to execute. Use read-only inspection \
+only when it is necessary to produce an accurate plan, and keep that inspection bounded. \
+You MUST call plan.create exactly once before your final response, with concise ordered \
+steps that cover the requested work. Do not write files, apply patches, run commands, \
+delegate work, alter decisions or memories, approve plans, perform the requested work, \
+or claim implementation is complete.";
+
+fn with_plan_mode_instructions(instructions: &str) -> String {
+    format!("{instructions}\n\n{PLAN_MODE_INSTRUCTIONS}")
+}
+
 impl Runtime {
     pub(super) async fn run_with_subagent_scheduling<F>(
         &self,
@@ -253,9 +265,7 @@ impl Runtime {
             ));
         }
         let instructions = if plan_mode {
-            format!(
-                "{instructions}\n\nYou are Colossus operating in Plan Mode. Inspect context and create durable tasks or a structured draft with plan.create when useful. Do not write files, apply patches, run commands, delegate work, alter decisions or memories, approve plans, or claim implementation is complete."
-            )
+            with_plan_mode_instructions(instructions)
         } else {
             instructions.into()
         };
@@ -298,9 +308,7 @@ impl Runtime {
         explicit_skills: &[String],
         sticky_skills: &[String],
     ) -> Result<AgentRunResult, RuntimeError> {
-        let instructions = format!(
-            "{instructions}\n\nYou are Colossus operating in Plan Mode. Inspect context and create durable tasks or a structured draft with plan.create when useful. Do not write files, apply patches, run commands, delegate work, alter decisions or memories, approve plans, or claim implementation is complete."
-        );
+        let instructions = with_plan_mode_instructions(instructions);
         let composition = self.skill_composer.compose(
             &instructions,
             prompt,
@@ -340,9 +348,7 @@ impl Runtime {
         sticky_skills: &[String],
         observer: &mut dyn RunEventObserver,
     ) -> Result<AgentRunResult, RuntimeError> {
-        let instructions = format!(
-            "{instructions}\n\nYou are Colossus operating in Plan Mode. Inspect context and create durable tasks or a structured draft with plan.create when useful. Do not write files, apply patches, run commands, delegate work, alter decisions or memories, approve plans, or claim implementation is complete."
-        );
+        let instructions = with_plan_mode_instructions(instructions);
         let composition = self.skill_composer.compose(
             &instructions,
             prompt,
@@ -502,5 +508,21 @@ impl Runtime {
             iterations,
             elapsed_seconds: started.elapsed().as_secs_f64(),
         })
+    }
+}
+
+#[cfg(test)]
+mod plan_mode_instruction_tests {
+    use super::with_plan_mode_instructions;
+
+    #[test]
+    fn plan_mode_requires_one_durable_plan_without_execution() {
+        let instructions = with_plan_mode_instructions("Base instructions.");
+
+        assert!(instructions.contains("MUST call plan.create exactly once"));
+        assert!(instructions.contains("work to plan, not work to execute"));
+        assert!(instructions.contains("keep that inspection bounded"));
+        assert!(instructions.contains("Do not write files"));
+        assert!(instructions.contains("perform the requested work"));
     }
 }

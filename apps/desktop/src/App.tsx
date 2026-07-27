@@ -14,6 +14,7 @@ import {
   applyManagedModelConfiguration,
   cancelRun,
   checkDesktopUpdate,
+  chooseRunAttachment,
   chooseWorkspace,
   configureManagedRuntime,
   connectColossus,
@@ -27,6 +28,7 @@ import {
   initializeDesktop,
   listWorkspaceDirectory,
   listRuns,
+  readArtifactContent,
   readWorkspaceFile,
   restartManagedRuntime,
   removeCaBundle,
@@ -86,6 +88,7 @@ import {
 import type { TargetRoute } from "./target-routing";
 import type {
   ApplyManagedModelConfigurationRequest,
+  ArtifactReference,
   CommandError,
   ConfigureManagedRuntimeRequest,
   ConnectionStatus,
@@ -196,9 +199,9 @@ const INITIAL_DESKTOP: DesktopStatus = {
   capabilities: {
     delegation: false,
     skills: false,
-    tui: true,
-    files: true,
-    artifacts: true,
+    tui: FIXTURE_MODE,
+    files: FIXTURE_MODE,
+    artifacts: FIXTURE_MODE,
     updateAvailable: false,
     agentWorkflows: false,
     attachments: false,
@@ -406,6 +409,17 @@ export default function App() {
   const [listError, setListError] = useState("");
   const [runLoadError, setRunLoadError] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [attachments, setAttachments] = useState<ArtifactReference[]>([]);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [artifactPreviews, setArtifactPreviews] = useState<
+    ReadonlyMap<string, readonly ArtifactPreviewLine[]>
+  >(new Map());
+  const [artifactPreviewFailures, setArtifactPreviewFailures] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
+  const [artifactPreviewsLoading, setArtifactPreviewsLoading] = useState<
+    ReadonlySet<string>
+  >(new Set());
   const [role, setRole] = useState("primary");
   const [mode, setMode] = useState<RunMode>("execute");
   const [maxTurns, setMaxTurns] = useState(24);
@@ -868,6 +882,7 @@ export default function App() {
     setRunLoadError("");
     setActionError(null);
     setComposerError(null);
+    setAttachments([]);
     requestAnimationFrame(() => composerRef.current?.focus());
   }
 
@@ -912,6 +927,7 @@ export default function App() {
       cleanRole,
       mode,
       maxTurns,
+      ...attachments.map((attachment) => attachment.artifactId),
     ]);
     const previousRoutedAttempt = createAttempt.current;
     const previousAttempt =
@@ -926,6 +942,7 @@ export default function App() {
     };
     const commonRequest: CreateRunRequest = {
       prompt: cleanPrompt,
+      artifactIds: attachments.map((attachment) => attachment.artifactId),
       role: cleanRole,
       mode,
       maxTurns,
@@ -972,6 +989,7 @@ export default function App() {
         };
         createAttempt.current = null;
         setPrompt("");
+        setAttachments([]);
         targetRoutes.current?.bindRun(runId, route);
         dispatch({ type: "upsert_run", run });
         dispatch({ type: "record_local_prompt", runId, prompt: cleanPrompt });
@@ -988,6 +1006,7 @@ export default function App() {
       }
       createAttempt.current = null;
       setPrompt("");
+      setAttachments([]);
       targetRoutes.current.bindRun(run.runId, route);
       dispatch({ type: "upsert_run", run });
       dispatch({
@@ -1007,6 +1026,92 @@ export default function App() {
     } finally {
       submitInFlight.current = false;
       setSubmitting(false);
+    }
+  }
+
+  async function chooseAttachment() {
+    const route = targetRoutes.current?.capture() ?? null;
+    if (
+      route === null ||
+      targetRoutes.current?.isCurrent(route) !== true ||
+      attachmentBusy
+    ) {
+      return;
+    }
+    setAttachmentBusy(true);
+    setComposerError(null);
+    try {
+      const attachment = await chooseRunAttachment(route.targetId);
+      if (
+        attachment !== null &&
+        targetRoutes.current?.isCurrent(route) === true
+      ) {
+        setAttachments((current) =>
+          current.some((item) => item.artifactId === attachment.artifactId)
+            ? current
+            : [...current, attachment].slice(0, 16),
+        );
+      }
+    } catch (error: unknown) {
+      setComposerError(commandError(error));
+    } finally {
+      setAttachmentBusy(false);
+    }
+  }
+
+  async function loadArtifactPreview(artifactId: string) {
+    if (
+      FIXTURE_MODE ||
+      artifactId.length === 0 ||
+      artifactPreviews.has(artifactId) ||
+      artifactPreviewsLoading.has(artifactId)
+    ) {
+      return;
+    }
+    const route = targetRoutes.current?.capture() ?? null;
+    if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
+      return;
+    }
+    setArtifactPreviewsLoading((current) => {
+      const next = new Set(current);
+      next.add(artifactId);
+      return next;
+    });
+    setArtifactPreviewFailures((current) => {
+      const next = new Map(current);
+      next.delete(artifactId);
+      return next;
+    });
+    try {
+      const content = await readArtifactContent(route.targetId, artifactId);
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      const lines = content.text.split(/\r?\n/).map((text, index) => ({
+        number: index + 1,
+        kind: "context" as const,
+        text,
+      }));
+      setArtifactPreviews((current) => {
+        const next = new Map(current);
+        next.set(artifactId, lines);
+        return next;
+      });
+    } catch (error: unknown) {
+      if (targetRoutes.current?.isCurrent(route) === true) {
+        const failure = commandError(error);
+        setArtifactPreviewFailures((current) => {
+          const next = new Map(current);
+          next.set(artifactId, failure.message);
+          return next;
+        });
+      }
+    } finally {
+      setArtifactPreviewsLoading((current) => {
+        const next = new Set(current);
+        next.delete(artifactId);
+        return next;
+      });
     }
   }
 
@@ -1647,18 +1752,32 @@ export default function App() {
   const artifactItems = useMemo<ArtifactViewItem[]>(
     () =>
       selectedArtifacts.map((artifact) => {
-        const previewLines = previewFor(artifact.fileName);
+        const artifactId = artifact.artifactId || artifact.key;
+        const previewLines =
+          previewFor(artifact.fileName) ?? artifactPreviews.get(artifactId);
+        const previewError = artifactPreviewFailures.get(artifactId);
         return {
-          id: artifact.artifactId || artifact.key,
+          id: artifactId,
           fileName: artifact.fileName,
           mediaType: artifact.mediaType,
           sizeLabel: artifact.sizeLabel,
           stateLabel: artifact.stateLabel,
           createdLabel: artifact.createdLabel,
           ...(previewLines === undefined ? {} : { previewLines }),
+          previewStatus: artifactPreviewsLoading.has(artifactId)
+            ? ("loading" as const)
+            : previewError === undefined
+              ? ("idle" as const)
+              : ("error" as const),
+          ...(previewError === undefined ? {} : { previewError }),
         };
       }),
-    [selectedArtifacts],
+    [
+      artifactPreviewFailures,
+      artifactPreviews,
+      artifactPreviewsLoading,
+      selectedArtifacts,
+    ],
   );
   const participants = useMemo<readonly AgentParticipant[]>(() => {
     if (FIXTURE_MODE && activeView !== undefined) {
@@ -1740,6 +1859,8 @@ export default function App() {
       }
       activeWorkNeedsInput={(activeView?.pendingInteractions.length ?? 0) > 0}
       attachmentsAvailable={desktop.capabilities.attachments}
+      attachments={attachments}
+      attachmentBusy={attachmentBusy}
       error={composerError}
       onPromptChange={(nextPrompt) => {
         setPrompt(nextPrompt);
@@ -1748,6 +1869,12 @@ export default function App() {
       onRoleChange={setRole}
       onMaxTurnsChange={(turns) => setMaxTurns(clampMaxTurns(turns))}
       onModeChange={setMode}
+      onChooseAttachment={() => void chooseAttachment()}
+      onRemoveAttachment={(artifactId) =>
+        setAttachments((current) =>
+          current.filter((attachment) => attachment.artifactId !== artifactId),
+        )
+      }
       onSubmit={(event) => void submitRun(event)}
     />
   );
@@ -1875,6 +2002,9 @@ export default function App() {
             setPrompt(suggestion);
             requestAnimationFrame(() => composerRef.current?.focus());
           }}
+          onSelectArtifact={(artifactId) =>
+            void loadArtifactPreview(artifactId)
+          }
           onOpenWorkNavigation={openWorkNavigation}
           onCloseWorkNavigation={closeWorkNavigation}
         />

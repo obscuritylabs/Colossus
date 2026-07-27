@@ -69,8 +69,23 @@ describe("ProductRail terminal availability", () => {
       attachments: false,
     });
 
-    expect(markup).not.toContain(">Fleet</span>");
+    expect(markup).not.toContain(">Agents</span>");
     expect(markup).not.toContain(">Library</span>");
     expect(markup).not.toContain(">TUI</span>");
+  });
+
+  it("shows orchestration for an authenticated delegation capability", () => {
+    const markup = renderRail(true, {
+      delegation: true,
+      skills: false,
+      tui: false,
+      files: false,
+      artifacts: false,
+      updateAvailable: false,
+      agentWorkflows: false,
+      attachments: false,
+    });
+
+    expect(markup).toContain(">Agents</span>");
   });
 });

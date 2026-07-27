@@ -134,6 +134,28 @@ describe("OperationsSurface runtime targets", () => {
     );
   });
 
+  it("renders only orchestration capabilities advertised by the selected target", () => {
+    const markup = renderSurface(
+      "fleet",
+      desktop({
+        capabilities: {
+          delegation: true,
+          skills: false,
+          tui: false,
+          files: false,
+          artifacts: false,
+          updateAvailable: false,
+          agentWorkflows: false,
+          attachments: false,
+        },
+      }),
+    );
+
+    expect(markup).toContain("Delegated agents");
+    expect(markup).not.toContain("Durable workflows");
+    expect(markup).not.toContain("Declarative skills");
+  });
+
   it("labels the actually selected target instead of assuming Managed Local", () => {
     const markup = renderSurface("settings");
 

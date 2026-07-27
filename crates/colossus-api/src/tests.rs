@@ -524,6 +524,24 @@ fn create_request_rejects_more_than_the_bounded_number_of_input_parts() {
 }
 
 #[test]
+fn create_request_accepts_opaque_artifact_input_and_rejects_path_like_ids() {
+    let mut request = create_request("artifact-input", "Review the attachment");
+    request.input.push(ContentPart::Artifact {
+        artifact_id: format!("artifact-{}", "a".repeat(64)),
+    });
+    request.validate().expect("opaque artifact input");
+
+    request.input[1] = ContentPart::Artifact {
+        artifact_id: "../private/report.md".into(),
+    };
+    let error = request
+        .validate()
+        .expect_err("artifact identifiers must never accept paths");
+    assert_eq!(error.reason, ApiErrorReason::InvalidArgument);
+    assert_eq!(error.violations[0].field, "input.artifact_id");
+}
+
+#[test]
 fn create_request_rejects_public_skill_activation() {
     let mut request = create_request("skill-denied", "Do not load skills");
     request.skill_ids = vec!["private-skill".into()];
