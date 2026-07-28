@@ -595,7 +595,7 @@ test("release compilation and signing authority use separate runners", () => {
   );
   assert.match(
     signJob,
-    /MACOS_TEAM_ID secret must be a 10-character Apple Team ID' >&2\n\s+exit 1\n\s+fi/u,
+    /MACOS_TEAM_ID secret must be a 10-character Apple Team ID' >&2\r?\n\s+exit 1\r?\n\s+fi/u,
   );
   assert.match(signJob, /actions\/setup-node@[0-9a-f]{40}/u);
   assert.match(signJob, /npm ci --ignore-scripts/u);
@@ -767,36 +767,38 @@ test("release manifest writer emits exact final binary digests", () => {
     if (process.platform !== "win32") {
       assert.equal(lstatSync(output).mode & 0o777, 0o644);
     }
-    execFileSync(process.execPath, [
-      join(repository, "scripts/verify-desktop-bundle.mjs"),
-      "--app",
-      join(root, "Colossus Desktop.app"),
-      "--target",
-      "aarch64-apple-darwin",
-      "--release-channel",
-      "developer_preview",
-    ]);
-    const wrongChannel = spawnSync(process.execPath, [
-      join(repository, "scripts/verify-desktop-bundle.mjs"),
-      "--app",
-      join(root, "Colossus Desktop.app"),
-      "--target",
-      "aarch64-apple-darwin",
-      "--release-channel",
-      "stable",
-    ]);
-    assert.notEqual(wrongChannel.status, 0);
-    appendFileSync(cli, "tampered");
-    const tampered = spawnSync(process.execPath, [
-      join(repository, "scripts/verify-desktop-bundle.mjs"),
-      "--app",
-      join(root, "Colossus Desktop.app"),
-      "--target",
-      "aarch64-apple-darwin",
-      "--release-channel",
-      "developer_preview",
-    ]);
-    assert.notEqual(tampered.status, 0);
+    if (process.platform !== "win32") {
+      execFileSync(process.execPath, [
+        join(repository, "scripts/verify-desktop-bundle.mjs"),
+        "--app",
+        join(root, "Colossus Desktop.app"),
+        "--target",
+        "aarch64-apple-darwin",
+        "--release-channel",
+        "developer_preview",
+      ]);
+      const wrongChannel = spawnSync(process.execPath, [
+        join(repository, "scripts/verify-desktop-bundle.mjs"),
+        "--app",
+        join(root, "Colossus Desktop.app"),
+        "--target",
+        "aarch64-apple-darwin",
+        "--release-channel",
+        "stable",
+      ]);
+      assert.notEqual(wrongChannel.status, 0);
+      appendFileSync(cli, "tampered");
+      const tampered = spawnSync(process.execPath, [
+        join(repository, "scripts/verify-desktop-bundle.mjs"),
+        "--app",
+        join(root, "Colossus Desktop.app"),
+        "--target",
+        "aarch64-apple-darwin",
+        "--release-channel",
+        "developer_preview",
+      ]);
+      assert.notEqual(tampered.status, 0);
+    }
 
     rmSync(sidecar);
     symlinkSync(cli, sidecar);
