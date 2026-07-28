@@ -550,7 +550,7 @@ test("release compilation and signing authority use separate runners", () => {
   );
   assert.match(
     buildJob,
-    /MACOS_TEAM_ID repository variable must be a 10-character Apple Team ID' >&2\n\s+exit 1\n\s+fi/u,
+    /MACOS_TEAM_ID repository variable must be a 10-character Apple Team ID' >&2\r?\n\s+exit 1\r?\n\s+fi/u,
   );
 
   assert.match(signJob, /actions\/download-artifact@[0-9a-f]{40}/u);
@@ -764,7 +764,9 @@ test("release manifest writer emits exact final binary digests", () => {
       sidecar: { fileName: "colossus-sidecar", sha256: digest(sidecar) },
       cli: { fileName: "colossus", sha256: digest(cli) },
     });
-    assert.equal(lstatSync(output).mode & 0o777, 0o644);
+    if (process.platform !== "win32") {
+      assert.equal(lstatSync(output).mode & 0o777, 0o644);
+    }
     execFileSync(process.execPath, [
       join(repository, "scripts/verify-desktop-bundle.mjs"),
       "--app",
