@@ -56,7 +56,9 @@ case $(rustc --version) in
         ;;
 esac
 
-legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' ':(exclude)examples/sdk/**')
+legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
+    ':(exclude)examples/sdk/integration/server.py' \
+    ':(exclude)examples/sdk/provider-failure/server.py')
 if [ -e pyproject.toml ] || [ -n "$legacy_python_sources" ]; then
     printf 'the active Rust tree must not contain the retired root Python package or tracked Python source outside the maintained public Python SDK and SDK fixtures\n' >&2
     exit 1
