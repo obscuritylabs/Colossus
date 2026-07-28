@@ -389,10 +389,9 @@ impl SettingsStore {
         let result = (|| {
             file.write_all(&bytes).map_err(|_| storage_error())?;
             file.sync_all().map_err(|_| storage_error())?;
-            fs::rename(&temporary, self.root.join(SETTINGS_FILE)).map_err(|_| storage_error())?;
-            File::open(&self.root)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|_| storage_error())
+            drop(file);
+            replace_private_file(&temporary, &self.root.join(SETTINGS_FILE))?;
+            sync_private_directory(&self.root)
         })();
         if result.is_err() {
             let _ = fs::remove_file(temporary);
@@ -421,10 +420,9 @@ impl SettingsStore {
         partition_digest.update(identity.version.to_le_bytes());
         partition_digest.update(identity.sha256.as_bytes());
         let partition = partition_digest.finalize();
-        let directory = self
-            .root
-            .join(MANAGED_DIRECTORY)
-            .join(hex::encode(&partition[..]));
+        let managed_root = self.root.join(MANAGED_DIRECTORY);
+        ensure_private_directory(&managed_root)?;
+        let directory = managed_root.join(hex::encode(&partition[..]));
         ensure_private_directory(&directory)?;
 
         let mut instance_digest = Sha256::new();
@@ -499,6 +497,7 @@ impl SettingsStore {
         let root = self.root.join(SELF_TEST_DIRECTORY);
         let instance_dir = root.join(SELF_TEST_RUNTIME_DIRECTORY);
         let workspace = root.join(SELF_TEST_WORKSPACE_DIRECTORY);
+        ensure_private_directory(&root)?;
         ensure_private_directory(&instance_dir)?;
         ensure_private_directory(&workspace)?;
         Ok(SelfTestStorage {
@@ -1079,6 +1078,32 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), CommandErrorDto> 
     Ok(())
 }
 
+fn replace_private_file(source: &Path, destination: &Path) -> Result<(), CommandErrorDto> {
+    #[cfg(windows)]
+    {
+        colossus_windows_native::replace_private_file(source, destination)
+            .map_err(|_| storage_error())
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(source, destination).map_err(|_| storage_error())
+    }
+}
+
+fn sync_private_directory(path: &Path) -> Result<(), CommandErrorDto> {
+    #[cfg(unix)]
+    {
+        File::open(path)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| storage_error())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 fn read_private_file(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>, CommandErrorDto> {
     #[cfg(unix)]
     let mut source = {
@@ -1410,7 +1435,7 @@ mod tests {
         assert!(migrated.legacy_connection_migrated);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn managed_state_and_instance_identity_are_isolated_per_workspace() {
         let (_root_guard, _root, store) = test_store();
@@ -1589,7 +1614,7 @@ mod tests {
         assert_eq!(store.load().expect("persisted recovery"), migrated);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn replacement_at_same_path_gets_distinct_state_and_rejects_saved_identity() {
         let (_root_guard, _root, store) = test_store();

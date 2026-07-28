@@ -14,6 +14,19 @@ pub fn create_private_directory(path: &Path) -> Result<(), WindowsNativeError> {
     }
 }
 
+/// Atomically replace one private file with another file in the same private directory.
+pub fn replace_private_file(source: &Path, destination: &Path) -> Result<(), WindowsNativeError> {
+    #[cfg(windows)]
+    {
+        crate::windows::replace_private_file(source, destination)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (source, destination);
+        Err(WindowsNativeError::UnsupportedPlatform)
+    }
+}
+
 /// Stable kernel identity returned by `FileIdInfo`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileIdentity {
@@ -127,8 +140,8 @@ impl BoundPath {
         }
     }
 
-    /// Require ownership by the current user and a DACL whose allow entries grant
-    /// access only to that user, LocalSystem, or built-in administrators.
+    /// Require ownership by the current user or a trusted local system principal and a
+    /// DACL whose allow entries grant access only to those same trusted principals.
     pub fn validate_private_owner_dacl(&self) -> Result<(), WindowsNativeError> {
         #[cfg(windows)]
         {

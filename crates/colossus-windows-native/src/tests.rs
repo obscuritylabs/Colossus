@@ -45,6 +45,30 @@ fn private_directory_creation_protects_the_directory_and_children() {
 
 #[cfg(windows)]
 #[test]
+fn private_file_replacement_is_atomic_and_preserves_private_access() {
+    let parent = tempfile::tempdir().expect("temporary parent");
+    let directory = parent.path().join("private");
+    create_private_directory(&directory).expect("create private directory");
+    let destination = directory.join("settings.json");
+    let source = directory.join(".settings.next");
+    std::fs::write(&destination, b"old").expect("write original");
+    std::fs::write(&source, b"new").expect("write replacement");
+
+    replace_private_file(&source, &destination).expect("replace private file");
+
+    assert!(!source.exists());
+    assert_eq!(
+        std::fs::read(&destination).expect("read replacement"),
+        b"new"
+    );
+    BoundPath::open_file(&destination)
+        .expect("bind replacement")
+        .validate_private_owner_dacl()
+        .expect("replacement remains private");
+}
+
+#[cfg(windows)]
+#[test]
 fn conpty_fixture_process() {
     use std::io::{Read as _, Write as _};
 

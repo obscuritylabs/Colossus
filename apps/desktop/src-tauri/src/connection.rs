@@ -573,7 +573,7 @@ mod tests {
         let config_path = root.join("connection.json");
         let source = VALID.replace(
             "~/.colossus-public-api",
-            r"C:\Users\test\AppData\Local\colossus-api",
+            r"C:\\Users\\test\\AppData\\Local\\colossus-api",
         );
         fs::write(&config_path, source).expect("write config");
         let config_path = fs::canonicalize(config_path).expect("canonical config");

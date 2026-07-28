@@ -37,7 +37,8 @@ use windows_sys::Win32::{
         CreateDirectoryW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandleEx, READ_CONTROL,
+        FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING,
+        MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL,
     },
     System::{
         Console::{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
@@ -156,6 +157,73 @@ pub(super) fn create_private_directory(path: &Path) -> Result<(), WindowsNativeE
         return Err(error);
     }
     Ok(())
+}
+
+pub(super) fn replace_private_file(
+    source_path: &Path,
+    destination_path: &Path,
+) -> Result<(), WindowsNativeError> {
+    if source_path == destination_path
+        || source_path.parent().is_none()
+        || source_path.parent() != destination_path.parent()
+    {
+        return Err(WindowsNativeError::InvalidInput);
+    }
+    let parent_path = source_path
+        .parent()
+        .ok_or(WindowsNativeError::InvalidInput)?;
+    let parent = open_bound(parent_path, BoundKind::Directory)?;
+    parent.validate_private_owner_dacl()?;
+    let source = open_bound(source_path, BoundKind::File)?;
+    source.validate_private_owner_dacl()?;
+    if destination_path.exists() {
+        let destination = open_bound(destination_path, BoundKind::File)?;
+        destination.validate_private_owner_dacl()?;
+    }
+
+    let source_encoded = nul_terminated_path(source_path)?;
+    let destination_encoded = nul_terminated_path(destination_path)?;
+    // SAFETY: both paths are NUL-terminated and remain live for the call. The retained
+    // private parent and source handles make the post-operation identity check meaningful.
+    if unsafe {
+        MoveFileExW(
+            source_encoded.as_ptr(),
+            destination_encoded.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(last_error("replace private file"));
+    }
+
+    let committed = open_bound(destination_path, BoundKind::File)?;
+    if committed.identity != source.identity {
+        return Err(WindowsNativeError::IdentityChanged);
+    }
+    committed
+        .validate_private_owner_dacl()
+        .and_then(|()| committed.revalidate())
+        .and_then(|()| parent.revalidate())
+}
+
+fn nul_terminated_path(path: &Path) -> Result<Vec<u16>, WindowsNativeError> {
+    if !path.is_absolute()
+        || path.parent().is_none()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return Err(WindowsNativeError::InvalidInput);
+    }
+    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(WindowsNativeError::InvalidInput);
+    }
+    encoded.push(0);
+    Ok(encoded)
 }
 
 fn private_access_entry(sid: PSID) -> EXPLICIT_ACCESS_W {
