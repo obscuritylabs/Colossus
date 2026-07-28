@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
@@ -15,6 +15,8 @@ use zeroize::Zeroizing;
 
 use crate::dto::CommandErrorDto;
 
+#[cfg(not(windows))]
+use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
@@ -1094,18 +1096,19 @@ fn replace_private_file(source: &Path, destination: &Path) -> Result<(), Command
     }
 }
 
+#[cfg(unix)]
 fn sync_private_directory(path: &Path) -> Result<(), CommandErrorDto> {
-    #[cfg(unix)]
-    {
-        File::open(path)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| storage_error())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Ok(())
-    }
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| storage_error())
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
+fn sync_private_directory(_path: &Path) -> Result<(), CommandErrorDto> {
+    // Windows does not expose the Unix directory-fsync durability primitive.
+    // Preserve one fallible interface at the save call site across platforms.
+    Ok(())
 }
 
 fn read_private_file(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>, CommandErrorDto> {
@@ -1224,6 +1227,7 @@ fn credential_error() -> CommandErrorDto {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn ca_pem(name: &str) -> String {
         let mut parameters =
             rcgen::CertificateParams::new(vec![name.into()]).expect("CA parameters");
