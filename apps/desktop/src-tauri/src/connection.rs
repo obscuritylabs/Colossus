@@ -375,9 +375,9 @@ fn expand_private_path(value: &str, home: Option<&Path>) -> Result<PathBuf, Comm
 fn valid_local_absolute_path(path: &Path) -> bool {
     if !path.is_absolute()
         || path.parent().is_none()
-        || path.components().any(|component| {
-            matches!(component, Component::ParentDir | Component::CurDir)
-        })
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
     {
         return false;
     }
@@ -433,8 +433,7 @@ mod tests {
 
     #[test]
     fn accepts_compiled_trust_anchor_and_expands_home() {
-        let config = prepare_connection(VALID, Some(test_home()))
-            .expect("valid connection config");
+        let config = prepare_connection(VALID, Some(test_home())).expect("valid connection config");
         assert_eq!(
             config.public_api_dir,
             test_home().join(".colossus-public-api")
@@ -443,12 +442,9 @@ mod tests {
 
     #[test]
     fn legacy_compiled_target_is_retained_without_copying_credential_authority() {
-        let target = legacy_compiled_target_from_source(
-            LEGACY,
-            "external-default",
-            Some(test_home()),
-        )
-        .expect("legacy target metadata");
+        let target =
+            legacy_compiled_target_from_source(LEGACY, "external-default", Some(test_home()))
+                .expect("legacy target metadata");
         assert!(target.requires_credential_enrollment);
         assert_eq!(target.credential_service, EXTERNAL_KEYRING_SERVICE);
         assert_eq!(
@@ -460,12 +456,8 @@ mod tests {
 
         let arbitrary = LEGACY.replace(LEGACY_DESKTOP_KEYRING_ACCOUNT, "unrelated-keychain-entry");
         assert!(
-            legacy_compiled_target_from_source(
-                &arbitrary,
-                "external-default",
-                Some(test_home()),
-            )
-            .is_err()
+            legacy_compiled_target_from_source(&arbitrary, "external-default", Some(test_home()),)
+                .is_err()
         );
     }
 
