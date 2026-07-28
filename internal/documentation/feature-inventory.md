@@ -1077,17 +1077,15 @@ to local or air-gapped operation.
 
 ## 22. Delivery Status
 
-Rust 0.10.1-preview.2 is the active Developer Preview candidate, and every capability in
-the Section 5 release baseline has executable evidence. The detailed requirement-to-test
-mapping lives in the [Rust Acceptance Matrix](rust-acceptance-matrix.md); test names and
-source paths belong there rather than being repeated in this product contract.
-Publication still requires the explicit platform, security, and artifact release gate.
+Rust 0.10.1 is the active stable release line, and every capability in the Section 5
+release baseline has executable evidence. The detailed requirement-to-test mapping lives
+in the [Rust Acceptance Matrix](rust-acceptance-matrix.md); test names and source paths
+belong there rather than being repeated in this product contract. Publication still
+requires the explicit platform, security, and artifact release gate.
 
 Latest published release proof:
 
-- [v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1)
-- [0.8.1 validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29541847312)
-  for source revision `eda0ce42a52b15d627b545067b64967aa95079ac`
+- [v0.10.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.1)
 - [Release Process](release-process.md) for the local, pull-request, platform, security, and
   packaging gates required before publication
 

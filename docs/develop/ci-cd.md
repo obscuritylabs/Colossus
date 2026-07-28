@@ -208,7 +208,7 @@ git push origin vX.Y.Z
 ### Developer Preview channel
 
 `vX.Y.Z-preview.N` is the only credential-free tag path that may produce a runnable
-Desktop; `v0.10.1-preview.2` is the current example. It still runs all six CLI release
+Desktop; `v0.10.1-preview.2` is the most recent example. It still runs all six CLI release
 jobs. Its Desktop build uses the `developer_preview` channel,
 `COLOSSUS_DESKTOP_TEAM_ID=ADHOC`, and the ad-hoc identity `-`; it never reads Apple signing
 or notarization secrets. Packaging still verifies strict code signatures, fixed code
