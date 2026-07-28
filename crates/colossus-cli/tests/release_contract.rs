@@ -212,7 +212,8 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
     let artifacts = job(jobs(&workflow), "artifacts");
     for step in [
         "Run Unix native sandbox acceptance",
-        "Run Windows runtime and sandbox acceptance",
+        "Run Windows native runtime acceptance",
+        "Run Windows worker and sandbox acceptance",
         "Build locked release binary",
         "Package and verify Unix release",
         "Package and verify Windows release",

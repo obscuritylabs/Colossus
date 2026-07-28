@@ -37,9 +37,7 @@ pub(crate) async fn choose_run_attachment(
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty() && name.len() <= 255)
-        .ok_or_else(|| {
-            CommandErrorDto::invalid("attachment", "The attachment name is invalid.")
-        })?
+        .ok_or_else(|| CommandErrorDto::invalid("attachment", "The attachment name is invalid."))?
         .to_owned();
     let media_type = attachment_media_type(&path).ok_or_else(|| {
         CommandErrorDto::invalid(
@@ -53,20 +51,22 @@ pub(crate) async fn choose_run_attachment(
     let metadata = file.metadata().map_err(|_| {
         CommandErrorDto::invalid("attachment", "The selected attachment is unavailable.")
     })?;
-    if !metadata.is_file()
-        || metadata.len() > MAX_ATTACHMENT_BYTES as u64
-    {
+    if !metadata.is_file() || metadata.len() > MAX_ATTACHMENT_BYTES as u64 {
         return Err(CommandErrorDto::invalid(
             "attachment",
             "Attachments must be regular files no larger than 16 MiB.",
         ));
     }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let capacity = usize::try_from(metadata.len()).map_err(|_| {
+        CommandErrorDto::invalid(
+            "attachment",
+            "Attachments must be regular files no larger than 16 MiB.",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
     file.take((MAX_ATTACHMENT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|_| {
-            CommandErrorDto::invalid("attachment", "The attachment could not be read.")
-        })?;
+        .map_err(|_| CommandErrorDto::invalid("attachment", "The attachment could not be read."))?;
     if bytes.len() > MAX_ATTACHMENT_BYTES || std::str::from_utf8(&bytes).is_err() {
         return Err(CommandErrorDto::invalid(
             "attachment",
@@ -135,8 +135,11 @@ fn attachment_idempotency_key(
     digest.update(media_type.as_bytes());
     digest.update(b"\0");
     digest.update(bytes);
-    IdempotencyKey::new(format!("desktop-attachment-{}", hex::encode(digest.finalize())))
-        .map_err(CommandErrorDto::from_api)
+    IdempotencyKey::new(format!(
+        "desktop-attachment-{}",
+        hex::encode(digest.finalize())
+    ))
+    .map_err(CommandErrorDto::from_api)
 }
 
 fn attachment_media_type(path: &Path) -> Option<&'static str> {
@@ -151,9 +154,9 @@ fn attachment_media_type(path: &Path) -> Option<&'static str> {
         Some("toml") => Some("application/toml"),
         Some("xml") => Some("application/xml"),
         Some(
-            "txt" | "md" | "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java"
-            | "c" | "h" | "cpp" | "hpp" | "cs" | "rb" | "php" | "sh" | "zsh" | "fish"
-            | "css" | "scss" | "html" | "sql" | "graphql" | "proto",
+            "txt" | "md" | "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "h"
+            | "cpp" | "hpp" | "cs" | "rb" | "php" | "sh" | "zsh" | "fish" | "css" | "scss" | "html"
+            | "sql" | "graphql" | "proto",
         ) => Some("text/plain"),
         _ => None,
     }
@@ -165,12 +168,12 @@ mod attachment_tests {
 
     #[test]
     fn attachment_replay_identity_includes_safe_metadata_and_content() {
-        let first = attachment_idempotency_key("first.md", "text/markdown", b"same")
-            .expect("first key");
-        let replay = attachment_idempotency_key("first.md", "text/markdown", b"same")
-            .expect("replay key");
-        let renamed = attachment_idempotency_key("second.md", "text/markdown", b"same")
-            .expect("renamed key");
+        let first =
+            attachment_idempotency_key("first.md", "text/markdown", b"same").expect("first key");
+        let replay =
+            attachment_idempotency_key("first.md", "text/markdown", b"same").expect("replay key");
+        let renamed =
+            attachment_idempotency_key("second.md", "text/markdown", b"same").expect("renamed key");
         assert_eq!(first, replay);
         assert_ne!(first, renamed);
     }

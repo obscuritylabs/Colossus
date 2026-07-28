@@ -219,10 +219,10 @@ jobs:
           workspaces: . -> target
           key: premerge-windows-x64
           cache-targets: false
-      - name: Run authenticated named-pipe and AppContainer escape acceptance
-        run: |
-          cargo test --locked -p colossus-windows-native -- --nocapture
-          cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture
+      - name: Run authenticated Windows native acceptance
+        run: cargo test --locked -p colossus-windows-native -- --nocapture
+      - name: Run Windows worker and AppContainer escape acceptance
+        run: cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture
       - name: Install locked Desktop dependencies
         working-directory: apps/desktop
         run: npm ci --ignore-scripts

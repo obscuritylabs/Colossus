@@ -1,6 +1,9 @@
 use super::*;
 
 #[cfg(windows)]
+const CONTROL_C_EXIT: u32 = 0xC000_013A;
+
+#[cfg(windows)]
 #[test]
 fn retained_file_handle_can_read_and_revalidate() {
     use std::io::Read as _;
@@ -38,11 +41,13 @@ fn conpty_fixture_process() {
         .output
         .write_all(b"pong")
         .expect("authentication response");
-    let mut interrupt = [0_u8; 1];
-    std::io::stdin()
-        .read_exact(&mut interrupt)
-        .expect("ConPTY interrupt");
-    assert_eq!(interrupt, [0x03]);
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        std::process::exit(2);
+    });
+    loop {
+        std::thread::park();
+    }
 }
 
 #[cfg(windows)]
@@ -87,7 +92,11 @@ fn conpty_authentication_resize_interrupt_and_job_cleanup() {
     assert_eq!(&response, b"pong");
     spawned.control.resize(40, 120).expect("resize ConPTY");
     spawned.control.interrupt().expect("interrupt ConPTY");
-    assert_eq!(spawned.child.wait().expect("wait for child"), 0);
+    assert_eq!(
+        spawned.child.wait().expect("wait for child"),
+        CONTROL_C_EXIT,
+        "the ConPTY must deliver Ctrl+C as a Windows console interrupt"
+    );
     spawned
         .control
         .terminate()

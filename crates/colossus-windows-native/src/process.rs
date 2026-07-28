@@ -29,6 +29,26 @@ impl KillOnCloseJob {
         .map(Self)
     }
 
+    /// Assign a Tokio-owned suspended process to a kill-on-close Job Object,
+    /// prove that its image still has the retained file identity, and resume its
+    /// only thread without exposing a raw Windows handle to the caller.
+    pub fn assign_tokio_child_verify_and_resume(
+        process: &tokio::process::Child,
+        expected_image: FileIdentity,
+    ) -> Result<(Self, u32), WindowsNativeError> {
+        let process_id = process.id().ok_or(WindowsNativeError::InvalidInput)?;
+        let raw_process = process
+            .raw_handle()
+            .ok_or(WindowsNativeError::InvalidInput)?;
+        let job = crate::windows::KillOnCloseJob::assign_verify_and_resume(
+            raw_process,
+            process_id,
+            expected_image,
+        )
+        .map(Self)?;
+        Ok((job, process_id))
+    }
+
     /// Terminate every process assigned to this job.
     pub fn terminate(&self) -> Result<(), WindowsNativeError> {
         self.0.terminate()

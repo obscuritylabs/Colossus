@@ -203,12 +203,15 @@ jobs:
         if: runner.os != 'Windows'
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
 
-      - name: Run Windows runtime and sandbox acceptance
+      - name: Run Windows native runtime acceptance
         if: runner.os == 'Windows'
-        run: |
-          cargo test --locked -p colossus-windows-native -- --nocapture
-          cargo test --locked -p colossus-cli \
-            --test worker_smoke --test windows_sandbox -- --nocapture
+        run: cargo test --locked -p colossus-windows-native -- --nocapture
+
+      - name: Run Windows worker and sandbox acceptance
+        if: runner.os == 'Windows'
+        run: >-
+          cargo test --locked -p colossus-cli
+          --test worker_smoke --test windows_sandbox -- --nocapture
 
       - name: Build locked release binary
         run: >-

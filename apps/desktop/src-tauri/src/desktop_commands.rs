@@ -1,4 +1,4 @@
-use colossus_sdk::{ApiErrorCode, ListRunsRequest, PageRequest, RunStatus};
+use colossus_sdk::{ApiErrorCode, ListRunsRequest, PageRequest, RunStatus, ServerCapabilities};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
@@ -1488,10 +1488,10 @@ async fn desktop_status_from(
                 .await
                 .map(|target| target.client.capabilities())
                 .unwrap_or_default(),
-            None => Default::default(),
+            None => ServerCapabilities::default(),
         }
     } else {
-        Default::default()
+        ServerCapabilities::default()
     };
     let capabilities = DesktopCapabilitiesDto {
         delegation: advertised.contains("agent_runs.delegation"),

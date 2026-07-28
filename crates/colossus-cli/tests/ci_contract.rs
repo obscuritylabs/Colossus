@@ -767,6 +767,57 @@ fn conventional_commit_checker_remains_python_free() {
 }
 
 #[test]
+fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
+    let premerge = workflow("premerge.yml");
+    let premerge_windows = job(jobs(&premerge), "windows-runtime");
+    assert_eq!(
+        field(
+            named_step(
+                premerge_windows,
+                "Run authenticated Windows native acceptance"
+            ),
+            "run"
+        )
+        .as_str(),
+        Some("cargo test --locked -p colossus-windows-native -- --nocapture")
+    );
+    assert_eq!(
+        field(
+            named_step(
+                premerge_windows,
+                "Run Windows worker and AppContainer escape acceptance"
+            ),
+            "run"
+        )
+        .as_str(),
+        Some(
+            "cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture"
+        )
+    );
+
+    let release = workflow("release.yml");
+    let release_job = job(jobs(&release), "artifacts");
+    assert_eq!(
+        field(
+            named_step(release_job, "Run Windows native runtime acceptance"),
+            "run"
+        )
+        .as_str(),
+        Some("cargo test --locked -p colossus-windows-native -- --nocapture")
+    );
+    assert_eq!(
+        field(
+            named_step(release_job, "Run Windows worker and sandbox acceptance"),
+            "run"
+        )
+        .as_str(),
+        Some(
+            "cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture"
+        )
+    );
+}
+
+#[test]
 fn bounded_fuzzing_uses_the_pinned_nightly_and_limits() {
     let workflow = workflow("premerge.yml");
     let fuzz = job(jobs(&workflow), "fuzz");
