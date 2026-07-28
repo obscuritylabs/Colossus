@@ -1,7 +1,8 @@
 use super::*;
 use async_trait::async_trait;
 use colossus_contracts::{
-    ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext, ProviderRoute, ProviderTurn,
+    ModelCapabilities, ModelLimits, ModelToolCall, PreparedContext, ProviderResponseDiagnostic,
+    ProviderRoute, ProviderTurn,
 };
 use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::InMemoryEventJournal;
@@ -91,6 +92,10 @@ struct EchoTools;
 
 struct PartialFailureProvider;
 
+struct MidRunDiagnosticProvider {
+    calls: AtomicUsize,
+}
+
 struct TextOnlyProvider {
     inner: ScriptedProvider,
 }
@@ -145,6 +150,73 @@ impl ModelProvider for PartialFailureProvider {
         Err(ModelProviderError::OutcomeUnknown(
             "stream interrupted".into(),
         ))
+    }
+}
+
+#[async_trait]
+impl ModelProvider for MidRunDiagnosticProvider {
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+        Ok(test_route(role, "mid-run-diagnostic"))
+    }
+
+    async fn turn(
+        &self,
+        _role: &str,
+        _request: ModelRequest,
+        _context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        Err(ModelProviderError::Failed(
+            "diagnostic test requires turn options".into(),
+        ))
+    }
+
+    async fn turn_stream_with_options(
+        &self,
+        _role: &str,
+        request: ModelRequest,
+        _context: ExecutionContext,
+        options: ProviderTurnOptions,
+        observer: &mut dyn ProviderEventObserver,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        assert!(options.include_response_diagnostics);
+        match self.calls.fetch_add(1, Ordering::AcqRel) {
+            0 => {
+                let event = ProviderEvent::ToolCallRequested {
+                    call_id: "call-1".into(),
+                    name: "echo".into(),
+                    arguments: json!({"text": "tool result"}),
+                };
+                observer.observe(event.clone()).await?;
+                turn(vec![event])
+            }
+            1 => {
+                assert!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|message| message.role == ModelMessageRole::Tool),
+                    "diagnostic failure must happen on the post-tool continuation"
+                );
+                Err(ModelProviderError::ResponseDiagnostic {
+                    diagnostic: Box::new(ProviderResponseDiagnostic {
+                        request_method: "POST".into(),
+                        request_url: "http://127.0.0.1:9000/v1/chat/completions".into(),
+                        request_body: Some(json!({
+                            "tools": [{
+                                "type": "function",
+                                "function": {"name": "tool.with.dots"}
+                            }]
+                        })),
+                        status: 400,
+                        content_type: Some("application/json".into()),
+                        body: r#"{"error":"mid-run-private-diagnostic"}"#.into(),
+                        body_encoding: "utf8".into(),
+                        body_truncated: false,
+                    }),
+                })
+            }
+            _ => panic!("unexpected provider turn"),
+        }
     }
 }
 
@@ -420,7 +492,7 @@ async fn authenticated_application_is_the_immutable_run_initiator() {
 }
 
 #[tokio::test]
-async fn public_tool_ceiling_cannot_expand_through_unscoped_delegation() {
+async fn public_tool_ceiling_offers_delegation_only_when_explicitly_granted() {
     let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
         ProviderEvent::FinalOutput {
             text: "done".into(),
@@ -467,8 +539,74 @@ async fn public_tool_ceiling_cannot_expand_through_unscoped_delegation() {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
-        ["echo"]
+        ["agent.delegate", "echo"]
     );
+}
+
+#[tokio::test]
+async fn an_unoffered_tool_call_is_returned_to_the_model_as_a_recoverable_result() {
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![ProviderEvent::ToolCallRequested {
+            call_id: "call-delegate".into(),
+            name: "agent.delegate".into(),
+            arguments: json!({"task": "say hi"}),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "Delegation is unavailable in this run.".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(
+            StaticToolRegistry::builtins(&["agent.delegate".into(), "echo".into()])
+                .expect("catalog"),
+        ),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    service
+        .run_public_with_skills_stream_controlled(
+            "primary",
+            "test",
+            "delegate",
+            2,
+            "public-run-unoffered",
+            "public-session-unoffered",
+            true,
+            &[],
+            &["echo".into()],
+            false,
+            Actor {
+                actor_type: ActorType::Application,
+                id: "app:test-ui".into(),
+            },
+            &mut observer,
+            &RunControl::default(),
+        )
+        .await
+        .expect("model must be allowed to recover from an unoffered call");
+
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 2);
+    let recovery = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.role == ModelMessageRole::Tool)
+        .expect("tool recovery message");
+    assert!(recovery.content.contains("unknown_tool"));
+    assert!(recovery.content.contains("not available in this run mode"));
+    assert!(!observer.events.iter().any(|event| {
+        matches!(
+            event.event,
+            RunEvent::Error {
+                recoverable: false,
+                ..
+            }
+        )
+    }));
 }
 
 #[tokio::test]
@@ -558,6 +696,7 @@ async fn goal_tools_are_visible_only_on_goal_lineage_runs() {
             1,
             plain.session_id.as_deref().expect("session"),
             "agent-1",
+            None,
         )
         .await
         .expect("subagent");
@@ -861,10 +1000,14 @@ async fn malformed_arguments_retry_twice_without_tool_execution() {
         Err(ModelProviderError::Recoverable {
             code: INVALID_TOOL_ARGUMENTS_CODE.into(),
             message: "call-1 arguments were not an object".into(),
+            http_status: None,
+            retry_after_ms: None,
         }),
         Err(ModelProviderError::Recoverable {
             code: INVALID_TOOL_ARGUMENTS_CODE.into(),
             message: "call-2 arguments were invalid JSON".into(),
+            http_status: None,
+            retry_after_ms: None,
         }),
         turn(vec![ProviderEvent::FinalOutput {
             text: "recovered".into(),
@@ -935,6 +1078,8 @@ async fn transient_provider_failure_stays_recoverable_without_implicit_retry() {
             code: "provider.temporarily_unavailable".into(),
             message: "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
                 .into(),
+            http_status: Some(503),
+            retry_after_ms: Some(7_000),
         },
     )]));
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
@@ -969,6 +1114,7 @@ async fn transient_provider_failure_stays_recoverable_without_implicit_retry() {
         RunEvent::Error {
             code,
             recoverable: true,
+            http_status: Some(503),
             ..
         } if code == "provider.temporarily_unavailable"
     )));
@@ -980,6 +1126,7 @@ async fn transient_provider_failure_stays_recoverable_without_implicit_retry() {
     let payload = journal.decrypt_payload(error_event).expect("error payload");
     assert_eq!(payload["code"], "provider.temporarily_unavailable");
     assert_eq!(payload["recoverable"], true);
+    assert_eq!(payload["http_status"], 503);
 }
 
 #[tokio::test]
@@ -1124,4 +1271,57 @@ async fn released_partial_stream_is_durable_before_unknown_outcome() {
         "partial"
     );
     assert!(events.iter().any(|event| event.event_type == "error.v1"));
+}
+
+#[tokio::test]
+async fn explicit_diagnostics_capture_a_post_tool_failure_without_persisting_the_body() {
+    let provider = Arc::new(MidRunDiagnosticProvider {
+        calls: AtomicUsize::new(0),
+    });
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    let error = service
+        .run_in_session_with_skills_stream_controlled_with_provider_diagnostics(
+            "primary",
+            "test",
+            "call a tool",
+            3,
+            None,
+            &[],
+            &mut observer,
+            &RunControl::default(),
+        )
+        .await
+        .expect_err("second provider turn must fail");
+    let AgentError::Provider(ModelProviderError::ResponseDiagnostic { diagnostic }) = error else {
+        panic!("expected typed provider response diagnostic");
+    };
+    assert_eq!(diagnostic.status, 400);
+    assert!(diagnostic.body.contains("mid-run-private-diagnostic"));
+    assert_eq!(provider.calls.load(Ordering::Acquire), 2);
+
+    let events = journal.read_global(1, 100).expect("events");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == "tool.call.completed.v1")
+    );
+    assert!(events.iter().any(|event| event.event_type == "error.v1"));
+    for event in &events {
+        let payload = journal.decrypt_payload(event).expect("event payload");
+        assert!(!payload.to_string().contains("mid-run-private-diagnostic"));
+    }
+    assert!(
+        observer
+            .events
+            .iter()
+            .all(|event| !format!("{event:?}").contains("mid-run-private-diagnostic"))
+    );
 }

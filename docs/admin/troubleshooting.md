@@ -28,6 +28,7 @@ colossus --config .colossus/config.yaml tools list
 | --- | --- | --- | --- |
 | Configuration does not parse | `config show` | Unknown field, missing `access`, removed exact tool/action fields, overlapping access entries, relative security path | Compare with [Configuration fields](../reference/configuration.md); for an incompatible shape, follow [Upgrade and compatibility](../get-started/upgrade-compatibility.md) |
 | Echo works; model fails | `provider doctor PROFILE` | Route, credential reference, origin, TLS, model ID, or response shape | Repair the first failing obligation |
+| Initial model request works, but a later TUI turn returns HTTP 400 | `/provider diagnostics on`, then retry the turn | Provider rejected continuation history, tool result encoding, schema, or a tool name | Inspect `Response body`, `Offered tool names`, and the exact `Request body`; run `/provider diagnostics off` afterward |
 | Local model returns HTTP 503 | Local endpoint health, then `provider doctor PROFILE` | Model process is still loading | Wait for endpoint readiness and retry the turn; Colossus marks this failure recoverable but never retries it implicitly |
 | Effect is denied | `config effective` | Exact deny or unmet policy obligation | Change the reviewed action decision; approval cannot override deny |
 | Approval never appears | Global option placement | `--approval-mode` placed after subcommand or noninteractive surface | Put the global flag before the subcommand |
@@ -65,6 +66,33 @@ colossus -w /absolute/path/to/repository \
 `outcome_unknown` means an effect may have escaped after it started but before a terminal
 event was durable. Investigate the external system and use only an operation-specific
 recovery path. Never blindly rerun a non-idempotent request.
+
+## Diagnose a provider failure during a TUI run
+
+Doctor probes send a fresh request, so they cannot reproduce every failure that occurs
+after a tool call. In the TUI, enable explicit in-run diagnostics and retry the failing
+turn:
+
+```text
+/provider diagnostics on
+```
+
+If a provider returns a non-success HTTP response on any model turn, the TUI error card
+shows:
+
+- the response status, content type, and up to 16 KiB of response body;
+- the offered provider-facing tool aliases as a compact list (for example,
+  `filesystem_write` for canonical `filesystem.write`);
+- the exact provider-facing JSON request, including structured tool-call history.
+
+The configured provider credential is redacted and the evidence must pass post-effect
+policy before display. The request can still contain user messages, session context, and
+tool results. It is not written to durable run history, but review it before sharing.
+Disable the mode when the reproduction is complete:
+
+```text
+/provider diagnostics off
+```
 
 ## Safe issue reports
 

@@ -148,10 +148,37 @@ pub(super) fn help_document() -> PresentationDocument {
                     "Cancel".into(),
                     "Ctrl-C clears draft, modal, or active run".into(),
                 ),
+                (
+                    "Provider diagnostics".into(),
+                    "/models doctor [PROFILE]; /provider doctor [PROFILE]; /provider diagnostics on|off".into(),
+                ),
                 ("Preferences".into(), "/tui prefs|save|reset".into()),
                 ("Exit".into(), "Ctrl-D while idle or /exit".into()),
             ]),
         ],
+    })
+}
+
+pub(super) fn provider_diagnostics_document(enabled: bool) -> PresentationDocument {
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Provider response diagnostics".into(),
+        tone: if enabled {
+            PresentationTone::Warning
+        } else {
+            PresentationTone::Neutral
+        },
+        body: vec![PresentationBlock::Text(if enabled {
+            concat!(
+                "Enabled for model turns in this TUI process. A failed provider request will ",
+                "show the exact provider-facing JSON and up to 16 KiB of response body after ",
+                "configured-credential redaction and post-effect policy. The diagnostic is not ",
+                "written to durable run history, but the request can contain user, session, and ",
+                "tool-result data. Use /provider diagnostics off when finished."
+            )
+            .into()
+        } else {
+            "Disabled. Provider failures will show status-only diagnostics.".into()
+        })],
     })
 }
 

@@ -8,7 +8,9 @@ use std::{
 };
 
 use colossus_sdk::WorkspaceIdentity;
-use portable_pty::{Child, MasterPty, NativePtySystem, PtySize, PtySystem, SlavePty};
+use portable_pty::{Child, MasterPty, PtySize};
+#[cfg(target_os = "macos")]
+use portable_pty::{NativePtySystem, PtySystem};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
@@ -63,6 +65,8 @@ impl std::fmt::Debug for TerminalWorkspace {
 struct BoundTerminalWorkspace {
     #[cfg(target_os = "macos")]
     directory: Arc<fs::File>,
+    #[cfg(target_os = "windows")]
+    binding: Arc<colossus_windows_native::BoundPath>,
     canonical_path: PathBuf,
     identity: WorkspaceIdentity,
     #[cfg(target_os = "macos")]
@@ -144,7 +148,29 @@ impl BoundTerminalWorkspace {
         })
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    fn open(path: &Path, expected: &WorkspaceIdentity) -> Result<Self, TerminalError> {
+        expected
+            .validate_current()
+            .map_err(|_| TerminalError::InvalidWorkspace)?;
+        let binding = colossus_windows_native::BoundPath::open_directory(path)
+            .map_err(|_| TerminalError::InvalidWorkspace)?;
+        let kernel = binding.identity();
+        let identity =
+            WorkspaceIdentity::from_windows_parts(kernel.volume_serial_number, kernel.file_id)
+                .map_err(|_| TerminalError::InvalidWorkspace)?;
+        if &identity != expected {
+            return Err(TerminalError::InvalidWorkspace);
+        }
+        let canonical_path = binding.canonical_path().to_owned();
+        Ok(Self {
+            binding: Arc::new(binding),
+            canonical_path,
+            identity,
+        })
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn open(_path: &Path, _expected: &WorkspaceIdentity) -> Result<Self, TerminalError> {
         Err(TerminalError::InvalidWorkspace)
     }
@@ -172,7 +198,19 @@ impl BoundTerminalWorkspace {
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    fn revalidate(&self) -> Result<(), TerminalError> {
+        self.binding
+            .revalidate()
+            .map_err(|_| TerminalError::InvalidWorkspace)?;
+        let current = Self::open(&self.canonical_path, &self.identity)?;
+        if current.binding.identity() != self.binding.identity() {
+            return Err(TerminalError::InvalidWorkspace);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn revalidate(&self) -> Result<(), TerminalError> {
         let _ = self;
         Err(TerminalError::InvalidWorkspace)
@@ -328,6 +366,8 @@ struct VerifiedTerminalExecutable {
     sha256: [u8; 32],
     #[cfg(target_os = "macos")]
     macos_identity: colossus_sdk::MacosCodeIdentity,
+    #[cfg(target_os = "windows")]
+    windows_identity: colossus_windows_native::FileIdentity,
 }
 
 struct TerminalSession {
@@ -336,6 +376,15 @@ struct TerminalSession {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     process_tree: TerminalProcessTree,
     _workspace: BoundTerminalWorkspace,
+}
+
+pub(crate) struct SpawnedTerminal {
+    pub(crate) master: Box<dyn MasterPty + Send>,
+    pub(crate) reader: Box<dyn Read + Send>,
+    pub(crate) writer: Box<dyn Write + Send>,
+    pub(crate) child: Box<dyn Child + Send + Sync>,
+    pub(crate) process_tree: TerminalProcessTree,
+    pub(crate) authentication_channel: TuiAuthenticationChannel,
 }
 
 type EventSink = Arc<dyn Fn(TerminalEvent) -> bool + Send + Sync + 'static>;
@@ -382,6 +431,21 @@ impl TerminalManager {
             .with_macos_code_signing_requirement(macos_code_signing_requirement),
         )
         .map_err(|_| TerminalError::ProgramUnavailable)?;
+        #[cfg(target_os = "windows")]
+        let windows_identity = {
+            let binding = colossus_windows_native::BoundPath::open_file(&path)
+                .map_err(|_| TerminalError::ProgramUnavailable)?;
+            let mut file = binding
+                .try_clone_file()
+                .map_err(|_| TerminalError::ProgramUnavailable)?;
+            if sha256_reader(&mut file)? != sha256 {
+                return Err(TerminalError::ProgramUnavailable);
+            }
+            binding
+                .revalidate()
+                .map_err(|_| TerminalError::ProgramUnavailable)?;
+            binding.identity()
+        };
         *self
             .inner
             .colossus_cli
@@ -391,6 +455,8 @@ impl TerminalManager {
             sha256,
             #[cfg(target_os = "macos")]
             macos_identity,
+            #[cfg(target_os = "windows")]
+            windows_identity,
         });
         Ok(())
     }
@@ -422,26 +488,22 @@ impl TerminalManager {
             return Err(TerminalError::SessionLimit);
         }
 
-        let pair = NativePtySystem::default()
-            .openpty(size)
-            .map_err(|_| TerminalError::SpawnFailed)?;
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|_| TerminalError::SpawnFailed)?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|_| TerminalError::SpawnFailed)?;
         // Close the lookup-to-spawn window before the verified child is created.
         workspace.revalidate()?;
-        let (mut child, process_tree, authentication_channel) = self.spawn(
-            pair.slave,
-            pair.master.as_ref(),
+        let SpawnedTerminal {
+            master,
+            reader,
+            writer,
+            mut child,
+            process_tree,
+            authentication_channel,
+        } = self.spawn(
+            size,
             kind,
             &program,
             &arguments,
             workspace.canonical_path(),
+            &workspace,
         )?;
         let authentication = terminal_workspace
             .worker_authentication
@@ -463,7 +525,7 @@ impl TerminalManager {
             session_id.clone(),
             TerminalSession {
                 owner: owner.to_owned(),
-                master: pair.master,
+                master,
                 writer: Arc::new(Mutex::new(writer)),
                 process_tree: process_tree.clone(),
                 _workspace: workspace,
@@ -597,21 +659,25 @@ impl TerminalManager {
     #[cfg(target_os = "macos")]
     fn spawn(
         &self,
-        slave: Box<dyn SlavePty>,
-        master: &dyn MasterPty,
+        size: PtySize,
         _kind: TerminalKind,
         program: &Path,
         arguments: &[PathBuf],
         _workspace: &Path,
-    ) -> Result<
-        (
-            Box<dyn Child + Send + Sync>,
-            TerminalProcessTree,
-            TuiAuthenticationChannel,
-        ),
-        TerminalError,
-    > {
-        let tty = master.tty_name().ok_or(TerminalError::SpawnFailed)?;
+        _workspace_binding: &BoundTerminalWorkspace,
+    ) -> Result<SpawnedTerminal, TerminalError> {
+        let pair = NativePtySystem::default()
+            .openpty(size)
+            .map_err(|_| TerminalError::SpawnFailed)?;
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|_| TerminalError::SpawnFailed)?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|_| TerminalError::SpawnFailed)?;
+        let tty = pair.master.tty_name().ok_or(TerminalError::SpawnFailed)?;
         let executable = self
             .inner
             .colossus_cli
@@ -622,35 +688,65 @@ impl TerminalManager {
         if executable.path != program {
             return Err(TerminalError::ProgramUnavailable);
         }
-        drop(slave);
-        crate::terminal_process::spawn_verified_tui(
-            &tty,
-            program,
-            arguments,
-            &executable.macos_identity,
-        )
+        drop(pair.slave);
+        let (child, process_tree, authentication_channel) =
+            crate::terminal_process::spawn_verified_tui(
+                &tty,
+                program,
+                arguments,
+                &executable.macos_identity,
+            )?;
+        Ok(SpawnedTerminal {
+            master: pair.master,
+            reader,
+            writer,
+            child,
+            process_tree,
+            authentication_channel,
+        })
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     fn spawn(
         &self,
-        slave: Box<dyn SlavePty>,
-        master: &dyn MasterPty,
+        size: PtySize,
         _kind: TerminalKind,
         program: &Path,
         arguments: &[PathBuf],
         workspace: &Path,
-    ) -> Result<
-        (
-            Box<dyn Child + Send + Sync>,
-            TerminalProcessTree,
-            TuiAuthenticationChannel,
-        ),
-        TerminalError,
-    > {
-        let _ = (self, slave, master, program, arguments, workspace);
-        // Managed Desktop is macOS-first. Other platforms must gain an equally
-        // strong pre-instruction executable binding before receiving worker keys.
+        workspace_binding: &BoundTerminalWorkspace,
+    ) -> Result<SpawnedTerminal, TerminalError> {
+        let executable = self
+            .inner
+            .colossus_cli
+            .read()
+            .map_err(|_| TerminalError::Internal)?
+            .clone()
+            .ok_or(TerminalError::ProgramUnavailable)?;
+        if executable.path != program {
+            return Err(TerminalError::ProgramUnavailable);
+        }
+        crate::terminal_process::spawn_verified_windows_tui(
+            program,
+            arguments,
+            workspace,
+            workspace_binding.binding.identity(),
+            executable.windows_identity,
+            size,
+        )
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    fn spawn(
+        &self,
+        size: PtySize,
+        _kind: TerminalKind,
+        program: &Path,
+        arguments: &[PathBuf],
+        workspace: &Path,
+        workspace_binding: &BoundTerminalWorkspace,
+    ) -> Result<SpawnedTerminal, TerminalError> {
+        let _ = (self, size, program, arguments, workspace, workspace_binding);
         Err(TerminalError::ProgramUnavailable)
     }
 
@@ -911,10 +1007,14 @@ fn validate_executable(path: &Path) -> Result<PathBuf, TerminalError> {
 
 fn sha256_file(path: &Path) -> Result<[u8; 32], TerminalError> {
     let mut file = fs::File::open(path).map_err(|_| TerminalError::ProgramUnavailable)?;
+    sha256_reader(&mut file)
+}
+
+fn sha256_reader(reader: &mut impl Read) -> Result<[u8; 32], TerminalError> {
     let mut digest = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
     loop {
-        let read = file
+        let read = reader
             .read(&mut buffer)
             .map_err(|_| TerminalError::ProgramUnavailable)?;
         if read == 0 {

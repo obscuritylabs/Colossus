@@ -195,6 +195,11 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         Some("windows-2025")
     );
     assert_eq!(
+        field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
+        Some(75),
+        "Windows acceptance must allow the native and Desktop checks to finish"
+    );
+    assert_eq!(
         field(job(jobs, "gate"), "name").as_str(),
         Some("Colossus pre-merge gate")
     );
@@ -250,11 +255,12 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "--package colossus-sidecar-protocol",
         "--package colossus-sidecar",
         "--test native_lifecycle -- --ignored --nocapture",
-        "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
         "cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
         "cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
         "test \"$CARGO_TARGET_DIR\" = \"$expected\"",
         "rm -rf \"$expected/debug\"",
+        "for attempt in 1 2 3",
+        "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
     ] {
         assert!(
@@ -321,6 +327,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
             "artifacts",
             "desktop_macos",
             "desktop_macos_build",
+            "desktop_windows_preview",
             "validate",
         ]
         .into_iter()
@@ -368,7 +375,14 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "shasum -a 256",
         "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
         "desktop_macos=${{ needs.desktop_macos.result }}",
-        "-eq 14",
+        "desktop_windows_preview=\"$WINDOWS_DESKTOP_RESULT\"",
+        "runs-on: windows-2025",
+        "./scripts/package-desktop-windows.ps1",
+        "codeSigning = \"unsigned_developer_preview\"",
+        "smartScreenWarningExpected = $true",
+        "Colossus-Desktop-UNSIGNED-$label-$env:RELEASE_TAG-x86_64-pc-windows-msvc-setup.exe",
+        "-eq 17",
+        "-eq 22",
     ] {
         assert!(
             source.contains(required),
@@ -381,12 +395,17 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         .find("  desktop_macos:")
         .map(|offset| build_start + offset)
         .expect("sign job");
-    let gate_start = source[sign_start..]
-        .find("  gate:")
+    let windows_start = source[sign_start..]
+        .find("  desktop_windows_preview:")
         .map(|offset| sign_start + offset)
+        .expect("Windows preview job");
+    let gate_start = source[windows_start..]
+        .find("  gate:")
+        .map(|offset| windows_start + offset)
         .expect("gate job");
     let build_job = &source[build_start..sign_start];
-    let sign_job = &source[sign_start..gate_start];
+    let sign_job = &source[sign_start..windows_start];
+    let windows_job = &source[windows_start..gate_start];
     for forbidden in [
         "${{ secrets.",
         "MACOS_DEVELOPER_ID_P12",
@@ -398,18 +417,17 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
             "credential-free Desktop build contains {forbidden}"
         );
     }
-    for forbidden in [
-        "actions/setup-node@",
-        "rust-toolchain@",
-        "npm ci",
-        "cargo build",
-        "tauri build",
-    ] {
+    assert!(sign_job.contains("actions/setup-node@"));
+    assert!(sign_job.contains("npm ci --ignore-scripts"));
+    for forbidden in ["rust-toolchain@", "cargo build", "tauri build"] {
         assert!(
             !sign_job.contains(forbidden),
             "Desktop signing job contains build authority {forbidden}"
         );
     }
+    assert!(windows_job.contains("if: needs.validate.outputs.release_channel != 'stable'"));
+    assert!(windows_job.contains("COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED"));
+    assert!(!windows_job.contains("AUTHENTICODE"));
 }
 
 #[test]
@@ -688,6 +706,9 @@ fn xtask_centralizes_portable_development_and_ci_checks() {
     let surfaces =
         fs::read_to_string(root.join("xtask/src/checks/surfaces.rs")).expect("read surface tasks");
     for required in [
+        "\"fmt\"",
+        "apps/desktop/src-tauri/Cargo.toml",
+        "\"--check\"",
         "npm",
         "\"audit\", \"--audit-level=high\"",
         "scripts/docs-site",
@@ -700,6 +721,14 @@ fn xtask_centralizes_portable_development_and_ci_checks() {
             "surface xtask is missing {required}"
         );
     }
+
+    assert_eq!(
+        fs::read_to_string(root.join(".gitattributes"))
+            .expect("read repository line-ending policy")
+            .lines()
+            .find(|line| !line.starts_with('#') && !line.is_empty()),
+        Some("* text=auto eol=lf")
+    );
 
     let hook =
         fs::read_to_string(root.join(".githooks/pre-commit")).expect("read local pre-commit hook");
@@ -745,6 +774,89 @@ fn conventional_commit_checker_remains_python_free() {
         .write_all(b"Update CI")
         .expect("write invalid title");
     assert!(!invalid.wait().expect("wait for checker").success());
+}
+
+#[test]
+fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
+    let premerge = workflow("premerge.yml");
+    let premerge_windows = job(jobs(&premerge), "windows-runtime");
+    assert_eq!(
+        field(
+            named_step(
+                premerge_windows,
+                "Run authenticated Windows native acceptance"
+            ),
+            "run"
+        )
+        .as_str(),
+        Some("cargo test --locked -p colossus-windows-native -- --nocapture")
+    );
+    assert_eq!(
+        field(
+            named_step(
+                premerge_windows,
+                "Run Windows worker and AppContainer escape acceptance"
+            ),
+            "run"
+        )
+        .as_str(),
+        Some(
+            "cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture"
+        )
+    );
+    for name in [
+        "Run authenticated Windows native acceptance",
+        "Run Windows worker and AppContainer escape acceptance",
+        "Prepare Windows Managed Local executables",
+        "Lint the Windows native Desktop bridge",
+        "Test the Windows native Desktop bridge",
+    ] {
+        assert_eq!(
+            field(named_step(premerge_windows, name), "continue-on-error").as_bool(),
+            Some(true),
+            "{name} must preserve later independent outcomes"
+        );
+    }
+    let aggregate = named_step(premerge_windows, "Require every Windows acceptance check");
+    let aggregate_run = field(aggregate, "run")
+        .as_str()
+        .expect("Windows acceptance aggregate must be a script");
+    for outcome in [
+        "TYPECHECK_OUTCOME",
+        "RENDERER_TEST_OUTCOME",
+        "CONTRACT_OUTCOME",
+        "NATIVE_OUTCOME",
+        "WORKER_OUTCOME",
+        "PREPARE_OUTCOME",
+        "CLIPPY_OUTCOME",
+        "NATIVE_TEST_OUTCOME",
+    ] {
+        assert!(
+            aggregate_run.contains(outcome),
+            "Windows acceptance aggregate is missing {outcome}"
+        );
+    }
+
+    let release = workflow("release.yml");
+    let release_job = job(jobs(&release), "artifacts");
+    assert_eq!(
+        field(
+            named_step(release_job, "Run Windows native runtime acceptance"),
+            "run"
+        )
+        .as_str(),
+        Some("cargo test --locked -p colossus-windows-native -- --nocapture")
+    );
+    assert_eq!(
+        field(
+            named_step(release_job, "Run Windows worker and sandbox acceptance"),
+            "run"
+        )
+        .as_str(),
+        Some(
+            "cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture"
+        )
+    );
 }
 
 #[test]

@@ -35,7 +35,7 @@ for changed_path in "$@"; do
     esac
 
     case "$changed_path" in
-        api/* | sdk/*)
+        api/* | sdk/* | examples/sdk/*)
             sdk_required=true
             ;;
     esac

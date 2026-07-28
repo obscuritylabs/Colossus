@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildOperationsStudioFixture } from "./fixtures";
+import { buildOperationsStudioFixture } from "./dev/operations-studio-fixture";
 import { MAX_FEED_ITEMS, MAX_RECENT_RUNS } from "./state";
 
 describe("buildOperationsStudioFixture", () => {

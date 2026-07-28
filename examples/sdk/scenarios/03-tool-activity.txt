@@ -1,0 +1,2 @@
+Read examples/sdk/integration/openapi.json using the offered workspace read tool.
+Report only the OpenAPI title and the single operationId. Do not use an absolute path.

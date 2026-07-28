@@ -6,12 +6,18 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+mod artifacts;
 mod error;
 mod identity;
 mod repository;
 mod runs;
 mod validation;
 
+pub use artifacts::{
+    ARTIFACT_CHUNK_BYTES, ArtifactApi, ArtifactChunk, ArtifactDownload, ArtifactPurpose,
+    ArtifactReference, ArtifactState, ArtifactUploadReservation, CreateArtifactUploadRequest,
+    EventSourcedArtifactApi, MAX_ARTIFACT_BYTES,
+};
 pub use error::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, FieldViolation, OutcomeCertainty,
 };

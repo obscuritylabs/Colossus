@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use colossus_contracts::{
     CredentialReference, EffectRequest, ModelCapabilities, ModelLimits, ModelMessage,
     ModelMessageRole, ModelRequest, ModelRoute, ModelToolCall, ModelToolDefinition, ProviderEvent,
-    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderStreamItem, ProviderTurn,
-    ProviderUsage, QuarantinedEffectResult,
+    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic,
+    ProviderStreamItem, ProviderTurn, ProviderUsage, QuarantinedEffectResult,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
     QuarantinedEffectObserver, StreamingEffectExecutor, network_destination_match,
@@ -29,9 +30,13 @@ use tokio::net::lookup_host;
 
 const MAX_PROVIDER_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_ADDRESSES: usize = 16;
+const MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES: usize = 16 * 1024;
 
 mod normalization;
 use normalization::*;
+
+mod tool_names;
+use tool_names::*;
 
 mod streaming;
 use streaming::*;

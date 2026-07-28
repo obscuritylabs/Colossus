@@ -10,6 +10,9 @@ pub struct RuntimeConfig {
     pub access: AccessConfig,
     /// Canonical journal and key settings.
     pub storage: StorageConfig,
+    /// Shared outbound-network trust settings.
+    #[serde(default)]
+    pub network: NetworkConfig,
     /// Optional durable external audit evidence export.
     #[serde(default)]
     pub audit: AuditConfig,
@@ -53,6 +56,14 @@ pub struct RuntimeConfig {
     /// Process isolation, filesystem grants, network allowlist, and resource ceilings.
     #[serde(default)]
     pub sandbox: SandboxConfig,
+}
+
+/// Shared trust settings for Colossus-owned outbound network clients.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkConfig {
+    /// Optional PEM CA bundle added to the built-in public trust roots.
+    pub ca_bundle_path: Option<PathBuf>,
 }
 
 /// Durable audit evidence export configuration.
@@ -687,6 +698,16 @@ impl RuntimeConfig {
             }
         }
         validate_audit_config(&config.audit, &config.sandbox)?;
+        if config
+            .network
+            .ca_bundle_path
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(RuntimeError::Config(
+                "network.caBundlePath must be a nonempty file path".into(),
+            ));
+        }
         if !matches!(
             config.sandbox.backend.as_str(),
             "native" | "oci" | "windows_job" | "broker"
@@ -912,6 +933,7 @@ impl RuntimeConfig {
                     signing_key_id: format!("checkpoint-{instance_id}"),
                 },
             },
+            network: NetworkConfig::default(),
             audit: AuditConfig::default(),
             policy: PolicyConfig::BuiltIn {
                 require_post_effect: false,
@@ -1206,12 +1228,19 @@ pub(super) fn configured_search_profile(
     Ok(profile)
 }
 
-pub(super) fn search_registry(config: &RuntimeConfig) -> Result<SearchRegistry, RuntimeError> {
+pub(super) fn search_registry(
+    config: &RuntimeConfig,
+    tls_roots: &AdditionalRootCertificates,
+) -> Result<SearchRegistry, RuntimeError> {
     let config = effective_search_config(config)?;
     let profiles = config
         .profiles
         .iter()
-        .map(|(name, profile)| configured_search_profile(name, profile).map(SearchExecutor::new))
+        .map(|(name, profile)| {
+            configured_search_profile(name, profile)
+                .map(SearchExecutor::new)
+                .map(|executor| executor.with_tls_roots(tls_roots.clone()))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     SearchRegistry::new(profiles, config.roles).map_err(Into::into)
 }
@@ -1366,6 +1395,7 @@ pub(super) fn provider_registry(
     providers_config: &ProvidersConfig,
     models_config: &ModelsConfig,
     credentials: Arc<dyn CredentialResolver>,
+    tls_roots: &AdditionalRootCertificates,
 ) -> Result<ProviderRegistry, RuntimeError> {
     let profiles = providers_config
         .profiles
@@ -1373,6 +1403,7 @@ pub(super) fn provider_registry(
         .map(|(name, profile)| {
             provider_profile(name, profile).map(|profile| {
                 ProviderExecutor::with_credentials(profile, Arc::clone(&credentials))
+                    .with_tls_roots(tls_roots.clone())
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1396,6 +1427,7 @@ pub(super) fn provider_registry(
 pub(super) fn compose_memory_indexes(
     config: &RuntimeConfig,
     gateway: Arc<EffectGateway>,
+    tls_roots: &AdditionalRootCertificates,
 ) -> Result<Vec<MemoryIndexRegistration>, RuntimeError> {
     if !config.memory.index_enabled {
         let index: Arc<dyn MemoryIndex> = Arc::new(UnavailableMemoryIndex::new(
@@ -1452,7 +1484,9 @@ pub(super) fn compose_memory_indexes(
                 *timeout_ms,
                 *dimensions,
             )?;
-            let executor = Arc::new(OpenAiEmbeddingExecutor::new(profile.clone()));
+            let executor = Arc::new(
+                OpenAiEmbeddingExecutor::new(profile.clone()).with_tls_roots(tls_roots.clone()),
+            );
             Arc::new(GatewayOpenAiEmbeddingProvider::new(
                 Arc::clone(&gateway),
                 executor,
@@ -1468,7 +1502,7 @@ pub(super) fn compose_memory_indexes(
         credential_reference.clone(),
         *timeout_ms,
     )?;
-    let executor = Arc::new(ChromaExecutor::new(profile.clone()));
+    let executor = Arc::new(ChromaExecutor::new(profile.clone()).with_tls_roots(tls_roots.clone()));
     let position_path = position_path
         .clone()
         .unwrap_or_else(|| config.storage.path.with_extension("chroma-position.json"));
@@ -1508,6 +1542,7 @@ pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), Run
         &config.providers,
         &config.models,
         Arc::new(EnvironmentCredentialResolver),
+        &AdditionalRootCertificates::default(),
     )?;
     for (name, profile) in &config.providers.profiles {
         let profile = provider_profile(name, profile)?;

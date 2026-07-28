@@ -524,6 +524,9 @@ pub(crate) struct RunFailureDto {
     pub(crate) reason: String,
     pub(crate) message: String,
     pub(crate) outcome_certainty: OutcomeCertaintyDto,
+    pub(crate) recoverable: bool,
+    pub(crate) http_status: Option<u16>,
+    pub(crate) retry_after_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -548,6 +551,9 @@ impl From<RunFailure> for RunFailureDto {
             reason: value.reason,
             message: value.message,
             outcome_certainty: value.outcome_certainty.into(),
+            recoverable: value.recoverable,
+            http_status: value.http_status,
+            retry_after_ms: value.retry_after_ms,
         }
     }
 }
@@ -597,6 +603,7 @@ impl From<RunTerminal> for RunTerminalDto {
 pub(crate) struct RunDto {
     pub(crate) run_id: String,
     pub(crate) session_id: String,
+    pub(crate) title: String,
     pub(crate) role: String,
     pub(crate) mode: RunModeDto,
     pub(crate) status: RunStatusDto,
@@ -616,6 +623,7 @@ impl From<Run> for RunDto {
         Self {
             run_id: value.run_id,
             session_id: value.session_id,
+            title: value.title,
             role: value.role,
             mode: value.mode.into(),
             status: value.status.into(),
@@ -920,6 +928,13 @@ pub(crate) struct ArtifactReferenceDto {
     pub(crate) created_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArtifactContentDto {
+    pub(crate) artifact: ArtifactReferenceDto,
+    pub(crate) text: String,
+}
+
 impl From<ArtifactReference> for ArtifactReferenceDto {
     fn from(value: ArtifactReference) -> Self {
         Self {
@@ -1121,6 +1136,8 @@ impl From<RunModeInput> for RunMode {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CreateRunInput {
     prompt: String,
+    #[serde(default)]
+    artifact_ids: Vec<String>,
     session_id: Option<String>,
     role: String,
     mode: RunModeInput,
@@ -1145,8 +1162,19 @@ impl CreateRunInput {
         }
         let idempotency_key =
             IdempotencyKey::new(self.idempotency_key).map_err(CommandErrorDto::from_api)?;
+        if self.artifact_ids.len() > 16 {
+            return Err(CommandErrorDto::invalid(
+                "artifactIds",
+                "A run can include at most 16 attachments.",
+            ));
+        }
+        let mut input = vec![InputContentPart::Text(self.prompt)];
+        for artifact_id in self.artifact_ids {
+            validate_identifier(&artifact_id, "artifactIds")?;
+            input.push(InputContentPart::Artifact(artifact_id));
+        }
         Ok(CreateRunRequest {
-            input: vec![InputContentPart::Text(self.prompt)],
+            input,
             session_id: self.session_id,
             role: self.role,
             mode: self.mode.into(),

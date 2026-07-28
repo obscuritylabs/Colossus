@@ -635,6 +635,7 @@ pub(super) fn fold_run(
         },
         inputs: start.get("inputs").cloned().unwrap_or(Value::Null),
         outputs: None,
+        failure_reason: None,
         completed_steps: 0,
         waiting_step_id: None,
         waiting_execution_id: None,
@@ -647,6 +648,7 @@ pub(super) fn fold_run(
             "workflow.run.queued.v1" => run.status = WorkflowStatus::Queued,
             "workflow.run.started.v1" => {
                 run.status = WorkflowStatus::Running;
+                run.failure_reason = None;
                 run.waiting_step_id = None;
                 run.waiting_execution_id = None;
                 run.waiting_reason = None;
@@ -680,6 +682,7 @@ pub(super) fn fold_run(
             }
             "workflow.run.resumed.v1" => {
                 run.status = WorkflowStatus::Running;
+                run.failure_reason = None;
                 run.waiting_step_id = None;
                 run.waiting_execution_id = None;
                 run.waiting_reason = None;
@@ -688,6 +691,7 @@ pub(super) fn fold_run(
             "workflow.run.completed.v1" => {
                 run.status = WorkflowStatus::Completed;
                 run.outputs = payload.get("outputs").cloned();
+                run.failure_reason = None;
                 run.waiting_step_id = None;
                 run.waiting_execution_id = None;
                 run.waiting_reason = None;
@@ -695,6 +699,10 @@ pub(super) fn fold_run(
             }
             "workflow.run.failed.v1" => {
                 run.status = WorkflowStatus::Failed;
+                run.failure_reason = payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 run.waiting_step_id = None;
                 run.waiting_execution_id = None;
                 run.waiting_reason = None;

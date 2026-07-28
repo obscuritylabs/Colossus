@@ -23,6 +23,10 @@ pub mod scopes {
     pub const PROMPTS_RESPOND: &str = "prompts:respond";
     /// Respond to effect approval requests.
     pub const APPROVALS_RESPOND: &str = "approvals:respond";
+    /// Read caller-owned released artifact metadata and bytes.
+    pub const ARTIFACTS_READ: &str = "artifacts:read";
+    /// Reserve and upload caller-owned bounded artifacts.
+    pub const ARTIFACTS_WRITE: &str = "artifacts:write";
 }
 
 /// Validated exact API scope.

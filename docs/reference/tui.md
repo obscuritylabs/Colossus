@@ -64,14 +64,27 @@ arguments in the current runtime.
 | Integrations and MCP | `/integrations`, `/integration show`, `/integration call`, `/integration disconnect`, `/mcp servers`, `/mcp tools`, `/mcp call` |
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |
-| Diagnostics | `/audit verify`, `/projection status`, `/tools` |
+| Diagnostics | `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics on`, `/provider diagnostics off`, `/tools` |
 
 Use `/resume` or `/session resume` without an ID for the picker; exact session IDs are
 accepted when deterministic selection matters.
 
 `/events compact` shows only a short preview of raw `web.fetch`, `docs.fetch`, and
 `network.http` response bodies. Use `/events verbose` when inspecting the full released
-response is necessary, or `/events off` to hide successful tool results entirely.
+response is necessary. Verbose run-error cards also show a structured `HTTP status`
+field when an upstream provider returned a non-success response. Ordinary run errors
+remain body-free. `/models doctor [PROFILE]` issues a new representative tool-calling
+probe and displays its exact credential-free request plus at most 16 KiB of the redacted
+non-success response body. `/provider doctor [PROFILE]` does the same for provider
+catalog diagnostics.
+
+Doctor commands cannot reproduce a failure that occurs only on a later continuation.
+Run `/provider diagnostics on`, retry the failing TUI turn, and inspect the error card's
+response body, offered tool-name list, and exact provider-facing request. The setting
+lasts only for the current TUI process and applies to every provider turn until
+`/provider diagnostics off` or exit. The detailed evidence is not written to durable run
+history, but the request can contain user, session, and tool-result data; review it
+before sharing. Use `/events off` to hide successful tool results entirely.
 
 `/research QUESTION` uses `standard` depth with the `repo`, `web`, and `mcp` lanes.
 Use the CLI `research run` route when depth or lane selection must be explicit.

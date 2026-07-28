@@ -58,8 +58,8 @@ relative configuration and runtime paths resolve from it.
 colossus -w . --config .colossus/config.yaml run "hello from Colossus"
 ```
 
-On an interactive terminal, Colossus renders a human response card. When output is
-redirected, it emits a stable JSON result.
+On an interactive terminal, Colossus prints only the assistant response. When output is
+redirected, it emits the complete stable JSON result.
 
 ### 4. Verify the journal
 
@@ -69,8 +69,8 @@ colossus -w . --config .colossus/config.yaml audit verify
 
 ## Expected result
 
-The run returns `hello from Colossus` through the `echo` profile and reports a run ID and
-session ID. Audit verification completes successfully.
+The run prints `hello from Colossus`. The JSON verification below exposes its profile,
+run ID, and session ID. Audit verification completes successfully.
 
 ## Verification
 

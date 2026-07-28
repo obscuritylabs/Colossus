@@ -122,6 +122,7 @@ pub struct TuiState {
     pub(super) history: Vec<String>,
     pub(super) completions: Vec<String>,
     pub(super) sticky_skills: Vec<String>,
+    pub(super) provider_response_diagnostics: bool,
     pub(super) active_calls: BTreeMap<String, colossus_contracts::ToolCall>,
     pub(super) queue: VecDeque<String>,
     pub(super) queue_paused: bool,
@@ -155,6 +156,7 @@ impl TuiState {
             history: snapshot.history,
             completions: snapshot.completions,
             sticky_skills: Vec::new(),
+            provider_response_diagnostics: false,
             active_calls: BTreeMap::new(),
             queue: VecDeque::new(),
             queue_paused: false,
@@ -175,6 +177,16 @@ impl TuiState {
     /// Current editable draft, excluding type-ahead ghost text.
     pub fn draft(&self) -> &str {
         &self.composer.draft
+    }
+
+    pub(super) fn run_request(&self, prompt: String) -> InteractiveRunRequest {
+        InteractiveRunRequest {
+            session_id: self.session_id.clone(),
+            prompt,
+            explicit_skills: Vec::new(),
+            sticky_skills: self.sticky_skills.clone(),
+            include_provider_response_diagnostics: self.provider_response_diagnostics,
+        }
     }
 
     /// UTF-8 byte cursor, always on a character boundary.

@@ -6,11 +6,19 @@ use colossus_policy::{
 };
 use colossus_ports::{EventJournal, PolicyDecisionPoint};
 use colossus_testkit::InMemoryEventJournal;
+use rcgen::{
+    BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+};
+use rustls::{
+    ServerConfig,
+    pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpListener,
 };
+use tokio_rustls::TlsAcceptor;
 
 struct CountingCredentialResolver {
     calls: AtomicUsize,
@@ -22,6 +30,31 @@ struct CountingHostCredentialResolver {
 }
 
 struct ProviderPostDenyPolicy(BuiltInPolicy);
+
+fn model_request_with_tools(names: &[&str]) -> ModelRequest {
+    ModelRequest {
+        instructions: "test".into(),
+        messages: vec![ModelMessage {
+            role: ModelMessageRole::User,
+            content: "use a tool".into(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        tools: names
+            .iter()
+            .map(|name| ModelToolDefinition {
+                name: (*name).into(),
+                description: "Test tool.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+            })
+            .collect(),
+        max_output_tokens: None,
+    }
+}
 
 #[async_trait]
 impl PolicyDecisionPoint for ProviderPostDenyPolicy {
@@ -172,14 +205,28 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
 #[test]
 fn service_unavailable_is_recoverable_without_reclassifying_bad_requests() {
     assert!(matches!(
-        crate::executor::provider_execution_error(ProviderError::Status { status: 503 }),
-        ExecutionError::Recoverable { ref code, ref message }
+        crate::executor::provider_execution_error(ProviderError::Status {
+            status: 503,
+            retry_after_ms: Some(7_000),
+        }),
+        ExecutionError::Recoverable {
+            ref code,
+            ref message,
+            http_status: Some(503),
+            retry_after_ms: Some(7_000),
+        }
             if code == "provider.temporarily_unavailable"
                 && message.contains("retry after the endpoint reports ready")
     ));
     assert!(matches!(
-        crate::executor::provider_execution_error(ProviderError::Status { status: 400 }),
-        ExecutionError::Failed(ref message)
+        crate::executor::provider_execution_error(ProviderError::Status {
+            status: 400,
+            retry_after_ms: None,
+        }),
+        ExecutionError::HttpStatus {
+            status: 400,
+            ref message,
+        }
             if message == "provider endpoint returned HTTP 400"
     ));
 }
@@ -224,6 +271,7 @@ fn provider_request(profile: &ProviderProfile) -> EffectRequest {
             model: Some("unit-model".into()),
             max_output_tokens: Some(4_096),
             request: Some(model_request()),
+            include_response_diagnostics: false,
         })
         .expect("effect input"),
     );
@@ -281,6 +329,169 @@ async fn one_response_server(body: Value) -> (String, tokio::task::JoinHandle<St
         request_text
     });
     (format!("http://{address}/v1"), task)
+}
+
+async fn one_status_server(
+    status: u16,
+    reason: &'static str,
+    retry_after: Option<&'static str>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut request = Vec::new();
+        let mut scratch = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut scratch).await.expect("read request");
+            assert_ne!(read, 0, "client closed before completing request");
+            request.extend_from_slice(&scratch[..read]);
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        let retry_after_header = retry_after
+            .map(|value| format!("retry-after: {value}\r\n"))
+            .unwrap_or_default();
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\n{retry_after_header}content-length: 0\r\nconnection: close\r\n\r\n"
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    });
+    (format!("http://{address}/v1"), task)
+}
+
+async fn one_status_body_server(
+    status: u16,
+    reason: &'static str,
+    body: &'static str,
+) -> (String, tokio::task::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut request = Vec::new();
+        let mut scratch = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut scratch).await.expect("read request");
+            assert_ne!(read, 0, "client closed before completing request");
+            request.extend_from_slice(&scratch[..read]);
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+        String::from_utf8_lossy(&request).into_owned()
+    });
+    (format!("http://{address}/v1"), task)
+}
+
+async fn one_tls_response_server(
+    body: Value,
+) -> (
+    String,
+    AdditionalRootCertificates,
+    tokio::task::JoinHandle<String>,
+) {
+    let mut ca_params = CertificateParams::new(vec!["Colossus Test CA".into()]).expect("CA params");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca = CertifiedIssuer::self_signed(ca_params, KeyPair::generate().expect("CA key"))
+        .expect("CA certificate");
+    let mut server_params =
+        CertificateParams::new(vec!["127.0.0.1".into()]).expect("server params");
+    server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    let server_key = KeyPair::generate().expect("server key");
+    let server_certificate = server_params
+        .signed_by(&server_key, &ca)
+        .expect("server certificate");
+    let roots =
+        AdditionalRootCertificates::from_pem_bundle(ca.pem().as_bytes()).expect("test CA bundle");
+    let server_config =
+        ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("TLS protocol versions")
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![server_certificate.der().clone()],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+            )
+            .expect("TLS server config");
+    let acceptor = TlsAcceptor::from(Arc::new(server_config));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut stream = acceptor.accept(stream).await.expect("TLS handshake");
+        let mut request = Vec::new();
+        let mut scratch = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut scratch).await.expect("read request");
+            assert_ne!(read, 0, "client closed before completing request");
+            request.extend_from_slice(&scratch[..read]);
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        let request_text = String::from_utf8_lossy(&request).into_owned();
+        let response_body = serde_json::to_vec(&body).expect("response JSON");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            response_body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write headers");
+        stream.write_all(&response_body).await.expect("write body");
+        request_text
+    });
+    (format!("https://{address}/v1"), roots, task)
 }
 
 async fn one_sse_server(body: String) -> (String, tokio::task::JoinHandle<String>) {
@@ -354,6 +565,7 @@ fn malformed_tool_arguments_fail_closed() {
         "unit-profile",
         "unit-model",
         &serde_json::to_vec(&malformed).expect("JSON"),
+        &ProviderToolNames::default(),
     )
     .expect_err("non-object arguments must fail");
     assert!(matches!(error, ProviderError::Malformed(_)));
@@ -378,15 +590,18 @@ fn responses_output_normalizes_visible_text_and_strict_tool_calls() {
             {"type": "message", "content": [
                 {"type": "output_text", "text": "working"}
             ]},
-            {"type": "function_call", "call_id": "call-1", "name": "lookup",
+            {"type": "function_call", "call_id": "call-1", "name": "workspace_inspect",
              "arguments": "{\"query\":\"rust\"}"}
         ]
     });
+    let request = model_request_with_tools(&["workspace.inspect"]);
+    let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
     let turn = normalize_responses(
         &profile,
         "unit-profile",
         "unit-model",
         &serde_json::to_vec(&response).expect("JSON"),
+        &tool_names,
     )
     .expect("normalized response");
     assert!(matches!(
@@ -400,7 +615,9 @@ fn responses_output_normalizes_visible_text_and_strict_tool_calls() {
     assert!(matches!(
         &turn.events[2],
         ProviderEvent::ToolCallRequested { call_id, name, arguments }
-            if call_id == "call-1" && name == "lookup" && arguments["query"] == "rust"
+            if call_id == "call-1"
+                && name == "workspace.inspect"
+                && arguments["query"] == "rust"
     ));
     assert!(
         !serde_json::to_string(&turn)
@@ -472,6 +689,72 @@ fn responses_stream_normalizes_deltas_completion_and_usage() {
 }
 
 #[test]
+fn provider_tool_names_alias_dots_and_reject_ambiguous_or_nonportable_names() {
+    let request = model_request_with_tools(&["workspace.inspect"]);
+    let names = ProviderToolNames::from_request(&request).expect("portable alias");
+    assert_eq!(
+        names
+            .provider_name("workspace.inspect")
+            .expect("provider name"),
+        "workspace_inspect"
+    );
+    assert_eq!(
+        names.canonical_name("workspace_inspect"),
+        "workspace.inspect"
+    );
+
+    let collision = model_request_with_tools(&["workspace.inspect", "workspace_inspect"]);
+    assert!(matches!(
+        ProviderToolNames::from_request(&collision),
+        Err(ProviderError::Configuration(_))
+    ));
+
+    let nonportable = model_request_with_tools(&["workspace/inspect"]);
+    assert!(matches!(
+        ProviderToolNames::from_request(&nonportable),
+        Err(ProviderError::Configuration(_))
+    ));
+}
+
+#[test]
+fn streamed_chat_tool_aliases_are_restored_to_canonical_names() {
+    let request = model_request_with_tools(&["filesystem.write"]);
+    let names = ProviderToolNames::from_request(&request).expect("provider tool names");
+    let mut state = ProviderStreamState::new(ProviderKind::OpenAiCompatible, names);
+    assert!(
+        state
+            .ingest(json!({
+                "id": "chat-tool-alias",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "filesystem_write",
+                                "arguments": "{\"path\":\"README.md\"}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            }))
+            .expect("stream chunk")
+            .is_empty()
+    );
+    let events = state.finish().expect("stream completion");
+    assert!(matches!(
+        &events[0],
+        ProviderEvent::ToolCallRequested { call_id, name, arguments }
+            if call_id == "call-1"
+                && name == "filesystem.write"
+                && arguments["path"] == "README.md"
+    ));
+}
+
+#[test]
 fn incomplete_sse_and_unterminated_chat_streams_fail_closed() {
     let mut decoder = SseDecoder::default();
     assert!(
@@ -511,7 +794,7 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
                 tool_call_id: None,
                 tool_calls: vec![ModelToolCall {
                     call_id: "call-1".into(),
-                    name: "lookup".into(),
+                    name: "workspace.inspect".into(),
                     arguments: json!({"query": "rust"}),
                 }],
             },
@@ -525,19 +808,26 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
         tools: Vec::new(),
         max_output_tokens: None,
     };
-    let responses =
-        responses_payload(&request, "unit-model", 4_096, false).expect("Responses payload");
+    let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
+    let responses = responses_payload(&request, "unit-model", 4_096, false, &tool_names)
+        .expect("Responses payload");
     assert_eq!(responses["model"], "unit-model");
     assert_eq!(responses["max_output_tokens"], 4_096);
     assert_eq!(responses["input"][0]["type"], "function_call");
     assert_eq!(responses["input"][0]["call_id"], "call-1");
+    assert_eq!(responses["input"][0]["name"], "workspace_inspect");
     assert_eq!(responses["input"][1]["type"], "function_call_output");
     assert_eq!(responses["input"][1]["call_id"], "call-1");
 
-    let chat = chat_payload(&request, "unit-model", 4_096, false).expect("chat payload");
+    let chat =
+        chat_payload(&request, "unit-model", 4_096, false, &tool_names).expect("chat payload");
     assert_eq!(chat["model"], "unit-model");
     assert_eq!(chat["max_tokens"], 4_096);
     assert_eq!(chat["messages"][1]["tool_calls"][0]["id"], "call-1");
+    assert_eq!(
+        chat["messages"][1]["tool_calls"][0]["function"]["name"],
+        "workspace_inspect"
+    );
     assert_eq!(chat["messages"][2]["tool_call_id"], "call-1");
 }
 
@@ -582,7 +872,10 @@ fn chat_tool_projection_omits_max_length_but_keeps_the_canonical_schema_strict()
         max_output_tokens: Some(4_096),
     };
 
-    let chat = chat_payload(&request, "unit-model", 4_096, false).expect("chat payload");
+    let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
+    let chat =
+        chat_payload(&request, "unit-model", 4_096, false, &tool_names).expect("chat payload");
+    assert_eq!(chat["tools"][0]["function"]["name"], "workspace_inspect");
     let projected = &chat["tools"][0]["function"]["parameters"];
     assert!(
         !serde_json::to_string(projected)
@@ -600,8 +893,9 @@ fn chat_tool_projection_omits_max_length_but_keeps_the_canonical_schema_strict()
         tool.input_schema["properties"]["paths"]["items"]["maxLength"],
         4096
     );
-    let responses =
-        responses_payload(&request, "unit-model", 4_096, false).expect("Responses payload");
+    let responses = responses_payload(&request, "unit-model", 4_096, false, &tool_names)
+        .expect("Responses payload");
+    assert_eq!(responses["tools"][0]["name"], "workspace_inspect");
     assert_eq!(
         responses["tools"][0]["parameters"]["properties"]["paths"]["items"]["maxLength"],
         4096
@@ -635,6 +929,7 @@ fn hidden_reasoning_is_not_released_but_safe_summary_is() {
         "unit-profile",
         "unit-model",
         &serde_json::to_vec(&response).expect("JSON"),
+        &ProviderToolNames::default(),
     )
     .expect("normalized turn");
     assert!(turn.events.iter().any(|event| matches!(
@@ -738,6 +1033,92 @@ async fn allowed_provider_call_is_permit_bound_and_post_released() {
         .collect::<Vec<_>>();
     assert!(event_types.contains(&"effect.release_requested.v1".into()));
     assert!(event_types.contains(&"effect.completed.v1".into()));
+}
+
+#[tokio::test]
+async fn provider_retry_after_header_is_preserved_as_safe_recoverable_metadata() {
+    let (base_url, server) = one_status_server(503, "Service Unavailable", Some("7")).await;
+    let profile = ProviderProfile::new(
+        "temporarily-unavailable",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network provider origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [14_u8; 32],
+    );
+    let error = gateway
+        .execute(provider_request(&profile), &executor)
+        .await
+        .expect_err("503 must remain a recoverable provider failure");
+    assert!(matches!(
+        error,
+        GatewayError::RecoverableExecution {
+            ref code,
+            http_status: Some(503),
+            retry_after_ms: Some(7_000),
+            ..
+        } if code == "provider.temporarily_unavailable"
+    ));
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn provider_https_accepts_the_runtime_ca_bundle() {
+    let (base_url, tls_roots, server) = one_tls_response_server(json!({
+        "id": "response-private-ca",
+        "choices": [{"message": {"role": "assistant", "content": "trusted"}}]
+    }))
+    .await;
+    let profile = ProviderProfile::new(
+        "private-ca",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network provider origin");
+    let executor = ProviderExecutor::new(profile.clone()).with_tls_roots(tls_roots);
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let gateway = EffectGateway::new(
+        Arc::new(InMemoryEventJournal::default()),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [13_u8; 32],
+    );
+    let released = gateway
+        .execute(provider_request(&profile), &executor)
+        .await
+        .expect("provider call through private CA");
+    let turn: ProviderTurn = serde_json::from_slice(&released.bytes).expect("provider turn");
+    assert!(matches!(
+        turn.events.last(),
+        Some(ProviderEvent::FinalOutput { text }) if text == "trusted"
+    ));
+    let request = server.await.expect("server task");
+    assert!(request.contains("POST /v1/chat/completions HTTP/1.1"));
 }
 
 #[tokio::test]
@@ -887,6 +1268,78 @@ async fn compatible_sse_stream_releases_ordered_deltas_usage_and_completion() {
             .expect("events")
             .iter()
             .any(|event| event.event_type == "effect.chunk_released.v1")
+    );
+}
+
+#[tokio::test]
+async fn streamed_bad_request_releases_explicit_request_and_response_diagnostics() {
+    let response_body = r#"{"error":{"message":"invalid dotted tool name"}}"#;
+    let (base_url, server) = one_status_body_server(400, "Bad Request", response_body).await;
+    let profile = ProviderProfile::new(
+        "local",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        None,
+        5_000,
+    )
+    .expect("profile");
+    let origin = profile
+        .network_origin()
+        .expect("origin")
+        .expect("network origin");
+    let executor = ProviderExecutor::new(profile.clone());
+    let policy = BuiltInPolicy::offline_default()
+        .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+        .with_network_destination(origin)
+        .with_post_effect(true);
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let gateway = EffectGateway::new(
+        Arc::clone(&journal),
+        Arc::new(policy),
+        Arc::new(DenyApproval),
+        SafetyKernel::new(["provider.call".into()]),
+        [15_u8; 32],
+    );
+    let mut request = provider_request(&profile);
+    request.content["include_response_diagnostics"] = Value::Bool(true);
+    request.content["request"]["tools"] = json!([{
+        "name": "tool.with.dots",
+        "description": "A dotted test tool.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }
+    }]);
+    let mut released = ReleasedItems::default();
+    let terminal = gateway
+        .execute_stream(request, &executor, &mut released)
+        .await
+        .expect("explicit diagnostic must pass the release boundary");
+    let terminal: ProviderStreamItem =
+        serde_json::from_slice(&terminal.bytes).expect("provider diagnostic item");
+    assert_eq!(released.0.last(), Some(&terminal));
+    let ProviderStreamItem::Diagnostic { diagnostic } = terminal else {
+        panic!("expected terminal provider diagnostic");
+    };
+    assert_eq!(diagnostic.status, 400);
+    assert_eq!(diagnostic.body, response_body);
+    assert_eq!(
+        diagnostic.request_body.as_ref().and_then(|body| {
+            body.pointer("/tools/0/function/name")
+                .and_then(Value::as_str)
+        }),
+        Some("tool_with_dots")
+    );
+    let raw_request = server.await.expect("server task");
+    assert!(raw_request.contains("\"name\":\"tool_with_dots\""));
+    assert!(!raw_request.contains("\"name\":\"tool.with.dots\""));
+    assert!(raw_request.contains("\"stream\":true"));
+    let events = journal.read_global(1, 50).expect("events");
+    assert!(
+        !serde_json::to_string(&events)
+            .expect("event evidence")
+            .contains(response_body)
     );
 }
 

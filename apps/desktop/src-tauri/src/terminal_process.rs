@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use portable_pty::ChildKiller;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use portable_pty::{Child, ExitStatus};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::io;
 
 use crate::terminal::TerminalError;
@@ -23,7 +23,10 @@ pub(crate) struct TuiAuthenticationChannel {
 pub(crate) struct TerminalProcessTree(Arc<Mutex<TerminalProcessTreeInner>>);
 
 struct TerminalProcessTreeInner {
+    #[cfg(unix)]
     process_group: Option<i32>,
+    #[cfg(target_os = "windows")]
+    windows_control: colossus_windows_native::ConptyControl,
     killer: Box<dyn ChildKiller + Send + Sync>,
     closed: bool,
 }
@@ -38,6 +41,15 @@ impl TerminalProcessTree {
         })))
     }
 
+    #[cfg(target_os = "windows")]
+    fn from_windows(control: colossus_windows_native::ConptyControl, child: &dyn Child) -> Self {
+        Self(Arc::new(Mutex::new(TerminalProcessTreeInner {
+            windows_control: control,
+            killer: child.clone_killer(),
+            closed: false,
+        })))
+    }
+
     #[cfg(unix)]
     pub(crate) fn interrupt(&self) -> Result<(), TerminalError> {
         let tree = self.0.lock().map_err(|_| TerminalError::Internal)?;
@@ -45,7 +57,17 @@ impl TerminalProcessTree {
         signal_process_group(process_group, nix::sys::signal::Signal::SIGINT)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    pub(crate) fn interrupt(&self) -> Result<(), TerminalError> {
+        self.0
+            .lock()
+            .map_err(|_| TerminalError::Internal)?
+            .windows_control
+            .interrupt()
+            .map_err(|_| TerminalError::IoFailed)
+    }
+
+    #[cfg(not(any(unix, target_os = "windows")))]
     pub(crate) fn interrupt(&self) -> Result<(), TerminalError> {
         Err(TerminalError::ProgramUnavailable)
     }
@@ -56,6 +78,10 @@ impl TerminalProcessTree {
         if let Some(process_group) = tree.process_group
             && signal_process_group(process_group, nix::sys::signal::Signal::SIGTERM).is_ok()
         {
+            return Ok(());
+        }
+        #[cfg(target_os = "windows")]
+        if tree.windows_control.terminate().is_ok() {
             return Ok(());
         }
         tree.killer.kill().map_err(|_| TerminalError::IoFailed)
@@ -75,8 +101,12 @@ impl TerminalProcessTree {
         });
         #[cfg(not(unix))]
         let signalled = false;
+        #[cfg(target_os = "windows")]
+        let job_terminated = tree.windows_control.terminate().is_ok();
+        #[cfg(not(target_os = "windows"))]
+        let job_terminated = false;
         let killed = tree.killer.kill().is_ok();
-        if signalled || killed {
+        if signalled || job_terminated || killed {
             Ok(())
         } else {
             Err(TerminalError::IoFailed)
@@ -91,6 +121,198 @@ fn signal_process_group(
 ) -> Result<(), TerminalError> {
     nix::sys::signal::killpg(nix::unistd::Pid::from_raw(process_group), signal)
         .map_err(|_| TerminalError::IoFailed)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn spawn_verified_windows_tui(
+    executable: &std::path::Path,
+    arguments: &[std::path::PathBuf],
+    workspace: &std::path::Path,
+    workspace_identity: colossus_windows_native::FileIdentity,
+    executable_identity: colossus_windows_native::FileIdentity,
+    size: portable_pty::PtySize,
+) -> Result<crate::terminal::SpawnedTerminal, TerminalError> {
+    use portable_pty::MasterPty as _;
+
+    let arguments = arguments
+        .iter()
+        .map(|argument| argument.as_os_str().to_owned())
+        .collect::<Vec<_>>();
+    let spawned = colossus_windows_native::spawn_verified_conpty(
+        executable,
+        executable_identity,
+        &arguments,
+        &minimal_windows_environment(),
+        workspace,
+        workspace_identity,
+        size.rows,
+        size.cols,
+    )
+    .map_err(|_| TerminalError::SpawnFailed)?;
+    let colossus_windows_native::SpawnedConpty {
+        control,
+        child,
+        input,
+        output,
+        authentication_input,
+        authentication_output,
+    } = spawned;
+    let master = WindowsConptyMaster {
+        control: control.clone(),
+        readable: output,
+        writable: Mutex::new(Some(input)),
+        size: Mutex::new(size),
+    };
+    let reader = master
+        .try_clone_reader()
+        .map_err(|_| TerminalError::SpawnFailed)?;
+    let writer = master
+        .take_writer()
+        .map_err(|_| TerminalError::SpawnFailed)?;
+    let child = WindowsPtyChild { inner: child };
+    let process_tree = TerminalProcessTree::from_windows(control, &child);
+    Ok(crate::terminal::SpawnedTerminal {
+        master: Box::new(master),
+        reader,
+        writer,
+        child: Box::new(child),
+        process_tree,
+        authentication_channel: TuiAuthenticationChannel {
+            reader: authentication_output,
+            writer: authentication_input,
+        },
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn minimal_windows_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let mut environment = [
+        ("TERM", "xterm-256color"),
+        ("COLORTERM", "truecolor"),
+        ("LANG", "en_US.UTF-8"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.into(), value.into()))
+    .collect::<Vec<_>>();
+    for name in [
+        "SystemRoot",
+        "WINDIR",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "PATH",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            environment.push((name.into(), value));
+        }
+    }
+    environment
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsConptyMaster {
+    control: colossus_windows_native::ConptyControl,
+    readable: std::fs::File,
+    writable: Mutex<Option<std::fs::File>>,
+    size: Mutex<portable_pty::PtySize>,
+}
+
+#[cfg(target_os = "windows")]
+impl portable_pty::MasterPty for WindowsConptyMaster {
+    fn resize(&self, size: portable_pty::PtySize) -> anyhow::Result<()> {
+        self.control.resize(size.rows, size.cols)?;
+        *self
+            .size
+            .lock()
+            .map_err(|_| anyhow::anyhow!("ConPTY size lock failed"))? = size;
+        Ok(())
+    }
+
+    fn get_size(&self) -> anyhow::Result<portable_pty::PtySize> {
+        self.size
+            .lock()
+            .map(|size| *size)
+            .map_err(|_| anyhow::anyhow!("ConPTY size lock failed"))
+    }
+
+    fn try_clone_reader(&self) -> anyhow::Result<Box<dyn std::io::Read + Send>> {
+        Ok(Box::new(self.readable.try_clone()?))
+    }
+
+    fn take_writer(&self) -> anyhow::Result<Box<dyn std::io::Write + Send>> {
+        self.writable
+            .lock()
+            .map_err(|_| anyhow::anyhow!("ConPTY writer lock failed"))?
+            .take()
+            .map(|writer| Box::new(writer) as Box<dyn std::io::Write + Send>)
+            .ok_or_else(|| anyhow::anyhow!("ConPTY writer already taken"))
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsPtyChild {
+    inner: colossus_windows_native::ConptyChild,
+}
+
+#[cfg(target_os = "windows")]
+impl std::fmt::Debug for WindowsPtyChild {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WindowsPtyChild")
+            .field("process_id", &self.inner.process_id())
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl ChildKiller for WindowsPtyChild {
+    fn kill(&mut self) -> io::Result<()> {
+        self.inner.kill()
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(WindowsConptyKiller(self.inner.control()))
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Child for WindowsPtyChild {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.inner
+            .try_wait()
+            .map(|status| status.map(ExitStatus::with_exit_code))
+    }
+
+    fn wait(&mut self) -> io::Result<ExitStatus> {
+        self.inner.wait().map(ExitStatus::with_exit_code)
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        Some(self.inner.process_id())
+    }
+
+    fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+        Some(self.inner.as_raw_handle())
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct WindowsConptyKiller(colossus_windows_native::ConptyControl);
+
+#[cfg(target_os = "windows")]
+impl ChildKiller for WindowsConptyKiller {
+    fn kill(&mut self) -> io::Result<()> {
+        self.0
+            .terminate()
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(Self(self.0.clone()))
+    }
 }
 
 #[cfg(target_os = "macos")]

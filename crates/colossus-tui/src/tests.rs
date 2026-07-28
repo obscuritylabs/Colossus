@@ -94,6 +94,14 @@ fn parser_handles_tui_commands_without_a_repl_alias() {
         InteractiveCommand::Local(LocalCommand::ResetPreferences)
     );
     assert_eq!(
+        parse_interactive_command("/provider diagnostics on"),
+        InteractiveCommand::Local(LocalCommand::ProviderDiagnostics(true))
+    );
+    assert_eq!(
+        parse_interactive_command("/provider diagnostics off"),
+        InteractiveCommand::Local(LocalCommand::ProviderDiagnostics(false))
+    );
+    assert_eq!(
         parse_interactive_command("/repl reset"),
         InteractiveCommand::Runtime(RuntimeCommand::Known {
             name: "repl".into(),
@@ -106,6 +114,27 @@ fn parser_handles_tui_commands_without_a_repl_alias() {
             name: "plans".into(),
             arguments: String::new(),
         })
+    );
+}
+
+#[test]
+fn run_request_carries_only_process_local_provider_diagnostic_state() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    assert!(
+        !state
+            .run_request("normal".into())
+            .include_provider_response_diagnostics
+    );
+    state.provider_response_diagnostics = true;
+    let request = state.run_request("reproduce".into());
+    assert!(request.include_provider_response_diagnostics);
+    assert_eq!(request.prompt, "reproduce");
+
+    let restarted = TuiState::from_snapshot(snapshot());
+    assert!(
+        !restarted
+            .run_request("after restart".into())
+            .include_provider_response_diagnostics
     );
 }
 

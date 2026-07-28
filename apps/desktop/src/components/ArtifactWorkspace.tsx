@@ -21,6 +21,8 @@ export interface ArtifactViewItem {
   stateLabel: string;
   createdLabel: string;
   previewLines?: readonly ArtifactPreviewLine[];
+  previewStatus?: "idle" | "loading" | "error";
+  previewError?: string;
 }
 
 interface ArtifactWorkspaceProps {
@@ -179,9 +181,12 @@ export function ArtifactWorkspace({
                 <IconFileText size={26} stroke={1.4} aria-hidden="true" />
                 <strong>{active.fileName}</strong>
                 <p>
-                  The public API released this artifact reference, but not its
-                  file contents. Native open and preview actions remain
-                  intentionally unavailable.
+                  {active.previewStatus === "loading"
+                    ? "Loading the authorized preview…"
+                    : active.previewStatus === "error"
+                      ? (active.previewError ??
+                        "The artifact preview could not be loaded.")
+                      : "Select this artifact to load its authorized preview."}
                 </p>
               </div>
             )}

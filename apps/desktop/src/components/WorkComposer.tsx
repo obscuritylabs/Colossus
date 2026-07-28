@@ -7,7 +7,7 @@ import {
 } from "@tabler/icons-react";
 import type { FormEvent, KeyboardEvent, RefObject } from "react";
 
-import type { CommandError, RunMode } from "../types";
+import type { ArtifactReference, CommandError, RunMode } from "../types";
 
 interface WorkComposerProps {
   formRef: RefObject<HTMLFormElement | null>;
@@ -26,11 +26,16 @@ interface WorkComposerProps {
   continuation: boolean;
   activeWorkRunning: boolean;
   activeWorkNeedsInput: boolean;
+  attachmentsAvailable: boolean;
+  attachments: readonly ArtifactReference[];
+  attachmentBusy: boolean;
   error: CommandError | null;
   onPromptChange: (prompt: string) => void;
   onRoleChange: (role: string) => void;
   onMaxTurnsChange: (maxTurns: number) => void;
   onModeChange: (mode: RunMode) => void;
+  onChooseAttachment: () => void;
+  onRemoveAttachment: (artifactId: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }
 
@@ -51,11 +56,16 @@ export function WorkComposer({
   continuation,
   activeWorkRunning,
   activeWorkNeedsInput,
+  attachmentsAvailable,
+  attachments,
+  attachmentBusy,
   error,
   onPromptChange,
   onRoleChange,
   onMaxTurnsChange,
   onModeChange,
+  onChooseAttachment,
+  onRemoveAttachment,
   onSubmit,
 }: WorkComposerProps) {
   const roleMissing = role.trim().length === 0;
@@ -163,27 +173,48 @@ export function WorkComposer({
         onKeyDown={handleKeyDown}
         onChange={(event) => onPromptChange(event.target.value)}
       />
-      <div className="composer-action-row">
-        <div className="composer-context-actions">
-          <button
-            className="icon-button"
-            type="button"
-            disabled
-            aria-label="Attach a file (not available in this API preview)"
-            title="File attachment is not available in this API preview"
-          >
-            <IconPaperclip size={19} stroke={1.7} aria-hidden="true" />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            disabled
-            aria-label="Choose workspace context (not available in this API preview)"
-            title="Workspace context selection is not available in this API preview"
-          >
-            <IconFolder size={19} stroke={1.7} aria-hidden="true" />
-          </button>
+      {attachments.length > 0 ? (
+        <div className="composer-attachments" aria-label="Run attachments">
+          {attachments.map((attachment) => (
+            <span className="artifact-chip" key={attachment.artifactId}>
+              {attachment.fileName}
+              <button
+                type="button"
+                aria-label={`Remove ${attachment.fileName}`}
+                onClick={() => onRemoveAttachment(attachment.artifactId)}
+              >
+                ×
+              </button>
+            </span>
+          ))}
         </div>
+      ) : null}
+      <div className="composer-action-row">
+        {attachmentsAvailable ? (
+          <div className="composer-context-actions">
+            <button
+              className="icon-button"
+              type="button"
+              disabled={
+                !canCompose || attachmentBusy || attachments.length >= 16
+              }
+              aria-label="Attach a file"
+              title="Attach a UTF-8 text or source file"
+              onClick={onChooseAttachment}
+            >
+              <IconPaperclip size={19} stroke={1.7} aria-hidden="true" />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              disabled
+              aria-label="Choose workspace context"
+              title="Workspace context selection is not available in this Desktop version"
+            >
+              <IconFolder size={19} stroke={1.7} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
         <fieldset className="mode-switch">
           <legend className="sr-only">Run mode</legend>
           <label>

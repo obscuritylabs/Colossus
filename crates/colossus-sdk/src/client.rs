@@ -1,8 +1,9 @@
 use crate::{
-    AgentRunClient, ApiResult, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
-    CreateRunRequest, CreateRunResponse, GetRunRequest, GetRunResponse, ListRunsRequest,
+    AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ArtifactClient,
+    ArtifactReference, Backend, BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest,
+    CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse, ListRunsRequest,
     ListRunsResponse, RespondInteractionRequest, RespondInteractionResponse, RunUpdates, SdkResult,
-    WatchRunRequest,
+    ServerCapabilities, UploadArtifactRequest, WatchRunRequest,
 };
 use std::{fmt, sync::Arc};
 
@@ -36,6 +37,46 @@ impl Colossus {
     /// Return a cloneable caller-bound run service.
     pub fn agent_runs(&self) -> Arc<dyn AgentRunClient> {
         self.backend.agent_runs()
+    }
+
+    /// Return authenticated optional behaviors cached during connection setup.
+    pub fn capabilities(&self) -> ServerCapabilities {
+        self.backend.capabilities()
+    }
+
+    /// Return the caller-bound artifact service when advertised.
+    pub fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
+        self.backend.artifacts()
+    }
+
+    /// Upload one complete bounded artifact.
+    pub async fn upload_artifact(
+        &self,
+        request: UploadArtifactRequest,
+    ) -> ApiResult<ArtifactReference> {
+        self.backend
+            .artifacts()
+            .ok_or_else(artifact_service_unavailable)?
+            .upload(request)
+            .await
+    }
+
+    /// Fetch one artifact's metadata.
+    pub async fn get_artifact(&self, artifact_id: &str) -> ApiResult<ArtifactReference> {
+        self.backend
+            .artifacts()
+            .ok_or_else(artifact_service_unavailable)?
+            .get(artifact_id)
+            .await
+    }
+
+    /// Download one complete released artifact.
+    pub async fn download_artifact(&self, artifact_id: &str) -> ApiResult<DownloadedArtifact> {
+        self.backend
+            .artifacts()
+            .ok_or_else(artifact_service_unavailable)?
+            .download(artifact_id)
+            .await
     }
 
     /// Create a durable agent run.
@@ -91,6 +132,18 @@ impl Colossus {
     /// Close this client or isolated backend.
     pub async fn close(&self) -> SdkResult<()> {
         self.backend.close().await
+    }
+}
+
+fn artifact_service_unavailable() -> ApiError {
+    ApiError {
+        code: ApiErrorCode::FailedPrecondition,
+        reason: ApiErrorReason::ArtifactUnavailable,
+        message: "the connected runtime did not advertise artifact operations".into(),
+        correlation_id: None,
+        retryable: false,
+        outcome: colossus_api::OutcomeCertainty::Known,
+        violations: Vec::new(),
     }
 }
 

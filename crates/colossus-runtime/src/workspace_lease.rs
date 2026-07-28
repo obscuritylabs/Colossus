@@ -13,9 +13,11 @@ const LEASE_DIRECTORY: &str = "colossus-worker-leases";
 const LEASE_INODE_DOMAIN: &[u8] = b"colossus-workspace-owner-unix-inode-v1\0";
 #[cfg(target_os = "macos")]
 const MACOS_IDENTITY_DOMAIN: &[u8] = b"colossus-workspace-owner-macos-inode-birthtime-v2\0";
-#[cfg(not(unix))]
+#[cfg(windows)]
+const WINDOWS_IDENTITY_DOMAIN: &[u8] = b"colossus-workspace-owner-windows-volume-file-id-v3\0";
+#[cfg(not(any(unix, windows)))]
 const LEASE_PATH_DOMAIN: &[u8] = b"colossus-workspace-owner-canonical-path-v1\0";
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const MAX_FALLBACK_WORKSPACE_IDENTITY_UNITS: usize = 32_768;
 
 /// Opaque identity of one opened workspace directory.
@@ -29,6 +31,8 @@ enum WorkspaceIdentityTokenKind {
     UnixV1,
     #[cfg(target_os = "macos")]
     MacosBirthtimeV2,
+    #[cfg(windows)]
+    WindowsFileIdV3,
 }
 
 /// Opaque expected identity supplied by a host that securely opened the workspace.
@@ -73,6 +77,22 @@ impl WorkspaceIdentityToken {
         digest.update(birth_nanoseconds.to_le_bytes());
         Some(Self {
             kind: WorkspaceIdentityTokenKind::MacosBirthtimeV2,
+            digest: digest.finalize().into(),
+        })
+    }
+
+    /// Construct the persisted Managed Desktop token from Windows `FileIdInfo`.
+    #[cfg(windows)]
+    pub fn from_windows_parts(volume_serial_number: u64, file_id: [u8; 16]) -> Option<Self> {
+        if volume_serial_number == 0 || file_id == [0; 16] {
+            return None;
+        }
+        let mut digest = Sha256::new();
+        digest.update(WINDOWS_IDENTITY_DOMAIN);
+        digest.update(volume_serial_number.to_le_bytes());
+        digest.update(file_id);
+        Some(Self {
+            kind: WorkspaceIdentityTokenKind::WindowsFileIdV3,
             digest: digest.finalize().into(),
         })
     }
@@ -176,7 +196,13 @@ struct WorkspaceIdentityInner {
     birth_nanoseconds: i64,
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+struct WorkspaceIdentityInner {
+    binding: colossus_windows_native::BoundPath,
+    canonical_path: PathBuf,
+}
+
+#[cfg(not(any(unix, windows)))]
 struct WorkspaceIdentityInner {
     canonical_path: PathBuf,
 }
@@ -216,6 +242,11 @@ impl WorkspaceIdentity {
                 }
             }
         }
+        #[cfg(windows)]
+        self.0
+            .binding
+            .revalidate()
+            .map_err(|_| identity_changed())?;
         Ok(())
     }
 
@@ -246,6 +277,15 @@ impl WorkspaceIdentity {
                 )
                 .is_some_and(|actual| actual.digest == expected.digest))
             }
+            #[cfg(windows)]
+            WorkspaceIdentityTokenKind::WindowsFileIdV3 => {
+                let identity = self.0.binding.identity();
+                Ok(WorkspaceIdentityToken::from_windows_parts(
+                    identity.volume_serial_number,
+                    identity.file_id,
+                )
+                .is_some_and(|actual| actual.digest == expected.digest))
+            }
         }
     }
 
@@ -262,7 +302,12 @@ impl WorkspaceIdentity {
         self.0.device == other.0.device && self.0.inode == other.0.inode
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn same_object(&self, other: &Self) -> bool {
+        self.0.binding.identity() == other.0.binding.identity()
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn same_object(&self, other: &Self) -> bool {
         self.0.canonical_path == other.0.canonical_path
     }
@@ -333,7 +378,18 @@ fn open_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, StoreE
     })))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn open_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, StoreError> {
+    let binding = colossus_windows_native::BoundPath::open_directory(workspace)
+        .map_err(|_| lease_unavailable())?;
+    let canonical_path = binding.canonical_path().to_owned();
+    Ok(WorkspaceIdentity(Arc::new(WorkspaceIdentityInner {
+        binding,
+        canonical_path,
+    })))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn open_workspace_identity(workspace: &Path) -> Result<WorkspaceIdentity, StoreError> {
     // Platforms without the Unix device/inode contract retain the canonical-path
     // fallback. Its encoded input is explicitly bounded below before it reaches the
@@ -363,21 +419,10 @@ fn update_workspace_identity(
     digest: &mut Sha256,
     workspace: &WorkspaceIdentity,
 ) -> Result<(), StoreError> {
-    use std::os::windows::ffi::OsStrExt as _;
-
-    digest.update(LEASE_PATH_DOMAIN);
-    for (index, unit) in workspace
-        .0
-        .canonical_path
-        .as_os_str()
-        .encode_wide()
-        .enumerate()
-    {
-        if index >= MAX_FALLBACK_WORKSPACE_IDENTITY_UNITS {
-            return Err(lease_unavailable());
-        }
-        digest.update(unit.to_le_bytes());
-    }
+    let identity = workspace.0.binding.identity();
+    digest.update(WINDOWS_IDENTITY_DOMAIN);
+    digest.update(identity.volume_serial_number.to_le_bytes());
+    digest.update(identity.file_id);
     Ok(())
 }
 

@@ -1,0 +1,2 @@
+Reply with exactly SDK_PROVIDER_SHOULD_NOT_COMPLETE. This scenario is successful only
+when the intentionally unavailable provider returns a typed terminal run failure.

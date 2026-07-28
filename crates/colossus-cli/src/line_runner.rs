@@ -126,6 +126,27 @@ pub(super) async fn line_runner(
             print_json(&runtime.journal().verify()?)?;
         } else if line == "/projection status" {
             print_json(&runtime.projection_status()?)?;
+        } else if line == "/models doctor" || line.starts_with("/models doctor ") {
+            match doctor_profile(line.strip_prefix("/models ").unwrap_or_default(), "models") {
+                Ok(profile) => {
+                    print_json(&runtime.model_doctor_with_diagnostics(profile, true).await?)?;
+                }
+                Err(error) => println!("recoverable: {error}"),
+            }
+        } else if line == "/provider doctor" || line.starts_with("/provider doctor ") {
+            match doctor_profile(
+                line.strip_prefix("/provider ").unwrap_or_default(),
+                "provider",
+            ) {
+                Ok(profile) => {
+                    print_json(
+                        &runtime
+                            .provider_doctor_with_diagnostics(profile, true)
+                            .await?,
+                    )?;
+                }
+                Err(error) => println!("recoverable: {error}"),
+            }
         } else if line == "/tools" {
             print_json(&runtime.tool_specs())?;
         } else if line == "/sessions" {

@@ -1,0 +1,2 @@
+# Keep text checkouts stable across developer and CI operating systems.
+* text=auto eol=lf

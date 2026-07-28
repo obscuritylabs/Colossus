@@ -1,0 +1,77 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: operator-gated-deployment
+  version: 1.0.0
+  description: Exercise structured input, an explicit approval, and nested parallel rollout stages
+inputs:
+  type: object
+  additionalProperties: false
+  required: [environment, release]
+  properties:
+    environment:
+      type: string
+      enum: [staging, production]
+    release:
+      type: string
+      minLength: 1
+      maxLength: 128
+outputs:
+  type: object
+capabilities: []
+maxConcurrency: 2
+stepBudget: 20
+steps:
+  - id: release-decision
+    type: wait_for_input
+    prompt: Supply the reviewed release decision and change ticket
+    schema:
+      type: object
+      additionalProperties: false
+      required: [approved, change_ticket]
+      properties:
+        approved:
+          type: boolean
+        change_ticket:
+          type: string
+          minLength: 1
+          maxLength: 128
+  - id: decision-route
+    type: condition
+    expression: /steps/release-decision/approved == true
+    then:
+      - id: final-authorization
+        type: approval
+        prompt: Authorize the bounded rollout for the reviewed release
+      - id: rollout-stages
+        type: parallel
+        max_concurrency: 2
+        branches:
+          -
+            - id: deploy-canary
+              type: emit
+              value:
+                stage: canary
+                status: released
+          -
+            - id: prepare-observation
+              type: emit
+              value:
+                stage: observation
+                status: ready
+      - id: approved-result
+        type: emit
+        value:
+          decision: approved
+          rollout: completed
+    otherwise:
+      - id: blocked-result
+        type: emit
+        value:
+          decision: blocked
+          rollout: skipped
+  - id: audit-summary
+    type: emit
+    value:
+      evidence: durable
+      workflow: operator-gated-deployment

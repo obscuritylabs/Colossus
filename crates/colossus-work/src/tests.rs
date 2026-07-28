@@ -344,14 +344,49 @@ fn subagents_reconstruct_and_enforce_terminal_requeue_transitions() {
     let (journal, repository, service) = fixture();
     let queued = service
         .create_subagent(
-            "session-1",
-            "run-1",
-            "call-1",
-            "Review the tests",
-            "subagent_default",
+            CreateSubagentRequest {
+                session_id: "session-1".into(),
+                parent_run_id: "run-1".into(),
+                parent_call_id: "call-1".into(),
+                task: "Review the tests".into(),
+                role: "subagent_default".into(),
+                allowed_tools: None,
+            },
             user_actor(),
         )
         .expect("queue");
+    let bounded = service
+        .create_subagent(
+            CreateSubagentRequest {
+                session_id: "session-1".into(),
+                parent_run_id: "run-bounded".into(),
+                parent_call_id: "call-bounded".into(),
+                task: "Review one file".into(),
+                role: "subagent_default".into(),
+                allowed_tools: Some(vec!["filesystem.read".into(), "git.diff".into()]),
+            },
+            user_actor(),
+        )
+        .expect("queue bounded subagent");
+    assert_eq!(
+        bounded.allowed_tools,
+        Some(vec!["filesystem.read".into(), "git.diff".into()])
+    );
+    assert!(
+        service
+            .create_subagent(
+                CreateSubagentRequest {
+                    session_id: "session-1".into(),
+                    parent_run_id: "run-duplicate".into(),
+                    parent_call_id: "call-duplicate".into(),
+                    task: "Review one file".into(),
+                    role: "subagent_default".into(),
+                    allowed_tools: Some(vec!["filesystem.read".into(), "filesystem.read".into(),]),
+                },
+                user_actor(),
+            )
+            .is_err()
+    );
     let running = service
         .start_subagent(&queued.id, user_actor())
         .expect("start");
@@ -391,11 +426,14 @@ fn subagents_reconstruct_and_enforce_terminal_requeue_transitions() {
     );
     let cancellable = service
         .create_subagent(
-            "session-1",
-            "run-2",
-            "call-2",
-            "Long child task",
-            "subagent_default",
+            CreateSubagentRequest {
+                session_id: "session-1".into(),
+                parent_run_id: "run-2".into(),
+                parent_call_id: "call-2".into(),
+                task: "Long child task".into(),
+                role: "subagent_default".into(),
+                allowed_tools: None,
+            },
             user_actor(),
         )
         .expect("queue cancellable");

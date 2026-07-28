@@ -8,6 +8,7 @@ Usage:
   cargo xtask dev
   cargo xtask pr [--base <git-revision>]
   cargo xtask check <component> [--base <git-revision>]
+  cargo xtask desktop prepare --profile <debug|release> [--target <triple>]
 
 Components:
   rust          Formatting, structure, metadata, Clippy, and workspace tests
@@ -72,6 +73,16 @@ pub(super) enum Invocation {
         component: Component,
         base: Option<String>,
     },
+    DesktopPrepare {
+        profile: DesktopProfile,
+        target: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DesktopProfile {
+    Debug,
+    Release,
 }
 
 pub(super) fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, String> {
@@ -95,8 +106,46 @@ pub(super) fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation
                 base: parse_base(args)?,
             })
         }
+        "desktop" => parse_desktop(args),
         _ => Err(format!("unknown task `{command}`\n\n{USAGE}")),
     }
+}
+
+fn parse_desktop(mut args: impl Iterator<Item = String>) -> Result<Invocation, String> {
+    if args.next().as_deref() != Some("prepare") {
+        return Err(format!("desktop requires `prepare`\n\n{USAGE}"));
+    }
+    let mut profile = None;
+    let mut target = None;
+    while let Some(flag) = args.next() {
+        let value = args
+            .next()
+            .ok_or_else(|| format!("{flag} requires a value\n\n{USAGE}"))?;
+        match flag.as_str() {
+            "--profile" if profile.is_none() => {
+                profile = Some(match value.as_str() {
+                    "debug" => DesktopProfile::Debug,
+                    "release" => DesktopProfile::Release,
+                    _ => return Err(format!("invalid desktop profile `{value}`\n\n{USAGE}")),
+                });
+            }
+            "--target" if target.is_none() && valid_target(&value) => target = Some(value),
+            "--target" => return Err(format!("invalid desktop target `{value}`\n\n{USAGE}")),
+            _ => return Err(format!("unexpected desktop argument `{flag}`\n\n{USAGE}")),
+        }
+    }
+    Ok(Invocation::DesktopPrepare {
+        profile: profile.ok_or_else(|| format!("desktop prepare requires --profile\n\n{USAGE}"))?,
+        target,
+    })
+}
+
+fn valid_target(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn no_more(
@@ -128,7 +177,7 @@ fn parse_base(mut args: impl Iterator<Item = String>) -> Result<Option<String>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{Component, Invocation, parse};
+    use super::{Component, DesktopProfile, Invocation, parse};
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -140,6 +189,21 @@ mod tests {
         assert_eq!(
             parse(strings(&["pre-commit"])).unwrap(),
             Invocation::PreCommit
+        );
+        assert_eq!(
+            parse(strings(&[
+                "desktop",
+                "prepare",
+                "--profile",
+                "release",
+                "--target",
+                "x86_64-pc-windows-msvc"
+            ]))
+            .unwrap(),
+            Invocation::DesktopPrepare {
+                profile: DesktopProfile::Release,
+                target: Some("x86_64-pc-windows-msvc".to_owned())
+            }
         );
         assert_eq!(parse(strings(&["dev"])).unwrap(), Invocation::Dev);
         assert_eq!(

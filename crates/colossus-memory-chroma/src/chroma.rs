@@ -195,12 +195,23 @@ struct QueryResponse {
 /// Permit-requiring Chroma v2 HTTP transport.
 pub struct ChromaExecutor {
     profile: ChromaProfile,
+    tls_roots: AdditionalRootCertificates,
 }
 
 impl ChromaExecutor {
     /// Construct a transport. Execution remains impossible without a gateway permit.
     pub fn new(profile: ChromaProfile) -> Self {
-        Self { profile }
+        Self {
+            profile,
+            tls_roots: AdditionalRootCertificates::default(),
+        }
+    }
+
+    /// Add validated runtime-wide CA roots to Chroma clients' built-in public roots.
+    #[must_use]
+    pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
+        self.tls_roots = tls_roots;
+        self
     }
 
     async fn ensure_collection(&self, permit: &ExecutionPermit) -> Result<String, StoreError> {
@@ -213,10 +224,13 @@ impl ChromaExecutor {
             Method::POST,
             &self.profile.collections_url()?,
             Some(&payload),
-            self.profile.credential_reference(),
-            "x-chroma-token",
             permit,
-            self.profile.timeout_ms,
+            HttpTransport::new(
+                self.profile.credential_reference(),
+                "x-chroma-token",
+                self.profile.timeout_ms,
+                &self.tls_roots,
+            ),
         )
         .await?;
         self.parse_collection(&bytes)
@@ -229,10 +243,13 @@ impl ChromaExecutor {
                 .profile
                 .collection_url(&self.profile.collection, None)?,
             None,
-            self.profile.credential_reference(),
-            "x-chroma-token",
             permit,
-            self.profile.timeout_ms,
+            HttpTransport::new(
+                self.profile.credential_reference(),
+                "x-chroma-token",
+                self.profile.timeout_ms,
+                &self.tls_roots,
+            ),
         )
         .await?;
         self.parse_collection(&bytes)
@@ -286,10 +303,13 @@ impl ChromaExecutor {
                     Method::POST,
                     &self.profile.collection_url(&id, Some("upsert"))?,
                     Some(&payload),
-                    self.profile.credential_reference(),
-                    "x-chroma-token",
                     permit,
-                    self.profile.timeout_ms,
+                    HttpTransport::new(
+                        self.profile.credential_reference(),
+                        "x-chroma-token",
+                        self.profile.timeout_ms,
+                        &self.tls_roots,
+                    ),
                 )
                 .await?;
                 Ok(json!({"ok": true}))
@@ -304,10 +324,13 @@ impl ChromaExecutor {
                     Method::POST,
                     &self.profile.collection_url(&id, Some("delete"))?,
                     Some(&payload),
-                    self.profile.credential_reference(),
-                    "x-chroma-token",
                     permit,
-                    self.profile.timeout_ms,
+                    HttpTransport::new(
+                        self.profile.credential_reference(),
+                        "x-chroma-token",
+                        self.profile.timeout_ms,
+                        &self.tls_roots,
+                    ),
                 )
                 .await?;
                 Ok(json!({"ok": true, "event_id": event_id}))
@@ -323,10 +346,13 @@ impl ChromaExecutor {
                     Method::POST,
                     &self.profile.collection_url(&id, Some("query"))?,
                     Some(&payload),
-                    self.profile.credential_reference(),
-                    "x-chroma-token",
                     permit,
-                    self.profile.timeout_ms,
+                    HttpTransport::new(
+                        self.profile.credential_reference(),
+                        "x-chroma-token",
+                        self.profile.timeout_ms,
+                        &self.tls_roots,
+                    ),
                 )
                 .await?;
                 let response: QueryResponse = serde_json::from_slice(&bytes).map_err(adapter)?;
@@ -354,10 +380,13 @@ impl ChromaExecutor {
                     Method::GET,
                     &self.profile.collection_url(&id, Some("count"))?,
                     None,
-                    self.profile.credential_reference(),
-                    "x-chroma-token",
                     permit,
-                    self.profile.timeout_ms,
+                    HttpTransport::new(
+                        self.profile.credential_reference(),
+                        "x-chroma-token",
+                        self.profile.timeout_ms,
+                        &self.tls_roots,
+                    ),
                 )
                 .await?;
                 let documents: usize = serde_json::from_slice(&bytes).map_err(adapter)?;
@@ -370,10 +399,13 @@ impl ChromaExecutor {
                         .profile
                         .collection_url(&self.profile.collection, None)?,
                     None,
-                    self.profile.credential_reference(),
-                    "x-chroma-token",
                     permit,
-                    self.profile.timeout_ms,
+                    HttpTransport::new(
+                        self.profile.credential_reference(),
+                        "x-chroma-token",
+                        self.profile.timeout_ms,
+                        &self.tls_roots,
+                    ),
                 )
                 .await?;
                 Ok(json!({"ok": true}))

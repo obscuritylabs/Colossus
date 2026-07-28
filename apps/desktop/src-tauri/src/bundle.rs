@@ -94,10 +94,7 @@ impl VerifiedBundle {
             }
             let app_root = release_app_root().ok_or_else(integrity_error)?;
             verify_outer_app_signature(&app_root)?;
-            let manifest_path = app_root
-                .join("Contents")
-                .join("Resources")
-                .join(SEALED_RELEASE_MANIFEST);
+            let manifest_path = release_manifest_path(&app_root);
             let source = read_bounded_manifest(&manifest_path)?;
             verify_release_manifest_binding(
                 &source,
@@ -146,7 +143,7 @@ fn verified_manifest(
         .map_err(|_| integrity_error())?
         .with_macos_code_signing_requirement(macos_code_signing_requirement);
 
-    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), not(debug_assertions)))]
     {
         verify_release_code_identity(sidecar.path(), SIDECAR_CODE_IDENTIFIER)?;
         verify_release_code_identity(&cli, CLI_CODE_IDENTIFIER)?;
@@ -162,6 +159,10 @@ fn verified_manifest(
 fn bundle_code_signing_requirement(
     release_channel: ReleaseChannel,
 ) -> Result<MacosCodeSigningRequirement, CommandErrorDto> {
+    #[cfg(windows)]
+    if release_channel == ReleaseChannel::Stable {
+        return Err(integrity_error());
+    }
     match release_channel {
         ReleaseChannel::Development | ReleaseChannel::Stable => {
             Ok(MacosCodeSigningRequirement::AppleTeam)
@@ -253,7 +254,7 @@ fn release_directory() -> Option<PathBuf> {
         .and_then(|executable| executable.parent().map(Path::to_owned))
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), target_os = "macos"))]
 fn release_app_root() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let macos = executable.parent()?;
@@ -263,6 +264,42 @@ fn release_app_root() -> Option<PathBuf> {
         && contents.file_name()? == "Contents"
         && app.extension().is_some_and(|extension| extension == "app"))
     .then(|| app.to_owned())
+}
+
+#[cfg(all(not(debug_assertions), target_os = "windows"))]
+fn release_app_root() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(Path::to_owned))
+}
+
+#[cfg(all(
+    not(debug_assertions),
+    not(any(target_os = "macos", target_os = "windows"))
+))]
+fn release_app_root() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(all(not(debug_assertions), target_os = "macos"))]
+fn release_manifest_path(app_root: &Path) -> PathBuf {
+    app_root
+        .join("Contents")
+        .join("Resources")
+        .join(SEALED_RELEASE_MANIFEST)
+}
+
+#[cfg(all(not(debug_assertions), target_os = "windows"))]
+fn release_manifest_path(app_root: &Path) -> PathBuf {
+    app_root.join(SEALED_RELEASE_MANIFEST)
+}
+
+#[cfg(all(
+    not(debug_assertions),
+    not(any(target_os = "macos", target_os = "windows"))
+))]
+fn release_manifest_path(app_root: &Path) -> PathBuf {
+    app_root.join(SEALED_RELEASE_MANIFEST)
 }
 
 #[cfg(all(not(debug_assertions), target_family = "unix"))]
@@ -296,7 +333,33 @@ fn read_bounded_manifest(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
     Ok(source)
 }
 
-#[cfg(all(not(debug_assertions), not(target_family = "unix")))]
+#[cfg(all(not(debug_assertions), target_os = "windows"))]
+fn read_bounded_manifest(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
+    use std::io::Read as _;
+
+    let binding =
+        colossus_windows_native::BoundPath::open_file(path).map_err(|_| integrity_error())?;
+    let file = binding.try_clone_file().map_err(|_| integrity_error())?;
+    let metadata = file.metadata().map_err(|_| integrity_error())?;
+    if metadata.len() == 0 || metadata.len() > u64::try_from(MAX_MANIFEST_BYTES).unwrap_or(u64::MAX)
+    {
+        return Err(integrity_error());
+    }
+    let mut source = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.take(u64::try_from(MAX_MANIFEST_BYTES + 1).unwrap_or(u64::MAX))
+        .read_to_end(&mut source)
+        .map_err(|_| integrity_error())?;
+    binding.revalidate().map_err(|_| integrity_error())?;
+    if source.is_empty() || source.len() > MAX_MANIFEST_BYTES {
+        return Err(integrity_error());
+    }
+    Ok(source)
+}
+
+#[cfg(all(
+    not(debug_assertions),
+    not(any(target_family = "unix", target_os = "windows"))
+))]
 fn read_bounded_manifest(_path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
     Err(integrity_error())
 }
@@ -320,7 +383,27 @@ fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), not(debug_assertions)))]
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn verify_outer_app_signature(app_root: &Path) -> Result<(), CommandErrorDto> {
+    if expected_release_channel()? != ReleaseChannel::DeveloperPreview
+        || EXPECTED_RELEASE_TEAM_ID != "UNSIGNED"
+    {
+        return Err(integrity_error());
+    }
+    let executable = std::env::current_exe().map_err(|_| integrity_error())?;
+    let binding = colossus_windows_native::BoundPath::open_file(&executable)
+        .map_err(|_| integrity_error())?;
+    if binding.canonical_path().parent() == Some(app_root) {
+        Ok(())
+    } else {
+        Err(integrity_error())
+    }
+}
+
+#[cfg(all(
+    not(any(target_os = "macos", target_os = "windows")),
+    not(debug_assertions)
+))]
 fn verify_outer_app_signature(_app_root: &Path) -> Result<(), CommandErrorDto> {
     Err(integrity_error())
 }
@@ -379,7 +462,25 @@ fn verify_signed_code_identity(
     Ok(())
 }
 
-#[cfg(all(not(target_os = "macos"), not(debug_assertions)))]
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn verify_release_code_identity(
+    path: &Path,
+    _expected_identifier: &str,
+) -> Result<(), CommandErrorDto> {
+    if expected_release_channel()? != ReleaseChannel::DeveloperPreview
+        || EXPECTED_RELEASE_TEAM_ID != "UNSIGNED"
+    {
+        return Err(integrity_error());
+    }
+    colossus_windows_native::BoundPath::open_file(path)
+        .and_then(|binding| binding.revalidate())
+        .map_err(|_| integrity_error())
+}
+
+#[cfg(all(
+    not(any(target_os = "macos", target_os = "windows")),
+    not(debug_assertions)
+))]
 fn verify_release_code_identity(
     _path: &Path,
     _expected_identifier: &str,
@@ -398,7 +499,7 @@ fn expected_release_channel() -> Result<ReleaseChannel, CommandErrorDto> {
     }
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), target_os = "macos"))]
 fn expected_release_team_identifier() -> Result<&'static str, CommandErrorDto> {
     release_team_identifier(expected_release_channel()?, EXPECTED_RELEASE_TEAM_ID)
         .ok_or_else(integrity_error)
@@ -472,10 +573,13 @@ mod tests {
             release_team_identifier(ReleaseChannel::ValidationOnly, "ADHOC"),
             None
         );
+        #[cfg(not(windows))]
         assert_eq!(
             bundle_code_signing_requirement(ReleaseChannel::Stable).expect("stable requirement"),
             MacosCodeSigningRequirement::AppleTeam
         );
+        #[cfg(windows)]
+        assert!(bundle_code_signing_requirement(ReleaseChannel::Stable).is_err());
         assert_eq!(
             bundle_code_signing_requirement(ReleaseChannel::DeveloperPreview)
                 .expect("preview requirement"),

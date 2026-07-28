@@ -16,7 +16,6 @@ clap.workspace = true
 colossus-access.workspace = true
 colossus-api.workspace = true
 colossus-contracts.workspace = true
-colossus-darwin-process.workspace = true
 colossus-grpc.workspace = true
 colossus-policy.workspace = true
 colossus-presentation.workspace = true
@@ -30,8 +29,8 @@ colossus-workflow.workspace = true
 crossterm.workspace = true
 fs4.workspace = true
 getrandom.workspace = true
+hex.workspace = true
 keyring.workspace = true
-rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -39,9 +38,18 @@ tokio.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+colossus-darwin-process.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+colossus-windows-native.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
+colossus-sdk.workspace = true
 ed25519-dalek.workspace = true
-hex.workspace = true
 hmac.workspace = true
 serde-saphyr.workspace = true
 sha2.workspace = true

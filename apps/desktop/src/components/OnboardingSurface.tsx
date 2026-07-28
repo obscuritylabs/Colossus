@@ -136,27 +136,34 @@ export function OnboardingSurface({
         </ol>
 
         {desktop.workspace === null ? (
-          <div className="onboarding-workspace-step">
-            <span className="setup-icon" aria-hidden="true">
-              <IconFolder size={25} stroke={1.5} />
-            </span>
-            <div>
-              <h2>Choose a folder</h2>
-              <p>
-                Agent tools are confined to the folder you select. Runtime state
-                is stored separately in Colossus application support.
-              </p>
+          <>
+            <div className="onboarding-workspace-step">
+              <span className="setup-icon" aria-hidden="true">
+                <IconFolder size={25} stroke={1.5} />
+              </span>
+              <div>
+                <h2>Choose a folder</h2>
+                <p>
+                  Agent tools are confined to the folder you select. Runtime
+                  state is stored separately in Colossus application support.
+                </p>
+              </div>
+              <button
+                className="button primary"
+                type="button"
+                disabled={busy}
+                onClick={() => void onChooseWorkspace()}
+              >
+                Choose workspace
+                <IconArrowRight size={16} stroke={1.8} aria-hidden="true" />
+              </button>
             </div>
-            <button
-              className="button primary"
-              type="button"
-              disabled={busy}
-              onClick={() => void onChooseWorkspace()}
-            >
-              Choose workspace
-              <IconArrowRight size={16} stroke={1.8} aria-hidden="true" />
-            </button>
-          </div>
+            {error !== "" ? (
+              <p className="page-error" role="alert">
+                {error}
+              </p>
+            ) : null}
+          </>
         ) : showAdvanced ? (
           <ModelConfigurationEditor
             desktop={desktop}

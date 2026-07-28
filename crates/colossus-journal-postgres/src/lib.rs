@@ -10,6 +10,7 @@ use colossus_contracts::{
     EncryptedPayload, EventEnvelope, NewEvent, ProjectionBatch, ProjectionMutation,
     ProjectionWorkItem, SignedCheckpoint,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_ports::{
     CheckpointSigner, EventJournal, KeyProvider, MAX_STREAM_READ_BATCH, ProjectionStore,
     StoreError, VerificationReport,

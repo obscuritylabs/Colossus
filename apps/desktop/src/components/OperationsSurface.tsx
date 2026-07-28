@@ -4,7 +4,9 @@ import {
   IconArchive,
   IconArrowUpRight,
   IconCheck,
+  IconChevronDown,
   IconCircle,
+  IconDownload,
   IconFileText,
   IconFolder,
   IconPlus,
@@ -34,6 +36,8 @@ interface OperationsSurfaceProps {
   connection: ConnectionStatus;
   desktop: DesktopStatus;
   connecting: boolean;
+  updateChecking: boolean;
+  updateMessage: string;
   runs: readonly Run[];
   artifacts: readonly PresentedArtifact[];
   activity: readonly OperationalActivityItem[];
@@ -48,6 +52,11 @@ interface OperationsSurfaceProps {
   onRestartManaged: () => void;
   onSetTerminalEnabled: (enabled: boolean) => void;
   onOpenTerminal: (kind: TerminalKind) => void;
+  onExportDiagnostics: () => void;
+  onCheckForUpdates: () => void;
+  onInstallUpdate: () => void;
+  onImportCaBundle: () => void;
+  onRemoveCaBundle: () => void;
 }
 
 function SurfaceHeader({
@@ -86,11 +95,66 @@ function FleetView({
   return (
     <>
       <SurfaceHeader
-        eyebrow="Fleet / Overview"
-        title="Agent fleet"
-        description="Coordinate active work while keeping every handoff visible."
+        eyebrow="Agents & workflows / Overview"
+        title="Operational capabilities"
+        description="Inspect only the orchestration features advertised by the connected runtime."
       />
       <div className="overview-scroll">
+        <section className="overview-section">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Authenticated discovery</p>
+              <h3>Available orchestration</h3>
+            </div>
+          </div>
+          <div className="target-grid">
+            {desktop.capabilities.delegation ? (
+              <article className="capability-summary-card">
+                <span className="target-node-icon" aria-hidden="true">
+                  <IconRobot size={20} stroke={1.6} />
+                </span>
+                <span>
+                  <strong>Delegated agents</strong>
+                  <small>
+                    Child runs inherit the caller&apos;s exact tool ceiling and
+                    cannot delegate recursively.
+                  </small>
+                </span>
+                <span className="status-chip tone-success">Available</span>
+              </article>
+            ) : null}
+            {desktop.capabilities.agentWorkflows ? (
+              <article className="capability-summary-card">
+                <span className="target-node-icon" aria-hidden="true">
+                  <IconTopologyStar3 size={20} stroke={1.6} />
+                </span>
+                <span>
+                  <strong>Durable workflows</strong>
+                  <small>
+                    Registered workflow definitions can run through the same
+                    policy and approval gateway.
+                  </small>
+                </span>
+                <span className="status-chip tone-success">Available</span>
+              </article>
+            ) : null}
+            {desktop.capabilities.skills ? (
+              <article className="capability-summary-card">
+                <span className="target-node-icon" aria-hidden="true">
+                  <IconArchive size={20} stroke={1.6} />
+                </span>
+                <span>
+                  <strong>Declarative skills</strong>
+                  <small>
+                    Skill selection is enabled for this authenticated
+                    application.
+                  </small>
+                </span>
+                <span className="status-chip tone-success">Available</span>
+              </article>
+            ) : null}
+          </div>
+        </section>
         <section className="overview-section">
           <div className="section-heading">
             <div>
@@ -147,7 +211,7 @@ function FleetView({
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Live topology</p>
-                <h3>Desktop hardening squad</h3>
+                <h3>Advertised agent topology</h3>
               </div>
               <span className="status-chip tone-progress">4 connected</span>
             </div>
@@ -315,6 +379,44 @@ function ActivityView({ activity }: Pick<OperationsSurfaceProps, "activity">) {
   );
 }
 
+function effectiveManagedConfiguration(desktop: DesktopStatus): string {
+  const configuration = desktop.managedModelConfiguration;
+  return JSON.stringify(
+    {
+      workspace:
+        desktop.workspace === null
+          ? null
+          : {
+              displayName: desktop.workspace.displayName,
+              displayPath: desktop.workspace.displayPath,
+            },
+      accessProfile: desktop.accessProfile,
+      terminalEnabled: desktop.terminalEnabled,
+      additionalCaBundle: desktop.additionalCaBundle,
+      providers: configuration.providers.map((provider) => ({
+        profile: provider.profile,
+        kind: provider.providerKind,
+        baseUrl: provider.baseUrl,
+        credential: provider.hasCredential
+          ? "stored_in_native_keyring"
+          : "not_configured",
+        timeoutMs: provider.timeoutMs,
+      })),
+      models: configuration.models.map((model) => ({
+        profile: model.profile,
+        providerProfile: model.providerProfile,
+        model: model.model,
+        contextWindowTokens: model.contextWindowTokens,
+        maxOutputTokens: model.maxOutputTokens,
+        capabilities: model.capabilities,
+      })),
+      roles: configuration.roles,
+    },
+    null,
+    2,
+  );
+}
+
 function SettingsView({
   connection,
   desktop,
@@ -328,6 +430,13 @@ function SettingsView({
   onRestartManaged,
   onSetTerminalEnabled,
   onOpenTerminal,
+  onExportDiagnostics,
+  onCheckForUpdates,
+  onInstallUpdate,
+  updateChecking,
+  updateMessage,
+  onImportCaBundle,
+  onRemoveCaBundle,
 }: Pick<
   OperationsSurfaceProps,
   | "connection"
@@ -342,6 +451,13 @@ function SettingsView({
   | "onRestartManaged"
   | "onSetTerminalEnabled"
   | "onOpenTerminal"
+  | "onExportDiagnostics"
+  | "onCheckForUpdates"
+  | "onInstallUpdate"
+  | "updateChecking"
+  | "updateMessage"
+  | "onImportCaBundle"
+  | "onRemoveCaBundle"
 >) {
   const localTarget = desktop.targets.find(
     (target) => target.kind === "managed_local",
@@ -355,6 +471,15 @@ function SettingsView({
     (target) => target.kind === "external_daemon",
   );
   const terminalAvailable = selectedTarget?.terminalAvailable === true;
+  const hasManagedConfiguration =
+    desktop.managedModelConfiguration.providers.length > 0 &&
+    desktop.managedModelConfiguration.models.length > 0;
+  const managedConfigurationState =
+    desktop.managedState === "ready" && hasManagedConfiguration
+      ? "Active"
+      : hasManagedConfiguration
+        ? "Saved"
+        : "Not configured";
   return (
     <>
       <SurfaceHeader
@@ -385,6 +510,46 @@ function SettingsView({
             <IconRefresh size={16} stroke={1.8} aria-hidden="true" />
             {connecting ? "Connecting…" : "Reconnect"}
           </button>
+        </section>
+        <section className="settings-card settings-card-stack">
+          <div className="settings-card-icon">
+            <IconRefresh size={23} stroke={1.6} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="eyebrow">Signed channel</p>
+            <h3>Desktop updates</h3>
+            <p>
+              Update checks run only when requested. Metadata and packages use
+              the {desktop.releaseChannel.replaceAll("_", " ")} channel and the
+              configured CA trust bundle.
+            </p>
+            {updateMessage ? (
+              <p className="settings-inline-status" role="status">
+                {updateMessage}
+              </p>
+            ) : null}
+          </div>
+          <div className="settings-actions">
+            <button
+              className="button secondary"
+              type="button"
+              disabled={updateChecking}
+              onClick={onCheckForUpdates}
+            >
+              <IconRefresh size={16} stroke={1.8} aria-hidden="true" />
+              {updateChecking ? "Checking…" : "Check for updates"}
+            </button>
+            {desktop.capabilities.updateAvailable ? (
+              <button
+                className="button primary"
+                type="button"
+                disabled={updateChecking}
+                onClick={onInstallUpdate}
+              >
+                Install update
+              </button>
+            ) : null}
+          </div>
         </section>
         <section className="settings-card settings-card-stack">
           <div className="settings-card-icon">
@@ -430,6 +595,46 @@ function SettingsView({
               Restart
             </button>
           </div>
+        </section>
+        <section className="settings-card settings-card-stack effective-configuration-card">
+          <div className="settings-card-icon">
+            <IconFileText size={23} stroke={1.6} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="eyebrow">Effective configuration</p>
+            <h3>Managed Local configuration</h3>
+            <p>
+              This read-only view reflects the configuration saved for Managed
+              Local. Credentials, keyring labels, certificate paths, and private
+              runtime paths remain native-only.
+            </p>
+          </div>
+          <span
+            className={`status-chip ${
+              managedConfigurationState === "Active"
+                ? "tone-success"
+                : "tone-neutral"
+            }`}
+          >
+            {managedConfigurationState}
+          </span>
+          <details className="effective-configuration-disclosure">
+            <summary>
+              <span className="configuration-collapsed-label">
+                Show configuration
+              </span>
+              <span className="configuration-expanded-label">
+                Hide configuration
+              </span>
+              <IconChevronDown size={17} stroke={1.8} aria-hidden="true" />
+            </summary>
+            <pre
+              className="effective-configuration-code"
+              aria-label="Effective Managed Local configuration"
+            >
+              <code>{effectiveManagedConfiguration(desktop)}</code>
+            </pre>
+          </details>
         </section>
         <section className="settings-card settings-card-stack external-targets-card">
           <div className="settings-card-icon">
@@ -488,47 +693,125 @@ function SettingsView({
             ) : null}
           </div>
         </section>
-        <section className="settings-card settings-card-stack terminal-settings-card">
+        {desktop.capabilities.tui ? (
+          <section className="settings-card settings-card-stack terminal-settings-card">
+            <div className="settings-card-icon">
+              <IconTerminal2 size={23} stroke={1.6} aria-hidden="true" />
+            </div>
+            <div>
+              <p className="eyebrow">Advanced local feature</p>
+              <h3>Authenticated Colossus TUI</h3>
+              <p>
+                {terminalAvailable
+                  ? "The verified bundled CLI connects only to the existing Managed Local worker. Its actions retain normal Colossus policy and audit behavior."
+                  : "The local TUI is unavailable for an external target. Select Managed Local to use its authenticated worker connection."}
+              </p>
+            </div>
+            <div className="settings-actions terminal-settings-actions">
+              <label className="terminal-consent-toggle">
+                <input
+                  type="checkbox"
+                  checked={desktop.terminalEnabled}
+                  disabled={
+                    connecting ||
+                    !terminalAvailable ||
+                    desktop.workspace === null
+                  }
+                  onChange={(event) =>
+                    onSetTerminalEnabled(event.target.checked)
+                  }
+                />
+                <span>
+                  {desktop.terminalEnabled
+                    ? "Local TUI enabled"
+                    : "I understand and want to enable it"}
+                </span>
+              </label>
+              <button
+                className="button primary"
+                type="button"
+                disabled={
+                  !desktop.terminalEnabled ||
+                  !terminalAvailable ||
+                  localTarget === undefined ||
+                  localTarget.state !== "ready"
+                }
+                onClick={() => onOpenTerminal("colossus_tui")}
+              >
+                Open Colossus TUI
+              </button>
+            </div>
+          </section>
+        ) : null}
+        <section className="settings-card settings-card-stack">
           <div className="settings-card-icon">
-            <IconTerminal2 size={23} stroke={1.6} aria-hidden="true" />
+            <IconShieldCheck size={23} stroke={1.6} aria-hidden="true" />
           </div>
           <div>
-            <p className="eyebrow">Advanced local feature</p>
-            <h3>Authenticated Colossus TUI</h3>
+            <p className="eyebrow">Outbound TLS trust</p>
+            <h3>Additional CA certificates</h3>
             <p>
-              {terminalAvailable
-                ? "The verified bundled CLI connects only to the existing Managed Local worker. Its actions retain normal Colossus policy and audit behavior."
-                : "The local TUI is unavailable for an external target. Select Managed Local to use its authenticated worker connection."}
+              {desktop.additionalCaBundle.configured
+                ? `${desktop.additionalCaBundle.certificateCount} additional certificate${desktop.additionalCaBundle.certificateCount === 1 ? "" : "s"} are trusted by Colossus networking.`
+                : "No additional CA bundle is configured. Public system trust remains available."}
+            </p>
+            {desktop.additionalCaBundle.configured ? (
+              <details className="ca-fingerprint-details">
+                <summary>Certificate fingerprints</summary>
+                <ul className="ca-fingerprint-list">
+                  {desktop.additionalCaBundle.fingerprintsSha256.map(
+                    (fingerprint) => (
+                      <li key={fingerprint}>
+                        <code>{fingerprint}</code>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </details>
+            ) : null}
+          </div>
+          <div className="settings-actions">
+            <button
+              className="button secondary"
+              type="button"
+              disabled={connecting}
+              onClick={onImportCaBundle}
+            >
+              Import PEM bundle
+            </button>
+            {desktop.additionalCaBundle.configured ? (
+              <button
+                className="button secondary"
+                type="button"
+                disabled={connecting}
+                onClick={onRemoveCaBundle}
+              >
+                Remove bundle
+              </button>
+            ) : null}
+          </div>
+        </section>
+        <section className="settings-card settings-card-stack">
+          <div className="settings-card-icon">
+            <IconDownload size={23} stroke={1.6} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="eyebrow">Local support</p>
+            <h3>Diagnostics</h3>
+            <p>
+              Export version, platform, bundle status, and sanitized runtime
+              health. Prompts, credentials, model output, and private paths are
+              excluded.
             </p>
           </div>
-          <div className="settings-actions terminal-settings-actions">
-            <label className="terminal-consent-toggle">
-              <input
-                type="checkbox"
-                checked={desktop.terminalEnabled}
-                disabled={
-                  connecting || !terminalAvailable || desktop.workspace === null
-                }
-                onChange={(event) => onSetTerminalEnabled(event.target.checked)}
-              />
-              <span>
-                {desktop.terminalEnabled
-                  ? "Local TUI enabled"
-                  : "I understand and want to enable it"}
-              </span>
-            </label>
+          <div className="settings-actions">
             <button
-              className="button primary"
+              className="button secondary"
               type="button"
-              disabled={
-                !desktop.terminalEnabled ||
-                !terminalAvailable ||
-                localTarget === undefined ||
-                localTarget.state !== "ready"
-              }
-              onClick={() => onOpenTerminal("colossus_tui")}
+              onClick={onExportDiagnostics}
             >
-              Open Colossus TUI
+              <IconDownload size={16} stroke={1.8} aria-hidden="true" />
+              Export diagnostics
             </button>
           </div>
         </section>
@@ -575,6 +858,13 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
           onRestartManaged={props.onRestartManaged}
           onSetTerminalEnabled={props.onSetTerminalEnabled}
           onOpenTerminal={props.onOpenTerminal}
+          onExportDiagnostics={props.onExportDiagnostics}
+          onCheckForUpdates={props.onCheckForUpdates}
+          onInstallUpdate={props.onInstallUpdate}
+          updateChecking={props.updateChecking}
+          updateMessage={props.updateMessage}
+          onImportCaBundle={props.onImportCaBundle}
+          onRemoveCaBundle={props.onRemoveCaBundle}
         />
       ) : null}
     </main>

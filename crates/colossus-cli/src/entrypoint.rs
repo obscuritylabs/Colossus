@@ -304,8 +304,18 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         Command::Workflow(command) => workflow_command(&runtime, command.command).await?,
         Command::Provider(command) => match command.command {
             ProviderAction::Profiles => print_json(&runtime.provider_profiles())?,
-            ProviderAction::Doctor { profile } => {
-                print_json(&runtime.provider_doctor(profile.as_deref()).await?)?;
+            ProviderAction::Doctor {
+                profile,
+                include_provider_response,
+            } => {
+                print_json(
+                    &runtime
+                        .provider_doctor_with_diagnostics(
+                            profile.as_deref(),
+                            include_provider_response,
+                        )
+                        .await?,
+                )?;
             }
             ProviderAction::Models { profile } => {
                 print_json(&runtime.provider_models(profile.as_deref()).await?)?;
@@ -319,11 +329,41 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         },
         Command::Models(command) => match command.command {
             ModelsAction::Profiles => print_json(&runtime.model_profiles())?,
-            ModelsAction::Doctor { profile } => {
-                print_json(&runtime.model_doctor(profile.as_deref()).await?)?;
+            ModelsAction::Doctor {
+                profile,
+                include_provider_response,
+            } => {
+                print_json(
+                    &runtime
+                        .model_doctor_with_diagnostics(
+                            profile.as_deref(),
+                            include_provider_response,
+                        )
+                        .await?,
+                )?;
             }
             ModelsAction::Routes => print_json(&runtime.provider_routes())?,
             ModelsAction::Route { role } => print_json(&runtime.provider_route(&role)?)?,
+        },
+        Command::Artifacts(command) => match command.command {
+            ArtifactsAction::Upload {
+                path,
+                purpose,
+                idempotency_key,
+            } => {
+                let key =
+                    idempotency_key.unwrap_or_else(|| format!("cli-artifact-{}", Uuid::now_v7()));
+                print_json(&upload_artifact_file(&runtime, &path, purpose.into(), &key).await?)?;
+            }
+            ArtifactsAction::Show { artifact_id } => {
+                print_json(&get_artifact(&runtime, &artifact_id).await?)?;
+            }
+            ArtifactsAction::Download {
+                artifact_id,
+                output,
+            } => {
+                print_json(&download_artifact_file(&runtime, &artifact_id, &output).await?)?;
+            }
         },
         Command::Tools(command) => match command.command {
             ToolsAction::List => print_json(&runtime.tool_catalog())?,
@@ -1020,8 +1060,15 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             session,
             resume,
             skills,
+            attachments,
             stream,
         } => {
+            if execute_plan.is_some() && !attachments.is_empty() {
+                return Err(cli_error(
+                    "--attach is not supported with --execute-plan; attach files to the planning run instead",
+                )
+                .into());
+            }
             if execute_plan.is_some() && stream {
                 return Err(cli_error(
                     "--stream is not supported with --execute-plan; inspect the returned run JSON",
@@ -1029,35 +1076,41 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                 .into());
             }
             if let Some(plan_id) = execute_plan {
-                let result = if goal {
+                if goal {
                     let approved = runtime
                         .get_plan(&plan_id)?
                         .ok_or_else(|| cli_error(format!("plan not found: {plan_id}")))?;
-                    serde_json::to_value(
-                        runtime
-                            .run_goal(
-                                &role,
-                                "",
-                                &approved.session_id,
-                                goal_max_iterations,
-                                Some(&plan_id),
-                            )
-                            .await?,
-                    )?
+                    let result = runtime
+                        .run_goal(
+                            &role,
+                            "",
+                            &approved.session_id,
+                            goal_max_iterations,
+                            Some(&plan_id),
+                        )
+                        .await?;
+                    runtime.drain_subagents().await?;
+                    let response = result
+                        .iterations
+                        .last()
+                        .map(|iteration| iteration.output.as_str())
+                        .unwrap_or(result.goal.summary.as_str());
+                    print_run_response(&result, response)?;
                 } else {
-                    serde_json::to_value(
-                        runtime
-                            .run_approved_plan(&role, &plan_id, max_turns)
-                            .await?,
-                    )?
-                };
-                runtime.drain_subagents().await?;
-                print_json(&result)?;
+                    let result = runtime
+                        .run_approved_plan(&role, &plan_id, max_turns)
+                        .await?;
+                    runtime.drain_subagents().await?;
+                    print_run_response(&result, &result.output)?;
+                }
                 return Ok(());
             }
             let prompt = prompt
                 .as_deref()
                 .ok_or_else(|| cli_error("a prompt or --execute-plan is required"))?;
+            let prompt = runtime
+                .prompt_with_text_attachments(prompt, &attachments)
+                .await?;
             let session_id = if resume {
                 Some(runtime.latest_session()?.id)
             } else {
@@ -1069,7 +1122,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .run_plan_with_skills_stream(
                         &role,
                         &instructions,
-                        prompt,
+                        &prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,
@@ -1084,7 +1137,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .run_plan_with_skills(
                         &role,
                         &instructions,
-                        prompt,
+                        &prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,
@@ -1097,7 +1150,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .run_model_with_skills_stream(
                         &role,
                         &instructions,
-                        prompt,
+                        &prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,
@@ -1112,7 +1165,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .run_model_with_skills(
                         &role,
                         &instructions,
-                        prompt,
+                        &prompt,
                         max_turns,
                         session_id.as_deref(),
                         &skills,
@@ -1121,7 +1174,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
                     .await?
             };
             runtime.drain_subagents().await?;
-            print_json(&result)?;
+            print_run_response(&result, &result.output)?;
         }
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;

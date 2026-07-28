@@ -46,10 +46,12 @@ impl ToolExecutor for DiscoverableToolExecutor {
         let limit = usize::try_from(optional_tool_u64(&call, "max_results")?.unwrap_or(10))
             .unwrap_or(50)
             .clamp(1, 50);
+        let offered = context.offered_tools.iter().collect::<BTreeSet<_>>();
         let mut matches = self
             .registry
             .list_specs()
             .into_iter()
+            .filter(|spec| offered.contains(&spec.name))
             .filter_map(|spec| {
                 let name = spec.name.to_ascii_lowercase();
                 let description = spec.description.to_ascii_lowercase();

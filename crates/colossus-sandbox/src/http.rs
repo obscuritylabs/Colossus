@@ -3,12 +3,21 @@ use super::*;
 /// Permit-bound HTTP adapter with exact-origin authorization, pinned DNS, no redirects,
 /// and bounded response streaming.
 #[derive(Default)]
-pub struct HttpExecutor;
+pub struct HttpExecutor {
+    tls_roots: AdditionalRootCertificates,
+}
 
 impl HttpExecutor {
     /// Construct the brokered HTTP adapter.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Add validated runtime-wide CA roots to HTTP clients' built-in public roots.
+    #[must_use]
+    pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
+        self.tls_roots = tls_roots;
+        self
     }
 }
 
@@ -52,7 +61,9 @@ impl EffectExecutor for HttpExecutor {
             && (host.eq_ignore_ascii_case("localhost")
                 || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
         let addresses = resolve_destinations(host, port, allow_non_public).await?;
-        let client = Client::builder()
+        let client = self
+            .tls_roots
+            .configure_reqwest(Client::builder())
             .redirect(RedirectPolicy::none())
             .no_proxy()
             .resolve_to_addrs(host, &addresses)

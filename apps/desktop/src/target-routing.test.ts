@@ -31,6 +31,7 @@ function run(
   return {
     runId: "run-1",
     sessionId: "session-1",
+    title: "Route the selected work",
     role: "primary",
     mode: "execute",
     status,
@@ -97,6 +98,21 @@ function status(): DesktopStatus {
     managedModelConfiguration: { providers: [], models: [], roles: {} },
     accessProfile: "development",
     terminalEnabled: false,
+    additionalCaBundle: {
+      configured: false,
+      certificateCount: 0,
+      fingerprintsSha256: [],
+    },
+    capabilities: {
+      delegation: false,
+      skills: false,
+      tui: true,
+      files: true,
+      artifacts: true,
+      updateAvailable: false,
+      agentWorkflows: false,
+      attachments: false,
+    },
   };
 }
 

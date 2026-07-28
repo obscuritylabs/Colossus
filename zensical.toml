@@ -19,6 +19,7 @@ nav = [
     { "Overview" = "get-started/index.md" },
     { "Install" = "get-started/install.md" },
     { "Colossus Desktop" = "get-started/desktop.md" },
+    { "Windows Desktop preview" = "get-started/windows-desktop.md" },
     { "Five-minute quickstart" = "get-started/quickstart.md" },
     { "Connect a model" = "get-started/connect-model.md" },
     { "First repository task" = "get-started/first-repository-task.md" },

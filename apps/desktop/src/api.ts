@@ -4,11 +4,15 @@ import type {
   CancelRunRequest,
   CommandError,
   ApplyManagedModelConfigurationRequest,
+  ArtifactContent,
+  ArtifactReference,
   ConfigureManagedRuntimeRequest,
   ConnectionStatus,
   CreateRunRequest,
   DesktopStatus,
   DesktopReleaseChannel,
+  DesktopReleaseMetadata,
+  DesktopUpdateCheck,
   GetRunRequest,
   Interaction,
   ListRunsRequest,
@@ -23,6 +27,8 @@ import type {
   TerminalSignal,
   WatchEvent,
   WatchRunRequest,
+  WorkspaceDirectory,
+  WorkspaceFile,
   WorkspaceSummary,
 } from "./types";
 
@@ -107,8 +113,32 @@ export function desktopReleaseChannel(): Promise<DesktopReleaseChannel> {
   return call("desktop_release_channel");
 }
 
+export function desktopReleaseMetadata(): Promise<DesktopReleaseMetadata> {
+  return call("desktop_release_metadata");
+}
+
+export function exportDiagnostics(): Promise<boolean> {
+  return call("export_diagnostics");
+}
+
+export function checkDesktopUpdate(): Promise<DesktopUpdateCheck> {
+  return call("check_desktop_update");
+}
+
+export function installDesktopUpdate(): Promise<boolean> {
+  return call("install_desktop_update");
+}
+
 export function desktopStatus(): Promise<DesktopStatus> {
   return call("desktop_status");
+}
+
+export function importCaBundle(): Promise<DesktopStatus | null> {
+  return call("import_ca_bundle");
+}
+
+export function removeCaBundle(): Promise<DesktopStatus> {
+  return call("remove_ca_bundle");
 }
 
 export function addExternalTarget(): Promise<DesktopStatus | null> {
@@ -129,6 +159,24 @@ export function connectionStatus(): Promise<ConnectionStatus> {
 
 export function chooseWorkspace(): Promise<WorkspaceSummary | null> {
   return call("choose_workspace");
+}
+
+export function listWorkspaceDirectory(
+  workspaceId: string,
+  path = "",
+): Promise<WorkspaceDirectory> {
+  return call("list_workspace_directory", {
+    request: { workspaceId, path },
+  });
+}
+
+export function readWorkspaceFile(
+  workspaceId: string,
+  path: string,
+): Promise<WorkspaceFile> {
+  return call("read_workspace_file", {
+    request: { workspaceId, path },
+  });
 }
 
 export function configureManagedRuntime(
@@ -172,6 +220,19 @@ export function createRun(
   request: CreateRunRequest,
 ): Promise<Run> {
   return call("create_run", { targetId, request });
+}
+
+export function chooseRunAttachment(
+  targetId: string,
+): Promise<ArtifactReference | null> {
+  return call("choose_run_attachment", { targetId });
+}
+
+export function readArtifactContent(
+  targetId: string,
+  artifactId: string,
+): Promise<ArtifactContent> {
+  return call("read_artifact_content", { targetId, artifactId });
 }
 
 export function getRun(

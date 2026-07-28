@@ -158,6 +158,7 @@ pub(super) fn pack_execution(error: PackError) -> ExecutionError {
 pub(super) async fn registry_client(
     endpoint: &str,
     permit: &ExecutionPermit,
+    tls_roots: &AdditionalRootCertificates,
 ) -> Result<(Url, Client), PackError> {
     let url = Url::parse(endpoint)
         .map_err(|error| PackError::Invalid(format!("invalid registry URL: {error}")))?;
@@ -207,7 +208,8 @@ pub(super) async fn registry_client(
     addresses.sort();
     addresses.dedup();
     addresses.truncate(16);
-    let client = Client::builder()
+    let client = tls_roots
+        .configure_reqwest(Client::builder())
         .no_proxy()
         .redirect(RedirectPolicy::none())
         .resolve_to_addrs(host, &addresses)

@@ -23,16 +23,16 @@ use colossus_contracts::{
     MemoryScope, MemoryStatus, ModelMessage, ModelMessageRole, ModelRequest, ModelRoute,
     ModelToolDefinition, NewEvent, PackInstallation, PackVerification, PlanRecord, PlanStatus,
     PlanStep, PreparedContext, ProjectionStatus, ProviderEvent, ProviderModelInfo,
-    ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ProviderStreamItem, ProviderTurn,
-    PublisherTrust, QuarantinedEffectResult, RegistryPullResult, RegistryPushResult, ResearchClaim,
-    ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind, RiskAssessment,
-    RunTelemetryDetail, RunTelemetrySummary, SearchProfileSummary, SearchRequest, SearchResponse,
-    SearchRoute, SessionMessage, SessionMessagePage, SessionSummary, SkillComposition,
-    SkillDuplicate, SkillFileRead, SkillInspection, SkillInstallResult, SkillRecord,
-    SkillResourceEntry, SkillResourceRead, SkillScaffoldResult, SkillValidationResult,
-    SkillWriteResult, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord, TaskStatus,
-    TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
-    WorkStateSnapshot, WorkflowWebhookDispatch,
+    ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic, ProviderRoute,
+    ProviderStreamItem, ProviderTurn, PublisherTrust, QuarantinedEffectResult, RegistryPullResult,
+    RegistryPushResult, ResearchClaim, ResearchDepth, ResearchRun, ResearchSource,
+    ResearchSourceKind, RiskAssessment, RunTelemetryDetail, RunTelemetrySummary,
+    SearchProfileSummary, SearchRequest, SearchResponse, SearchRoute, SessionMessage,
+    SessionMessagePage, SessionSummary, SkillComposition, SkillDuplicate, SkillFileRead,
+    SkillInspection, SkillInstallResult, SkillRecord, SkillResourceEntry, SkillResourceRead,
+    SkillScaffoldResult, SkillValidationResult, SkillWriteResult, SubagentJob, SubagentQueueStatus,
+    SubagentStatus, TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall,
+    ToolResult, ToolSpec, UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch,
 };
 use colossus_integrations::{
     EventSourcedExtensionRepository, IntegrationExecutor, IntegrationRequest,
@@ -55,6 +55,7 @@ use colossus_memory_chroma::{
     ChromaExecutor, ChromaMemoryIndex, ChromaProfile, GatewayOpenAiEmbeddingProvider,
     LocalHashEmbeddingProvider, OpenAiEmbeddingExecutor, OpenAiEmbeddingProfile,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_packs::{PackError, PackExecutor, PackOperation, PackService};
 use colossus_policy::{
     BuiltInPolicy, DenyApproval, EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit,
@@ -68,9 +69,9 @@ use colossus_ports::{
     EmbeddingProvider, EventJournal, ExtensionRepository, ExternalWorkQueue, KeyProvider,
     MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
     PolicyDecisionPoint, PresentationRepository, ProjectionStore, ProviderEventObserver,
-    ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl, RunEventObserver,
-    SearchError, SearchProvider, SessionRepository, SkillRepository, StoreError, ToolError,
-    ToolExecutor, ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
+    ProviderTurnOptions, ResearchRepository, RiskEvaluationError, RiskEvaluator, RunControl,
+    RunEventObserver, SearchError, SearchProvider, SessionRepository, SkillRepository, StoreError,
+    ToolError, ToolExecutor, ToolRegistry, UserPromptProvider, WorkRepository, WorkflowRepository,
 };
 
 const SESSION_MESSAGE_PAGE_LIMIT: usize = 100;
@@ -167,11 +168,12 @@ pub use colossus_contracts::ModelCapabilities;
 pub use composition::Runtime;
 pub use config::{
     AgentConfig, AuditConfig, AuditExporterConfig, KeyConfig, MemoryConfig, MemoryEmbeddingConfig,
-    ModelProfileConfig, ModelsConfig, PacksConfig, PolicyConfig, ProviderProfileConfig,
-    ProvidersConfig, ResearchConfig, ResearchSearchConfig, RuntimeConfig, SandboxConfig,
-    SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillsConfig, StorageAdapter,
-    StorageConfig, SubagentConfig, WorkflowLibraryConfig,
+    ModelProfileConfig, ModelsConfig, NetworkConfig, PacksConfig, PolicyConfig,
+    ProviderProfileConfig, ProvidersConfig, ResearchConfig, ResearchSearchConfig, RuntimeConfig,
+    SandboxConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig, SkillsConfig,
+    StorageAdapter, StorageConfig, SubagentConfig, WorkflowLibraryConfig,
 };
+pub use diagnostics::format_provider_response_diagnostic;
 pub use error::RuntimeError;
 pub use workspace::RuntimeOpenOptions;
 pub use workspace_lease::WorkspaceIdentityToken;

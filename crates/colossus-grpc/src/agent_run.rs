@@ -299,7 +299,7 @@ fn create_request(
         return Err(invalid(
             caller,
             "input",
-            "input must contain at most 128 text parts",
+            "input must contain at most 128 content parts",
         ));
     }
     if !request.selected_skills.is_empty() {
@@ -327,15 +327,16 @@ fn create_request(
             Some(content_part::Content::Text(text)) => {
                 Ok(CoreContentPart::Text { text: text.text })
             }
-            Some(content_part::Content::Artifact(_)) => Err(invalid(
-                caller,
-                "input.content",
-                "v1alpha1 create-run input accepts text content only",
-            )),
+            Some(content_part::Content::Artifact(artifact)) => {
+                validate_identifier(caller, "input.artifact.artifact_id", &artifact.artifact_id)?;
+                Ok(CoreContentPart::Artifact {
+                    artifact_id: artifact.artifact_id,
+                })
+            }
             None => Err(invalid(
                 caller,
                 "input.content",
-                "each input part must contain text",
+                "each input part must contain text or an artifact reference",
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -457,6 +458,7 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
     Ok(Run {
         run_id: value.id,
         session_id: value.session_id,
+        title: value.title,
         role: value.role,
         mode: mode as i32,
         status: status as i32,
@@ -517,6 +519,9 @@ fn proto_failure(value: colossus_api::RunFailure) -> RunFailure {
         reason: value.code,
         message: value.message,
         outcome_certainty: proto_outcome(value.outcome) as i32,
+        recoverable: value.recoverable,
+        http_status: value.http_status.map(u32::from),
+        retry_after_ms: value.retry_after_ms,
     }
 }
 

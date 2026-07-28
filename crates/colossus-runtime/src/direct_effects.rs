@@ -1,6 +1,34 @@
 use super::*;
 
 impl Runtime {
+    /// Render bounded UTF-8 attachment files into a model prompt after policy-authorized reads.
+    pub async fn prompt_with_text_attachments(
+        &self,
+        prompt: &str,
+        attachments: &[PathBuf],
+    ) -> Result<String, RuntimeError> {
+        const MAX_ATTACHMENTS: usize = 16;
+        const MAX_INPUT_BYTES: usize = 1_048_576;
+
+        if attachments.len() > MAX_ATTACHMENTS {
+            return Err(RuntimeError::Config(format!(
+                "at most {MAX_ATTACHMENTS} attachments may be supplied"
+            )));
+        }
+        if prompt.len() > MAX_INPUT_BYTES {
+            return Err(RuntimeError::Config(
+                "combined prompt and attachments exceed 1 MiB".into(),
+            ));
+        }
+        let mut rendered = String::with_capacity(prompt.len());
+        rendered.push_str(prompt);
+        for path in attachments {
+            let bytes = self.read_file_bytes(path).await?;
+            append_text_attachment(&mut rendered, path, &bytes, MAX_INPUT_BYTES)?;
+        }
+        Ok(rendered)
+    }
+
     /// Credential-free, network-free smoke provider routed through policy and journal.
     pub async fn echo(&self, message: &str) -> Result<ReleasedEffectResult, RuntimeError> {
         let request = effect_request(
@@ -17,6 +45,13 @@ impl Runtime {
 
     /// Read bounded UTF-8 text through the universal filesystem effect boundary.
     pub async fn read_text_file(&self, path: impl AsRef<Path>) -> Result<String, RuntimeError> {
+        let bytes = self.read_file_bytes(path).await?;
+        String::from_utf8(bytes)
+            .map_err(|error| RuntimeError::Config(format!("file is not valid UTF-8: {error}")))
+    }
+
+    /// Read bounded bytes through the universal filesystem effect boundary.
+    pub async fn read_file_bytes(&self, path: impl AsRef<Path>) -> Result<Vec<u8>, RuntimeError> {
         let path = workspace_absolute_path(&self.workspace, path.as_ref());
         let mut request = effect_request(
             Actor {
@@ -25,15 +60,14 @@ impl Runtime {
             },
             "filesystem.read",
             path.display().to_string(),
-            json!({"path": path.display().to_string(), "encoding": "utf-8"}),
+            json!({"path": path.display().to_string(), "encoding": "binary"}),
         );
         request.capabilities = vec!["filesystem.read".into()];
-        let result = self
+        Ok(self
             .gateway
             .execute(request, self.filesystem_executor.as_ref())
-            .await?;
-        String::from_utf8(result.bytes)
-            .map_err(|error| RuntimeError::Config(format!("file is not valid UTF-8: {error}")))
+            .await
+            .map(|result| result.bytes)?)
     }
 
     /// Write bounded UTF-8 text through policy, approval, and the filesystem adapter.
@@ -51,6 +85,31 @@ impl Runtime {
             "filesystem.write",
             path.display().to_string(),
             json!({"text": text}),
+        );
+        request.capabilities = vec!["filesystem.write".into()];
+        let result = self
+            .gateway
+            .execute(request, self.filesystem_executor.as_ref())
+            .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Write bounded bytes through policy, approval, and the filesystem adapter.
+    pub async fn write_file_bytes(
+        &self,
+        path: impl AsRef<Path>,
+        bytes: &[u8],
+    ) -> Result<Value, RuntimeError> {
+        let path = workspace_absolute_path(&self.workspace, path.as_ref());
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            "filesystem.write",
+            path.display().to_string(),
+            json!({"content_base64": BASE64.encode(bytes)}),
         );
         request.capabilities = vec!["filesystem.write".into()];
         let result = self
@@ -194,5 +253,76 @@ impl Runtime {
             }),
         })?;
         Ok(())
+    }
+}
+
+fn append_text_attachment(
+    rendered: &mut String,
+    path: &Path,
+    bytes: &[u8],
+    max_input_bytes: usize,
+) -> Result<(), RuntimeError> {
+    let content = std::str::from_utf8(bytes)
+        .map_err(|_| RuntimeError::Config("CLI attachments must contain UTF-8 text".into()))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| RuntimeError::Config("attachment name is invalid".into()))?;
+    let required = "\n\n[Attached file: "
+        .len()
+        .saturating_add(name.len())
+        .saturating_add("]\n".len())
+        .saturating_add(content.len())
+        .saturating_add("\n[End attached file]".len());
+    if rendered.len().saturating_add(required) > max_input_bytes {
+        return Err(RuntimeError::Config(
+            "combined prompt and attachments exceed 1 MiB".into(),
+        ));
+    }
+    rendered.push_str("\n\n[Attached file: ");
+    rendered.push_str(name);
+    rendered.push_str("]\n");
+    rendered.push_str(content);
+    rendered.push_str("\n[End attached file]");
+    Ok(())
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::append_text_attachment;
+    use std::path::Path;
+
+    #[test]
+    fn rendering_uses_only_the_display_name_and_bounded_utf8_content() {
+        let mut rendered = "Inspect this".to_owned();
+        append_text_attachment(
+            &mut rendered,
+            Path::new("/private/work/review.md"),
+            b"# Review\nready",
+            1_048_576,
+        )
+        .expect("render attachment");
+        assert!(rendered.contains("[Attached file: review.md]"));
+        assert!(rendered.contains("# Review\nready"));
+        assert!(!rendered.contains("/private/work"));
+        assert!(
+            append_text_attachment(
+                &mut String::new(),
+                Path::new("binary.bin"),
+                &[0xff, 0xfe],
+                1_048_576,
+            )
+            .is_err()
+        );
+        assert!(
+            append_text_attachment(
+                &mut String::new(),
+                Path::new("large.txt"),
+                &vec![b'x'; 1_048_576],
+                1_048_576,
+            )
+            .is_err()
+        );
     }
 }

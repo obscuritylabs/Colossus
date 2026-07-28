@@ -21,6 +21,9 @@ confirm that work uses the app-managed runtime and its bounded access profile.
 
 The offline self-test does not require a provider key or network connection.
 
+For the unsigned Windows 10/11 x64 package, use the
+[Windows Desktop Developer Preview](windows-desktop.md) guide.
+
 ## Steps
 
 ### 1. Download and verify Desktop
@@ -103,7 +106,29 @@ Settings shows the runtime as `Starting`, `Ready`, `Restarting`, `Stopping`, or
 exits receive at most three bounded restart attempts; in-flight mutations are not
 automatically replayed.
 
-### 5. Add an External target when needed
+For a private provider or enterprise TLS interception root, open
+**Settings → Additional CA certificates** and import a PEM bundle. Desktop copies and
+validates it in private native storage and shows only its certificate count and SHA-256
+fingerprints. Import and removal restart Managed Local transactionally; the renderer
+never receives the original or private storage path.
+
+### 5. Check the signed update channel
+
+Open **Settings → Desktop updates → Check for updates**. Desktop does not perform a
+background update request: the check occurs only after this explicit action. Stable
+builds query only the stable channel, and Developer Preview builds query only the
+preview channel. Validation-only and development builds have no update authority.
+
+Both the metadata request and package download use the shared Colossus network
+configuration, including an imported additional CA bundle. The native updater rejects
+non-HTTPS endpoints, HTTP redirect downgrades, mismatched channel metadata, and
+unsupported platform targets. **Install update** opens a native confirmation, downloads
+the package, verifies its Tauri updater signature with the public key sealed into the
+application, and only then invokes the platform installer. The renderer receives only
+whether an update is configured or available and the public version/channel values; it
+does not receive update URLs, signatures, or package bytes.
+
+### 6. Add an External target when needed
 
 Use **External** for an installed daemon or fleet node that was enrolled for this
 application. External targets preserve their independent endpoint, certificate pin,
@@ -185,7 +210,7 @@ A workspace already owned by another worker is never stopped or taken over. Conn
 that worker as External instead. Closing Desktop stops Managed Local after graceful
 drain and checkpoint; it does not stop an installed External daemon.
 
-### 6. Opt into the local TUI
+### 7. Opt into the local TUI
 
 The macOS MVP deliberately does not expose a general Shell PTY. macOS provides no
 supported race-free job primitive to an ordinary desktop app that can guarantee cleanup

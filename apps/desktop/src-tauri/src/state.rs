@@ -256,6 +256,8 @@ pub(crate) struct AppState {
     terminal_window_active: AtomicBool,
     terminal_document_ready: AtomicBool,
     terminal_enabled: AtomicBool,
+    update_available: AtomicBool,
+    update_guard: Mutex<()>,
     terminal_launch_request: StdMutex<TerminalLaunchRequest>,
 }
 
@@ -291,6 +293,8 @@ impl Default for AppState {
             terminal_window_active: AtomicBool::new(false),
             terminal_document_ready: AtomicBool::new(false),
             terminal_enabled: AtomicBool::new(false),
+            update_available: AtomicBool::new(false),
+            update_guard: Mutex::new(()),
             terminal_launch_request: StdMutex::new(TerminalLaunchRequest {
                 generation: 0,
                 delivered_generation: 0,
@@ -303,6 +307,18 @@ impl Default for AppState {
 }
 
 impl AppState {
+    pub(crate) fn update_available(&self) -> bool {
+        self.update_available.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_update_available(&self, available: bool) {
+        self.update_available.store(available, Ordering::Release);
+    }
+
+    pub(crate) fn try_update_guard(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        self.update_guard.try_lock().ok()
+    }
+
     pub(crate) async fn target(&self, target_id: &str) -> Option<TargetHandle> {
         self.targets
             .read()

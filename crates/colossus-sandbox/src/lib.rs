@@ -7,6 +7,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     EffectRequest, FilesystemGrant, PolicyObligations, QuarantinedEffectResult,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, MIN_OCI_EFFECT_TIMEOUT_MS,
     MIN_OCI_NETWORK_EFFECT_TIMEOUT_MS, MIN_WINDOWS_JOB_EFFECT_TIMEOUT_MS, NetworkDestinationMatch,

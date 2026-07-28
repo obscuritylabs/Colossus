@@ -44,6 +44,16 @@ pub enum RuntimeError {
     Workflow(#[from] WorkflowError),
 }
 
+impl RuntimeError {
+    /// Return explicitly released provider response evidence from a failed local run.
+    pub fn provider_response_diagnostic(&self) -> Option<&ProviderResponseDiagnostic> {
+        match self {
+            Self::Agent(AgentError::Provider(error)) => error.response_diagnostic(),
+            _ => None,
+        }
+    }
+}
+
 pub(super) fn explicit_secret(variable: &str) -> Result<[u8; 32], RuntimeError> {
     let encoded = std::env::var(variable)
         .map_err(|_| RuntimeError::Config(format!("environment variable {variable} is unset")))?;

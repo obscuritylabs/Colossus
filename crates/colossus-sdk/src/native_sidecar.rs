@@ -1,11 +1,12 @@
 use crate::{
-    AgentRunClient, ApiResult, Backend, BackendKind, CancelRunRequest, CancelRunResponse,
-    CreateRunRequest, CreateRunResponse, CredentialProvider, GetRunRequest, GetRunResponse,
-    GrpcBackend, GrpcConnectOptions, InteractionAnswer, ListRunsRequest, ListRunsResponse,
-    MacosCodeSigningRequirement, NativeSidecarFailure, NativeSidecarStatus,
-    RespondInteractionRequest, RespondInteractionResponse, RunUpdateStream, SdkError, SdkResult,
-    Secret, SidecarBootstrapConfig, SidecarLifecycle, SidecarOptions, TlsFingerprint,
-    WatchRunRequest,
+    AgentRunClient, ApiResult, ArtifactClient, ArtifactReference, Backend, BackendKind,
+    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, CredentialProvider,
+    DownloadedArtifact, GetRunRequest, GetRunResponse, GrpcBackend, GrpcConnectOptions,
+    Interaction, InteractionAnswer, InteractionContent, InteractionStatus, ListRunsRequest,
+    ListRunsResponse, MacosCodeSigningRequirement, NativeSidecarFailure, NativeSidecarStatus,
+    RespondInteractionRequest, RespondInteractionResponse, RunUpdateKind, RunUpdateStream,
+    SdkError, SdkResult, Secret, ServerCapabilities, SidecarBootstrapConfig, SidecarLifecycle,
+    SidecarOptions, TlsFingerprint, UploadArtifactRequest, WatchRunRequest,
 };
 #[cfg(test)]
 use crate::{ApiError, ApiErrorReason};
@@ -14,6 +15,7 @@ use colossus_sidecar_protocol::{
     AckRequest, ActivatedResponse, ChildFrame, FailureCode, MAX_FRAME_BYTES, PROTOCOL_VERSION,
     ParentFrame, ReadyResponse, WorkspaceIdentity, decode_payload, encode_frame,
 };
+use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
 #[cfg(unix)]
 use std::collections::HashSet;
@@ -149,6 +151,12 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                     return Err(error);
                 }
             };
+            let capabilities = running.transports.primary.capabilities();
+            let artifacts = running
+                .transports
+                .primary
+                .artifacts()
+                .map(|client| Arc::new(SwitchingArtifactClient::new(client)));
             let agent_runs = Arc::new(SwitchingAgentRunClient::new(
                 running.transports.agent_runs(),
             ));
@@ -156,6 +164,7 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                 options: options.clone(),
                 bootstrap: Arc::clone(&self.bootstrap),
                 agent_runs: Arc::clone(&agent_runs),
+                artifacts: artifacts.clone(),
                 process: tokio::sync::Mutex::new(Some(running)),
                 close_guard: tokio::sync::Mutex::new(()),
                 closing: AtomicBool::new(false),
@@ -169,7 +178,12 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
             *state.monitor.lock().map_err(|_| SdkError::SidecarFailed)? = Some(monitor);
             self.status.send_replace(NativeSidecarStatus::Ready);
             start_status.complete();
-            Ok(Arc::new(ManagedSidecarBackend { state, agent_runs }))
+            Ok(Arc::new(ManagedSidecarBackend {
+                state,
+                agent_runs,
+                artifacts,
+                capabilities,
+            }))
         }
     }
 }
@@ -837,6 +851,7 @@ struct ManagedSidecarState {
     options: SidecarOptions,
     bootstrap: Arc<SidecarBootstrapConfig>,
     agent_runs: Arc<SwitchingAgentRunClient>,
+    artifacts: Option<Arc<SwitchingArtifactClient>>,
     process: tokio::sync::Mutex<Option<RunningChild>>,
     close_guard: tokio::sync::Mutex<()>,
     closing: AtomicBool,
@@ -847,6 +862,8 @@ struct ManagedSidecarState {
 struct ManagedSidecarBackend {
     state: Arc<ManagedSidecarState>,
     agent_runs: Arc<SwitchingAgentRunClient>,
+    artifacts: Option<Arc<SwitchingArtifactClient>>,
+    capabilities: ServerCapabilities,
 }
 
 impl fmt::Debug for ManagedSidecarBackend {
@@ -866,6 +883,16 @@ impl Backend for ManagedSidecarBackend {
 
     fn agent_runs(&self) -> Arc<dyn AgentRunClient> {
         self.agent_runs.clone()
+    }
+
+    fn capabilities(&self) -> ServerCapabilities {
+        self.capabilities.clone()
+    }
+
+    fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
+        self.artifacts
+            .as_ref()
+            .map(|client| client.clone() as Arc<dyn ArtifactClient>)
     }
 
     async fn close(&self) -> SdkResult<()> {
@@ -1033,6 +1060,50 @@ impl SwitchingAgentRunClient {
     }
 }
 
+struct SwitchingArtifactClient {
+    current: RwLock<Arc<dyn ArtifactClient>>,
+}
+
+impl SwitchingArtifactClient {
+    fn new(initial: Arc<dyn ArtifactClient>) -> Self {
+        Self {
+            current: RwLock::new(initial),
+        }
+    }
+
+    async fn current(&self) -> Arc<dyn ArtifactClient> {
+        self.current.read().await.clone()
+    }
+
+    async fn replace(&self, next: Arc<dyn ArtifactClient>) {
+        *self.current.write().await = next;
+    }
+}
+
+#[async_trait]
+impl ArtifactClient for SwitchingArtifactClient {
+    async fn upload(&self, request: UploadArtifactRequest) -> ApiResult<ArtifactReference> {
+        self.current().await.upload(request).await
+    }
+
+    async fn get(&self, artifact_id: &str) -> ApiResult<ArtifactReference> {
+        self.current().await.get(artifact_id).await
+    }
+
+    async fn download(&self, artifact_id: &str) -> ApiResult<DownloadedArtifact> {
+        self.current().await.download(artifact_id).await
+    }
+}
+
+fn expose_approval_broker_capability(interaction: &mut Interaction) {
+    if interaction.status == InteractionStatus::Pending
+        && !interaction.etag.is_empty()
+        && matches!(&interaction.content, InteractionContent::Approval(_))
+    {
+        interaction.respondable_by_caller = true;
+    }
+}
+
 #[async_trait]
 impl AgentRunClient for SwitchingAgentRunClient {
     async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
@@ -1040,7 +1111,15 @@ impl AgentRunClient for SwitchingAgentRunClient {
     }
 
     async fn get_run(&self, request: GetRunRequest) -> ApiResult<GetRunResponse> {
-        self.current().await.primary.get_run(request).await
+        let transports = self.current().await;
+        let mut response = transports.primary.get_run(request).await?;
+        if transports.approval_broker.is_some() {
+            response
+                .pending_interactions
+                .iter_mut()
+                .for_each(expose_approval_broker_capability);
+        }
+        Ok(response)
     }
 
     async fn list_runs(&self, request: ListRunsRequest) -> ApiResult<ListRunsResponse> {
@@ -1048,7 +1127,19 @@ impl AgentRunClient for SwitchingAgentRunClient {
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {
-        self.current().await.primary.watch_run(request).await
+        let transports = self.current().await;
+        let stream = transports.primary.watch_run(request).await?;
+        if transports.approval_broker.is_none() {
+            return Ok(stream);
+        }
+        Ok(Box::pin(stream.map(|item| {
+            item.map(|mut update| {
+                if let RunUpdateKind::Interaction(interaction) = &mut update.update {
+                    expose_approval_broker_capability(interaction);
+                }
+                update
+            })
+        })))
     }
 
     fn is_closed(&self) -> bool {
@@ -1147,6 +1238,16 @@ async fn supervise(state: Arc<ManagedSidecarState>) {
                 .agent_runs
                 .replace(restarted.transports.agent_runs())
                 .await;
+            if let Some(artifacts) = &state.artifacts {
+                let Some(next) = restarted.transports.primary.artifacts() else {
+                    let mut restarted = restarted;
+                    restarted.guardian.take();
+                    restarted.kill_tree();
+                    terminal_failure = NativeSidecarFailure::SupervisionFailed;
+                    continue;
+                };
+                artifacts.replace(next).await;
+            }
             *state.process.lock().await = Some(restarted);
             state.status.send_replace(NativeSidecarStatus::Ready);
             recovered = true;
@@ -2023,8 +2124,7 @@ mod tests {
     use crate::{ApiMajor, AppPrivateInstanceDir, InstanceId, Sha256Digest, VerifiedExecutable};
     #[cfg(target_os = "macos")]
     use crate::{
-        ApiScope, ManagedAccessProfile, ManagedProviderConfig, ManagedProviderKind,
-        ManagedRuntimeConfig, SidecarApplicationGrant, scopes,
+        ApiScope, ManagedAccessProfile, ManagedRuntimeConfig, SidecarApplicationGrant, scopes,
     };
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     use std::os::unix::process::CommandExt as _;
@@ -2108,6 +2208,48 @@ mod tests {
 
     struct RoutingAgentRuns(&'static str);
 
+    struct ApprovalReadAgentRuns;
+
+    fn pending_approval() -> Interaction {
+        Interaction {
+            interaction_id: "interaction-approval".into(),
+            run_id: "run-approval".into(),
+            kind: crate::InteractionKind::Approval,
+            status: InteractionStatus::Pending,
+            created_at: "2026-07-24T17:26:00Z".into(),
+            expires_at: "2026-07-24T17:31:00Z".into(),
+            respondable_by_caller: false,
+            etag: "approval-etag".into(),
+            content: InteractionContent::Approval(crate::ApprovalInteraction {
+                reason: "An effect requires explicit approval".into(),
+                action: "process.execute".into(),
+                resource: "configured executable".into(),
+                risk: None,
+                request_hash: "approval-binding".into(),
+            }),
+        }
+    }
+
+    fn approval_run() -> crate::Run {
+        crate::Run {
+            run_id: "run-approval".into(),
+            session_id: "session-approval".into(),
+            title: "Approval test".into(),
+            role: "primary".into(),
+            mode: crate::RunMode::Execute,
+            status: crate::RunStatus::Waiting,
+            created_at: "2026-07-24T17:26:00Z".into(),
+            updated_at: "2026-07-24T17:26:01Z".into(),
+            started_at: Some("2026-07-24T17:26:00Z".into()),
+            finished_at: None,
+            last_sequence: 4,
+            pending_interaction_count: 1,
+            terminal: None,
+            etag: "approval-etag".into(),
+            selected_skills: Vec::new(),
+        }
+    }
+
     #[async_trait]
     impl AgentRunClient for UnusedAgentRuns {
         async fn create_run(&self, _request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
@@ -2135,6 +2277,44 @@ mod tests {
             _request: RespondInteractionRequest,
         ) -> ApiResult<RespondInteractionResponse> {
             unreachable!("run operation is not exercised")
+        }
+    }
+
+    #[async_trait]
+    impl AgentRunClient for ApprovalReadAgentRuns {
+        async fn create_run(&self, _request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
+            unreachable!("run creation is not exercised")
+        }
+
+        async fn get_run(&self, _request: GetRunRequest) -> ApiResult<GetRunResponse> {
+            Ok(GetRunResponse {
+                run: approval_run(),
+                pending_interactions: vec![pending_approval()],
+            })
+        }
+
+        async fn list_runs(&self, _request: ListRunsRequest) -> ApiResult<ListRunsResponse> {
+            unreachable!("run listing is not exercised")
+        }
+
+        async fn watch_run(&self, _request: WatchRunRequest) -> ApiResult<RunUpdateStream> {
+            Ok(Box::pin(futures::stream::iter([Ok(crate::RunUpdate {
+                run_id: "run-approval".into(),
+                sequence: 4,
+                created_at: "2026-07-24T17:26:01Z".into(),
+                update: RunUpdateKind::Interaction(pending_approval()),
+            })])))
+        }
+
+        async fn cancel_run(&self, _request: CancelRunRequest) -> ApiResult<CancelRunResponse> {
+            unreachable!("run cancellation is not exercised")
+        }
+
+        async fn respond_interaction(
+            &self,
+            _request: RespondInteractionRequest,
+        ) -> ApiResult<RespondInteractionResponse> {
+            unreachable!("interaction response is not exercised")
         }
     }
 
@@ -2769,6 +2949,53 @@ mod tests {
             .await
             .expect_err("mock response");
         assert_eq!(approval.message, "approval-broker");
+    }
+
+    #[tokio::test]
+    async fn native_broker_capability_enables_projected_approval_actions() {
+        let without_broker = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: Arc::new(ApprovalReadAgentRuns),
+            approval_broker: None,
+        });
+        let response = without_broker
+            .get_run(GetRunRequest {
+                run_id: "run-approval".into(),
+            })
+            .await
+            .expect("get run without broker");
+        assert!(!response.pending_interactions[0].respondable_by_caller);
+
+        let with_broker = SwitchingAgentRunClient::new(AgentRunTransports {
+            primary: Arc::new(ApprovalReadAgentRuns),
+            approval_broker: Some(Arc::new(RoutingAgentRuns("approval-broker"))),
+        });
+        let response = with_broker
+            .get_run(GetRunRequest {
+                run_id: "run-approval".into(),
+            })
+            .await
+            .expect("get run with broker");
+        assert!(response.pending_interactions[0].respondable_by_caller);
+
+        let mut updates = with_broker
+            .watch_run(WatchRunRequest {
+                run_id: "run-approval".into(),
+                after_sequence: 0,
+            })
+            .await
+            .expect("watch run with broker");
+        let update = updates
+            .next()
+            .await
+            .expect("approval update")
+            .expect("valid approval update");
+        assert!(matches!(
+            update.update,
+            RunUpdateKind::Interaction(Interaction {
+                respondable_by_caller: true,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]

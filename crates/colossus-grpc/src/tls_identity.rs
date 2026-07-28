@@ -2,18 +2,22 @@
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use getrandom::fill;
+use p256::{
+    EncodedPoint, SecretKey,
+    ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey, signature::Signer as _},
+    pkcs8::EncodePrivateKey as _,
+};
 #[cfg(test)]
 use rcgen::BasicConstraints as CertificateBasicConstraints;
 use rcgen::{
-    CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
-    KeyUsagePurpose, PKCS_ED25519, SerialNumber, date_time_ymd,
+    CertificateParams, CustomExtension, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, PublicKeyData, SerialNumber,
+    SigningKey as CertificateSigningKey, date_time_ymd,
 };
 use rustls::{
     ServerConfig,
     client::verify_server_name,
-    pki_types::{
-        CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, pem::PemObject as _,
-    },
+    pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject as _},
     server::ParsedCertificate,
 };
 use sha2::{Digest as _, Sha256};
@@ -26,9 +30,41 @@ const KEY_SEED_BYTES: usize = 32;
 const MAX_CERTIFICATE_PEM_BYTES: usize = 256 * 1024;
 const MAX_PRIVATE_KEY_PEM_BYTES: usize = 64 * 1024;
 const REQUIRED_SUBJECT_ALT_NAMES: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
-const ED25519_PKCS8_PREFIX: [u8; 16] = [
-    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
-];
+const P256_DERIVATION_DOMAIN: &[u8] = b"colossus-public-api-p256-key-v1\0";
+const P256_DERIVATION_ATTEMPTS: u16 = 256;
+
+struct DeterministicP256SigningKey {
+    signing_key: P256SigningKey,
+    public_key: EncodedPoint,
+}
+
+impl DeterministicP256SigningKey {
+    fn new(secret_key: SecretKey) -> Self {
+        let signing_key = P256SigningKey::from(secret_key);
+        let public_key = signing_key.verifying_key().to_encoded_point(false);
+        Self {
+            signing_key,
+            public_key,
+        }
+    }
+}
+
+impl PublicKeyData for DeterministicP256SigningKey {
+    fn der_bytes(&self) -> &[u8] {
+        self.public_key.as_bytes()
+    }
+
+    fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
+        &PKCS_ECDSA_P256_SHA256
+    }
+}
+
+impl CertificateSigningKey for DeterministicP256SigningKey {
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
+        let signature: P256Signature = self.signing_key.sign(message);
+        Ok(signature.to_der().as_bytes().to_vec())
+    }
+}
 
 /// Dedicated seed for the public API TLS identity.
 ///
@@ -187,16 +223,12 @@ fn generate_materials_with_is_ca(
     subject_alt_names: &[&str],
     is_ca: IsCa,
 ) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), TlsIdentityError> {
-    let mut private_key_der = Zeroizing::new(Vec::with_capacity(
-        ED25519_PKCS8_PREFIX.len() + KEY_SEED_BYTES,
-    ));
-    private_key_der.extend_from_slice(&ED25519_PKCS8_PREFIX);
-    private_key_der.extend_from_slice(seed);
-    let pkcs8 = PrivatePkcs8KeyDer::from(private_key_der.as_slice());
-    let key_pair = Zeroizing::new(
-        KeyPair::from_pkcs8_der_and_sign_algo(&pkcs8, &PKCS_ED25519)
-            .map_err(|_| TlsIdentityError::GenerationFailed)?,
-    );
+    let secret_key = derive_p256_secret_key(seed)?;
+    let document = secret_key
+        .to_pkcs8_der()
+        .map_err(|_| TlsIdentityError::GenerationFailed)?;
+    let private_key_der = Zeroizing::new(document.as_bytes().to_vec());
+    let signing_key = DeterministicP256SigningKey::new(secret_key);
 
     let mut params = CertificateParams::new(
         subject_alt_names
@@ -207,9 +239,23 @@ fn generate_materials_with_is_ca(
     .map_err(|_| TlsIdentityError::GenerationFailed)?;
     params.not_before = date_time_ymd(2025, 1, 1);
     params.not_after = date_time_ymd(2050, 1, 1);
-    params.is_ca = is_ca;
+    match is_ca {
+        IsCa::ExplicitNoCa => {
+            // RFC 5280 defines BasicConstraints.cA as DEFAULT FALSE. DER must omit a
+            // field carrying its default value, so the canonical explicit
+            // BasicConstraints CA=false extension is an empty SEQUENCE. rcgen's
+            // ExplicitNoCa currently serializes BOOLEAN FALSE, which strict X.509
+            // implementations reject as non-canonical DER.
+            params.is_ca = IsCa::NoCa;
+            let mut basic_constraints =
+                CustomExtension::from_oid_content(&[2, 5, 29, 19], vec![0x30, 0x00]);
+            basic_constraints.set_criticality(true);
+            params.custom_extensions.push(basic_constraints);
+        }
+        other => params.is_ca = other,
+    }
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-    if matches!(is_ca, IsCa::Ca(_)) {
+    if matches!(&params.is_ca, IsCa::Ca(_)) {
         params.key_usages.push(KeyUsagePurpose::KeyCertSign);
     }
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
@@ -217,7 +263,7 @@ fn generate_materials_with_is_ca(
     distinguished_name.push(DnType::CommonName, "Colossus Local API");
     params.distinguished_name = distinguished_name;
 
-    let digest = Sha256::digest(key_pair.public_key_raw());
+    let digest = Sha256::digest(signing_key.der_bytes());
     let mut serial = digest[..20].to_vec();
     serial[0] &= 0x7f;
     if serial.iter().all(|byte| *byte == 0) {
@@ -226,11 +272,26 @@ fn generate_materials_with_is_ca(
     params.serial_number = Some(SerialNumber::from_slice(&serial));
 
     let certificate = params
-        .self_signed(&*key_pair)
+        .self_signed(&signing_key)
         .map_err(|_| TlsIdentityError::GenerationFailed)?;
     let certificate_pem = certificate.pem().into_bytes();
     let private_key_pem = encode_private_key_pem(private_key_der.as_ref());
     Ok((certificate_pem, private_key_pem))
+}
+
+fn derive_p256_secret_key(seed: &[u8; KEY_SEED_BYTES]) -> Result<SecretKey, TlsIdentityError> {
+    for counter in 0..P256_DERIVATION_ATTEMPTS {
+        let candidate = Sha256::new()
+            .chain_update(P256_DERIVATION_DOMAIN)
+            .chain_update(seed)
+            .chain_update(counter.to_be_bytes())
+            .finalize();
+        let Ok(secret) = SecretKey::from_slice(&candidate) else {
+            continue;
+        };
+        return Ok(secret);
+    }
+    Err(TlsIdentityError::GenerationFailed)
 }
 
 fn validate_pem_identity(
@@ -374,6 +435,49 @@ mod tests {
             .expect("certificate PEM");
         let leaf = certificates.first().expect("leaf");
         validate_loopback_subject_alt_names(leaf).expect("all loopback SANs");
+    }
+
+    #[test]
+    fn generated_identity_uses_canonical_basic_constraints_der() {
+        let identity = TlsIdentity::from_seed(TlsKeySeed::new([19_u8; KEY_SEED_BYTES]))
+            .expect("generated identity");
+        let certificate = CertificateDer::pem_slice_iter(identity.certificate_pem())
+            .next()
+            .expect("leaf")
+            .expect("certificate PEM");
+        let (remaining, parsed) =
+            parse_x509_certificate(certificate.as_ref()).expect("X.509 certificate");
+        assert!(remaining.is_empty());
+        assert_eq!(
+            parsed.signature_algorithm.algorithm.to_id_string(),
+            "1.2.840.10045.4.3.2",
+            "the shared SDK leaf must use ECDSA with SHA-256"
+        );
+        assert_eq!(
+            parsed.public_key().algorithm.algorithm.to_id_string(),
+            "1.2.840.10045.2.1",
+            "the shared SDK leaf must use an EC public key"
+        );
+        let constraints = parsed
+            .extensions()
+            .iter()
+            .find(|extension| extension.oid.to_id_string() == "2.5.29.19")
+            .expect("BasicConstraints extension");
+        assert!(constraints.critical);
+        assert_eq!(
+            constraints.value,
+            &[0x30, 0x00],
+            "DER must omit the DEFAULT FALSE cA field"
+        );
+        assert!(
+            !parsed
+                .tbs_certificate
+                .basic_constraints()
+                .expect("parsed BasicConstraints")
+                .expect("present BasicConstraints")
+                .value
+                .ca
+        );
     }
 
     #[test]

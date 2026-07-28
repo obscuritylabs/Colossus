@@ -108,6 +108,15 @@ message RunFailure {
 
   // outcome_certainty prevents unsafe automatic retry.
   OutcomeCertainty outcome_certainty = 3;
+
+  // recoverable is true only when retrying is known to be safe.
+  bool recoverable = 4;
+
+  // http_status is present only for a released upstream HTTP response status.
+  optional uint32 http_status = 5;
+
+  // retry_after_ms is present only when the provider supplied a useful lower bound.
+  optional uint64 retry_after_ms = 6;
 }
 
 // RunCancellation contains durable cancellation evidence.
@@ -171,11 +180,14 @@ message Run {
 
   // selected_skills is empty in v1alpha1 because public skill activation is denied.
   repeated string selected_skills = 16;
+
+  // title is a bounded deterministic display label derived from the opening request.
+  string title = 17;
 }
 
 // CreateRunRequest allocates and starts one durable agent run.
 message CreateRunRequest {
-  // input contains bounded user-visible content; v1alpha1 accepts text parts only.
+  // input contains bounded visible text or authorized opaque artifact references.
   repeated ContentPart input = 1;
 
   // session_id attaches to an existing canonical session. Omission allocates a durable

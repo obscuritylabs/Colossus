@@ -1,5 +1,9 @@
 use super::*;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ClientHello {
@@ -31,6 +35,9 @@ pub enum WorkerError {
     /// Public application API configuration or transport failed safely.
     #[error("public API failed: {0}")]
     PublicApi(String),
+    /// Caller-owned artifact request failed safely.
+    #[error(transparent)]
+    Artifact(#[from] colossus_api::ApiError),
     /// Local transport failed.
     #[error("worker transport failed: {0}")]
     Io(#[from] std::io::Error),
@@ -102,6 +109,9 @@ pub enum WorkerOperation {
     ProviderDoctor {
         /// Optional exact profile.
         profile: Option<String>,
+        /// Include bounded non-success provider response diagnostics.
+        #[serde(default, skip_serializing_if = "is_false")]
+        include_provider_response: bool,
     },
     /// List normalized models for one provider.
     ProviderModels {
@@ -114,6 +124,9 @@ pub enum WorkerOperation {
     ModelDoctor {
         /// Optional exact model profile.
         profile: Option<String>,
+        /// Include bounded non-success provider response diagnostics.
+        #[serde(default, skip_serializing_if = "is_false")]
+        include_provider_response: bool,
     },
     /// Show role-to-model-profile routing.
     ProviderRoutes,
@@ -137,6 +150,27 @@ pub enum WorkerOperation {
     ToolsList,
     /// Show credential-free effective tool and action resolution.
     AccessEffective,
+    /// Upload one policy-authorized bounded workspace file into caller-owned artifact storage.
+    ArtifactUpload {
+        /// Workspace-relative or policy-authorized input path.
+        path: String,
+        /// Declared intended use.
+        purpose: ArtifactPurpose,
+        /// Exact caller-selected replay key.
+        idempotency_key: String,
+    },
+    /// Return CLI-owned released artifact metadata.
+    ArtifactGet {
+        /// Exact opaque artifact identifier.
+        artifact_id: String,
+    },
+    /// Download one CLI-owned artifact through the filesystem policy boundary.
+    ArtifactDownload {
+        /// Exact opaque artifact identifier.
+        artifact_id: String,
+        /// Workspace-relative or policy-authorized output path.
+        output: String,
+    },
     /// Execute the normal audited model application path.
     RunModel {
         /// Logical role.
@@ -145,6 +179,9 @@ pub enum WorkerOperation {
         instructions: String,
         /// User prompt.
         prompt: String,
+        /// Paths read only by the worker through the runtime filesystem boundary.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
         /// Optional bounded turn override.
         max_turns: Option<u16>,
         /// Optional exact durable session.
@@ -170,6 +207,9 @@ pub enum WorkerOperation {
         explicit_skills: Vec<String>,
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
+        /// Include bounded provider evidence on a failed turn for the trusted local TUI.
+        #[serde(default, skip_serializing_if = "is_false")]
+        include_provider_response_diagnostics: bool,
     },
     /// Execute structurally read-only Plan Mode.
     RunPlan {
@@ -179,6 +219,9 @@ pub enum WorkerOperation {
         instructions: String,
         /// Planning prompt.
         prompt: String,
+        /// Paths read only by the worker through the runtime filesystem boundary.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
         /// Optional bounded turn override.
         max_turns: Option<u16>,
         /// Optional exact durable session.

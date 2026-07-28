@@ -13,10 +13,15 @@ pub(super) struct RunScope<'a> {
     pub(super) goal_id: Option<&'a str>,
     pub(super) plan_id: Option<&'a str>,
     pub(super) subagent_id: Option<&'a str>,
+    pub(super) workflow_id: Option<&'a str>,
+    pub(super) workflow_hash: Option<&'a str>,
+    pub(super) step_id: Option<&'a str>,
+    pub(super) attempt: Option<u32>,
     pub(super) active_skills: &'a [String],
     pub(super) allowed_tools: Option<&'a [String]>,
     pub(super) plan_mode: bool,
     pub(super) create_requested_session: bool,
+    pub(super) include_provider_response_diagnostics: bool,
 }
 
 /// Application-loop failure with terminal states distinguishable by callers.

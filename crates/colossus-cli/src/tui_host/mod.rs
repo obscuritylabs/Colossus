@@ -1,6 +1,6 @@
 //! Embedded-runtime adapter for the backend-neutral Colossus TUI host contract.
 
-use super::{ApprovalMode, TERMINAL_HISTORY_CAPACITY, terminal_completion_values};
+use super::{ApprovalMode, TERMINAL_HISTORY_CAPACITY, doctor_profile, terminal_completion_values};
 use async_trait::async_trait;
 use colossus_contracts::{
     ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice, ContextStatus, EffectRequest,
@@ -18,7 +18,7 @@ use colossus_presentation::{
     automatic_approval_document, context_status_document, document_from_json,
     risk_review_fallback_document, work_state_document,
 };
-use colossus_runtime::Runtime;
+use colossus_runtime::{Runtime, RuntimeError, format_provider_response_diagnostic};
 use colossus_tui::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostRunResult, InteractiveHost,
     InteractivePrompt, InteractiveRunRequest, InteractiveSnapshot, PromptResponse, RuntimeCommand,
@@ -39,6 +39,16 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+fn interactive_runtime_error(error: &RuntimeError) -> String {
+    match error.provider_response_diagnostic() {
+        Some(diagnostic) => format!(
+            "{error}\n\n{}",
+            format_provider_response_diagnostic(diagnostic)
+        ),
+        None => error.to_string(),
+    }
+}
 
 mod common;
 mod embedded;

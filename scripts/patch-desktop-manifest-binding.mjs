@@ -43,6 +43,17 @@ const MACH_O_MAGICS = new Set([
   0xcafebabf, 0xbfbafeca,
 ]);
 
+function isPortableExecutable(executable) {
+  if (executable.length < 64 || executable[0] !== 0x4d || executable[1] !== 0x5a) {
+    return false;
+  }
+  const headerOffset = executable.readUInt32LE(0x3c);
+  return (
+    headerOffset <= executable.length - 4 &&
+    executable.subarray(headerOffset, headerOffset + 4).equals(Buffer.from("PE\0\0"))
+  );
+}
+
 function fail(message) {
   process.stderr.write(`patch-desktop-manifest-binding: ${message}\n`);
   process.exit(1);
@@ -76,14 +87,17 @@ function openValidatedFile(path, { maximumBytes, executable, expectedName }) {
     fail(`${expectedName ?? "executable"} must use its exact absolute path`);
   }
   const metadata = lstatSync(path);
+  const unsafePosixMode =
+    process.platform !== "win32" &&
+    ((metadata.mode & 0o022) !== 0 ||
+      (executable && (metadata.mode & 0o111) === 0));
   if (
     !metadata.isFile() ||
     metadata.isSymbolicLink() ||
     metadata.size <= 0 ||
     metadata.size > maximumBytes ||
     metadata.nlink !== 1 ||
-    (metadata.mode & 0o022) !== 0 ||
-    (executable && (metadata.mode & 0o111) === 0)
+    unsafePosixMode
   ) {
     fail(`${expectedName ?? "executable"} is not a bounded regular file`);
   }
@@ -96,13 +110,15 @@ function openValidatedFile(path, { maximumBytes, executable, expectedName }) {
     (constants.O_NOFOLLOW ?? 0);
   const descriptor = openSync(path, flags);
   const opened = fstatSync(descriptor);
+  const openedUnsafePosixMode =
+    process.platform !== "win32" && (opened.mode & 0o022) !== 0;
   if (
     !opened.isFile() ||
     opened.dev !== metadata.dev ||
     opened.ino !== metadata.ino ||
     opened.size !== metadata.size ||
     opened.nlink !== 1 ||
-    (opened.mode & 0o022) !== 0
+    openedUnsafePosixMode
   ) {
     closeSync(descriptor);
     fail(`${expectedName ?? "executable"} changed while it was opened`);
@@ -150,8 +166,18 @@ function validateManifest(bytes) {
     !RELEASE_CHANNELS.has(manifest.releaseChannel) ||
     typeof manifest.targetTriple !== "string" ||
     !TARGET_PATTERN.test(manifest.targetTriple) ||
-    !validExecutableEntry(manifest.sidecar, "colossus-sidecar") ||
-    !validExecutableEntry(manifest.cli, "colossus")
+    !validExecutableEntry(
+      manifest.sidecar,
+      manifest.targetTriple.includes("-windows-")
+        ? "colossus-sidecar.exe"
+        : "colossus-sidecar",
+    ) ||
+    !validExecutableEntry(
+      manifest.cli,
+      manifest.targetTriple.includes("-windows-")
+        ? "colossus.exe"
+        : "colossus",
+    )
   ) {
     fail("manifest does not have the canonical release schema");
   }
@@ -175,8 +201,12 @@ try {
   const executable = readFileSync(executableDescriptor);
   const manifest = readFileSync(manifestDescriptor);
   validateManifest(manifest);
-  if (executable.length < 4 || !MACH_O_MAGICS.has(executable.readUInt32BE(0))) {
-    fail("executable is not a Mach-O image");
+  if (
+    executable.length < 4 ||
+    (!MACH_O_MAGICS.has(executable.readUInt32BE(0)) &&
+      !isPortableExecutable(executable))
+  ) {
+    fail("executable is not a supported Mach-O or PE image");
   }
 
   const bindingOffset = executable.indexOf(PLACEHOLDER_BINDING);

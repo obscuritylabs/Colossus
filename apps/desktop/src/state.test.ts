@@ -4,6 +4,7 @@ import { selectOperationalActivity } from "./presenters";
 import {
   MAX_CACHED_IDEMPOTENCY_ATTEMPTS,
   MAX_CACHED_RUN_VIEWS,
+  MAX_CONVERSATION_RUNS,
   MAX_FEED_ITEMS,
   MAX_FEED_TEXT_CHARACTERS,
   MAX_OUTPUT_CHARACTERS,
@@ -16,6 +17,7 @@ import {
   isConnectionError,
   isPromptWithinByteLimit,
   operationFingerprint,
+  selectConversationViews,
   stableIdempotentAttempt,
   utf8ByteLength,
   withBoundedEntry,
@@ -25,6 +27,7 @@ import type { Interaction, Run, RunUpdate } from "./types";
 const baseRun: Run = {
   runId: "run-1",
   sessionId: "session-1",
+  title: "Test work",
   role: "primary",
   mode: "execute",
   status: "running",
@@ -412,6 +415,31 @@ describe("chatReducer", () => {
       "Inspect the release safely",
     );
     expect(baseRun).not.toHaveProperty("localPrompt");
+  });
+
+  it("projects continuation runs as one ordered bounded conversation", () => {
+    let state = initialChatState;
+    for (let index = MAX_CONVERSATION_RUNS + 1; index >= 0; index -= 1) {
+      state = chatReducer(state, {
+        type: "upsert_run",
+        run: {
+          ...baseRun,
+          runId: `continuation-${index}`,
+          sessionId: baseRun.sessionId,
+          createdAt: `2026-07-20T12:00:${String(index).padStart(2, "0")}Z`,
+        },
+      });
+    }
+
+    const views = selectConversationViews(state, baseRun.sessionId);
+    expect(views).toHaveLength(MAX_CONVERSATION_RUNS);
+    expect(views.map((view) => view.run.runId)).toEqual(
+      Array.from(
+        { length: MAX_CONVERSATION_RUNS },
+        (_, index) => `continuation-${index + 2}`,
+      ),
+    );
+    expect(selectConversationViews(state, null)).toEqual([]);
   });
 
   it("bounds caches while preserving the active and nonterminal run views", () => {

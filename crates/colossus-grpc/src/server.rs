@@ -1,11 +1,12 @@
 use crate::{
-    AgentRunServiceAdapter, AuthenticationInterceptor, CredentialAuthenticator,
-    MAX_ACTIVE_WATCH_STREAMS, SystemServiceAdapter, TlsIdentity,
+    AgentRunServiceAdapter, ArtifactServiceAdapter, AuthenticationInterceptor,
+    CredentialAuthenticator, MAX_ACTIVE_WATCH_STREAMS, SystemServiceAdapter, TlsIdentity,
     request_guard::RequestCardinalityLayer,
 };
-use colossus_api::AgentRunApi;
+use colossus_api::{AgentRunApi, ArtifactApi};
 use colossus_api_proto::v1alpha1::{
-    agent_run_service_server::AgentRunServiceServer, system_service_server::SystemServiceServer,
+    agent_run_service_server::AgentRunServiceServer,
+    artifact_service_server::ArtifactServiceServer, system_service_server::SystemServiceServer,
 };
 use futures::{StreamExt as _, task::AtomicWaker};
 use std::{
@@ -253,6 +254,7 @@ pub struct BoundPublicGrpcServer {
     authenticator: Arc<CredentialAuthenticator>,
     system: SystemServiceAdapter,
     agent_runs: Arc<dyn AgentRunApi>,
+    artifacts: Arc<dyn ArtifactApi>,
 }
 
 impl BoundPublicGrpcServer {
@@ -263,6 +265,7 @@ impl BoundPublicGrpcServer {
         authenticator: Arc<CredentialAuthenticator>,
         system: SystemServiceAdapter,
         agent_runs: Arc<dyn AgentRunApi>,
+        artifacts: Arc<dyn ArtifactApi>,
     ) -> Result<Self, PublicGrpcServerError> {
         validate_bind(bind)?;
         let listener = TcpListener::bind(bind)
@@ -279,6 +282,7 @@ impl BoundPublicGrpcServer {
             authenticator,
             system,
             agent_runs,
+            artifacts,
         })
     }
 
@@ -327,7 +331,11 @@ impl BoundPublicGrpcServer {
         let agent_runs = AgentRunServiceServer::new(AgentRunServiceAdapter::new(self.agent_runs))
             .max_decoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
             .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
-        let agent_runs = InterceptedService::new(agent_runs, authentication);
+        let agent_runs = InterceptedService::new(agent_runs, authentication.clone());
+        let artifacts = ArtifactServiceServer::new(ArtifactServiceAdapter::new(self.artifacts))
+            .max_decoding_message_size(MAX_REQUEST_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_RESPONSE_MESSAGE_BYTES);
+        let artifacts = InterceptedService::new(artifacts, authentication);
         let tls = self
             .tls_identity
             .into_rustls_server_config()
@@ -389,6 +397,7 @@ impl BoundPublicGrpcServer {
             .tcp_nodelay(true)
             .add_service(system)
             .add_service(agent_runs)
+            .add_service(artifacts)
             .serve_with_incoming_shutdown(incoming, graceful);
         tokio::pin!(server);
         tokio::pin!(shutdown);

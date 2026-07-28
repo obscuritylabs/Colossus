@@ -143,6 +143,13 @@ pub struct ExecutionContext {
     /// Declarative active skill identities; these do not grant capabilities.
     #[serde(default)]
     pub skill_ids: Vec<String>,
+    /// Exact model-visible tool ceiling for the current turn.
+    ///
+    /// This is an in-process dispatch hint rather than durable provenance. It is skipped
+    /// by journal serialization so adding discovery scoping does not change stored event
+    /// schemas or make new events unreadable by an older release.
+    #[serde(skip)]
+    pub offered_tools: Vec<String>,
     /// Pinned workflow identifier.
     pub workflow_id: Option<String>,
     /// Pinned workflow content hash.

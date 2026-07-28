@@ -264,6 +264,7 @@ impl WorkflowService {
                     reference: webhook.secret_reference.clone(),
                     value_hash: Some(secret_hash),
                 }],
+                allowed_tools: Vec::new(),
                 run_id: run_id.clone(),
                 step_id: "$webhook".into(),
                 definition_step_id: "$webhook".into(),

@@ -24,6 +24,24 @@ pub(super) fn terminal_completion_values(
     completion_values
 }
 
+pub(super) fn doctor_profile<'a>(
+    arguments: &'a str,
+    family: &str,
+) -> Result<Option<&'a str>, String> {
+    let arguments = arguments.trim();
+    if arguments == "doctor" {
+        return Ok(None);
+    }
+    let Some(profile) = arguments.strip_prefix("doctor ") else {
+        return Err(format!("/{family} expects doctor [PROFILE]"));
+    };
+    let profile = profile.trim();
+    if profile.is_empty() || profile.split_whitespace().count() != 1 {
+        return Err(format!("/{family} expects doctor [PROFILE]"));
+    }
+    Ok(Some(profile))
+}
+
 pub(super) fn resolve_skill_mentions(input: &str, skill_names: &[String]) -> (String, Vec<String>) {
     let mut explicit = Vec::new();
     let mut prompt = input.trim_start();

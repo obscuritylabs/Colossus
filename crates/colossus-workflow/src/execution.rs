@@ -370,6 +370,7 @@ impl WorkflowService {
             usize::try_from(definition.max_concurrency)
                 .map_err(|error| WorkflowError::InvalidDefinition(error.to_string()))?,
         ));
+        let allowed_tools = Arc::new(definition.capabilities.clone());
         for (index, step) in definition.steps.iter().enumerate().skip(
             usize::try_from(start_index)
                 .map_err(|error| WorkflowError::InvalidTransition(error.to_string()))?,
@@ -379,6 +380,7 @@ impl WorkflowService {
                     run_id,
                     &workflow_hash,
                     step,
+                    Arc::clone(&allowed_tools),
                     "",
                     &mut context,
                     Arc::clone(&budget),
@@ -441,6 +443,7 @@ impl WorkflowService {
                             run_id,
                             &workflow_hash,
                             &definition.compensation,
+                            Arc::clone(&allowed_tools),
                             Arc::clone(&budget),
                             definition.step_budget,
                             Arc::clone(&semaphore),
@@ -483,6 +486,7 @@ impl WorkflowService {
                     run_id,
                     &workflow_hash,
                     &definition.compensation,
+                    Arc::clone(&allowed_tools),
                     Arc::clone(&budget),
                     definition.step_budget,
                     Arc::clone(&semaphore),
@@ -531,6 +535,7 @@ impl WorkflowService {
         run_id: &str,
         workflow_hash: &str,
         step: &WorkflowStep,
+        allowed_tools: Arc<Vec<String>>,
         scope: &str,
         context: &mut Value,
         budget: Arc<AtomicU32>,
@@ -599,6 +604,7 @@ impl WorkflowService {
                             .as_ref()
                             .map(|strategy| format!("{strategy}:{run_id}:{execution_id}")),
                         credential_references: Vec::new(),
+                        allowed_tools: allowed_tools.as_ref().clone(),
                         run_id: run_id.into(),
                         step_id: execution_id.clone(),
                         definition_step_id: id.clone(),
@@ -631,6 +637,7 @@ impl WorkflowService {
                             .as_ref()
                             .map(|strategy| format!("{strategy}:{run_id}:{execution_id}")),
                         credential_references: Vec::new(),
+                        allowed_tools: allowed_tools.as_ref().clone(),
                         run_id: run_id.into(),
                         step_id: execution_id.clone(),
                         definition_step_id: id.clone(),
@@ -661,6 +668,7 @@ impl WorkflowService {
                         }),
                         idempotency: Some(format!("subworkflow:{run_id}:{execution_id}")),
                         credential_references: Vec::new(),
+                        allowed_tools: allowed_tools.as_ref().clone(),
                         run_id: run_id.into(),
                         step_id: execution_id.clone(),
                         definition_step_id: id.clone(),
@@ -714,6 +722,7 @@ impl WorkflowService {
                     run_id,
                     workflow_hash,
                     selected,
+                    Arc::clone(&allowed_tools),
                     scope,
                     context,
                     budget,
@@ -732,6 +741,7 @@ impl WorkflowService {
                     workflow_hash,
                     branches,
                     *max_concurrency,
+                    Arc::clone(&allowed_tools),
                     &execution_id,
                     context,
                     budget,
@@ -774,6 +784,7 @@ impl WorkflowService {
                             run_id,
                             workflow_hash,
                             steps,
+                            Arc::clone(&allowed_tools),
                             &iteration_scope,
                             &mut iteration,
                             Arc::clone(&budget),
@@ -948,11 +959,13 @@ impl WorkflowService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_compensation(
         &self,
         run_id: &str,
         workflow_hash: &str,
         steps: &[WorkflowStep],
+        allowed_tools: Arc<Vec<String>>,
         budget: Arc<AtomicU32>,
         step_budget: u32,
         semaphore: Arc<Semaphore>,
@@ -984,6 +997,7 @@ impl WorkflowService {
                     content: json!({"prompt": prompt}),
                     idempotency: idempotency.clone(),
                     credential_references: Vec::new(),
+                    allowed_tools: allowed_tools.as_ref().clone(),
                     run_id: run_id.into(),
                     step_id: id.clone(),
                     definition_step_id: id.clone(),
@@ -1002,6 +1016,7 @@ impl WorkflowService {
                     content: arguments.clone(),
                     idempotency: idempotency.clone(),
                     credential_references: Vec::new(),
+                    allowed_tools: allowed_tools.as_ref().clone(),
                     run_id: run_id.into(),
                     step_id: id.clone(),
                     definition_step_id: id.clone(),
@@ -1044,6 +1059,7 @@ impl WorkflowService {
         workflow_hash: &str,
         branches: &[Vec<WorkflowStep>],
         max_concurrency: u32,
+        allowed_tools: Arc<Vec<String>>,
         scope: &str,
         context: &Value,
         budget: Arc<AtomicU32>,
@@ -1060,6 +1076,7 @@ impl WorkflowService {
                 let mut branch_context = base_context.clone();
                 let budget = Arc::clone(&budget);
                 let semaphore = Arc::clone(&semaphore);
+                let allowed_tools = Arc::clone(&allowed_tools);
                 let branch_scope = format!("{scope}.branch[{index}]");
                 async move {
                     let state = self
@@ -1067,6 +1084,7 @@ impl WorkflowService {
                             run_id,
                             workflow_hash,
                             &branch,
+                            allowed_tools,
                             &branch_scope,
                             &mut branch_context,
                             budget,
@@ -1120,6 +1138,7 @@ impl WorkflowService {
         run_id: &str,
         workflow_hash: &str,
         steps: &[WorkflowStep],
+        allowed_tools: Arc<Vec<String>>,
         scope: &str,
         context: &mut Value,
         budget: Arc<AtomicU32>,
@@ -1137,6 +1156,7 @@ impl WorkflowService {
                     run_id,
                     workflow_hash,
                     step,
+                    Arc::clone(&allowed_tools),
                     scope,
                     context,
                     Arc::clone(&budget),

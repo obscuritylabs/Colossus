@@ -1,0 +1,11 @@
+# Default-deny this context: the scratch image needs only its Dockerfile and
+# one prebuilt static proxy selected by TARGET_TRIPLE.
+*
+!oci-proxy.Dockerfile
+!target/
+target/*
+!target/*-unknown-linux-musl/
+target/*-unknown-linux-musl/*
+!target/*-unknown-linux-musl/release/
+target/*-unknown-linux-musl/release/*
+!target/*-unknown-linux-musl/release/colossus-oci-proxy

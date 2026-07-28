@@ -1,0 +1,55 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: release-orchestrator
+  version: 1.0.0
+  description: Run three hash-pinned component health workflows with bounded parallelism
+inputs:
+  type: object
+  additionalProperties: false
+  required: [release]
+  properties:
+    release:
+      type: string
+      minLength: 1
+      maxLength: 128
+outputs:
+  type: object
+capabilities:
+  - workflow.execute
+maxConcurrency: 3
+stepBudget: 12
+steps:
+  - id: component-checks
+    type: parallel
+    max_concurrency: 3
+    branches:
+      -
+        - id: check-api
+          type: workflow
+          workflow: component-health-check
+          version: 1.0.0
+          inputs:
+            component: api
+            critical: true
+      -
+        - id: check-worker
+          type: workflow
+          workflow: component-health-check
+          version: 1.0.0
+          inputs:
+            component: worker
+            critical: true
+      -
+        - id: check-desktop
+          type: workflow
+          workflow: component-health-check
+          version: 1.0.0
+          inputs:
+            component: desktop
+            critical: false
+  - id: release-result
+    type: emit
+    value:
+      workflow: release-orchestrator
+      status: child_checks_completed

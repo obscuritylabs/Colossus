@@ -97,6 +97,11 @@ fn plan_mode_cannot_mutate_and_approved_plans_are_consumed_once() {
 data: [DONE]
 
 "#;
+    let denied_finished = r#"data: {"id":"plan-corrected","choices":[{"index":0,"delta":{"content":"mutation-not-available"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
     let create_plan = r##"data: {"id":"plan-create","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"plan-1","type":"function","function":{"name":"plan.create","arguments":"{\"prompt\":\"Plan the Rust cutover\",\"content\":\"# Cutover\",\"steps\":[{\"title\":\"Implement\",\"detail\":\"Use the audited runtime\",\"requires_mutation\":true}]}"}}]},"finish_reason":"tool_calls"}]}
 
 data: [DONE]
@@ -124,6 +129,7 @@ data: [DONE]
 "#;
     let (origin, server) = serve(vec![
         denied_write,
+        denied_finished,
         create_plan,
         plan_finished,
         direct_finished,
@@ -219,18 +225,21 @@ data: [DONE]
     );
     let session_id = session["id"].as_str().expect("session id");
 
-    let denied = run(
-        binary,
-        &config,
-        &[
-            "run",
-            "Attempt a mutation",
-            "--plan",
-            "--session",
-            session_id,
-        ],
+    let denied = parse(
+        &run(
+            binary,
+            &config,
+            &[
+                "run",
+                "Attempt a mutation",
+                "--plan",
+                "--session",
+                session_id,
+            ],
+        ),
+        "plan mutation correction JSON",
     );
-    assert!(!denied.status.success());
+    assert_eq!(denied["output"], "mutation-not-available");
     assert!(!directory.path().join("plan-mode-escape.txt").exists());
 
     let planned = parse(
@@ -334,6 +343,9 @@ data: [DONE]
 
     let requests = server.join().expect("provider server");
     let denied_body = requests[0].split("\r\n\r\n").nth(1).expect("body");
-    assert!(!denied_body.contains("filesystem.write"));
-    assert!(denied_body.contains("plan.create"));
+    assert!(!denied_body.contains("filesystem_write"));
+    assert!(denied_body.contains("plan_create"));
+    let correction_body = requests[1].split("\r\n\r\n").nth(1).expect("body");
+    assert!(correction_body.contains("not available in this run mode"));
+    assert!(correction_body.contains("unknown_tool"));
 }

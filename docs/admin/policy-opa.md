@@ -15,7 +15,8 @@ one-use permits, sandbox, quarantine, and terminal audit events.
 ## Prerequisites
 
 - A valid access profile.
-- For remote OPA: an HTTPS service, pinned CA, client identity, fixed decision path,
+- For remote OPA: an HTTPS service, pinned CA (either `ca_pem_path` or the shared
+  `network.caBundlePath`), client identity, fixed decision path,
   approved content disclosure, and verified decision-log masking.
 
 ## Steps
@@ -41,6 +42,9 @@ one-use permits, sandbox, quarantine, and terminal audit events.
       decision_log_masking_verified: true
       timeout_ms: 5000
     ```
+
+   `ca_pem_path` takes precedence over the shared `network.caBundlePath`; omit it only
+   when the shared bundle contains the intended pinned OPA trust roots.
 
 3. Keep `access.actions.allow`, `requireApproval`, and `deny` empty when OPA is active.
    OPA is the sole action decision point.

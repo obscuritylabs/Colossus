@@ -1,0 +1,2 @@
+Create a concise three-step plan for checking this repository's public SDK examples.
+Do not edit files, run commands, call external services, or claim that you did.

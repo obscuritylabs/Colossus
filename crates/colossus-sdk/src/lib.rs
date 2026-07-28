@@ -28,7 +28,10 @@ mod macos_verified_process;
 mod native_daemon;
 #[cfg(all(feature = "sidecar", unix))]
 mod native_sidecar;
-#[cfg(all(feature = "sidecar", not(unix)))]
+#[cfg(all(feature = "sidecar", windows))]
+#[path = "native_sidecar_windows.rs"]
+mod native_sidecar;
+#[cfg(all(feature = "sidecar", not(any(unix, windows))))]
 #[path = "native_sidecar_unsupported.rs"]
 mod native_sidecar;
 mod secret;
@@ -39,7 +42,7 @@ mod types;
 
 #[cfg(feature = "embedded")]
 pub use backend::ContextBoundAgentRunClient;
-pub use backend::{AgentRunClient, Backend, BackendKind};
+pub use backend::{AgentRunClient, ArtifactClient, Backend, BackendKind};
 pub use client::Colossus;
 pub use colossus_api::{
     ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ApiScope, FieldViolation, IdempotencyKey,
@@ -90,14 +93,14 @@ pub use sidecar::{
 pub use stream::RunUpdates;
 pub use types::{
     ApprovalInteraction, ApprovalRisk, ArtifactPurpose, ArtifactReference, ArtifactState,
-    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, GetRunRequest,
-    GetRunResponse, InputContentPart, Interaction, InteractionAnswer, InteractionContent,
-    InteractionKind, InteractionStatus, ListRunsRequest, ListRunsResponse, MessageContentPart,
-    MessageRole, OutcomeCertainty, PageRequest, PageResponse, PromptAnswer, PromptChoice,
-    RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation, RunFailure,
-    RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind, RunUpdateStream,
-    SessionMessage, TokenUsage, ToolActivity, ToolActivityState, UserPromptInteraction,
-    WatchRunRequest,
+    CancelRunRequest, CancelRunResponse, CreateRunRequest, CreateRunResponse, DownloadedArtifact,
+    GetRunRequest, GetRunResponse, InputContentPart, Interaction, InteractionAnswer,
+    InteractionContent, InteractionKind, InteractionStatus, ListRunsRequest, ListRunsResponse,
+    MessageContentPart, MessageRole, OutcomeCertainty, PageRequest, PageResponse, PromptAnswer,
+    PromptChoice, RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation,
+    RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind,
+    RunUpdateStream, ServerCapabilities, SessionMessage, TokenUsage, ToolActivity,
+    ToolActivityState, UploadArtifactRequest, UserPromptInteraction, WatchRunRequest,
 };
 
 #[cfg(test)]

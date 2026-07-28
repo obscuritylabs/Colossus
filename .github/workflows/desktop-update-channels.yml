@@ -1,0 +1,100 @@
+name: Publish Desktop update channel
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-update-channel-${{ github.event.release.prerelease && 'developer-preview' || 'stable' }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish verified channel metadata
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve and validate the release channel
+        id: channel
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_DRAFT" = false
+          if [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            channel=stable
+            test "$RELEASE_PRERELEASE" = false
+          elif [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]]; then
+            channel=developer_preview
+            test "$RELEASE_PRERELEASE" = true
+          else
+            echo "published release is not a Colossus Desktop channel version" >&2
+            exit 1
+          fi
+          printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Download immutable release update metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 dist
+          gh release download "$RELEASE_TAG" \
+            --pattern "$CHANNEL.json" \
+            --dir dist
+
+      - name: Validate channel isolation and immutable artifact URLs
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+        run: |
+          set -euo pipefail
+          metadata="dist/$CHANNEL.json"
+          test -f "$metadata"
+          jq -e \
+            --arg channel "$CHANNEL" \
+            --arg version "${RELEASE_TAG#v}" \
+            --arg tag "/releases/download/$RELEASE_TAG/" \
+            '.schemaVersion == 1
+             and .channel == $channel
+             and .version == $version
+             and (.platforms | type == "object" and length > 0)
+             and ([.platforms | to_entries[] |
+               (.key | endswith("-" + $channel))
+               and (.value.url | startswith("https://github.com/") and contains($tag))
+               and (.value.signature | type == "string" and length > 0)
+             ] | all)' \
+            "$metadata" >/dev/null
+          if [ "$CHANNEL" = stable ]; then
+            jq -e '.platforms | keys == ["macos-aarch64-stable"]' "$metadata" >/dev/null
+          else
+            jq -e \
+              '.platforms | keys == [
+                "macos-aarch64-developer_preview",
+                "windows-x86_64-developer_preview"
+              ]' "$metadata" >/dev/null
+          fi
+
+      - name: Publish the fixed HTTPS channel endpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+        run: |
+          set -euo pipefail
+          channel_tag=desktop-update-channels
+          if ! gh release view "$channel_tag" >/dev/null 2>&1; then
+            gh release create "$channel_tag" \
+              --prerelease \
+              --title "Colossus Desktop update channels" \
+              --notes "Machine-readable, signature-bound Desktop update metadata. Use the normal versioned releases for manual downloads."
+          fi
+          gh release upload "$channel_tag" "dist/$CHANNEL.json" --clobber

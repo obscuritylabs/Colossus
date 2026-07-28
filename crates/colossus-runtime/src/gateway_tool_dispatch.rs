@@ -563,6 +563,7 @@ impl ToolExecutor for GatewayToolExecutor {
                 let parent_run_id = context.run_id.clone().ok_or_else(|| {
                     ToolError::Denied("agent.delegate requires a parent run".into())
                 })?;
+                let allowed_tools = context.offered_tools.clone();
                 self.execute_work_tool(
                     &call,
                     context,
@@ -572,6 +573,7 @@ impl ToolExecutor for GatewayToolExecutor {
                         parent_call_id: call.call_id.clone(),
                         task: required_tool_string(&call, "task")?.into(),
                         role: "subagent_default".into(),
+                        allowed_tools: Some(allowed_tools),
                     },
                 )
                 .await?

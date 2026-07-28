@@ -268,6 +268,7 @@ impl WorkflowService {
                     subscription.subscription_id, source.event_id
                 )),
                 credential_references: Vec::new(),
+                allowed_tools: Vec::new(),
                 run_id: run_id.clone(),
                 step_id: "$subscription".into(),
                 definition_step_id: "$subscription".into(),

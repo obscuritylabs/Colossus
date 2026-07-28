@@ -543,8 +543,14 @@ pub(super) fn operation_url(
             "integration path contains an undeclared template parameter",
         ));
     }
-    let base = Url::parse(&connection.base_url).map_err(execution)?;
-    base.join(path.trim_start_matches('/')).map_err(execution)
+    let mut base = connection.base_url.clone();
+    if !base.ends_with('/') {
+        base.push('/');
+    }
+    Url::parse(&base)
+        .map_err(execution)?
+        .join(path.trim_start_matches('/'))
+        .map_err(execution)
 }
 
 pub(super) fn encode_path_segment(value: &str) -> String {

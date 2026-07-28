@@ -23,14 +23,19 @@ use crate::{
 const APPLICATION_ID: &str = "app:colossus-desktop-managed";
 const SELF_TEST_APPLICATION_ID: &str = "app:colossus-desktop-self-test";
 const SELF_TEST_INSTANCE_ID: &str = "00000000-0000-7000-8000-000000000001";
-const PRIMARY_SCOPES: [&str; 4] = [
+const PRIMARY_SCOPES: [&str; 6] = [
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
     scopes::RUNS_CONTROL,
     scopes::PROMPTS_RESPOND,
+    scopes::ARTIFACTS_READ,
+    scopes::ARTIFACTS_WRITE,
 ];
 
 const DEVELOPMENT_TOOL_GRANT: &[&str] = &[
+    "agent.delegate",
+    "agent.list",
+    "agent.result",
     "context.compact",
     "context.restore",
     "context.show",
@@ -335,6 +340,12 @@ async fn start_inner(
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
     let host_credentials = provider_host_credentials(settings)?;
+    let ca_bundle_path = settings
+        .additional_ca_bundle
+        .as_ref()
+        .map(|bundle| store.ca_bundle_path(bundle))
+        .transpose()
+        .map_err(|error| (error, RuntimeFailureCodeDto::Permission))?;
     let approval_broker_grant = approval_broker_grant()
         .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
     let worker_authentication = TerminalWorkerAuthentication::random().map_err(|error| {
@@ -351,6 +362,7 @@ async fn start_inner(
         host_credentials,
         approval_broker_grant,
         worker_bootstrap_secret.as_ref(),
+        ca_bundle_path.as_deref(),
     )
     .map_err(|error| classify_sdk(error, RuntimeFailureCodeDto::Configuration))?;
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
@@ -396,6 +408,7 @@ fn managed_bootstrap(
     host_credentials: Vec<SidecarHostCredential>,
     approval_broker_grant: SidecarApprovalBrokerGrant,
     worker_authentication: &[u8],
+    ca_bundle_path: Option<&Path>,
 ) -> Result<SidecarBootstrapConfig, SdkError> {
     let runtime = ManagedRuntimeConfig {
         access_profile: access_profile(settings.access_profile),
@@ -427,7 +440,7 @@ fn managed_bootstrap(
             .collect(),
         roles: settings.model_roles.clone(),
     };
-    SidecarBootstrapConfig::new(
+    let bootstrap = SidecarBootstrapConfig::new(
         workspace,
         runtime,
         application_grant(settings.access_profile)?,
@@ -435,7 +448,12 @@ fn managed_bootstrap(
     .with_expected_workspace_identity(workspace_identity)?
     .with_approval_broker_grant(approval_broker_grant)?
     .with_host_credentials(host_credentials)?
-    .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)
+    .with_worker_ipc_authentication(Secret::new(worker_authentication.to_vec())?)?;
+    if let Some(path) = ca_bundle_path {
+        bootstrap.with_additional_ca_bundle_path(path)
+    } else {
+        Ok(bootstrap)
+    }
 }
 
 fn expected_workspace_identity(
@@ -587,16 +605,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_grant_excludes_delegation_skills_and_worker_admin() {
+    fn desktop_grant_includes_bounded_delegation_and_excludes_worker_admin() {
         let grant = application_grant(AccessProfileSetting::Development).expect("grant");
         let debug = format!("{grant:?}");
-        for denied in ["agent.delegate", "skill.install", "mcp.call"] {
+        for denied in ["skill.install", "mcp.call"] {
             assert!(!debug.contains(denied));
         }
+        assert!(debug.contains("agent.delegate"));
         assert!(debug.contains("filesystem.read"));
         assert!(debug.contains("shell.run"));
         assert!(!debug.contains(scopes::APPROVALS_RESPOND));
-        assert_eq!(PRIMARY_SCOPES.len(), 4);
+        assert_eq!(PRIMARY_SCOPES.len(), 6);
         for required in PRIMARY_SCOPES {
             assert!(debug.contains(required));
         }

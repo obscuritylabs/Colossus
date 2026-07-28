@@ -49,6 +49,21 @@ const desktop: DesktopStatus = {
   },
   accessProfile: "minimal",
   terminalEnabled: false,
+  additionalCaBundle: {
+    configured: false,
+    certificateCount: 0,
+    fingerprintsSha256: [],
+  },
+  capabilities: {
+    delegation: false,
+    skills: false,
+    tui: false,
+    files: false,
+    artifacts: true,
+    updateAvailable: false,
+    agentWorkflows: false,
+    attachments: false,
+  },
 };
 
 describe("ModelConfigurationEditor", () => {

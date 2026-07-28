@@ -5,6 +5,7 @@ pub struct PackService {
     repository: Arc<dyn ExtensionRepository>,
     install_root: PathBuf,
     skill_install_root: PathBuf,
+    tls_roots: AdditionalRootCertificates,
 }
 
 impl PackService {
@@ -17,6 +18,7 @@ impl PackService {
             repository,
             install_root,
             skill_install_root,
+            tls_roots: AdditionalRootCertificates::default(),
         }
     }
 
@@ -24,6 +26,13 @@ impl PackService {
     #[must_use]
     pub fn with_skill_install_root(mut self, skill_install_root: PathBuf) -> Self {
         self.skill_install_root = skill_install_root;
+        self
+    }
+
+    /// Add validated runtime-wide CA roots to registry clients' built-in public roots.
+    #[must_use]
+    pub fn with_tls_roots(mut self, tls_roots: AdditionalRootCertificates) -> Self {
+        self.tls_roots = tls_roots;
         self
     }
 
@@ -465,7 +474,7 @@ impl PackService {
             PackError::Invalid("registry pull destination has no parent directory".into())
         })?;
         let parent = verified_root(parent)?;
-        let (url, client) = registry_client(url, permit).await?;
+        let (url, client) = registry_client(url, permit, &self.tls_roots).await?;
         let request = registry_auth(
             client
                 .get(url.clone())
@@ -553,7 +562,7 @@ impl PackService {
             ));
         }
         let transport_sha256 = hash_file(transport.path(), limit)?;
-        let (url, client) = registry_client(url, permit).await?;
+        let (url, client) = registry_client(url, permit, &self.tls_roots).await?;
         let file = tokio::fs::File::from_std(transport.reopen()?);
         let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
         let request = registry_auth(

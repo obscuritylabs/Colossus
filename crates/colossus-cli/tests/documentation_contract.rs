@@ -6,6 +6,7 @@ use colossus_tools::builtin_specs;
 use colossus_workflow::validate_definition;
 use serde::Deserialize;
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -644,6 +645,203 @@ fn published_config_and_workflow_examples_are_accepted_by_rust_parsers() {
 }
 
 #[test]
+fn repository_workflow_examples_are_accepted_by_the_rust_parser() {
+    let directory = repository_root().join("examples/workflows");
+    let mut paths = fs::read_dir(&directory)
+        .expect("read workflow examples")
+        .map(|entry| entry.expect("workflow example entry").path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("yaml"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert!(
+        paths.len() >= 7,
+        "advanced workflow example suite is unexpectedly small"
+    );
+
+    let mut identities = BTreeSet::new();
+    for path in paths {
+        let yaml = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let validated = validate_definition(&yaml)
+            .unwrap_or_else(|error| panic!("validate {}: {error}", path.display()));
+        let identity = (
+            validated.definition.metadata.name,
+            validated.definition.metadata.version,
+        );
+        assert!(
+            identities.insert(identity.clone()),
+            "duplicate example workflow identity {}:{}",
+            identity.0,
+            identity.1
+        );
+    }
+}
+
+#[test]
+fn repository_agent_ask_examples_are_bounded_documented_and_portable() {
+    let directory = repository_root().join("examples/asks");
+    let readme = fs::read_to_string(directory.join("README.md")).expect("read ask README");
+    let mut paths = fs::read_dir(&directory)
+        .expect("read ask examples")
+        .map(|entry| entry.expect("ask example entry").path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("txt"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert!(
+        paths.len() >= 10,
+        "agent ask example suite is unexpectedly small"
+    );
+
+    let mut names = BTreeSet::new();
+    for path in paths {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("portable UTF-8 ask filename");
+        assert!(
+            names.insert(name.to_owned()),
+            "duplicate ask example {name}"
+        );
+        assert!(
+            readme.contains(&format!("`{name}`")),
+            "ask README omits {name}"
+        );
+
+        let prompt = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            !prompt.trim().is_empty() && prompt.len() <= 4_096,
+            "{} must contain one bounded prompt",
+            path.display()
+        );
+        assert!(
+            prompt.ends_with('\n'),
+            "{} must end with a newline",
+            path.display()
+        );
+        assert!(
+            !prompt
+                .chars()
+                .any(|character| character.is_control() && !matches!(character, '\n' | '\t')),
+            "{} contains unsafe control characters",
+            path.display()
+        );
+        for absolute_prefix in ["/Users/", "/home/", "C:\\Users\\"] {
+            assert!(
+                !prompt.contains(absolute_prefix),
+                "{} contains non-portable absolute path prefix {absolute_prefix:?}",
+                path.display()
+            );
+        }
+    }
+
+    for fixture_path in ["Cargo.toml", "README.md", "src/lib.rs"] {
+        assert!(
+            directory.join("fixture").join(fixture_path).is_file(),
+            "ask implementation fixture omits {fixture_path}"
+        );
+    }
+}
+
+#[test]
+fn repository_sdk_examples_are_cross_language_bounded_and_documented() {
+    let directory = repository_root().join("examples/sdk");
+    let readme = fs::read_to_string(directory.join("README.md")).expect("read SDK example README");
+    for required in [
+        "crates/colossus-sdk/examples/durable_run.rs",
+        "sdk/python/examples/durable_run.py",
+        "sdk/typescript/examples/durable-run.ts",
+        "sdk/go/examples/durable-run/durable_run.go",
+        "cargo run -p colossus-cli --example sdk_ephemeral_local",
+        "sdk/python/examples/live_run.py",
+        "sdk/typescript/examples/live-run.ts",
+        "sdk/go/examples/live-run/main.go",
+        "anonymous child-stdin pipe",
+        "never enrolls an application",
+        "serializes the bearer into argv",
+        "never automatically retry",
+        "OS credential-store",
+        "openapi.sdk-demo.getstatus",
+    ] {
+        assert!(
+            readme.contains(required),
+            "SDK example README omits {required:?}"
+        );
+    }
+
+    for source in [
+        "crates/colossus-cli/examples/sdk_ephemeral_local.rs",
+        "crates/colossus-sdk/examples/durable_run.rs",
+        "sdk/python/examples/durable_run.py",
+        "sdk/python/examples/live_run.py",
+        "sdk/typescript/examples/durable-run.ts",
+        "sdk/typescript/examples/live-run.ts",
+        "sdk/go/examples/durable-run/durable_run.go",
+        "sdk/go/examples/live-run/main.go",
+    ] {
+        assert!(
+            repository_root().join(source).is_file(),
+            "SDK example source is missing: {source}"
+        );
+    }
+
+    let scenario_directory = directory.join("scenarios");
+    let mut scenarios = fs::read_dir(&scenario_directory)
+        .expect("read SDK scenarios")
+        .map(|entry| entry.expect("SDK scenario entry").path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("txt"))
+        .collect::<Vec<_>>();
+    scenarios.sort();
+    assert_eq!(
+        scenarios.len(),
+        6,
+        "SDK scenario suite must remain explicit"
+    );
+    for path in scenarios {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("portable UTF-8 SDK scenario filename");
+        assert!(
+            readme.contains(&format!("`{name}`")),
+            "SDK README omits scenario {name}"
+        );
+        let prompt = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            !prompt.trim().is_empty() && prompt.len() <= 2_048 && prompt.ends_with('\n'),
+            "{} must contain one newline-terminated bounded prompt",
+            path.display()
+        );
+        for absolute_prefix in ["/Users/", "/home/", "C:\\Users\\"] {
+            assert!(
+                !prompt.contains(absolute_prefix),
+                "{} contains non-portable absolute path prefix {absolute_prefix:?}",
+                path.display()
+            );
+        }
+    }
+
+    let openapi =
+        fs::read(directory.join("integration/openapi.json")).expect("read SDK OpenAPI fixture");
+    let openapi: serde_json::Value =
+        serde_json::from_slice(&openapi).expect("SDK OpenAPI fixture must be valid JSON");
+    assert_eq!(openapi["openapi"], "3.1.0");
+    assert_eq!(
+        openapi["paths"]["/status/{service}"]["get"]["operationId"],
+        "getStatus"
+    );
+    assert!(
+        directory.join("integration/server.py").is_file(),
+        "SDK integration server fixture is missing"
+    );
+    assert!(
+        directory.join("provider-failure/server.py").is_file(),
+        "SDK provider failure fixture is missing"
+    );
+}
+
+#[test]
 fn tools_and_action_reference_covers_the_executable_catalog() {
     let reference = read("docs/reference/tools-actions.md");
     for specification in builtin_specs() {
@@ -675,6 +873,7 @@ fn documented_command_families_are_real_clap_routes() {
         &["search", "profiles"],
         &["search", "query"],
         &["models", "route"],
+        &["artifacts", "upload"],
         &["sessions", "messages"],
         &["context", "restore"],
         &["tasks", "create"],

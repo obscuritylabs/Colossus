@@ -67,6 +67,18 @@ pub enum GatewayError {
         code: String,
         /// Bounded safe diagnostic.
         message: String,
+        /// HTTP response status when the adapter supplied one.
+        http_status: Option<u16>,
+        /// Bounded provider retry lower bound when supplied.
+        retry_after_ms: Option<u64>,
+    },
+    /// Adapter reported a known non-success HTTP response.
+    #[error("effect failed: {message}")]
+    HttpStatus {
+        /// HTTP response status.
+        status: u16,
+        /// Bounded safe diagnostic without response headers or body.
+        message: String,
     },
     /// Adapter outcome is unknown and must not be retried implicitly.
     #[error("effect outcome is unknown: {0}")]
@@ -88,6 +100,18 @@ pub enum ExecutionError {
         /// Stable application-neutral code.
         code: String,
         /// Bounded safe diagnostic.
+        message: String,
+        /// HTTP response status when the adapter supplied one.
+        http_status: Option<u16>,
+        /// Bounded provider retry lower bound when supplied.
+        retry_after_ms: Option<u64>,
+    },
+    /// Adapter returned a known non-success HTTP response.
+    #[error("{message}")]
+    HttpStatus {
+        /// HTTP response status.
+        status: u16,
+        /// Bounded safe diagnostic without response headers or body.
         message: String,
     },
     /// Adapter cannot prove whether the external effect occurred.

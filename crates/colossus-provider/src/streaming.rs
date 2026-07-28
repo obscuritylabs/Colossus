@@ -131,10 +131,16 @@ pub(super) enum ProviderStreamState {
 }
 
 impl ProviderStreamState {
-    pub(super) fn new(kind: ProviderKind) -> Self {
+    pub(super) fn new(kind: ProviderKind, tool_names: ProviderToolNames) -> Self {
         match kind {
-            ProviderKind::OpenAiResponses => Self::Responses(ResponsesStreamState::default()),
-            ProviderKind::OpenAiCompatible => Self::Chat(ChatStreamState::default()),
+            ProviderKind::OpenAiResponses => Self::Responses(ResponsesStreamState {
+                tool_names,
+                ..ResponsesStreamState::default()
+            }),
+            ProviderKind::OpenAiCompatible => Self::Chat(ChatStreamState {
+                tool_names,
+                ..ChatStreamState::default()
+            }),
             ProviderKind::Echo => unreachable!("echo streaming is handled without SSE"),
         }
     }
@@ -170,6 +176,7 @@ impl ProviderStreamState {
 
 #[derive(Default)]
 pub(super) struct ResponsesStreamState {
+    tool_names: ProviderToolNames,
     response_id: Option<String>,
     text: String,
     tool_call_ids: BTreeSet<String>,
@@ -246,6 +253,7 @@ impl ResponsesStreamState {
                     item.get("call_id"),
                     item.get("name"),
                     item.get("arguments"),
+                    &self.tool_names,
                 )?;
                 let ProviderEvent::ToolCallRequested { call_id, .. } = &event else {
                     unreachable!("function call normalization returned another event")
@@ -263,7 +271,10 @@ impl ResponsesStreamState {
                 }
                 Ok(Some(ProviderEvent::ToolCallRequested {
                     call_id,
-                    name: required_string(item, "name")?,
+                    name: self
+                        .tool_names
+                        .canonical_name(&required_string(item, "name")?)
+                        .to_owned(),
                     arguments: json!({
                         "input": item.get("input").and_then(Value::as_str).unwrap_or_default()
                     }),
@@ -327,6 +338,7 @@ impl ResponsesStreamState {
 
 #[derive(Default)]
 pub(super) struct ChatStreamState {
+    tool_names: ProviderToolNames,
     response_id: Option<String>,
     text: String,
     tool_calls: BTreeMap<u64, PartialChatToolCall>,
@@ -481,9 +493,10 @@ impl ChatStreamState {
                 let call_id = partial.call_id.clone().ok_or_else(|| {
                     ProviderError::Malformed("streamed tool call id is absent".into())
                 })?;
-                let name = partial.name.clone().ok_or_else(|| {
+                let provider_name = partial.name.as_deref().ok_or_else(|| {
                     ProviderError::Malformed("streamed tool call name is absent".into())
                 })?;
+                let name = self.tool_names.canonical_name(provider_name).to_owned();
                 let arguments_text = if partial.arguments.is_empty() {
                     "{}"
                 } else {

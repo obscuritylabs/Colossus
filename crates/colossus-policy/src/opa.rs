@@ -6,8 +6,10 @@ pub struct OpaConfig {
     pub base_url: String,
     /// Fixed data decision path, such as `colossus/effect`.
     pub decision_path: String,
-    /// PEM trust anchor. Required for remote OPA.
+    /// Optional PEM CA bundle. Required for remote OPA unless runtime roots are supplied.
     pub ca_pem: Option<Vec<u8>>,
+    /// Runtime-wide CA roots used when OPA does not configure its own pinned CA.
+    pub tls_roots: AdditionalRootCertificates,
     /// PEM client certificate plus private key. Required for remote OPA.
     pub identity_pem: Option<Vec<u8>>,
     /// Explicit acknowledgement that full logical content is sent.
@@ -58,18 +60,33 @@ impl OpaPolicy {
                 "remote OPA requires HTTPS".into(),
             ));
         }
-        if !local && (config.ca_pem.is_none() || config.identity_pem.is_none()) {
+        if !local
+            && ((config.ca_pem.is_none() && config.tls_roots.is_empty())
+                || config.identity_pem.is_none())
+        {
             return Err(PolicyError::InvalidDecision(
                 "remote OPA requires pinned CA trust and mTLS identity".into(),
             ));
         }
         let mut builder = Client::builder().timeout(config.timeout);
         if let Some(ca_pem) = config.ca_pem {
-            let certificate = Certificate::from_pem(&ca_pem)
+            let certificates = Certificate::from_pem_bundle(&ca_pem)
                 .map_err(|error| PolicyError::InvalidDecision(error.to_string()))?;
-            builder = builder
-                .tls_built_in_root_certs(false)
-                .add_root_certificate(certificate);
+            if certificates.is_empty() {
+                return Err(PolicyError::InvalidDecision(
+                    "OPA CA bundle contains no certificates".into(),
+                ));
+            }
+            builder = builder.tls_built_in_root_certs(false);
+            for certificate in certificates {
+                builder = builder.add_root_certificate(certificate);
+            }
+        } else if !local {
+            builder = config
+                .tls_roots
+                .configure_reqwest(builder.tls_built_in_root_certs(false));
+        } else {
+            builder = config.tls_roots.configure_reqwest(builder);
         }
         if let Some(identity_pem) = config.identity_pem {
             let identity = Identity::from_pem(&identity_pem)

@@ -1,4 +1,4 @@
-use colossus_sdk::{ApiErrorCode, ListRunsRequest, PageRequest, RunStatus};
+use colossus_sdk::{ApiErrorCode, ListRunsRequest, PageRequest, RunStatus, ServerCapabilities};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
@@ -11,9 +11,9 @@ use crate::{
     connection,
     desktop_dto::{
         ApplyManagedModelConfigurationInput, ConfigureManagedRuntimeInput, CredentialActionInput,
-        DesktopReleaseChannelDto, DesktopStatusDto, ManagedModelConfigurationDto,
-        ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto, RuntimeTargetKindDto,
-        WorkspaceSummaryDto,
+        DesktopCapabilitiesDto, DesktopReleaseChannelDto, DesktopStatusDto,
+        ManagedModelConfigurationDto, ManagedRuntimeStateDto, ProviderSummaryDto, RuntimeTargetDto,
+        RuntimeTargetKindDto, WorkspaceSummaryDto,
     },
     desktop_settings::{
         DesktopSettings, ExternalTargetSetting, MAX_EXTERNAL_TARGETS,
@@ -153,6 +153,75 @@ pub(crate) async fn connection_status(
 ) -> Result<ConnectionStatusDto, CommandErrorDto> {
     let settings = settings_store()?.load()?;
     Ok(desktop_status_from(&state, &settings).await?.connection)
+}
+
+#[tauri::command]
+pub(crate) async fn import_ca_bundle(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<DesktopStatusDto>, CommandErrorDto> {
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter("PEM CA certificate bundle", &["pem", "crt", "cer"])
+        .blocking_pick_file();
+    let Some(path) = selected else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|_| {
+        CommandErrorDto::invalid(
+            "caBundle",
+            "The selected CA certificate bundle is unavailable.",
+        )
+    })?;
+    let _guard = connect_guard(&state)?;
+    reject_active_managed_runs(&state).await?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let previous = settings.additional_ca_bundle.clone();
+    let staged = store.stage_ca_bundle(&path)?;
+    settings.additional_ca_bundle = Some(staged.clone());
+    if let Err(error) = store.save(&settings) {
+        let _ = store.delete_ca_bundle(&staged);
+        return Err(error);
+    }
+    if has_managed_configuration(&settings)
+        && let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await
+    {
+        settings.additional_ca_bundle = previous.clone();
+        store.save(&settings)?;
+        let _ = store.delete_ca_bundle(&staged);
+        restore_managed_after_rollback(&state, &store, &settings).await?;
+        return Err(start_error);
+    }
+    if let Some(previous) = previous {
+        store.delete_ca_bundle(&previous)?;
+    }
+    desktop_status_from(&state, &settings).await.map(Some)
+}
+
+#[tauri::command]
+pub(crate) async fn remove_ca_bundle(
+    state: State<'_, AppState>,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let _guard = connect_guard(&state)?;
+    reject_active_managed_runs(&state).await?;
+    let store = settings_store()?;
+    let mut settings = store.load()?;
+    let Some(previous) = settings.additional_ca_bundle.take() else {
+        return desktop_status_from(&state, &settings).await;
+    };
+    store.save(&settings)?;
+    if has_managed_configuration(&settings)
+        && let Err(start_error) = managed_runtime::start(&state, &store, &settings, true).await
+    {
+        settings.additional_ca_bundle = Some(previous);
+        store.save(&settings)?;
+        restore_managed_after_rollback(&state, &store, &settings).await?;
+        return Err(start_error);
+    }
+    store.delete_ca_bundle(&previous)?;
+    desktop_status_from(&state, &settings).await
 }
 
 #[tauri::command]
@@ -1375,7 +1444,7 @@ async fn desktop_status_from(
         state: managed_state_name(managed_state).into(),
         message: managed_health.message.clone(),
         selected: selected.as_deref() == Some(MANAGED_TARGET_ID),
-        terminal_available: managed_ready,
+        terminal_available: managed_ready && cfg!(any(target_os = "macos", target_os = "windows")),
         workspace: workspace.clone(),
         failure_code: managed_health.failure_code,
     }];
@@ -1411,6 +1480,32 @@ async fn desktop_status_from(
         }
         _ => ConnectionStatusDto::not_configured(),
     };
+    let selected_managed = selected.as_deref() == Some(MANAGED_TARGET_ID) && managed_ready;
+    let advertised = if connection.state == ConnectionStateDto::Connected {
+        match selected.as_deref() {
+            Some(target_id) => state
+                .target(target_id)
+                .await
+                .map(|target| target.client.capabilities())
+                .unwrap_or_default(),
+            None => ServerCapabilities::default(),
+        }
+    } else {
+        ServerCapabilities::default()
+    };
+    let capabilities = DesktopCapabilitiesDto {
+        delegation: advertised.contains("agent_runs.delegation"),
+        skills: advertised.contains("skills.select"),
+        tui: selected_managed && cfg!(any(target_os = "macos", target_os = "windows")),
+        files: selected_managed
+            && workspace.is_some()
+            && settings.access_profile
+                == crate::desktop_settings::AccessProfileSetting::Development,
+        artifacts: advertised.contains("artifacts.read"),
+        update_available: state.update_available(),
+        agent_workflows: advertised.contains("automation.workflows"),
+        attachments: advertised.contains("attachments.run_input"),
+    };
     Ok(DesktopStatusDto {
         release_channel: DesktopReleaseChannelDto::current(),
         connection,
@@ -1422,7 +1517,16 @@ async fn desktop_status_from(
         managed_model_configuration: ManagedModelConfigurationDto::from_settings(settings),
         access_profile: settings.access_profile,
         terminal_enabled: settings.terminal_enabled,
+        additional_ca_bundle: crate::desktop_dto::CaBundleStatusDto::from_settings(settings),
+        capabilities,
     })
+}
+
+pub(crate) async fn diagnostics_status(
+    state: &AppState,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let settings = settings_store()?.load()?;
+    desktop_status_from(state, &settings).await
 }
 
 async fn external_target_status(

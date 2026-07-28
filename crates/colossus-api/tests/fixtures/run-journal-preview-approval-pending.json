@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "prior_state": {
+    "status": "running",
+    "started_at": "2026-01-01T00:00:01Z",
+    "finished_at": null,
+    "result": null,
+    "failure": null,
+    "cancellation": null,
+    "pending_interaction": null
+  },
+  "released_bytes_before": 0,
+  "kind": {
+    "type": "interaction",
+    "interaction": {
+      "id": "approval-preview",
+      "kind": "approval",
+      "status": "pending",
+      "application_id": "app:desktop-ui",
+      "created_at": "2026-01-01T00:00:02Z",
+      "prompt": "Allow this process execution?",
+      "choices": [],
+      "allow_free_form": false,
+      "request_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "action": "process.execute",
+      "resource": "configured executable",
+      "risk": "medium",
+      "expires_at": "2026-01-01T00:05:02Z",
+      "response": null,
+      "responded_at": null
+    }
+  }
+}

@@ -59,9 +59,9 @@ to attach to a worker serving another workspace.
 In Colossus Desktop, **Open Colossus TUI** launches the verified bundled CLI with fixed
 native-generated arguments and requires the existing Managed Local worker. It never
 falls back to a second local writer. This TUI retains normal Colossus policy and
-audit behavior. The macOS MVP rejects general Shell PTYs at the native boundary because
-the platform cannot provide the required race-free descendant cleanup guarantee. See
-[Colossus Desktop](../get-started/desktop.md#6-opt-into-the-local-tui).
+audit behavior. Desktop rejects arbitrary Shell PTYs at the native boundary; only the
+authenticated bundled TUI contract is available. See
+[Colossus Desktop](../get-started/desktop.md#7-opt-into-the-local-tui).
 
 ### 2. Inspect the session before acting
 

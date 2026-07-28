@@ -10,6 +10,7 @@ use colossus_contracts::{
     IntegrationStatus, IntegrationSummary, NewEvent, PackInstallation, PackStatus, PublisherTrust,
     QuarantinedEffectResult, ToolSpec,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
     network_destination_match, non_public_network_address,

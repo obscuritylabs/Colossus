@@ -68,7 +68,8 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "release_channel=validation_only",
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 14",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 17",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 22",
     ] {
         assert!(
             source.contains(required),
@@ -83,6 +84,31 @@ fn tag_validation_and_draft_publication_fail_closed() {
             .as_str()
             .is_some_and(|condition| condition.contains("publish_draft == 'true'"))
     );
+}
+
+#[test]
+fn validation_only_desktop_builds_do_not_receive_updater_configuration() {
+    let source = fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
+        .expect("read release workflow");
+    for variable in [
+        "COLOSSUS_DESKTOP_UPDATE_ENDPOINT",
+        "COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY",
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    ] {
+        assert!(
+            !source.contains(&format!(
+                "{variable}: ${{{{ needs.validate.outputs.release_channel == 'validation_only' && '' ||"
+            )),
+            "{variable} must not use a falsy empty true branch"
+        );
+    }
+    assert!(source.contains(
+        "COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel != 'validation_only' && format("
+    ));
+    assert!(source.contains(
+        "COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}"
+    ));
 }
 
 #[test]
@@ -186,7 +212,8 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
     let artifacts = job(jobs(&workflow), "artifacts");
     for step in [
         "Run Unix native sandbox acceptance",
-        "Run Windows runtime and sandbox acceptance",
+        "Run Windows native runtime acceptance",
+        "Run Windows worker and sandbox acceptance",
         "Build locked release binary",
         "Package and verify Unix release",
         "Package and verify Windows release",
@@ -305,7 +332,7 @@ fn release_bundle_publisher_identity_is_self_consistent() {
 }
 
 #[test]
-fn canonical_binary_and_oci_proxy_context_remain_bounded() {
+fn canonical_binary_and_container_build_contexts_remain_bounded() {
     let manifest = fs::read_to_string(repository_root().join("crates/colossus-cli/Cargo.toml"))
         .expect("read CLI manifest");
     assert!(manifest.contains("name = \"colossus\""));
@@ -313,19 +340,62 @@ fn canonical_binary_and_oci_proxy_context_remain_bounded() {
 
     let dockerignore = fs::read_to_string(repository_root().join(".dockerignore"))
         .expect("read Docker ignore rules");
-    let rules = dockerignore.lines().collect::<BTreeSet<_>>();
-    assert!(!rules.contains("target/"));
+    let rules = dockerignore
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect::<BTreeSet<_>>();
     for required in [
-        "target/*",
-        "!target/x86_64-unknown-linux-musl/",
-        "target/x86_64-unknown-linux-musl/*",
-        "!target/x86_64-unknown-linux-musl/release/",
-        "target/x86_64-unknown-linux-musl/release/*",
-        "!target/x86_64-unknown-linux-musl/release/colossus-oci-proxy",
+        ".git/",
+        ".colossus/",
+        "**/.env",
+        "**/.env.*",
+        "**/.cargo/credentials.toml",
+        "**/target/",
+        "**/node_modules/",
+        "**/.venv/",
+        "**/.codegen/",
+        "apps/desktop/src-tauri/binaries/",
     ] {
         assert!(
             rules.contains(required),
-            "Docker context is missing {required}"
+            "root Docker context is missing exclusion {required}"
         );
     }
+    assert!(
+        rules.iter().all(|rule| !rule.starts_with('!')),
+        "the general build context must not re-admit generated or credential paths"
+    );
+
+    let proxy_ignore =
+        fs::read_to_string(repository_root().join("oci-proxy.Dockerfile.dockerignore"))
+            .expect("read OCI proxy Docker ignore rules");
+    let proxy_rules = proxy_ignore
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        proxy_rules,
+        [
+            "*",
+            "!oci-proxy.Dockerfile",
+            "!target/",
+            "target/*",
+            "!target/*-unknown-linux-musl/",
+            "target/*-unknown-linux-musl/*",
+            "!target/*-unknown-linux-musl/release/",
+            "target/*-unknown-linux-musl/release/*",
+            "!target/*-unknown-linux-musl/release/colossus-oci-proxy",
+        ],
+        "the OCI proxy build context must remain default-deny and artifact-only"
+    );
+
+    let premerge = fs::read_to_string(repository_root().join(".github/workflows/premerge.yml"))
+        .expect("read pre-merge workflow");
+    assert_eq!(
+        premerge
+            .matches("--ignorefile oci-proxy.Dockerfile.dockerignore")
+            .count(),
+        1,
+        "Podman must explicitly use the Dockerfile-specific ignore rules"
+    );
 }

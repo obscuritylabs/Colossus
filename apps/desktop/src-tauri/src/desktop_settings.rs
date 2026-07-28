@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
@@ -15,12 +15,16 @@ use zeroize::Zeroizing;
 
 use crate::dto::CommandErrorDto;
 
+#[cfg(not(windows))]
+use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
 const SETTINGS_SCHEMA_VERSION: u16 = 2;
 const SETTINGS_FILE: &str = "desktop-settings.json";
 const MANAGED_DIRECTORY: &str = "managed-local";
+const TRUST_DIRECTORY: &str = "trust";
+const MAX_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
 const SELF_TEST_DIRECTORY: &str = "offline-self-test";
 const SELF_TEST_RUNTIME_DIRECTORY: &str = "runtime";
 const SELF_TEST_WORKSPACE_DIRECTORY: &str = "workspace";
@@ -139,6 +143,15 @@ pub(crate) struct ExternalTargetSetting {
     pub(crate) requires_credential_enrollment: bool,
 }
 
+/// Native-only location and renderer-safe metadata for an imported trust bundle.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CaBundleSetting {
+    pub(crate) bundle_id: String,
+    pub(crate) certificate_count: usize,
+    pub(crate) fingerprints_sha256: Vec<String>,
+}
+
 const fn legacy_external_credential_binding() -> bool {
     true
 }
@@ -157,6 +170,8 @@ pub(crate) struct DesktopSettings {
     pub(crate) model_roles: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) pending_provider_cleanup_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) additional_ca_bundle: Option<CaBundleSetting>,
     pub(crate) access_profile: AccessProfileSetting,
     pub(crate) terminal_enabled: bool,
     pub(crate) selected_target_id: Option<String>,
@@ -206,6 +221,7 @@ impl Default for DesktopSettings {
             models: Vec::new(),
             model_roles: BTreeMap::new(),
             pending_provider_cleanup_ids: Vec::new(),
+            additional_ca_bundle: None,
             access_profile: AccessProfileSetting::Development,
             terminal_enabled: false,
             selected_target_id: None,
@@ -273,9 +289,27 @@ impl SettingsStore {
             return Err(storage_error());
         }
         let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-        File::open(&path)
-            .and_then(|file| file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes))
+        #[cfg(windows)]
+        let binding =
+            colossus_windows_native::BoundPath::open_file(&path).map_err(|_| storage_error())?;
+        #[cfg(windows)]
+        binding
+            .validate_private_owner_dacl()
             .map_err(|_| storage_error())?;
+        #[cfg(windows)]
+        let source = binding.try_clone_file().map_err(|_| storage_error())?;
+        #[cfg(not(windows))]
+        let source = File::open(&path).map_err(|_| storage_error())?;
+        source
+            .take(MAX_SETTINGS_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| storage_error())?;
+        #[cfg(windows)]
+        binding.revalidate().map_err(|_| storage_error())?;
+        #[cfg(windows)]
+        // Migration may atomically replace this file below. Release the validated read
+        // handle first so Windows can detach the old destination name.
+        drop(binding);
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_SETTINGS_BYTES {
             return Err(storage_error());
         }
@@ -331,6 +365,9 @@ impl SettingsStore {
             settings.access_profile = AccessProfileSetting::Development;
         }
         validate_settings(&settings)?;
+        if let Some(bundle) = &settings.additional_ca_bundle {
+            self.ca_bundle_path(bundle)?;
+        }
         if migrated_legacy_workspace || migrated_provider_config {
             self.save(&settings)?;
         }
@@ -358,10 +395,9 @@ impl SettingsStore {
         let result = (|| {
             file.write_all(&bytes).map_err(|_| storage_error())?;
             file.sync_all().map_err(|_| storage_error())?;
-            fs::rename(&temporary, self.root.join(SETTINGS_FILE)).map_err(|_| storage_error())?;
-            File::open(&self.root)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|_| storage_error())
+            drop(file);
+            replace_private_file(&temporary, &self.root.join(SETTINGS_FILE))?;
+            sync_private_directory(&self.root)
         })();
         if result.is_err() {
             let _ = fs::remove_file(temporary);
@@ -390,10 +426,9 @@ impl SettingsStore {
         partition_digest.update(identity.version.to_le_bytes());
         partition_digest.update(identity.sha256.as_bytes());
         let partition = partition_digest.finalize();
-        let directory = self
-            .root
-            .join(MANAGED_DIRECTORY)
-            .join(hex::encode(&partition[..]));
+        let managed_root = self.root.join(MANAGED_DIRECTORY);
+        ensure_private_directory(&managed_root)?;
+        let directory = managed_root.join(hex::encode(&partition[..]));
         ensure_private_directory(&directory)?;
 
         let mut instance_digest = Sha256::new();
@@ -413,10 +448,62 @@ impl SettingsStore {
         })
     }
 
+    pub(crate) fn stage_ca_bundle(
+        &self,
+        source_path: &Path,
+    ) -> Result<CaBundleSetting, CommandErrorDto> {
+        let bytes = read_ca_bundle_source(source_path)?;
+        let roots = colossus_network::AdditionalRootCertificates::from_pem_bundle(&bytes)
+            .map_err(|_| ca_bundle_error("The selected file is not a valid PEM CA bundle."))?;
+        let bundle = CaBundleSetting {
+            bundle_id: Uuid::now_v7().to_string(),
+            certificate_count: roots.len(),
+            fingerprints_sha256: roots.fingerprints_sha256(),
+        };
+        let directory = self.root.join(TRUST_DIRECTORY);
+        ensure_private_directory(&directory)?;
+        let destination = ca_bundle_storage_path(&directory, &bundle)?;
+        write_private_file(&destination, &bytes)?;
+        self.ca_bundle_path(&bundle)?;
+        Ok(bundle)
+    }
+
+    pub(crate) fn ca_bundle_path(
+        &self,
+        bundle: &CaBundleSetting,
+    ) -> Result<PathBuf, CommandErrorDto> {
+        validate_ca_bundle_setting(bundle)?;
+        let directory = self.root.join(TRUST_DIRECTORY);
+        ensure_private_directory(&directory)?;
+        let path = ca_bundle_storage_path(&directory, bundle)?;
+        let bytes = read_private_file(&path, MAX_CA_BUNDLE_BYTES)?;
+        let roots = colossus_network::AdditionalRootCertificates::from_pem_bundle(&bytes)
+            .map_err(|_| ca_bundle_error("The imported CA bundle is no longer valid."))?;
+        if roots.len() != bundle.certificate_count
+            || roots.fingerprints_sha256() != bundle.fingerprints_sha256
+        {
+            return Err(ca_bundle_error(
+                "The imported CA bundle no longer matches its saved identity.",
+            ));
+        }
+        Ok(path)
+    }
+
+    pub(crate) fn delete_ca_bundle(&self, bundle: &CaBundleSetting) -> Result<(), CommandErrorDto> {
+        let directory = self.root.join(TRUST_DIRECTORY);
+        let path = ca_bundle_storage_path(&directory, bundle)?;
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(storage_error()),
+        }
+    }
+
     pub(crate) fn self_test_storage(&self) -> Result<SelfTestStorage, CommandErrorDto> {
         let root = self.root.join(SELF_TEST_DIRECTORY);
         let instance_dir = root.join(SELF_TEST_RUNTIME_DIRECTORY);
         let workspace = root.join(SELF_TEST_WORKSPACE_DIRECTORY);
+        ensure_private_directory(&root)?;
         ensure_private_directory(&instance_dir)?;
         ensure_private_directory(&workspace)?;
         Ok(SelfTestStorage {
@@ -544,6 +631,7 @@ fn migrate_v1_settings(
         models: Vec::new(),
         model_roles: BTreeMap::new(),
         pending_provider_cleanup_ids: pending,
+        additional_ca_bundle: None,
         access_profile: legacy.access_profile,
         terminal_enabled: legacy.terminal_enabled,
         selected_target_id: legacy
@@ -559,6 +647,10 @@ fn validate_settings(settings: &DesktopSettings) -> Result<(), CommandErrorDto> 
         || !Uuid::parse_str(&settings.managed_instance_id).is_ok_and(|value| !value.is_nil())
         || settings.external_targets.len() > MAX_EXTERNAL_TARGETS
         || settings.pending_provider_cleanup_ids.len() > MAX_PENDING_PROVIDER_CLEANUPS
+        || settings
+            .additional_ca_bundle
+            .as_ref()
+            .is_some_and(|bundle| validate_ca_bundle_setting(bundle).is_err())
     {
         return Err(storage_error());
     }
@@ -761,18 +853,37 @@ fn valid_private_absolute_path(path: &Path) -> bool {
     let Some(value) = path.to_str() else {
         return false;
     };
-    path.is_absolute()
-        && path.parent().is_some()
-        && value.len() <= MAX_CONNECTION_PATH_BYTES
-        && !value.chars().any(char::is_control)
-        && !path.components().any(|component| {
+    if !path.is_absolute()
+        || path.parent().is_none()
+        || value.len() > MAX_CONNECTION_PATH_BYTES
+        || value.chars().any(char::is_control)
+        || path.components().any(|component| {
             matches!(
                 component,
-                std::path::Component::ParentDir
-                    | std::path::Component::CurDir
-                    | std::path::Component::Prefix(_)
+                std::path::Component::ParentDir | std::path::Component::CurDir
             )
         })
+    {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        path.components().next().is_some_and(|component| {
+            matches!(
+                component,
+                Component::Prefix(prefix)
+                    if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+            )
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        !path
+            .components()
+            .any(|component| matches!(component, std::path::Component::Prefix(_)))
+    }
 }
 
 fn display_path(path: &Path) -> String {
@@ -836,11 +947,218 @@ fn open_workspace_identity(path: &Path) -> Result<(PathBuf, WorkspaceIdentity), 
         .map_err(|_| workspace_error())?;
         Ok((canonical, identity))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let binding = colossus_windows_native::BoundPath::open_directory(path)
+            .map_err(|_| workspace_error())?;
+        binding.revalidate().map_err(|_| workspace_error())?;
+        let kernel = binding.identity();
+        let identity =
+            WorkspaceIdentity::from_windows_parts(kernel.volume_serial_number, kernel.file_id)
+                .map_err(|_| workspace_error())?;
+        Ok((binding.canonical_path().to_owned(), identity))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = path;
         Err(workspace_error())
     }
+}
+
+fn validate_ca_bundle_setting(bundle: &CaBundleSetting) -> Result<(), CommandErrorDto> {
+    if !valid_opaque_id(&bundle.bundle_id)
+        || bundle.certificate_count == 0
+        || bundle.certificate_count > 256
+        || bundle.fingerprints_sha256.len() != bundle.certificate_count
+        || bundle.fingerprints_sha256.iter().any(|fingerprint| {
+            fingerprint.len() != 64
+                || !fingerprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    {
+        return Err(storage_error());
+    }
+    Ok(())
+}
+
+fn ca_bundle_storage_path(
+    directory: &Path,
+    bundle: &CaBundleSetting,
+) -> Result<PathBuf, CommandErrorDto> {
+    validate_ca_bundle_setting(bundle)?;
+    Ok(directory.join(format!("{}.pem", bundle.bundle_id)))
+}
+
+fn read_ca_bundle_source(path: &Path) -> Result<Vec<u8>, CommandErrorDto> {
+    if !path.is_absolute() {
+        return Err(ca_bundle_error(
+            "Choose a regular PEM file from the native file picker.",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let before = fs::symlink_metadata(path)
+            .map_err(|_| ca_bundle_error("The selected CA bundle could not be opened."))?;
+        if !before.file_type().is_file() || before.len() > MAX_CA_BUNDLE_BYTES {
+            return Err(ca_bundle_error(
+                "The selected CA bundle must be a regular file no larger than 4 MiB.",
+            ));
+        }
+        let mut source = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|_| ca_bundle_error("The selected CA bundle could not be opened."))?;
+        let opened = source
+            .metadata()
+            .map_err(|_| ca_bundle_error("The selected CA bundle could not be verified."))?;
+        if opened.dev() != before.dev() || opened.ino() != before.ino() {
+            return Err(ca_bundle_error(
+                "The selected CA bundle changed while it was being opened.",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
+        std::io::Read::by_ref(&mut source)
+            .take(MAX_CA_BUNDLE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ca_bundle_error("The selected CA bundle could not be read."))?;
+        if bytes.len() as u64 > MAX_CA_BUNDLE_BYTES {
+            return Err(ca_bundle_error(
+                "The selected CA bundle must be no larger than 4 MiB.",
+            ));
+        }
+        return Ok(bytes);
+    }
+    #[cfg(windows)]
+    {
+        let binding = colossus_windows_native::BoundPath::open_file(path)
+            .map_err(|_| ca_bundle_error("The selected CA bundle could not be opened."))?;
+        let mut source = binding
+            .try_clone_file()
+            .map_err(|_| ca_bundle_error("The selected CA bundle could not be opened."))?;
+        let mut bytes = Vec::new();
+        std::io::Read::by_ref(&mut source)
+            .take(MAX_CA_BUNDLE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ca_bundle_error("The selected CA bundle could not be read."))?;
+        binding
+            .revalidate()
+            .map_err(|_| ca_bundle_error("The selected CA bundle changed while it was read."))?;
+        if bytes.len() as u64 > MAX_CA_BUNDLE_BYTES {
+            return Err(ca_bundle_error(
+                "The selected CA bundle must be no larger than 4 MiB.",
+            ));
+        }
+        return Ok(bytes);
+    }
+    #[allow(unreachable_code)]
+    Err(ca_bundle_error(
+        "CA bundle import is unavailable on this platform.",
+    ))
+}
+
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), CommandErrorDto> {
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).map_err(|_| storage_error())?;
+    if file.write_all(bytes).is_err() || file.sync_all().is_err() {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(storage_error());
+    }
+    drop(file);
+    #[cfg(windows)]
+    {
+        let binding =
+            colossus_windows_native::BoundPath::open_file(path).map_err(|_| storage_error())?;
+        binding
+            .validate_private_owner_dacl()
+            .and_then(|()| binding.revalidate())
+            .map_err(|_| storage_error())?;
+    }
+    Ok(())
+}
+
+fn replace_private_file(source: &Path, destination: &Path) -> Result<(), CommandErrorDto> {
+    #[cfg(windows)]
+    {
+        colossus_windows_native::replace_private_file(source, destination)
+            .map_err(|_| storage_error())
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(source, destination).map_err(|_| storage_error())
+    }
+}
+
+#[cfg(unix)]
+fn sync_private_directory(path: &Path) -> Result<(), CommandErrorDto> {
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| storage_error())
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
+fn sync_private_directory(_path: &Path) -> Result<(), CommandErrorDto> {
+    // Windows does not expose the Unix directory-fsync durability primitive.
+    // Preserve one fallible interface at the save call site across platforms.
+    Ok(())
+}
+
+fn read_private_file(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>, CommandErrorDto> {
+    #[cfg(unix)]
+    let mut source = {
+        let metadata = fs::symlink_metadata(path).map_err(|_| storage_error())?;
+        if !metadata.file_type().is_file()
+            || metadata.uid() != rustix::process::getuid().as_raw()
+            || metadata.mode() & 0o077 != 0
+            || metadata.len() > maximum_bytes
+        {
+            return Err(storage_error());
+        }
+        let source = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|_| storage_error())?;
+        let opened = source.metadata().map_err(|_| storage_error())?;
+        if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
+            return Err(storage_error());
+        }
+        source
+    };
+    #[cfg(windows)]
+    let (mut source, binding) = {
+        let binding =
+            colossus_windows_native::BoundPath::open_file(path).map_err(|_| storage_error())?;
+        binding
+            .validate_private_owner_dacl()
+            .map_err(|_| storage_error())?;
+        let source = binding.try_clone_file().map_err(|_| storage_error())?;
+        (source, binding)
+    };
+    #[cfg(not(any(unix, windows)))]
+    let mut source = return Err(storage_error());
+
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut source)
+        .take(maximum_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| storage_error())?;
+    if bytes.len() as u64 > maximum_bytes {
+        return Err(storage_error());
+    }
+    #[cfg(windows)]
+    binding.revalidate().map_err(|_| storage_error())?;
+    Ok(bytes)
 }
 
 fn ensure_private_directory(path: &Path) -> Result<(), CommandErrorDto> {
@@ -848,6 +1166,9 @@ fn ensure_private_directory(path: &Path) -> Result<(), CommandErrorDto> {
         return Err(storage_error());
     }
     if !path.exists() {
+        #[cfg(windows)]
+        colossus_windows_native::create_private_directory(path).map_err(|_| storage_error())?;
+        #[cfg(not(windows))]
         fs::create_dir_all(path).map_err(|_| storage_error())?;
         #[cfg(unix)]
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
@@ -861,6 +1182,15 @@ fn ensure_private_directory(path: &Path) -> Result<(), CommandErrorDto> {
     #[cfg(unix)]
     if metadata.uid() != rustix::process::getuid().as_raw() || metadata.mode() & 0o077 != 0 {
         return Err(storage_error());
+    }
+    #[cfg(windows)]
+    {
+        let binding = colossus_windows_native::BoundPath::open_directory(path)
+            .map_err(|_| storage_error())?;
+        binding
+            .validate_private_owner_dacl()
+            .and_then(|()| binding.revalidate())
+            .map_err(|_| storage_error())?;
     }
     Ok(())
 }
@@ -881,6 +1211,10 @@ fn workspace_error() -> CommandErrorDto {
     )
 }
 
+fn ca_bundle_error(message: &str) -> CommandErrorDto {
+    CommandErrorDto::local_sanitized("ca_bundle_invalid", message, false)
+}
+
 fn credential_error() -> CommandErrorDto {
     CommandErrorDto::local_sanitized(
         "provider_credential",
@@ -892,6 +1226,17 @@ fn credential_error() -> CommandErrorDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn ca_pem(name: &str) -> String {
+        let mut parameters =
+            rcgen::CertificateParams::new(vec![name.into()]).expect("CA parameters");
+        parameters.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        parameters
+            .self_signed(&rcgen::KeyPair::generate().expect("CA key"))
+            .expect("CA certificate")
+            .pem()
+    }
 
     fn configured_settings(
         kind: ProviderKindSetting,
@@ -919,6 +1264,30 @@ mod tests {
             }],
             model_roles: BTreeMap::from([("primary".into(), "primary".into())]),
             ..DesktopSettings::default()
+        }
+    }
+
+    fn test_store() -> (tempfile::TempDir, PathBuf, SettingsStore) {
+        let parent = tempfile::tempdir().expect("store parent");
+        let root = fs::canonicalize(parent.path())
+            .expect("canonical store parent")
+            .join("store");
+        let store = SettingsStore::open(root.clone()).expect("store");
+        let canonical_root = fs::canonicalize(&root).expect("canonical store root");
+        assert_eq!(canonical_root, root);
+        (parent, canonical_root, store)
+    }
+
+    fn test_public_api_dir(suffix: &str) -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!(
+                r"C:\Users\test\AppData\Local\colossus-public-api-{suffix}"
+            ))
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from(format!("/private/tmp/colossus-public-api-{suffix}"))
         }
     }
 
@@ -954,6 +1323,41 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn ca_bundle_is_copied_into_private_storage_and_revalidated() {
+        let root = tempfile::tempdir().expect("root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("root permissions");
+        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
+        let source = tempfile::NamedTempFile::new().expect("source");
+        fs::write(source.path(), ca_pem("private.example")).expect("write CA");
+        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+
+        let bundle = store.stage_ca_bundle(source.path()).expect("import CA");
+        let path = store.ca_bundle_path(&bundle).expect("validate CA");
+
+        assert!(path.starts_with(canonical_root.join(TRUST_DIRECTORY)));
+        assert_ne!(path, source.path());
+        assert_eq!(bundle.certificate_count, 1);
+        assert_eq!(bundle.fingerprints_sha256.len(), 1);
+        assert_eq!(
+            fs::symlink_metadata(&path).expect("metadata").mode() & 0o077,
+            0
+        );
+        let settings = DesktopSettings {
+            additional_ca_bundle: Some(bundle.clone()),
+            ..DesktopSettings::default()
+        };
+        store.save(&settings).expect("save settings");
+        assert_eq!(
+            store.load().expect("load settings").additional_ca_bundle,
+            Some(bundle.clone())
+        );
+        store.delete_ca_bundle(&bundle).expect("delete bundle");
+        assert!(!path.exists());
+    }
+
     #[test]
     fn preview_provider_kind_is_loaded_and_rewritten_canonically() {
         let settings = configured_settings(
@@ -973,11 +1377,7 @@ mod tests {
 
     #[test]
     fn settings_round_trip_never_contains_provider_secret() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let settings = configured_settings(
             ProviderKindSetting::OpenAiCompatible,
             OPENROUTER_BASE_URL,
@@ -1003,11 +1403,7 @@ mod tests {
 
     #[test]
     fn v1_provider_configuration_is_cleared_and_credential_is_queued_for_deletion() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let credential_id = Uuid::now_v7().to_string();
         let encoded = serde_json::json!({
             "schemaVersion": 1,
@@ -1047,16 +1443,12 @@ mod tests {
         assert!(migrated.legacy_connection_migrated);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn managed_state_and_instance_identity_are_isolated_per_workspace() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, _root, store) = test_store();
         let first_workspace = tempfile::tempdir().expect("first workspace");
         let second_workspace = tempfile::tempdir().expect("second workspace");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let store = SettingsStore::open(fs::canonicalize(root.path()).expect("canonical root"))
-            .expect("store");
         let seed = Uuid::now_v7().to_string();
         let first_path = fs::canonicalize(first_workspace.path()).expect("first canonical");
         let second_path = fs::canonicalize(second_workspace.path()).expect("second canonical");
@@ -1091,17 +1483,13 @@ mod tests {
 
     #[test]
     fn path_only_same_path_replacement_requires_reselection_and_preserves_provider() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, root, store) = test_store();
         let workspace_parent = tempfile::tempdir().expect("workspace parent");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
         let workspace_parent =
             fs::canonicalize(workspace_parent.path()).expect("canonical workspace parent");
         let workspace = workspace_parent.join("workspace");
         let moved = workspace_parent.join("workspace-moved");
         fs::create_dir(&workspace).expect("workspace");
-        let store = SettingsStore::open(root.clone()).expect("store");
         let old_seed = Uuid::now_v7().to_string();
         let mut legacy = configured_settings(
             ProviderKindSetting::OpenAiCompatible,
@@ -1139,13 +1527,9 @@ mod tests {
 
     #[test]
     fn v1_inode_only_workspace_identity_requires_explicit_reselection() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, root, store) = test_store();
         let workspace = tempfile::tempdir().expect("workspace");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
         let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
-        let store = SettingsStore::open(root.clone()).expect("store");
         let old_seed = Uuid::now_v7().to_string();
         let legacy = DesktopSettings {
             managed_instance_id: old_seed.clone(),
@@ -1174,13 +1558,9 @@ mod tests {
 
     #[test]
     fn missing_identity_version_migrates_without_bricking_settings() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, root, store) = test_store();
         let workspace = tempfile::tempdir().expect("workspace");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
         let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
-        let store = SettingsStore::open(root.clone()).expect("store");
         let old_seed = Uuid::now_v7().to_string();
         let legacy = DesktopSettings {
             managed_instance_id: old_seed.clone(),
@@ -1214,11 +1594,7 @@ mod tests {
 
     #[test]
     fn missing_legacy_workspace_is_cleared_and_persisted_without_bricking_settings() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(root.clone()).expect("store");
+        let (_root_guard, root, store) = test_store();
         let old_seed = Uuid::now_v7().to_string();
         let missing = root.join("missing-workspace");
         let legacy = DesktopSettings {
@@ -1246,14 +1622,11 @@ mod tests {
         assert_eq!(store.load().expect("persisted recovery"), migrated);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn replacement_at_same_path_gets_distinct_state_and_rejects_saved_identity() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, _root, store) = test_store();
         let parent = tempfile::tempdir().expect("workspace parent");
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let store = SettingsStore::open(fs::canonicalize(root.path()).expect("canonical root"))
-            .expect("store");
         let parent = fs::canonicalize(parent.path()).expect("canonical parent");
         let workspace_path = parent.join("workspace");
         let moved_path = parent.join("workspace-moved");
@@ -1295,11 +1668,7 @@ mod tests {
 
     #[test]
     fn offline_self_test_uses_distinct_app_private_runtime_and_workspace() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let store = SettingsStore::open(fs::canonicalize(root.path()).expect("canonical root"))
-            .expect("store");
+        let (_root_guard, _root, store) = test_store();
 
         let storage = store.self_test_storage().expect("self-test storage");
 
@@ -1320,11 +1689,7 @@ mod tests {
 
     #[test]
     fn persisted_settings_reject_unknown_fields() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let path = canonical_root.join(SETTINGS_FILE);
         fs::write(
             &path,
@@ -1338,11 +1703,7 @@ mod tests {
 
     #[test]
     fn persisted_external_targets_cannot_select_arbitrary_keychain_entries() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let instance_id = Uuid::now_v7().to_string();
         let certificate_sha256 = "a".repeat(64);
         let settings = DesktopSettings {
@@ -1351,7 +1712,7 @@ mod tests {
                 label: "Imported daemon".into(),
                 instance_id: instance_id.clone(),
                 certificate_sha256: certificate_sha256.clone(),
-                public_api_dir: "/private/tmp/colossus-public-api".into(),
+                public_api_dir: test_public_api_dir("imported"),
                 credential_service: "com.example.unrelated".into(),
                 credential_account: "private-mail-password".into(),
                 requires_credential_enrollment: false,
@@ -1381,13 +1742,23 @@ mod tests {
         assert!(!valid_external_label("Production\u{2066}daemon"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn private_connection_paths_reject_remote_windows_namespaces() {
+        assert!(valid_private_absolute_path(Path::new(
+            r"C:\Users\test\AppData\Local\colossus-api"
+        )));
+        assert!(!valid_private_absolute_path(Path::new(
+            r"\\server\share\colossus-api"
+        )));
+        assert!(!valid_private_absolute_path(Path::new(
+            r"\\?\UNC\server\share\colossus-api"
+        )));
+    }
+
     #[test]
     fn persisted_external_targets_reject_directional_spoofing() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let instance_id = Uuid::now_v7().to_string();
         let certificate_sha256 = "a".repeat(64);
         let settings = DesktopSettings {
@@ -1396,7 +1767,7 @@ mod tests {
                 label: "Production\u{202e}nimda".into(),
                 instance_id: instance_id.clone(),
                 certificate_sha256: certificate_sha256.clone(),
-                public_api_dir: "/private/tmp/colossus-public-api".into(),
+                public_api_dir: test_public_api_dir("spoofed"),
                 credential_service: EXTERNAL_KEYRING_SERVICE.into(),
                 credential_account: external_credential_account(&instance_id, &certificate_sha256)
                     .expect("bound credential account"),
@@ -1414,11 +1785,7 @@ mod tests {
 
     #[test]
     fn bounded_external_target_set_fits_private_settings_storage() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root).expect("store");
+        let (_root_guard, _canonical_root, store) = test_store();
         let targets = (0..MAX_EXTERNAL_TARGETS)
             .map(|index| {
                 let instance_id = Uuid::now_v7().to_string();
@@ -1431,9 +1798,7 @@ mod tests {
                     label: format!("External daemon {index}"),
                     instance_id,
                     certificate_sha256,
-                    public_api_dir: PathBuf::from(format!(
-                        "/private/tmp/colossus-public-api-{index}"
-                    )),
+                    public_api_dir: test_public_api_dir(&index.to_string()),
                     credential_service: EXTERNAL_KEYRING_SERVICE.into(),
                     credential_account,
                     requires_credential_enrollment: false,

@@ -6,13 +6,16 @@ use colossus_sdk::{
 use directories::BaseDirs;
 use serde::Deserialize;
 use std::{
-    fs::{self, File},
+    fs,
     io::Read as _,
     path::{Component, Path, PathBuf},
     str::FromStr as _,
     sync::Arc,
 };
 use uuid::Uuid;
+
+#[cfg(not(windows))]
+use std::fs::File;
 
 use crate::{
     desktop_settings::{
@@ -94,6 +97,18 @@ pub(crate) fn import_target(path: &Path) -> Result<ExternalTargetSetting, Comman
     if canonical != path {
         return Err(connection_file_error());
     }
+    #[cfg(windows)]
+    let binding = colossus_windows_native::BoundPath::open_file(&canonical)
+        .map_err(|_| connection_file_error())?;
+    #[cfg(windows)]
+    binding
+        .validate_private_owner_dacl()
+        .map_err(|_| connection_file_error())?;
+    #[cfg(windows)]
+    let file = binding
+        .try_clone_file()
+        .map_err(|_| connection_file_error())?;
+    #[cfg(not(windows))]
     let file = File::open(&canonical).map_err(|_| connection_file_error())?;
     let opened_metadata = file.metadata().map_err(|_| connection_file_error())?;
     if !same_file_metadata(&metadata, &opened_metadata) {
@@ -108,6 +123,8 @@ pub(crate) fn import_target(path: &Path) -> Result<ExternalTargetSetting, Comman
     if !same_file_metadata(&opened_metadata, &final_metadata) {
         return Err(connection_file_error());
     }
+    #[cfg(windows)]
+    binding.revalidate().map_err(|_| connection_file_error())?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CONNECTION_FILE_BYTES {
         return Err(connection_file_error());
     }
@@ -349,18 +366,39 @@ fn expand_private_path(value: &str, home: Option<&Path>) -> Result<PathBuf, Comm
         PathBuf::from(value)
     };
 
-    if !path.is_absolute()
-        || path.parent().is_none()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::CurDir | Component::Prefix(_)
-            )
-        })
-    {
+    if !valid_local_absolute_path(&path) {
         return Err(CommandErrorDto::not_configured());
     }
     Ok(path)
+}
+
+fn valid_local_absolute_path(path: &Path) -> bool {
+    if !path.is_absolute()
+        || path.parent().is_none()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+    {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::path::Prefix;
+
+        path.components().next().is_some_and(|component| {
+            matches!(
+                component,
+                Component::Prefix(prefix)
+                    if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+            )
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        !path
+            .components()
+            .any(|component| matches!(component, Component::Prefix(_)))
+    }
 }
 
 #[cfg(test)]
@@ -382,24 +420,31 @@ mod tests {
         "credentialAccount":"colossus-public-api"
     }"#;
 
+    fn test_home() -> &'static Path {
+        #[cfg(windows)]
+        {
+            Path::new(r"C:\Users\test")
+        }
+        #[cfg(not(windows))]
+        {
+            Path::new("/Users/test")
+        }
+    }
+
     #[test]
     fn accepts_compiled_trust_anchor_and_expands_home() {
-        let config = prepare_connection(VALID, Some(Path::new("/Users/test")))
-            .expect("valid connection config");
+        let config = prepare_connection(VALID, Some(test_home())).expect("valid connection config");
         assert_eq!(
             config.public_api_dir,
-            PathBuf::from("/Users/test/.colossus-public-api")
+            test_home().join(".colossus-public-api")
         );
     }
 
     #[test]
     fn legacy_compiled_target_is_retained_without_copying_credential_authority() {
-        let target = legacy_compiled_target_from_source(
-            LEGACY,
-            "external-default",
-            Some(Path::new("/Users/test")),
-        )
-        .expect("legacy target metadata");
+        let target =
+            legacy_compiled_target_from_source(LEGACY, "external-default", Some(test_home()))
+                .expect("legacy target metadata");
         assert!(target.requires_credential_enrollment);
         assert_eq!(target.credential_service, EXTERNAL_KEYRING_SERVICE);
         assert_eq!(
@@ -411,39 +456,49 @@ mod tests {
 
         let arbitrary = LEGACY.replace(LEGACY_DESKTOP_KEYRING_ACCOUNT, "unrelated-keychain-entry");
         assert!(
-            legacy_compiled_target_from_source(
-                &arbitrary,
-                "external-default",
-                Some(Path::new("/Users/test")),
-            )
-            .is_err()
+            legacy_compiled_target_from_source(&arbitrary, "external-default", Some(test_home()),)
+                .is_err()
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn connection_paths_reject_remote_windows_namespaces() {
+        assert!(valid_local_absolute_path(Path::new(
+            r"C:\Users\test\.colossus-public-api"
+        )));
+        assert!(!valid_local_absolute_path(Path::new(
+            r"\\server\share\.colossus-public-api"
+        )));
+        assert!(!valid_local_absolute_path(Path::new(
+            r"\\?\UNC\server\share\.colossus-public-api"
+        )));
     }
 
     #[test]
     fn rejects_placeholder_identity_and_fingerprint() {
-        assert!(prepare_connection(TEMPLATE_CONNECTION, Some(Path::new("/tmp"))).is_err());
+        assert!(prepare_connection(TEMPLATE_CONNECTION, Some(test_home())).is_err());
         let nil = VALID.replace(
             "01968a3e-0ab3-7f10-bb27-4eadbd550007",
             "00000000-0000-0000-0000-000000000000",
         );
-        assert!(prepare_connection(&nil, Some(Path::new("/tmp"))).is_err());
+        assert!(prepare_connection(&nil, Some(test_home())).is_err());
         let zero_pin = VALID.replace(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             PLACEHOLDER_FINGERPRINT,
         );
-        assert!(prepare_connection(&zero_pin, Some(Path::new("/tmp"))).is_err());
+        assert!(prepare_connection(&zero_pin, Some(test_home())).is_err());
     }
 
     #[test]
     fn rejects_unknown_fields_and_unsafe_paths() {
         let unknown = VALID.replace("\n    }", ",\n        \"credential\":\"secret\"\n    }");
-        assert!(prepare_connection(&unknown, Some(Path::new("/tmp"))).is_err());
+        assert!(prepare_connection(&unknown, Some(test_home())).is_err());
 
         for path in ["relative/api", "~/../other", "/tmp/../other", "/"] {
             let source = VALID.replace("~/.colossus-public-api", path);
             assert!(
-                prepare_connection(&source, Some(Path::new("/Users/test"))).is_err(),
+                prepare_connection(&source, Some(test_home())).is_err(),
                 "accepted unsafe path {path}"
             );
         }
@@ -452,18 +507,18 @@ mod tests {
             "com.obscuritylabs.colossus.desktop.external",
             "com.example.unrelated-secret",
         );
-        assert!(prepare_connection(&arbitrary_service, Some(Path::new("/tmp"))).is_err());
+        assert!(prepare_connection(&arbitrary_service, Some(test_home())).is_err());
         let arbitrary_account = VALID.replace(
             "daemon-01968a3e-0ab3-7f10-bb27-4eadbd550007-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "another-keychain-account",
         );
-        assert!(prepare_connection(&arbitrary_account, Some(Path::new("/tmp"))).is_err());
+        assert!(prepare_connection(&arbitrary_account, Some(test_home())).is_err());
     }
 
     #[test]
     fn setup_errors_do_not_disclose_native_configuration() {
         let source = VALID.replace("~/.colossus-public-api", "/Users/private/secret/../daemon");
-        let error = prepare_connection(&source, Some(Path::new("/Users/test")))
+        let error = prepare_connection(&source, Some(test_home()))
             .err()
             .expect("unsafe path rejected");
         let serialized = serde_json::to_string(&error).expect("error serializes");
@@ -507,6 +562,25 @@ mod tests {
         let link_path = root.path().join("connection-link.json");
         symlink(&config_path, &link_path).expect("symlink");
         assert!(import_target(&link_path).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn imports_owner_private_windows_connection_files() {
+        let parent = tempfile::tempdir().expect("root");
+        let root = parent.path().join("private");
+        colossus_windows_native::create_private_directory(&root).expect("private root");
+        let config_path = root.join("connection.json");
+        let source = VALID.replace(
+            "~/.colossus-public-api",
+            r"C:\\Users\\test\\AppData\\Local\\colossus-api",
+        );
+        fs::write(&config_path, source).expect("write config");
+        let config_path = fs::canonicalize(config_path).expect("canonical config");
+
+        let imported = import_target(&config_path).expect("import target");
+        assert!(Uuid::parse_str(&imported.target_id).is_ok());
+        assert_eq!(imported.label, "External 01968a3e");
     }
 
     #[cfg(unix)]

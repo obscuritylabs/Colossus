@@ -641,7 +641,7 @@ fn risk_auto_reviews_read_only_network_tools_without_prompting() {
     );
     let requests = server.join().expect("network provider");
     assert!(requests[0].starts_with("POST /v1/chat/completions "));
-    assert!(requests[0].contains(r#""name":"web.fetch""#));
+    assert!(requests[0].contains(r#""name":"web_fetch""#));
     assert!(requests[1].contains("risk_level"));
     assert!(requests[2].starts_with("GET /resource "));
     assert!(requests[3].contains(r#""tool_call_id":"network-call""#));
@@ -693,7 +693,7 @@ fn risk_auto_warns_when_invalid_evaluator_output_requires_manual_approval() {
     assert!(!warning.contains("not a valid risk assessment"), "{stderr}");
     let requests = server.join().expect("network provider");
     assert_eq!(requests.len(), 2);
-    assert!(requests[0].contains(r#""name":"web.fetch""#));
+    assert!(requests[0].contains(r#""name":"web_fetch""#));
     assert!(requests[1].contains("risk_level"));
 }
 
@@ -721,7 +721,7 @@ fn every_terminal_mode_preserves_allowed_denied_and_approval_required_tool_seman
             "approval-mode-write"
         );
         let requests = server.join().expect("allowed provider");
-        assert!(requests[0].contains(r#""name":"filesystem.write""#));
+        assert!(requests[0].contains(r#""name":"filesystem_write""#));
         assert!(requests[1].contains(r#""tool_call_id":"approval-call""#));
         assert!(
             !String::from_utf8_lossy(&output.stderr).contains("approval required"),

@@ -6,7 +6,8 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "tsBuildInfoFile": "./node_modules/.cache/tsconfig.node.tsbuildinfo",
-    "types": ["node"]
+    "types": ["node"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["vite.config.ts"]
+  "include": ["vite.config.ts", "playwright.config.ts", "tests/browser"]
 }

@@ -154,6 +154,46 @@ impl AgentService {
         .await
     }
 
+    /// Execute a trusted local run with explicit provider response diagnostics.
+    ///
+    /// The diagnostic remains typed on a terminal provider error. Durable run events and
+    /// ordinary error display stay body-free.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_in_session_with_skills_stream_controlled_with_provider_diagnostics(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
+        match self
+            .run_with_lineage(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                requested_session_id,
+                RunScope {
+                    active_skills,
+                    include_provider_response_diagnostics: true,
+                    ..RunScope::default()
+                },
+                terminal_actor(),
+                Some(observer),
+                Some(control),
+            )
+            .await
+        {
+            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
+            Err(AgentError::Cancelled { result }) => Ok(AgentRunOutcome::Cancelled { result }),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Execute a skilled run for one immutable authenticated initiator.
     ///
     /// Interfaces must construct the actor from authenticated caller context. The actor
@@ -373,6 +413,7 @@ impl AgentService {
         max_turns: u16,
         child_session_id: &str,
         subagent_id: &str,
+        allowed_tools: Option<&[String]>,
     ) -> Result<AgentRunResult, AgentError> {
         self.run_with_lineage(
             role,
@@ -382,9 +423,52 @@ impl AgentService {
             Some(child_session_id),
             RunScope {
                 subagent_id: Some(subagent_id),
+                allowed_tools,
                 ..RunScope::default()
             },
             terminal_actor(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Execute one policy-authorized declarative workflow agent step.
+    ///
+    /// The workflow effect itself is authorized before this method is entered. Every
+    /// provider turn and tool invoked by the model still crosses its ordinary gateway
+    /// with immutable workflow lineage, so this is not an alternate effect path.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_workflow_step(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        workflow_id: &str,
+        workflow_hash: &str,
+        step_id: &str,
+        attempt: u32,
+        allowed_tools: &[String],
+    ) -> Result<AgentRunResult, AgentError> {
+        self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            None,
+            RunScope {
+                workflow_id: Some(workflow_id),
+                workflow_hash: Some(workflow_hash),
+                step_id: Some(step_id),
+                attempt: Some(attempt),
+                allowed_tools: Some(allowed_tools),
+                ..RunScope::default()
+            },
+            Actor {
+                actor_type: ActorType::Workflow,
+                id: workflow_id.into(),
+            },
             None,
             None,
         )

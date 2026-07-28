@@ -60,6 +60,9 @@ steps:
 
 The schemas describe the top-level input and output values. `capabilities` is the
 definition ceiling; it does not grant policy or sandbox authority.
+For an `agent` step, exact tool names in this list are also the model-visible tool
+ceiling. A tool omitted from the pinned definition is not offered to the workflow
+agent, even when it is available to an interactive primary run.
 
 Workflows never inherit `workspace-development` grants, even when invoked by a main
 agent that has them. An agent executing inside workflow lineage also loses development
@@ -144,4 +147,6 @@ registration trusts exact content rather than a mutable path.
 ## Next step
 
 Add schedules, webhooks, or repository events with
-[Triggers and recovery](triggers-recovery.md).
+[Triggers and recovery](triggers-recovery.md), or run the advanced examples in
+`examples/workflows/` to exercise conditions, parallel branches, durable input, child
+workflows, and recovery.

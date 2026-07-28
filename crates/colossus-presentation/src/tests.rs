@@ -361,6 +361,8 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
             code: "provider_unavailable".into(),
             message: "Try another profile.".into(),
             recoverable: true,
+            http_status: None,
+            retry_after_ms: None,
             turn: Some(2),
             elapsed_seconds: 1.5,
         })
@@ -408,6 +410,38 @@ fn compact_web_fetch_cards_bound_response_bodies_while_verbose_cards_show_them()
     .expect("visible verbose fetch");
     assert!(verbose.contains("full-body-tail"), "{verbose}");
     assert!(!verbose.contains("preview only"), "{verbose}");
+}
+
+#[test]
+fn verbose_run_errors_show_structured_http_status() {
+    let event = RunEvent::Error {
+        code: "provider.temporarily_unavailable".into(),
+        message: "provider endpoint is not ready".into(),
+        recoverable: true,
+        http_status: Some(503),
+        retry_after_ms: Some(7_000),
+        turn: Some(1),
+        elapsed_seconds: 0.27,
+    };
+    let compact = SemanticRenderer::new(TerminalPreferences::default())
+        .run_event(&event)
+        .expect("render compact error")
+        .expect("visible compact error");
+    assert!(!compact.contains("HTTP status"), "{compact}");
+    assert!(!compact.contains("503"), "{compact}");
+
+    let verbose = SemanticRenderer::new(TerminalPreferences {
+        events_mode: EventDisplayMode::Verbose,
+        ..TerminalPreferences::default()
+    })
+    .run_event(&event)
+    .expect("render verbose error")
+    .expect("visible verbose error");
+    assert!(verbose.contains("HTTP status"), "{verbose}");
+    assert!(verbose.contains("503"), "{verbose}");
+    assert!(verbose.contains("Retry after"), "{verbose}");
+    assert!(verbose.contains("7000 ms"), "{verbose}");
+    assert!(!verbose.contains("response body"), "{verbose}");
 }
 
 #[test]
@@ -784,6 +818,8 @@ fn every_run_event_variant_and_builtin_tool_has_compact_and_verbose_semantics() 
                     code: "acceptance_error".into(),
                     message: "bounded safe message".into(),
                     recoverable: true,
+                    http_status: None,
+                    retry_after_ms: None,
                     turn: Some(1),
                     elapsed_seconds: 0.5,
                 })

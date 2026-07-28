@@ -289,6 +289,28 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())?,
                 Some("Active model route"),
             ),
+            "models" => {
+                let profile = doctor_profile(arguments, "models")?;
+                self.result(
+                    &self
+                        .runtime
+                        .model_doctor_with_diagnostics(profile, true)
+                        .await
+                        .map_err(|error| error.to_string())?,
+                    Some("Model diagnostics"),
+                )
+            }
+            "provider" => {
+                let profile = doctor_profile(arguments, "provider")?;
+                self.result(
+                    &self
+                        .runtime
+                        .provider_doctor_with_diagnostics(profile, true)
+                        .await
+                        .map_err(|error| error.to_string())?,
+                    Some("Provider diagnostics"),
+                )
+            }
             "workspace" => self.result(
                 &json!({"workspace": std::env::current_dir().map_err(|error| error.to_string())?}),
                 Some("Workspace"),
@@ -1014,21 +1036,36 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         request.explicit_skills = explicit_skills;
         self.router.install(Some(events.clone()));
         let mut observer = ChannelRunObserver { sender: events };
-        let outcome = self
-            .runtime
-            .run_model_with_skills_stream_controlled(
-                "primary",
-                "You are Colossus.",
-                &request.prompt,
-                None,
-                Some(&request.session_id),
-                &request.explicit_skills,
-                &request.sticky_skills,
-                &mut observer,
-                &control,
-            )
-            .await
-            .map_err(|error| error.to_string());
+        let outcome = if request.include_provider_response_diagnostics {
+            self.runtime
+                .run_model_with_skills_stream_controlled_with_provider_diagnostics(
+                    "primary",
+                    "You are Colossus.",
+                    &request.prompt,
+                    None,
+                    Some(&request.session_id),
+                    &request.explicit_skills,
+                    &request.sticky_skills,
+                    &mut observer,
+                    &control,
+                )
+                .await
+        } else {
+            self.runtime
+                .run_model_with_skills_stream_controlled(
+                    "primary",
+                    "You are Colossus.",
+                    &request.prompt,
+                    None,
+                    Some(&request.session_id),
+                    &request.explicit_skills,
+                    &request.sticky_skills,
+                    &mut observer,
+                    &control,
+                )
+                .await
+        }
+        .map_err(|error| interactive_runtime_error(&error));
         self.router.install(None);
         let outcome = outcome?;
         let status = match outcome {

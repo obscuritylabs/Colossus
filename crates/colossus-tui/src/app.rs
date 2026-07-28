@@ -374,12 +374,7 @@ pub(super) fn start_line(
             state.activity = Some("waiting for model".into());
             let control = RunControl::default();
             state.control = Some(control.clone());
-            let request = InteractiveRunRequest {
-                session_id: state.session_id.clone(),
-                prompt,
-                explicit_skills: Vec::new(),
-                sticky_skills: state.sticky_skills.clone(),
-            };
+            let request = state.run_request(prompt);
             let task_tx = event_tx.clone();
             tokio::spawn(async move {
                 let result = host
@@ -414,6 +409,15 @@ pub(super) fn handle_local_command(
             document: preferences_document(&state.preferences),
             temporary: false,
         }),
+        LocalCommand::ProviderDiagnostics(enabled) => {
+            state.provider_response_diagnostics = enabled;
+            state.append_entry(TranscriptEntry {
+                sequence: None,
+                kind: TranscriptKind::Command,
+                document: provider_diagnostics_document(enabled),
+                temporary: false,
+            });
+        }
         LocalCommand::SavePreferences | LocalCommand::ResetPreferences => {
             let preferences = if command == LocalCommand::ResetPreferences {
                 TerminalPreferences::default()

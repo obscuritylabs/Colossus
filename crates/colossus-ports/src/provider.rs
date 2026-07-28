@@ -1,5 +1,12 @@
 use super::*;
 
+/// Explicit controls for one provider turn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProviderTurnOptions {
+    /// Capture a bounded non-success response for a trusted local diagnostic surface.
+    pub include_response_diagnostics: bool,
+}
+
 /// Role-routed, policy-bound model provider used by the application loop.
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
@@ -27,6 +34,23 @@ pub trait ModelProvider: Send + Sync {
             observer.observe(event.clone()).await?;
         }
         Ok(turn)
+    }
+
+    /// Execute one provider turn with explicit local diagnostic controls.
+    async fn turn_stream_with_options(
+        &self,
+        role: &str,
+        request: ModelRequest,
+        context: ExecutionContext,
+        options: ProviderTurnOptions,
+        observer: &mut dyn ProviderEventObserver,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        if options.include_response_diagnostics {
+            return Err(ModelProviderError::Configuration(
+                "provider response diagnostics are unsupported by this adapter".into(),
+            ));
+        }
+        self.turn_stream(role, request, context, observer).await
     }
 }
 

@@ -34,4 +34,27 @@ describe("ArtifactWorkspace", () => {
       /aria-selected="true"[^>]*data-artifact-id="artifact-7"/,
     );
   });
+
+  it("reports authorized preview loading and failures without implying a path leak", () => {
+    const loading = renderToStaticMarkup(
+      createElement(ArtifactWorkspace, {
+        artifacts: [{ ...artifact(1), previewStatus: "loading" }],
+      }),
+    );
+    expect(loading).toContain("Loading the authorized preview");
+
+    const failed = renderToStaticMarkup(
+      createElement(ArtifactWorkspace, {
+        artifacts: [
+          {
+            ...artifact(1),
+            previewStatus: "error",
+            previewError: "The artifact is no longer available.",
+          },
+        ],
+      }),
+    );
+    expect(failed).toContain("The artifact is no longer available.");
+    expect(failed).not.toContain("runtime paths");
+  });
 });

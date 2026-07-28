@@ -116,6 +116,7 @@ where
         parent_call_id: "call-conformance".into(),
         task: "Verify one bounded adapter.".into(),
         role: "subagent_default".into(),
+        allowed_tools: None,
         status: SubagentStatus::Queued,
         child_session_id: "child-session-conformance".into(),
         child_run_id: None,

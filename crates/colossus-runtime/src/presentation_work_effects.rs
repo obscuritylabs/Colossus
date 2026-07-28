@@ -329,12 +329,16 @@ impl EffectExecutor for WorkEffectExecutor {
                 parent_call_id,
                 task,
                 role,
+                allowed_tools,
             } => work_result(self.service.create_subagent(
-                &session_id,
-                &parent_run_id,
-                &parent_call_id,
-                &task,
-                &role,
+                colossus_work::CreateSubagentRequest {
+                    session_id,
+                    parent_run_id,
+                    parent_call_id,
+                    task,
+                    role,
+                    allowed_tools,
+                },
                 actor,
             )),
             WorkOperation::SubagentRead { id } => {

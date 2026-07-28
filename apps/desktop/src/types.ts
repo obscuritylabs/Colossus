@@ -41,6 +41,31 @@ export interface WorkspaceSummary {
   displayPath: string;
 }
 
+export type WorkspaceEntryKind = "directory" | "file";
+
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  kind: WorkspaceEntryKind;
+  sizeBytes: number | null;
+}
+
+export interface WorkspaceDirectory {
+  path: string;
+  entries: WorkspaceEntry[];
+  truncated: boolean;
+  excludedCount: number;
+}
+
+export interface WorkspaceFile {
+  name: string;
+  path: string;
+  content: string;
+  language: string;
+  sizeBytes: number;
+  lineCount: number;
+}
+
 export interface RuntimeTarget {
   targetId: string;
   kind: RuntimeTargetKind;
@@ -97,6 +122,23 @@ export interface ManagedConfiguration {
 export type DesktopReleaseChannel =
   "development" | "stable" | "developer_preview" | "validation_only";
 
+export interface DesktopReleaseMetadata {
+  platform: "macos" | "windows" | "unsupported";
+  architecture: string;
+  channel: DesktopReleaseChannel;
+  bundleIntegrity: "verified" | "failed";
+  codeSigning:
+    "development" | "verified" | "ad_hoc" | "unsigned" | "unsupported";
+}
+
+export interface DesktopUpdateCheck {
+  configured: boolean;
+  available: boolean;
+  currentVersion: string;
+  version: string | null;
+  channel: DesktopReleaseChannel;
+}
+
 export interface DesktopStatus {
   releaseChannel: DesktopReleaseChannel;
   connection: ConnectionStatus;
@@ -108,6 +150,25 @@ export interface DesktopStatus {
   managedModelConfiguration: ManagedConfiguration;
   accessProfile: "minimal" | "development";
   terminalEnabled: boolean;
+  additionalCaBundle: CaBundleStatus;
+  capabilities: DesktopCapabilities;
+}
+
+export interface CaBundleStatus {
+  configured: boolean;
+  certificateCount: number;
+  fingerprintsSha256: string[];
+}
+
+export interface DesktopCapabilities {
+  delegation: boolean;
+  skills: boolean;
+  tui: boolean;
+  files: boolean;
+  artifacts: boolean;
+  updateAvailable: boolean;
+  agentWorkflows: boolean;
+  attachments: boolean;
 }
 
 export interface ConfigureManagedRuntimeRequest {
@@ -213,6 +274,9 @@ export interface RunFailure {
   reason: string;
   message: string;
   outcomeCertainty: OutcomeCertainty;
+  recoverable?: boolean;
+  httpStatus?: number | null;
+  retryAfterMs?: number | null;
 }
 
 export interface RunCancellation {
@@ -228,6 +292,7 @@ export type RunTerminal =
 export interface Run {
   runId: string;
   sessionId: string;
+  title: string;
   role: string;
   mode: RunMode;
   status: RunStatus;
@@ -368,11 +433,17 @@ export interface RunPage {
 
 export interface CreateRunRequest {
   prompt: string;
+  artifactIds?: string[];
   sessionId?: string;
   role: string;
   mode: RunMode;
   maxTurns: number;
   idempotencyKey: string;
+}
+
+export interface ArtifactContent {
+  artifact: ArtifactReference;
+  text: string;
 }
 
 export interface GetRunRequest {

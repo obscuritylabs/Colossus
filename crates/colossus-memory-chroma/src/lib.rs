@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, CredentialReference, EffectRequest, QuarantinedEffectResult,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{
     EffectExecutor, EffectGateway, ExecutionError, ExecutionPermit, GatewayError,
     NetworkDestinationMatch, effect_request, network_destination_match, non_public_network_address,

@@ -497,8 +497,14 @@ type RunFailure struct {
 	Message string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	// outcome_certainty prevents unsafe automatic retry.
 	OutcomeCertainty OutcomeCertainty `protobuf:"varint,3,opt,name=outcome_certainty,json=outcomeCertainty,proto3,enum=colossus.api.v1alpha1.OutcomeCertainty" json:"outcome_certainty,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// recoverable is true only when retrying is known to be safe.
+	Recoverable bool `protobuf:"varint,4,opt,name=recoverable,proto3" json:"recoverable,omitempty"`
+	// http_status is present only for a released upstream HTTP response status.
+	HttpStatus *uint32 `protobuf:"varint,5,opt,name=http_status,json=httpStatus,proto3,oneof" json:"http_status,omitempty"`
+	// retry_after_ms is present only when the provider supplied a useful lower bound.
+	RetryAfterMs  *uint64 `protobuf:"varint,6,opt,name=retry_after_ms,json=retryAfterMs,proto3,oneof" json:"retry_after_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunFailure) Reset() {
@@ -550,6 +556,27 @@ func (x *RunFailure) GetOutcomeCertainty() OutcomeCertainty {
 		return x.OutcomeCertainty
 	}
 	return OutcomeCertainty_OUTCOME_CERTAINTY_UNSPECIFIED
+}
+
+func (x *RunFailure) GetRecoverable() bool {
+	if x != nil {
+		return x.Recoverable
+	}
+	return false
+}
+
+func (x *RunFailure) GetHttpStatus() uint32 {
+	if x != nil && x.HttpStatus != nil {
+		return *x.HttpStatus
+	}
+	return 0
+}
+
+func (x *RunFailure) GetRetryAfterMs() uint64 {
+	if x != nil && x.RetryAfterMs != nil {
+		return *x.RetryAfterMs
+	}
+	return 0
 }
 
 // RunCancellation contains durable cancellation evidence.
@@ -644,8 +671,10 @@ type Run struct {
 	Etag string `protobuf:"bytes,15,opt,name=etag,proto3" json:"etag,omitempty"`
 	// selected_skills is empty in v1alpha1 because public skill activation is denied.
 	SelectedSkills []string `protobuf:"bytes,16,rep,name=selected_skills,json=selectedSkills,proto3" json:"selected_skills,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// title is a bounded deterministic display label derived from the opening request.
+	Title         string `protobuf:"bytes,17,opt,name=title,proto3" json:"title,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Run) Reset() {
@@ -803,6 +832,13 @@ func (x *Run) GetSelectedSkills() []string {
 	return nil
 }
 
+func (x *Run) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
 type isRun_Terminal interface {
 	isRun_Terminal()
 }
@@ -831,7 +867,7 @@ func (*Run_Cancellation) isRun_Terminal() {}
 // CreateRunRequest allocates and starts one durable agent run.
 type CreateRunRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// input contains bounded user-visible content; v1alpha1 accepts text parts only.
+	// input contains bounded visible text or authorized opaque artifact references.
 	Input []*ContentPart `protobuf:"bytes,1,rep,name=input,proto3" json:"input,omitempty"`
 	// session_id attaches to an existing canonical session. Omission allocates a durable
 	// run-owned session identity; the canonical session is materialized during agent
@@ -2864,15 +2900,21 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\x05model\x18\x03 \x01(\tR\x05model\x12'\n" +
 	"\x0felapsed_seconds\x18\x04 \x01(\x01R\x0eelapsedSeconds\x12#\n" +
 	"\rmodel_profile\x18\x05 \x01(\tR\fmodelProfile\x12)\n" +
-	"\x10provider_profile\x18\x06 \x01(\tR\x0fproviderProfile\"\x94\x01\n" +
+	"\x10provider_profile\x18\x06 \x01(\tR\x0fproviderProfile\"\xaa\x02\n" +
 	"\n" +
 	"RunFailure\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12T\n" +
-	"\x11outcome_certainty\x18\x03 \x01(\x0e2'.colossus.api.v1alpha1.OutcomeCertaintyR\x10outcomeCertainty\"?\n" +
+	"\x11outcome_certainty\x18\x03 \x01(\x0e2'.colossus.api.v1alpha1.OutcomeCertaintyR\x10outcomeCertainty\x12 \n" +
+	"\vrecoverable\x18\x04 \x01(\bR\vrecoverable\x12$\n" +
+	"\vhttp_status\x18\x05 \x01(\rH\x00R\n" +
+	"httpStatus\x88\x01\x01\x12)\n" +
+	"\x0eretry_after_ms\x18\x06 \x01(\x04H\x01R\fretryAfterMs\x88\x01\x01B\x0e\n" +
+	"\f_http_statusB\x11\n" +
+	"\x0f_retry_after_ms\"?\n" +
 	"\x0fRunCancellation\x12\x12\n" +
 	"\x04turn\x18\x01 \x01(\rR\x04turn\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x9e\x06\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xb4\x06\n" +
 	"\x03Run\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -2895,7 +2937,8 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\afailure\x18\r \x01(\v2!.colossus.api.v1alpha1.RunFailureH\x00R\afailure\x12L\n" +
 	"\fcancellation\x18\x0e \x01(\v2&.colossus.api.v1alpha1.RunCancellationH\x00R\fcancellation\x12\x12\n" +
 	"\x04etag\x18\x0f \x01(\tR\x04etag\x12'\n" +
-	"\x0fselected_skills\x18\x10 \x03(\tR\x0eselectedSkillsB\n" +
+	"\x0fselected_skills\x18\x10 \x03(\tR\x0eselectedSkills\x12\x14\n" +
+	"\x05title\x18\x11 \x01(\tR\x05titleB\n" +
 	"\n" +
 	"\bterminal\"\xb6\x02\n" +
 	"\x10CreateRunRequest\x128\n" +
@@ -3214,6 +3257,7 @@ func file_colossus_api_v1alpha1_agent_run_proto_init() {
 	}
 	file_colossus_api_v1alpha1_common_proto_init()
 	file_colossus_api_v1alpha1_session_proto_init()
+	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[1].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[3].OneofWrappers = []any{
 		(*Run_Result)(nil),
 		(*Run_Failure)(nil),

@@ -42,6 +42,8 @@ storage:
     journal_key_id: journal-production
     signing_variable: COLOSSUS_SIGNING_KEY
     anchor_path: .colossus/secure-anchor.json
+network:
+  caBundlePath: null
 policy:
   kind: built_in
   require_post_effect: false
@@ -101,6 +103,7 @@ process launch. YAML contains names and identities, never the values.
 | `schemaVersion` | Yes | Strict configuration schema identity |
 | `access` | Yes | Tool selection and built-in action overrides |
 | `storage` | Yes | Journal adapter, key provider, and anchor |
+| `network` | No | Runtime-wide additional CA certificate bundle |
 | `policy` | Yes | Built-in or OPA action decisions |
 | `workflows` | Yes | Repository and user workflow roots |
 | `providers` | No | Named provider connections; defaults to `echo` |
@@ -163,6 +166,14 @@ and generation transport independently of `sandbox.timeoutMs`. The adapter still
 enforces the exact selected connection's timeout. OPA deployments may return a stricter
 timeout obligation.
 
+For both network provider kinds, canonical Colossus tool names remain dotted in access
+configuration, policy, audit evidence, and tool dispatch. At the provider boundary,
+each `.` is projected to `_` so function names satisfy the portable 64-byte
+`[A-Za-z0-9_-]` contract used by OpenAI-compatible APIs. Provider-returned aliases are
+restored to their canonical names before runtime handling. A name that cannot be
+represented by that contract, or two canonical names that would produce the same
+alias, rejects the request locally rather than risking ambiguous tool authority.
+
 For `open_ai_compatible` profiles, provider-facing tool schemas omit `maxLength`
 annotations to interoperate with Chat Completions servers that compile tool definitions
 into bounded grammars. The canonical Colossus tool schema remains unchanged and is
@@ -171,6 +182,25 @@ validated in full before execution.
 `host:` references are resolved only by an application-managed runtime through its
 in-memory credential resolver. The standard CLI and daemon composition remain
 environment-backed; they never interpret a `host:` identifier as a secret value.
+
+## Network trust
+
+| Field | Values / constraint |
+| --- | --- |
+| `network.caBundlePath` | Optional path to a PEM CA certificate bundle; at most 4 MiB and 256 certificates |
+
+The configured certificates augment the built-in public roots for Colossus-owned
+outbound clients: model providers, search, brokered HTTP and WORM export, integrations,
+pack registries, semantic memory, and the default PostgreSQL WebPKI policy. Relative
+paths resolve from the selected workspace. The bundle is read, bounded, and validated
+once during runtime startup; an unreadable, empty, malformed, or oversized bundle stops
+startup.
+
+Remote OPA may use this runtime bundle as its pinned trust when `policy.ca_pem_path` is
+omitted. An adapter-specific OPA CA or PostgreSQL `custom_ca` remains exclusive and
+overrides the runtime bundle. The pinned local public API identity is deliberately
+separate. Programs launched as sandbox or MCP processes own their TLS stacks and do not
+automatically inherit this in-process trust configuration.
 
 ## Storage
 
@@ -198,9 +228,10 @@ policy:
   require_post_effect: false
 ```
 
-Remote OPA uses the complete field set below. Remote deployments require the CA and
-client identity paths; acknowledgements are explicit because OPA receives bounded
-logical request content after hard-secret replacement.
+Remote OPA uses the complete field set below. Remote deployments require a client
+identity path and either this adapter-specific CA path or `network.caBundlePath`;
+acknowledgements are explicit because OPA receives bounded logical request content
+after hard-secret replacement.
 
 ```yaml
 policy:

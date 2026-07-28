@@ -1,0 +1,64 @@
+apiVersion: colossus.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: component-review-loop
+  version: 1.0.0
+  description: Collect and route one durable structured review for each bounded component
+inputs:
+  type: object
+  additionalProperties: false
+  required: [components]
+  properties:
+    components:
+      type: array
+      minItems: 1
+      maxItems: 5
+      uniqueItems: true
+      items:
+        type: string
+        minLength: 1
+        maxLength: 80
+outputs:
+  type: object
+capabilities: []
+maxConcurrency: 1
+stepBudget: 40
+steps:
+  - id: review-components
+    type: foreach
+    items: /inputs/components
+    max_items: 5
+    steps:
+      - id: review
+        type: wait_for_input
+        prompt: Supply the pass or needs_work result for the current component
+        schema:
+          type: object
+          additionalProperties: false
+          required: [status, notes]
+          properties:
+            status:
+              type: string
+              enum: [pass, needs_work]
+            notes:
+              type: string
+              minLength: 1
+              maxLength: 2000
+      - id: route-review
+        type: condition
+        expression: /steps/review/status == "pass"
+        then:
+          - id: accepted-component
+            type: emit
+            value:
+              disposition: accepted
+        otherwise:
+          - id: follow-up-component
+            type: emit
+            value:
+              disposition: follow_up_required
+  - id: review-summary
+    type: emit
+    value:
+      workflow: component-review-loop
+      status: all_responses_collected

@@ -70,6 +70,27 @@ references. Filesystem reads, provider output, network responses, process output
 memory retrieval remain quarantined until mandatory post-effect policy permits release.
 A denial cannot leak private bytes through output, errors, audit payloads, or observers.
 
+Provider and model diagnostics have an explicit local-operator release. The CLI
+`--include-provider-response` option and the local TUI `/models doctor` and `/provider
+doctor` commands can return the credential-free request plus at most 16 KiB of a
+non-success response body after exact configured-credential redaction. The TUI
+`/provider diagnostics on` command applies the same release to failed provider turns in
+the current TUI process, including post-tool continuations, until the operator runs
+`/provider diagnostics off` or exits. These captures are represented as quarantined
+adapter output and must pass the ordinary post-effect decision before the authenticated
+local worker or direct TUI receives them. Default Doctor output, default run failures
+and events, and durable audit payloads remain status-only and never receive the body.
+An in-run diagnostic request can contain user, session, and tool-result content, so the
+TUI warns the operator to review it before sharing.
+
+Canonical tool identities are never renamed to accommodate a provider. Network adapters
+build a request-local, one-to-one transport alias map that projects `.` to `_` under the
+portable 64-byte function-name grammar. Definitions and continuation history use that
+map, and streamed or non-streamed provider tool calls are restored to canonical names
+before they cross back into agent policy or dispatch. Unrepresentable names and alias
+collisions fail closed before network execution. Diagnostic request bodies intentionally
+show the actual provider aliases because they are wire evidence, not authority records.
+
 ## Adapter confinement
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and
@@ -100,6 +121,12 @@ semantic memory, native/Windows process proxy, and OCI proxy paths share this ma
 pin DNS results, validate TLS authority, reject ambient proxies and redirects, bound
 connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
+
+One explicit bounded PEM CA bundle may augment built-in roots across Colossus-owned
+outbound clients. It is loaded once at runtime startup and never sourced from ambient
+proxy or TLS environment variables. Adapter-specific OPA and PostgreSQL CA policies
+remain exclusive overrides, and public API clients continue to verify their separately
+provisioned leaf pin. Sandboxed and MCP child processes retain independent TLS stacks.
 
 `risk-auto` is deliberately narrow: only model or child-agent `shell.run`,
 `web.search`, and bodyless `network.http` GET effects without workflow lineage can use
@@ -158,9 +185,20 @@ connections, concurrent requests, authenticated protobuf decodes globally and pe
 application, HTTP/2 streams, header bytes, request bytes, response bytes, and repeated
 field cardinality before durable work begins. Its independent active-watch ceiling is
 lower than both global and per-connection request admission, reserving unary headroom
-so watches cannot starve cancellation, interaction responses, or system RPCs. Public
-runs cannot expose `agent.delegate` until child-run authority ceilings are durably
-propagated; naming that tool in a caller grant does not widen the runtime boundary.
+so watches cannot starve cancellation, interaction responses, or system RPCs.
+`agent.delegate` is advertised only when it is present in the authenticated
+application's tool ceiling. The delegated job durably records that exact ceiling, the
+child run receives only that ceiling, and child runs always remove `agent.delegate`
+before model tool discovery so delegation cannot recurse.
+
+Artifacts use an explicit owner-bound release boundary. A caller with
+`artifacts:write` first reserves an upload with an exact length and SHA-256 digest,
+then sends bounded ordered chunks. Colossus exposes the opaque artifact ID only after
+the complete bytes match the reservation. Metadata and downloads require
+`artifacts:read` and the same authenticated application ID. Original paths, partial
+uploads, and another application's artifacts are never released. Run-input
+attachments are accepted only from available `run_input` artifacts with supported
+bounded UTF-8 media types.
 
 Public run listing is owner-indexed and never scans the shared global journal. The
 idempotency claim, run creation, and per-application index entry commit atomically.
@@ -208,6 +246,18 @@ capability-scoped Rust commands and receives ordered released updates. It never 
 daemon credentials, private discovery paths, raw effect inputs or outputs, hidden
 reasoning, or a generic process, filesystem, network, or SDK invocation escape hatch.
 See [Public API and application SDKs](application-sdk.md) for the complete topology.
+
+The read-only Desktop file viewer is a separate, narrow local-user disclosure surface,
+not a generic filesystem bridge or an agent tool. It is available only while the exact
+Managed Local target is selected with Development access, accepts the opaque current
+workspace ID plus a bounded relative path, and revalidates the persisted object-bound
+workspace identity before and after every operation. It rejects absolute paths, parent
+components, links, non-files, non-directories, non-UTF-8 or unsafe-control text, large
+files, and oversized directories. Control state, version-control internals, generated
+dependency/build trees, environment files, credential files, and key/certificate
+formats are excluded. The native boundary returns at most 256 KiB of text and exposes
+no write, execute, process, network, arbitrary-open, or SDK command. Source changes
+continue through ordinary permit-bound agent effects; the viewer cannot mutate them.
 
 A managed desktop sidecar is a separate signed process, not an in-process extension of
 renderer authority. Its exact signed executable and the bundled TUI CLI are named in a

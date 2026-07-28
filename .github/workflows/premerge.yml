@@ -151,12 +151,16 @@ jobs:
           cache-targets: false
       - name: Validate desktop renderer
         run: cargo xtask check desktop
+      - name: Install the pinned Chromium browser
+        working-directory: apps/desktop
+        run: npm run test:browser:install
+      - name: Exercise Desktop keyboard and accessibility contracts
+        working-directory: apps/desktop
+        run: npm run test:browser
       - name: Prepare verified debug desktop executables
         run: ./scripts/prepare-desktop-binaries debug
-      - name: Check desktop native formatting and lints
-        run: |
-          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
-          cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Lint the desktop native bridge
+        run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Test the desktop native bridge
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
       - name: Remove standalone debug artifacts before release packaging
@@ -174,20 +178,49 @@ jobs:
         run: npm run tauri:bundle:macos
 
   windows-runtime:
-    name: Representative Windows runtime and sandbox
+    name: Representative Windows runtime, sandbox, and Desktop
     if: needs.eligibility.result == 'success'
     needs: eligibility
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 75
     env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}\apps\desktop\src-tauri\target
+      COLOSSUS_DESKTOP_RELEASE_CHANNEL: "development"
+      COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"
       SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Node.js 22.18
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install locked Desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci --ignore-scripts
+      - name: Typecheck the Windows renderer
+        id: renderer_typecheck
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: npm run typecheck
+      - name: Test the Windows renderer
+        id: renderer_tests
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: npm run test
+      - name: Test Windows Desktop contracts
+        id: renderer_contracts
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: npm run check:security
       - name: Install Rust 1.96
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
           toolchain: 1.96.0
+          components: clippy
       - name: Enable shared compiler cache
         id: sccache
         continue-on-error: true
@@ -202,10 +235,62 @@ jobs:
           workspaces: . -> target
           key: premerge-windows-x64
           cache-targets: false
-      - name: Run authenticated named-pipe and AppContainer escape acceptance
+      - name: Run authenticated Windows native acceptance
+        id: windows_native
+        continue-on-error: true
+        run: cargo test --locked -p colossus-windows-native -- --nocapture
+      - name: Run Windows worker and AppContainer escape acceptance
+        id: worker_acceptance
+        continue-on-error: true
+        run: cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture
+      - name: Prepare Windows Managed Local executables
+        id: desktop_prepare
+        continue-on-error: true
         run: >-
-          cargo test --locked -p colossus-cli
-          --test worker_smoke --test windows_sandbox -- --nocapture
+          cargo xtask desktop prepare --profile debug
+          --target x86_64-pc-windows-msvc
+      - name: Lint the Windows native Desktop bridge
+        id: native_clippy
+        if: steps.desktop_prepare.outcome == 'success'
+        continue-on-error: true
+        run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Test the Windows native Desktop bridge
+        id: native_tests
+        if: steps.desktop_prepare.outcome == 'success'
+        continue-on-error: true
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Require every Windows acceptance check
+        shell: bash
+        env:
+          CLIPPY_OUTCOME: ${{ steps.native_clippy.outcome }}
+          CONTRACT_OUTCOME: ${{ steps.renderer_contracts.outcome }}
+          NATIVE_OUTCOME: ${{ steps.windows_native.outcome }}
+          PREPARE_OUTCOME: ${{ steps.desktop_prepare.outcome }}
+          NATIVE_TEST_OUTCOME: ${{ steps.native_tests.outcome }}
+          RENDERER_TEST_OUTCOME: ${{ steps.renderer_tests.outcome }}
+          TYPECHECK_OUTCOME: ${{ steps.renderer_typecheck.outcome }}
+          WORKER_OUTCOME: ${{ steps.worker_acceptance.outcome }}
+        run: |
+          set -eu
+          failed=
+          for result in \
+            "renderer-typecheck=$TYPECHECK_OUTCOME" \
+            "renderer-tests=$RENDERER_TEST_OUTCOME" \
+            "renderer-contracts=$CONTRACT_OUTCOME" \
+            "windows-native=$NATIVE_OUTCOME" \
+            "worker-and-sandbox=$WORKER_OUTCOME" \
+            "desktop-prepare=$PREPARE_OUTCOME" \
+            "desktop-clippy=$CLIPPY_OUTCOME" \
+            "desktop-tests=$NATIVE_TEST_OUTCOME"
+          do
+            if test "${result#*=}" != success; then
+              failed="$failed ${result%%=*}"
+            fi
+          done
+          if test -n "$failed"; then
+            printf 'Windows acceptance checks failed:%s\n' "$failed" >&2
+            exit 1
+          fi
 
   fuzz:
     name: Bounded security fuzzing
@@ -294,6 +379,15 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
         with:
           toolchain: 1.96.0
+      - name: Pull pinned Chroma release
+        run: |
+          for attempt in 1 2 3; do
+            docker pull "${{ matrix.image }}" && exit 0
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
       - name: Start pinned Chroma release
         run: |
           docker run --detach --rm --name colossus-chroma \
@@ -383,6 +477,7 @@ jobs:
         run: |
           podman pull python:3.13-slim@sha256:e544a7fcbdf8555eceda66bf86cafb006c736339f76141918bcb812f3174c00a
           podman build --file oci-proxy.Dockerfile \
+            --ignorefile oci-proxy.Dockerfile.dockerignore \
             --build-arg TARGET_TRIPLE=x86_64-unknown-linux-musl \
             --tag colossus-oci-proxy:acceptance .
           proxy=$(podman image inspect colossus-oci-proxy:acceptance --format '{{.Id}}')

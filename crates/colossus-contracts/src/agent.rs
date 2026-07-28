@@ -141,8 +141,14 @@ pub enum RunEvent {
         code: String,
         /// Bounded user-safe message.
         message: String,
-        /// Whether the runtime will continue automatically.
+        /// Whether the failure is safe for bounded recovery or an explicit caller retry.
         recoverable: bool,
+        /// HTTP response status when the failure came from an upstream response.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_status: Option<u16>,
+        /// Bounded provider retry lower bound when supplied.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_ms: Option<u64>,
         /// One-based model turn when applicable.
         turn: Option<u16>,
         /// Wall time since the run began.
@@ -284,6 +290,11 @@ pub enum ProviderStreamItem {
         /// Event released through per-chunk post-effect policy.
         event: ProviderEvent,
     },
+    /// Explicit terminal evidence for one non-success provider response.
+    Diagnostic {
+        /// Post-policy, bounded provider request and response evidence.
+        diagnostic: ProviderResponseDiagnostic,
+    },
     /// Terminal metadata proving the provider stream completed normally.
     Completed {
         /// Deprecated compatibility alias populated with the model profile.
@@ -424,6 +435,31 @@ pub struct ProviderModelInfo {
     pub owned_by: Option<String>,
 }
 
+/// Explicitly requested, bounded diagnostics for one non-success provider response.
+///
+/// This contract is released only by explicitly requested local diagnostics after post-effect
+/// policy. Ordinary model runs, durable events, and default TUI output never contain it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderResponseDiagnostic {
+    /// HTTP method used by the probe.
+    pub request_method: String,
+    /// Exact configured provider endpoint without credentials, query, or fragment.
+    pub request_url: String,
+    /// Provider-facing JSON request body when the probe used one.
+    pub request_body: Option<Value>,
+    /// Non-success HTTP response status.
+    pub status: u16,
+    /// Bounded response content type when supplied.
+    pub content_type: Option<String>,
+    /// Bounded response body after exact configured-credential redaction.
+    pub body: String,
+    /// `utf8` when the captured bytes were valid UTF-8, otherwise `utf8_lossy`.
+    pub body_encoding: String,
+    /// Whether bytes beyond the diagnostic capture ceiling were omitted.
+    pub body_truncated: bool,
+}
+
 /// One bounded provider readiness check.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -434,6 +470,9 @@ pub struct ProviderReadinessCheck {
     pub status: String,
     /// Bounded detail without credentials or response bodies.
     pub detail: String,
+    /// Opt-in bounded provider response diagnostics, omitted by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_response: Option<ProviderResponseDiagnostic>,
 }
 
 /// Provider profile readiness and capability report.

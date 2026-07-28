@@ -1,5 +1,21 @@
 use super::*;
 
+/// Immutable inputs for queueing one isolated child-agent job.
+pub struct CreateSubagentRequest {
+    /// Parent session that owns the job.
+    pub session_id: String,
+    /// Exact parent agent run.
+    pub parent_run_id: String,
+    /// Exact model tool-call lineage.
+    pub parent_call_id: String,
+    /// Bounded child task.
+    pub task: String,
+    /// Child role resolved by the agent runtime.
+    pub role: String,
+    /// Persisted exact model-tool ceiling, or trusted private-call compatibility.
+    pub allowed_tools: Option<Vec<String>>,
+}
+
 /// Validated application service shared by CLI, TUI, tools, and embedded callers.
 pub struct WorkService {
     repository: Arc<dyn WorkRepository>,
@@ -410,14 +426,10 @@ impl WorkService {
     /// Queue a durable child-agent job and create its isolated child session.
     pub fn create_subagent(
         &self,
-        session_id: &str,
-        parent_run_id: &str,
-        parent_call_id: &str,
-        task: &str,
-        role: &str,
+        request: CreateSubagentRequest,
         actor: Actor,
     ) -> Result<SubagentJob, StoreError> {
-        self.require_session(session_id)?;
+        self.require_session(&request.session_id)?;
         let id = format!("agent-{}", Uuid::now_v7());
         let child_session_id = Uuid::now_v7().to_string();
         self.sessions.create_session(
@@ -429,11 +441,12 @@ impl WorkService {
         self.repository.create_subagent(
             SubagentJob {
                 id,
-                session_id: session_id.into(),
-                parent_run_id: parent_run_id.into(),
-                parent_call_id: parent_call_id.into(),
-                task: task.trim().into(),
-                role: role.into(),
+                session_id: request.session_id,
+                parent_run_id: request.parent_run_id,
+                parent_call_id: request.parent_call_id,
+                task: request.task.trim().into(),
+                role: request.role,
+                allowed_tools: request.allowed_tools,
                 status: SubagentStatus::Queued,
                 child_session_id,
                 child_run_id: None,

@@ -72,14 +72,35 @@ pub(super) fn validate_destination(
     }
 }
 
+pub(super) struct HttpTransport<'a> {
+    credential_reference: Option<&'a str>,
+    credential_header: &'a str,
+    timeout_ms: u64,
+    tls_roots: &'a AdditionalRootCertificates,
+}
+
+impl<'a> HttpTransport<'a> {
+    pub(super) const fn new(
+        credential_reference: Option<&'a str>,
+        credential_header: &'a str,
+        timeout_ms: u64,
+        tls_roots: &'a AdditionalRootCertificates,
+    ) -> Self {
+        Self {
+            credential_reference,
+            credential_header,
+            timeout_ms,
+            tls_roots,
+        }
+    }
+}
+
 pub(super) async fn send_http(
     method: Method,
     endpoint: &str,
     payload: Option<&Value>,
-    credential_reference: Option<&str>,
-    credential_header: &str,
     permit: &ExecutionPermit,
-    configured_timeout_ms: u64,
+    transport: HttpTransport<'_>,
 ) -> Result<Vec<u8>, StoreError> {
     let url = Url::parse(endpoint).map_err(adapter)?;
     let host = url
@@ -95,8 +116,10 @@ pub(super) async fn send_http(
         && (host.eq_ignore_ascii_case("localhost")
             || host.parse::<IpAddr>().is_ok_and(non_public_network_address));
     let addresses = resolve_addresses(host, port, allow_non_public).await?;
-    let timeout_ms = configured_timeout_ms.min(permit.obligations().timeout_ms);
-    let client = Client::builder()
+    let timeout_ms = transport.timeout_ms.min(permit.obligations().timeout_ms);
+    let client = transport
+        .tls_roots
+        .configure_reqwest(Client::builder())
         .no_proxy()
         .redirect(RedirectPolicy::none())
         .resolve_to_addrs(host, &addresses)
@@ -104,12 +127,12 @@ pub(super) async fn send_http(
         .build()
         .map_err(adapter)?;
     let mut builder = client.request(method, url);
-    if let Some(reference) = credential_reference {
+    if let Some(reference) = transport.credential_reference {
         let secret = resolve_credential(reference)?;
-        builder = if credential_header == "authorization" {
+        builder = if transport.credential_header == "authorization" {
             builder.bearer_auth(secret)
         } else {
-            builder.header(credential_header, secret)
+            builder.header(transport.credential_header, secret)
         };
     }
     if let Some(payload) = payload {

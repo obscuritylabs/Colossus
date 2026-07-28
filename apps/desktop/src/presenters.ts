@@ -336,7 +336,7 @@ function toRecentWorkItem(run: Run): RecentWorkItem {
   const isActive = ACTIVE_STATUSES.has(run.status);
   return {
     runId: run.runId,
-    title: agentRoleLabel(run.role),
+    title: safeDisplayLabel(run.title, agentRoleLabel(run.role), 96),
     mode: run.mode,
     modeLabel: runModeLabel(run.mode),
     status: run.status,
@@ -353,9 +353,49 @@ function toRecentWorkItem(run: Run): RecentWorkItem {
   };
 }
 
+function collapseSessionRuns(runs: readonly Run[]): Run[] {
+  const sessions = new Map<
+    string,
+    { opening: Run; latest: Run; firstIndex: number }
+  >();
+  for (const [index, run] of runs
+    .slice(0, MAX_PRESENTED_WORK_ITEMS)
+    .entries()) {
+    const current = sessions.get(run.sessionId);
+    if (current === undefined) {
+      sessions.set(run.sessionId, {
+        opening: run,
+        latest: run,
+        firstIndex: index,
+      });
+      continue;
+    }
+    const opening =
+      timestampValue(run.createdAt) < timestampValue(current.opening.createdAt)
+        ? run
+        : current.opening;
+    const latest =
+      timestampValue(run.updatedAt) > timestampValue(current.latest.updatedAt)
+        ? run
+        : current.latest;
+    sessions.set(run.sessionId, {
+      opening,
+      latest,
+      firstIndex: current.firstIndex,
+    });
+  }
+  return [...sessions.values()]
+    .sort((left, right) => left.firstIndex - right.firstIndex)
+    .map(({ opening, latest }) => ({
+      ...latest,
+      title: opening.title,
+    }));
+}
+
 /**
- * Groups durable runs as work without treating opaque session identities as a
- * user-facing session or manufacturing titles that the API does not provide.
+ * Groups durable sessions as work without exposing opaque session identities.
+ * A continuation keeps the opening title while status and recency follow its
+ * latest run.
  */
 export function selectRecentWork(
   runs: readonly Run[],
@@ -374,8 +414,7 @@ export function selectRecentWork(
   ).toLocaleLowerCase();
   const seen = new Set<string>();
   const groups = new Map<WorkGroupKey, RecentWorkItem[]>();
-  const sorted = runs
-    .slice(0, MAX_PRESENTED_WORK_ITEMS)
+  const sorted = collapseSessionRuns(runs)
     .map((run, index) => ({ run, index }))
     .sort(
       (left, right) =>

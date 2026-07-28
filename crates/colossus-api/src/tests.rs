@@ -269,12 +269,44 @@ fn identity_values_validate_and_idempotency_debug_is_redacted() {
 }
 
 #[test]
+fn run_result_reads_pre_profile_split_durable_payloads() {
+    let result: RunResult = serde_json::from_value(serde_json::json!({
+        "output": "legacy result",
+        "profile": "legacy-provider",
+        "model": "legacy-model",
+        "elapsed_seconds": 1.25
+    }))
+    .expect("legacy run result");
+
+    assert_eq!(result.profile, "legacy-provider");
+    assert_eq!(result.model_profile, "legacy-provider");
+    assert_eq!(result.provider_profile, "legacy-provider");
+    assert_eq!(result.model, "legacy-model");
+}
+
+#[test]
+fn run_failure_reads_payloads_from_before_response_metadata_was_added() {
+    let failure: RunFailure = serde_json::from_value(serde_json::json!({
+        "code": "runtime.failed",
+        "message": "the run failed with a known outcome",
+        "outcome": "known"
+    }))
+    .expect("legacy run failure");
+
+    assert_eq!(failure.code, "runtime.failed");
+    assert!(!failure.recoverable);
+    assert_eq!(failure.http_status, None);
+    assert_eq!(failure.retry_after_ms, None);
+}
+
+#[test]
 fn create_is_atomic_application_attributed_and_replays_exact_request() {
     let (journal, repository, caller) = fixture();
     let request = create_request("create-key", "Build the UI");
     let first = create_run(&repository, &caller, &request, "run-1", "session-1");
     assert_eq!(first.status, RunStatus::Queued);
     assert_eq!(first.last_sequence, 1);
+    assert_eq!(first.title, "Build the UI");
 
     let retry_caller = caller_context(
         "app:desktop-ui",
@@ -312,6 +344,26 @@ fn create_is_atomic_application_attributed_and_replays_exact_request() {
     assert!(events.iter().all(|event| {
         event.actor.actor_type == ActorType::Application && event.actor.id == "app:desktop-ui"
     }));
+}
+
+#[test]
+fn run_title_is_safe_bounded_and_derived_from_visible_input() {
+    let (_, repository, caller) = fixture();
+    let mut request = create_request(
+        "title-key",
+        &format!("  Review\n\u{202e}{}  ", "workspace ".repeat(20)),
+    );
+    request.input.push(ContentPart::Text {
+        text: "ignored continuation".into(),
+    });
+
+    let run = create_run(&repository, &caller, &request, "run-title", "session-title");
+
+    assert!(run.title.starts_with("Review workspace workspace"));
+    assert!(!run.title.contains('\n'));
+    assert!(!run.title.contains('\u{202e}'));
+    assert!(run.title.ends_with('…'));
+    assert!(run.title.chars().count() <= 80);
 }
 
 #[test]
@@ -469,6 +521,24 @@ fn create_request_rejects_more_than_the_bounded_number_of_input_parts() {
     assert_eq!(error.code, ApiErrorCode::InvalidArgument);
     assert_eq!(error.reason, ApiErrorReason::InvalidArgument);
     assert_eq!(error.violations[0].field, "input");
+}
+
+#[test]
+fn create_request_accepts_opaque_artifact_input_and_rejects_path_like_ids() {
+    let mut request = create_request("artifact-input", "Review the attachment");
+    request.input.push(ContentPart::Artifact {
+        artifact_id: format!("artifact-{}", "a".repeat(64)),
+    });
+    request.validate().expect("opaque artifact input");
+
+    request.input[1] = ContentPart::Artifact {
+        artifact_id: "../private/report.md".into(),
+    };
+    let error = request
+        .validate()
+        .expect_err("artifact identifiers must never accept paths");
+    assert_eq!(error.reason, ApiErrorReason::InvalidArgument);
+    assert_eq!(error.violations[0].field, "input.artifact_id");
 }
 
 #[test]
@@ -786,6 +856,61 @@ fn append_update_rejects_a_tail_projection_unlinked_from_its_predecessor() {
             .len(),
         3
     );
+}
+
+#[test]
+fn preview_run_journal_golden_updates_remain_replayable() {
+    let (_journal, repository, caller) = fixture();
+    let request = create_request("preview-golden-create", "Replay preview journal");
+    let initial = create_run(
+        &repository,
+        &caller,
+        &request,
+        "run-preview-golden",
+        "session-preview-golden",
+    );
+    let replay = |contents: &str| {
+        crate::repository::replay_preview_stored_update_for_test(
+            &initial,
+            2,
+            "2026-01-01T00:00:03Z",
+            serde_json::from_str(contents).expect("golden JSON"),
+        )
+        .expect("preview update replay")
+    };
+
+    let completed = replay(include_str!(
+        "../tests/fixtures/run-journal-preview-completed.json"
+    ));
+    assert_eq!(completed.status, RunStatus::Completed);
+    let result = completed.result.expect("completed result");
+    assert_eq!(result.profile, "preview-default");
+    assert_eq!(result.model_profile, "preview-default");
+    assert_eq!(result.provider_profile, "preview-default");
+
+    let failed = replay(include_str!(
+        "../tests/fixtures/run-journal-preview-failed.json"
+    ));
+    assert_eq!(failed.status, RunStatus::Failed);
+    let failure = failed.failure.expect("failure");
+    assert!(!failure.recoverable);
+    assert_eq!(failure.http_status, None);
+    assert_eq!(failure.retry_after_ms, None);
+
+    let waiting = replay(include_str!(
+        "../tests/fixtures/run-journal-preview-approval-pending.json"
+    ));
+    assert_eq!(waiting.status, RunStatus::Waiting);
+    assert_eq!(
+        waiting.pending_interaction.expect("pending approval").id,
+        "approval-preview"
+    );
+
+    let resumed = replay(include_str!(
+        "../tests/fixtures/run-journal-preview-resumed.json"
+    ));
+    assert_eq!(resumed.status, RunStatus::Running);
+    assert!(resumed.pending_interaction.is_none());
 }
 
 #[test]

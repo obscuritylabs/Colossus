@@ -17,6 +17,9 @@ pub(super) fn create_request(value: CreateRunRequest) -> core::CreateRunRequest 
             .into_iter()
             .map(|part| match part {
                 InputContentPart::Text(text) => core::ContentPart::Text { text },
+                InputContentPart::Artifact(artifact_id) => {
+                    core::ContentPart::Artifact { artifact_id }
+                }
             })
             .collect(),
         session_id: value.session_id,
@@ -217,6 +220,7 @@ fn run(value: core::Run) -> ApiResult<Run> {
     Ok(Run {
         run_id: value.id,
         session_id: value.session_id,
+        title: value.title,
         role: value.role,
         mode: match value.mode {
             core::RunMode::Execute => RunMode::Execute,
@@ -254,6 +258,9 @@ fn run_failure(value: core::RunFailure) -> RunFailure {
             core::OutcomeCertainty::Known => OutcomeCertainty::Known,
             core::OutcomeCertainty::Unknown => OutcomeCertainty::Unknown,
         },
+        recoverable: value.recoverable,
+        http_status: value.http_status,
+        retry_after_ms: value.retry_after_ms,
     }
 }
 

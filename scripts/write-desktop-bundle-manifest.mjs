@@ -55,24 +55,27 @@ function parseArguments(argv) {
   return values;
 }
 
-function validatedBinary(path, expectedName) {
-  if (!isAbsolute(path) || basename(path) !== expectedName) {
-    fail(`${expectedName} must use its exact absolute bundle path`);
+function validatedBinary(path, expectedNames) {
+  const actualName = basename(path);
+  if (!isAbsolute(path) || !expectedNames.includes(actualName)) {
+    fail(`${expectedNames.join(" or ")} must use its exact absolute bundle path`);
   }
   const metadata = lstatSync(path);
+  const unsafePosixMode =
+    process.platform !== "win32" &&
+    ((metadata.mode & 0o111) === 0 || (metadata.mode & 0o022) !== 0);
   if (
     !metadata.isFile() ||
     metadata.isSymbolicLink() ||
     metadata.size <= 0 ||
     metadata.size > MAX_BINARY_BYTES ||
-    (metadata.mode & 0o111) === 0 ||
-    (metadata.mode & 0o022) !== 0
+    unsafePosixMode
   ) {
-    fail(`${expectedName} is not a bounded, non-writable executable`);
+    fail(`${actualName} is not a bounded, non-writable executable`);
   }
   const canonical = realpathSync(path);
   if (canonical !== path) {
-    fail(`${expectedName} must already be canonical`);
+    fail(`${actualName} must already be canonical`);
   }
   return canonical;
 }
@@ -94,8 +97,17 @@ const releaseChannel = values.get("--release-channel");
 if (!RELEASE_CHANNELS.has(releaseChannel)) {
   fail("release channel is not stable, developer_preview, or validation_only");
 }
-const sidecar = validatedBinary(values.get("--sidecar"), "colossus-sidecar");
-const cli = validatedBinary(values.get("--cli"), "colossus");
+const windowsTarget = target.includes("-windows-");
+const sidecarName = windowsTarget ? "colossus-sidecar.exe" : "colossus-sidecar";
+const cliName = windowsTarget ? "colossus.exe" : "colossus";
+const sidecar = validatedBinary(values.get("--sidecar"), [
+  sidecarName,
+  `colossus-sidecar-${target}${windowsTarget ? ".exe" : ""}`,
+]);
+const cli = validatedBinary(values.get("--cli"), [
+  cliName,
+  `colossus-${target}${windowsTarget ? ".exe" : ""}`,
+]);
 const output = values.get("--output");
 if (
   !isAbsolute(output) ||
@@ -118,11 +130,11 @@ const manifest = {
   profile: "release",
   releaseChannel,
   sidecar: {
-    fileName: "colossus-sidecar",
+    fileName: sidecarName,
     sha256: await sha256(sidecar),
   },
   cli: {
-    fileName: "colossus",
+    fileName: cliName,
     sha256: await sha256(cli),
   },
 };

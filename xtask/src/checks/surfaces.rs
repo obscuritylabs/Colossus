@@ -18,6 +18,16 @@ pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
 
 pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
     repository
+        .task(cargo_program())
+        .args([
+            "fmt",
+            "--manifest-path",
+            "apps/desktop/src-tauri/Cargo.toml",
+            "--",
+            "--check",
+        ])
+        .run()?;
+    repository
         .task("npm")
         .args(["ci", "--ignore-scripts"])
         .current_dir("apps/desktop")

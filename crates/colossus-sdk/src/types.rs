@@ -1,4 +1,32 @@
 use colossus_api::IdempotencyKey;
+use std::collections::BTreeSet;
+
+/// Authenticated public behaviors advertised by the connected runtime.
+///
+/// Capability names are credential-free stable identifiers. Absence always means the
+/// client must keep the corresponding operation unavailable.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ServerCapabilities {
+    enabled: BTreeSet<String>,
+}
+
+impl ServerCapabilities {
+    pub(crate) fn from_enabled(enabled: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            enabled: enabled.into_iter().collect(),
+        }
+    }
+
+    /// Return whether the authenticated runtime advertised one exact behavior.
+    pub fn contains(&self, capability: &str) -> bool {
+        self.enabled.contains(capability)
+    }
+
+    /// Iterate enabled names in deterministic order.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.enabled.iter().map(String::as_str)
+    }
+}
 
 /// Requested public execution mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +74,8 @@ pub enum OutcomeCertainty {
 pub enum InputContentPart {
     /// Visible user text.
     Text(String),
+    /// Opaque authorized artifact reference.
+    Artifact(String),
 }
 
 /// Request to create one durable run.
@@ -95,6 +125,12 @@ pub struct RunFailure {
     pub message: String,
     /// External outcome certainty.
     pub outcome_certainty: OutcomeCertainty,
+    /// Whether an explicit caller retry is known to be safe.
+    pub recoverable: bool,
+    /// Released upstream HTTP response status, when one was received.
+    pub http_status: Option<u16>,
+    /// Provider-supplied retry lower bound in milliseconds.
+    pub retry_after_ms: Option<u64>,
 }
 
 /// Durable cancellation evidence.
@@ -124,6 +160,8 @@ pub struct Run {
     pub run_id: String,
     /// Durable session identity associated with the run.
     pub session_id: String,
+    /// Bounded display title derived from the opening request.
+    pub title: String,
     /// Selected logical role.
     pub role: String,
     /// Requested execution mode.
@@ -487,6 +525,30 @@ pub struct ArtifactReference {
     pub state: ArtifactState,
     /// UTC RFC3339 creation time.
     pub created_at: String,
+}
+
+/// Complete bounded artifact upload supplied by an SDK caller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UploadArtifactRequest {
+    /// Display name only; never interpreted as a server path.
+    pub file_name: String,
+    /// Declared MIME type.
+    pub media_type: String,
+    /// Intended public use.
+    pub purpose: ArtifactPurpose,
+    /// Complete bounded content.
+    pub bytes: Vec<u8>,
+    /// Caller-scoped idempotency key.
+    pub idempotency_key: IdempotencyKey,
+}
+
+/// Downloaded released artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DownloadedArtifact {
+    /// Verified public metadata.
+    pub artifact: ArtifactReference,
+    /// Complete verified bytes.
+    pub bytes: Vec<u8>,
 }
 
 /// Released message content part.
