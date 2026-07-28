@@ -32,6 +32,8 @@ const COMMANDS: &[&str] = &[
     "connect_colossus",
     "connection_status",
     "create_run",
+    "choose_run_attachment",
+    "read_artifact_content",
     "get_run",
     "list_runs",
     "watch_run",
