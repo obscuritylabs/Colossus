@@ -573,10 +573,13 @@ mod tests {
             release_team_identifier(ReleaseChannel::ValidationOnly, "ADHOC"),
             None
         );
+        #[cfg(not(windows))]
         assert_eq!(
             bundle_code_signing_requirement(ReleaseChannel::Stable).expect("stable requirement"),
             MacosCodeSigningRequirement::AppleTeam
         );
+        #[cfg(windows)]
+        assert!(bundle_code_signing_requirement(ReleaseChannel::Stable).is_err());
         assert_eq!(
             bundle_code_signing_requirement(ReleaseChannel::DeveloperPreview)
                 .expect("preview requirement"),

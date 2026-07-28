@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::{
     fs,
     io::{Read, Write},
-    net::TcpListener,
+    net::{Shutdown, TcpListener},
     path::Path,
     process::{Command, Output},
     sync::{
@@ -570,11 +570,21 @@ sandbox:
         fs::write(&config, updated).expect("network config");
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("network accept");
-            let mut request = [0_u8; 1024];
-            let _ = stream.read(&mut request).expect("network read");
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut chunk).expect("network read");
+                assert_ne!(count, 0, "network request ended before its header");
+                request.extend_from_slice(&chunk[..count]);
+                assert!(request.len() <= 16 * 1024, "network request is oversized");
+            }
             stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .expect("network write");
+            stream.flush().expect("network flush");
+            stream
+                .shutdown(Shutdown::Write)
+                .expect("network response shutdown");
         });
         let denied_url = format!("http://{denied_address}/");
         let denied_network = run(

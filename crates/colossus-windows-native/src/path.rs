@@ -1,6 +1,19 @@
 use crate::WindowsNativeError;
 use std::{fs::File, path::Path};
 
+/// Create one directory with an owner-private DACL and no inherited broad access.
+pub fn create_private_directory(path: &Path) -> Result<(), WindowsNativeError> {
+    #[cfg(windows)]
+    {
+        crate::windows::create_private_directory(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(WindowsNativeError::UnsupportedPlatform)
+    }
+}
+
 /// Stable kernel identity returned by `FileIdInfo`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileIdentity {

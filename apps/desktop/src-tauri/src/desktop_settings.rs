@@ -848,16 +848,37 @@ fn valid_private_absolute_path(path: &Path) -> bool {
     let Some(value) = path.to_str() else {
         return false;
     };
-    path.is_absolute()
-        && path.parent().is_some()
-        && value.len() <= MAX_CONNECTION_PATH_BYTES
-        && !value.chars().any(char::is_control)
-        && !path.components().any(|component| {
+    if !path.is_absolute()
+        || path.parent().is_none()
+        || value.len() > MAX_CONNECTION_PATH_BYTES
+        || value.chars().any(char::is_control)
+        || path.components().any(|component| {
             matches!(
                 component,
                 std::path::Component::ParentDir | std::path::Component::CurDir
-            ) || cfg!(not(windows)) && matches!(component, std::path::Component::Prefix(_))
+            )
         })
+    {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        path.components().next().is_some_and(|component| {
+            matches!(
+                component,
+                Component::Prefix(prefix)
+                    if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+            )
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        !path
+            .components()
+            .any(|component| matches!(component, std::path::Component::Prefix(_)))
+    }
 }
 
 fn display_path(path: &Path) -> String {
@@ -1113,6 +1134,9 @@ fn ensure_private_directory(path: &Path) -> Result<(), CommandErrorDto> {
         return Err(storage_error());
     }
     if !path.exists() {
+        #[cfg(windows)]
+        colossus_windows_native::create_private_directory(path).map_err(|_| storage_error())?;
+        #[cfg(not(windows))]
         fs::create_dir_all(path).map_err(|_| storage_error())?;
         #[cfg(unix)]
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
@@ -1210,6 +1234,30 @@ mod tests {
         }
     }
 
+    fn test_store() -> (tempfile::TempDir, PathBuf, SettingsStore) {
+        let parent = tempfile::tempdir().expect("store parent");
+        let root = fs::canonicalize(parent.path())
+            .expect("canonical store parent")
+            .join("store");
+        let store = SettingsStore::open(root.clone()).expect("store");
+        let canonical_root = fs::canonicalize(&root).expect("canonical store root");
+        assert_eq!(canonical_root, root);
+        (parent, canonical_root, store)
+    }
+
+    fn test_public_api_dir(suffix: &str) -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!(
+                r"C:\Users\test\AppData\Local\colossus-public-api-{suffix}"
+            ))
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from(format!("/private/tmp/colossus-public-api-{suffix}"))
+        }
+    }
+
     #[test]
     fn provider_kind_wire_values_match_renderer_and_accept_preview_aliases() {
         assert_eq!(
@@ -1296,11 +1344,7 @@ mod tests {
 
     #[test]
     fn settings_round_trip_never_contains_provider_secret() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let settings = configured_settings(
             ProviderKindSetting::OpenAiCompatible,
             OPENROUTER_BASE_URL,
@@ -1326,11 +1370,7 @@ mod tests {
 
     #[test]
     fn v1_provider_configuration_is_cleared_and_credential_is_queued_for_deletion() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let credential_id = Uuid::now_v7().to_string();
         let encoded = serde_json::json!({
             "schemaVersion": 1,
@@ -1373,13 +1413,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn managed_state_and_instance_identity_are_isolated_per_workspace() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, _root, store) = test_store();
         let first_workspace = tempfile::tempdir().expect("first workspace");
         let second_workspace = tempfile::tempdir().expect("second workspace");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let store = SettingsStore::open(fs::canonicalize(root.path()).expect("canonical root"))
-            .expect("store");
         let seed = Uuid::now_v7().to_string();
         let first_path = fs::canonicalize(first_workspace.path()).expect("first canonical");
         let second_path = fs::canonicalize(second_workspace.path()).expect("second canonical");
@@ -1414,17 +1450,13 @@ mod tests {
 
     #[test]
     fn path_only_same_path_replacement_requires_reselection_and_preserves_provider() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, root, store) = test_store();
         let workspace_parent = tempfile::tempdir().expect("workspace parent");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
         let workspace_parent =
             fs::canonicalize(workspace_parent.path()).expect("canonical workspace parent");
         let workspace = workspace_parent.join("workspace");
         let moved = workspace_parent.join("workspace-moved");
         fs::create_dir(&workspace).expect("workspace");
-        let store = SettingsStore::open(root.clone()).expect("store");
         let old_seed = Uuid::now_v7().to_string();
         let mut legacy = configured_settings(
             ProviderKindSetting::OpenAiCompatible,
@@ -1462,13 +1494,9 @@ mod tests {
 
     #[test]
     fn v1_inode_only_workspace_identity_requires_explicit_reselection() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, root, store) = test_store();
         let workspace = tempfile::tempdir().expect("workspace");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
         let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
-        let store = SettingsStore::open(root.clone()).expect("store");
         let old_seed = Uuid::now_v7().to_string();
         let legacy = DesktopSettings {
             managed_instance_id: old_seed.clone(),
@@ -1497,13 +1525,9 @@ mod tests {
 
     #[test]
     fn missing_identity_version_migrates_without_bricking_settings() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, root, store) = test_store();
         let workspace = tempfile::tempdir().expect("workspace");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
         let workspace = fs::canonicalize(workspace.path()).expect("canonical workspace");
-        let store = SettingsStore::open(root.clone()).expect("store");
         let old_seed = Uuid::now_v7().to_string();
         let legacy = DesktopSettings {
             managed_instance_id: old_seed.clone(),
@@ -1537,11 +1561,7 @@ mod tests {
 
     #[test]
     fn missing_legacy_workspace_is_cleared_and_persisted_without_bricking_settings() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(root.clone()).expect("store");
+        let (_root_guard, root, store) = test_store();
         let old_seed = Uuid::now_v7().to_string();
         let missing = root.join("missing-workspace");
         let legacy = DesktopSettings {
@@ -1572,11 +1592,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn replacement_at_same_path_gets_distinct_state_and_rejects_saved_identity() {
-        let root = tempfile::tempdir().expect("root");
+        let (_root_guard, _root, store) = test_store();
         let parent = tempfile::tempdir().expect("workspace parent");
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let store = SettingsStore::open(fs::canonicalize(root.path()).expect("canonical root"))
-            .expect("store");
         let parent = fs::canonicalize(parent.path()).expect("canonical parent");
         let workspace_path = parent.join("workspace");
         let moved_path = parent.join("workspace-moved");
@@ -1618,11 +1635,7 @@ mod tests {
 
     #[test]
     fn offline_self_test_uses_distinct_app_private_runtime_and_workspace() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let store = SettingsStore::open(fs::canonicalize(root.path()).expect("canonical root"))
-            .expect("store");
+        let (_root_guard, _root, store) = test_store();
 
         let storage = store.self_test_storage().expect("self-test storage");
 
@@ -1643,11 +1656,7 @@ mod tests {
 
     #[test]
     fn persisted_settings_reject_unknown_fields() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let path = canonical_root.join(SETTINGS_FILE);
         fs::write(
             &path,
@@ -1661,11 +1670,7 @@ mod tests {
 
     #[test]
     fn persisted_external_targets_cannot_select_arbitrary_keychain_entries() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let instance_id = Uuid::now_v7().to_string();
         let certificate_sha256 = "a".repeat(64);
         let settings = DesktopSettings {
@@ -1674,7 +1679,7 @@ mod tests {
                 label: "Imported daemon".into(),
                 instance_id: instance_id.clone(),
                 certificate_sha256: certificate_sha256.clone(),
-                public_api_dir: "/private/tmp/colossus-public-api".into(),
+                public_api_dir: test_public_api_dir("imported"),
                 credential_service: "com.example.unrelated".into(),
                 credential_account: "private-mail-password".into(),
                 requires_credential_enrollment: false,
@@ -1704,13 +1709,23 @@ mod tests {
         assert!(!valid_external_label("Production\u{2066}daemon"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn private_connection_paths_reject_remote_windows_namespaces() {
+        assert!(valid_private_absolute_path(Path::new(
+            r"C:\Users\test\AppData\Local\colossus-api"
+        )));
+        assert!(!valid_private_absolute_path(Path::new(
+            r"\\server\share\colossus-api"
+        )));
+        assert!(!valid_private_absolute_path(Path::new(
+            r"\\?\UNC\server\share\colossus-api"
+        )));
+    }
+
     #[test]
     fn persisted_external_targets_reject_directional_spoofing() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root.clone()).expect("store");
+        let (_root_guard, canonical_root, store) = test_store();
         let instance_id = Uuid::now_v7().to_string();
         let certificate_sha256 = "a".repeat(64);
         let settings = DesktopSettings {
@@ -1719,7 +1734,7 @@ mod tests {
                 label: "Production\u{202e}nimda".into(),
                 instance_id: instance_id.clone(),
                 certificate_sha256: certificate_sha256.clone(),
-                public_api_dir: "/private/tmp/colossus-public-api".into(),
+                public_api_dir: test_public_api_dir("spoofed"),
                 credential_service: EXTERNAL_KEYRING_SERVICE.into(),
                 credential_account: external_credential_account(&instance_id, &certificate_sha256)
                     .expect("bound credential account"),
@@ -1737,11 +1752,7 @@ mod tests {
 
     #[test]
     fn bounded_external_target_set_fits_private_settings_storage() {
-        let root = tempfile::tempdir().expect("root");
-        #[cfg(unix)]
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("permissions");
-        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
-        let store = SettingsStore::open(canonical_root).expect("store");
+        let (_root_guard, _canonical_root, store) = test_store();
         let targets = (0..MAX_EXTERNAL_TARGETS)
             .map(|index| {
                 let instance_id = Uuid::now_v7().to_string();
@@ -1754,9 +1765,7 @@ mod tests {
                     label: format!("External daemon {index}"),
                     instance_id,
                     certificate_sha256,
-                    public_api_dir: PathBuf::from(format!(
-                        "/private/tmp/colossus-public-api-{index}"
-                    )),
+                    public_api_dir: test_public_api_dir(&index.to_string()),
                     credential_service: EXTERNAL_KEYRING_SERVICE.into(),
                     credential_account,
                     requires_credential_enrollment: false,

@@ -24,6 +24,27 @@ fn retained_file_handle_can_read_and_revalidate() {
 
 #[cfg(windows)]
 #[test]
+fn private_directory_creation_protects_the_directory_and_children() {
+    let parent = tempfile::tempdir().expect("temporary parent");
+    let directory = parent.path().join("private");
+
+    create_private_directory(&directory).expect("create private directory");
+    let binding = BoundPath::open_directory(&directory).expect("bind private directory");
+    binding
+        .validate_private_owner_dacl()
+        .expect("private directory DACL");
+
+    let child = directory.join("settings.json");
+    std::fs::write(&child, b"{}").expect("write inherited private file");
+    let child_binding = BoundPath::open_file(&child).expect("bind inherited file");
+    child_binding
+        .validate_private_owner_dacl()
+        .expect("private child DACL");
+    assert!(create_private_directory(&directory).is_err());
+}
+
+#[cfg(windows)]
+#[test]
 fn conpty_fixture_process() {
     use std::io::{Read as _, Write as _};
 

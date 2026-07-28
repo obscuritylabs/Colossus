@@ -267,6 +267,29 @@ test("workspace file preview is read-only, bounded, and workspace-bound", () => 
   assert.doesNotMatch(implementation, /write_all|create_dir|remove_file/u);
 });
 
+test("Windows private storage is created with a protected native DACL", () => {
+  const settingsSource = read(
+    "apps/desktop/src-tauri/src/desktop_settings.rs",
+  );
+  const settings = settingsSource.slice(
+    0,
+    settingsSource.indexOf("#[cfg(test)]"),
+  );
+  assert.match(
+    settings,
+    /colossus_windows_native::create_private_directory\(path\)/u,
+  );
+  assert.match(settings, /validate_private_owner_dacl\(\)/u);
+
+  const native = read("crates/colossus-windows-native/src/windows.rs");
+  assert.match(native, /CreateDirectoryW/u);
+  assert.match(native, /SE_DACL_PROTECTED/u);
+  assert.match(native, /SetSecurityDescriptorOwner/u);
+  assert.match(native, /WinLocalSystemSid/u);
+  assert.match(native, /WinBuiltinAdministratorsSid/u);
+  assert.match(native, /parent\.revalidate\(\)/u);
+});
+
 test("CA bundle management stays native and exposes only sanitized trust metadata", () => {
   const main = json("apps/desktop/src-tauri/capabilities/main-chat.json");
   assert.ok(main.permissions.includes("allow-import-ca-bundle"));

@@ -13,7 +13,7 @@ mod path;
 
 pub use credentials::prompt_secret;
 pub use error::WindowsNativeError;
-pub use path::{BoundPath, FileIdentity};
+pub use path::{BoundPath, FileIdentity, create_private_directory};
 
 #[cfg(windows)]
 mod conpty;
