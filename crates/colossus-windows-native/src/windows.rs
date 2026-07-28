@@ -522,15 +522,23 @@ fn validate_private_owner_dacl(file: &File) -> Result<(), WindowsNativeError> {
         });
     }
     let _descriptor = LocalSecurityDescriptor(descriptor);
+    let local_system = well_known_sid(WinLocalSystemSid)?;
+    let administrators = well_known_sid(WinBuiltinAdministratorsSid)?;
+    // Elevated Windows tokens can use BUILTIN\Administrators as the default owner
+    // for newly inherited child objects. All accepted owners are already the only
+    // principals permitted by the private DACL.
     if owner.is_null()
         || dacl.is_null()
         || unsafe { IsValidSid(owner) } == 0
-        || unsafe { EqualSid(owner, current_user) } == 0
+        || !sid_is_one_of(
+            owner,
+            current_user,
+            local_system.as_ptr().cast_mut().cast(),
+            administrators.as_ptr().cast_mut().cast(),
+        )
     {
         return Err(WindowsNativeError::UnsafePermissions);
     }
-    let local_system = well_known_sid(WinLocalSystemSid)?;
-    let administrators = well_known_sid(WinBuiltinAdministratorsSid)?;
     // SAFETY: dacl points inside the live security descriptor and therefore its
     // fixed header can be read for the descriptor lifetime.
     let ace_count = unsafe { (*dacl).AceCount };
