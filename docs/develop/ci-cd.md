@@ -98,10 +98,11 @@ the repository-owned `cargo xtask` component checks. The Rust component covers
 formatting, crate-root structure, locked metadata, Clippy, the complete workspace suite,
 and fuzz-harness linting. When selected, the SDK component installs pinned Node.js,
 Python, and Go toolchains for reproducible generation and packaging, while the Desktop
-component installs the renderer lockfile to audit, test, and build it. Desktop selection
-also exercises the managed-sidecar protocol and host crates. The workflow retains
-trusted-base classification and runner provisioning, but does not duplicate portable
-check recipes or allocate macOS or Windows runners.
+component checks the standalone native bridge formatting, installs the renderer
+lockfile, and audits, tests, and builds the renderer. Desktop selection also exercises
+the managed-sidecar protocol and host crates. The workflow retains trusted-base
+classification and runner provisioning, but does not duplicate portable check recipes
+or allocate macOS or Windows runners.
 The aggregate gate accepts a skipped job only when the classifier explicitly marked
 that job unnecessary; the stable seven-argument gate contract remains unchanged.
 
@@ -127,8 +128,8 @@ Eligibility is checked on a cheap Linux runner before macOS or Windows is alloca
 rejects draft PRs, actors below write permission, and a missing or failed current-head PR
 gate. The required pre-merge gate fails on failed, cancelled, or unexpectedly skipped
 acceptance work. Separate macOS jobs keep the root native-debug graph from coexisting
-with the standalone Tauri graph on the runner's bounded disk. The desktop job formats,
-lints, and tests the standalone native bridge; runs pinned Chromium keyboard,
+with the standalone Tauri graph on the runner's bounded disk. The desktop job lints and
+tests the standalone native bridge; runs pinned Chromium keyboard,
 accessibility, high-contrast, drawer, approval, and 880×640 layout acceptance; deletes
 its debug artifacts; then builds the bundled sidecar, CLI, and Tauri application into one
 shared non-incremental release tree. The native job exercises the otherwise-ignored real sidecar
@@ -139,6 +140,13 @@ uses the explicit `ADHOC` team sentinel, tests structure only, and produces a ru
 intentionally refuses to start Managed Local. Distributable builds embed the expected
 10-character Apple Team ID, use Developer ID and notarization, and verify exact code
 identifiers for the app, sidecar, and CLI.
+The Windows lane runs renderer typechecking, renderer tests, and platform-sensitive
+Desktop contract tests before installing Rust or starting native compilation. Those
+independent checks continue into Windows native, worker, sandbox, binary preparation,
+Desktop Clippy, and Desktop library-test acceptance, then report every failed outcome
+together before the lane fails. Desktop checks run only when their required binaries were staged.
+Portable formatting remains owned by the PR tier instead of being repeated on platform
+runners.
 Supply-chain acceptance audits both the root sidecar graph and the desktop's independent
 lockfile.
 

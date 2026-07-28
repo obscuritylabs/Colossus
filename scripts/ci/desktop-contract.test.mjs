@@ -480,6 +480,21 @@ test("release packaging records hashes only after nested signing", () => {
   assert.match(runtime, /com\.obscuritylabs\.colossus\.desktop\.cli/u);
 });
 
+test("portable Desktop validation owns formatting and canonical line endings", () => {
+  const attributes = read(".gitattributes");
+  assert.match(attributes, /^\* text=auto eol=lf$/mu);
+
+  const checks = read("xtask/src/checks/surfaces.rs");
+  const desktopStart = checks.indexOf("pub(super) fn desktop");
+  const docsStart = checks.indexOf("pub(super) fn docs", desktopStart);
+  assert.ok(desktopStart >= 0 && docsStart > desktopStart);
+  const desktop = checks.slice(desktopStart, docsStart);
+  assert.match(
+    desktop,
+    /\.args\(\[\s*"fmt",\s*"--manifest-path",\s*"apps\/desktop\/src-tauri\/Cargo\.toml",\s*"--",\s*"--check",\s*\]\)/u,
+  );
+});
+
 test("pre-merge desktop packaging declares its non-runnable trust channel", () => {
   const workflow = read(".github/workflows/premerge.yml");
   const desktopStart = workflow.indexOf("  macos-desktop:");
@@ -500,7 +515,28 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
     windows,
     /cargo test --locked --manifest-path apps\/desktop\/src-tauri\/Cargo\.toml --lib/u,
   );
-  assert.match(windows, /npm run check/u);
+  assert.match(windows, /npm run typecheck/u);
+  assert.match(windows, /npm run test/u);
+  assert.match(windows, /npm run check:security/u);
+  assert.doesNotMatch(windows, /npm run format:check/u);
+  assert.doesNotMatch(windows, /run: npm run check\s*$/mu);
+  assert.match(windows, /continue-on-error: true/u);
+  assert.match(windows, /steps\.renderer_typecheck\.outcome/u);
+  assert.match(windows, /steps\.renderer_tests\.outcome/u);
+  assert.match(windows, /steps\.renderer_contracts\.outcome/u);
+  assert.match(windows, /steps\.windows_native\.outcome/u);
+  assert.match(windows, /steps\.worker_acceptance\.outcome/u);
+  assert.match(windows, /steps\.desktop_prepare\.outcome/u);
+  assert.match(windows, /steps\.native_clippy\.outcome/u);
+  assert.match(windows, /steps\.native_tests\.outcome/u);
+  assert.match(
+    windows,
+    /if: steps\.desktop_prepare\.outcome == 'success'/u,
+  );
+  assert.ok(
+    windows.indexOf("npm run typecheck") <
+      windows.indexOf("Install Rust 1.96"),
+  );
 });
 
 test("release compilation and signing authority use separate runners", () => {

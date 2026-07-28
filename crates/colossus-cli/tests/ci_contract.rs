@@ -255,7 +255,6 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "--package colossus-sidecar-protocol",
         "--package colossus-sidecar",
         "--test native_lifecycle -- --ignored --nocapture",
-        "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
         "cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
         "cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
         "test \"$CARGO_TARGET_DIR\" = \"$expected\"",
@@ -707,6 +706,9 @@ fn xtask_centralizes_portable_development_and_ci_checks() {
     let surfaces =
         fs::read_to_string(root.join("xtask/src/checks/surfaces.rs")).expect("read surface tasks");
     for required in [
+        "\"fmt\"",
+        "apps/desktop/src-tauri/Cargo.toml",
+        "\"--check\"",
         "npm",
         "\"audit\", \"--audit-level=high\"",
         "scripts/docs-site",
@@ -719,6 +721,14 @@ fn xtask_centralizes_portable_development_and_ci_checks() {
             "surface xtask is missing {required}"
         );
     }
+
+    assert_eq!(
+        fs::read_to_string(root.join(".gitattributes"))
+            .expect("read repository line-ending policy")
+            .lines()
+            .find(|line| !line.starts_with('#') && !line.is_empty()),
+        Some("* text=auto eol=lf")
+    );
 
     let hook =
         fs::read_to_string(root.join(".githooks/pre-commit")).expect("read local pre-commit hook");
@@ -794,6 +804,38 @@ fn windows_native_acceptance_cannot_be_masked_by_a_later_command() {
             "cargo test --locked -p colossus-cli --test worker_smoke --test windows_sandbox -- --nocapture"
         )
     );
+    for name in [
+        "Run authenticated Windows native acceptance",
+        "Run Windows worker and AppContainer escape acceptance",
+        "Prepare Windows Managed Local executables",
+        "Lint the Windows native Desktop bridge",
+        "Test the Windows native Desktop bridge",
+    ] {
+        assert_eq!(
+            field(named_step(premerge_windows, name), "continue-on-error").as_bool(),
+            Some(true),
+            "{name} must preserve later independent outcomes"
+        );
+    }
+    let aggregate = named_step(premerge_windows, "Require every Windows acceptance check");
+    let aggregate_run = field(aggregate, "run")
+        .as_str()
+        .expect("Windows acceptance aggregate must be a script");
+    for outcome in [
+        "TYPECHECK_OUTCOME",
+        "RENDERER_TEST_OUTCOME",
+        "CONTRACT_OUTCOME",
+        "NATIVE_OUTCOME",
+        "WORKER_OUTCOME",
+        "PREPARE_OUTCOME",
+        "CLIPPY_OUTCOME",
+        "NATIVE_TEST_OUTCOME",
+    ] {
+        assert!(
+            aggregate_run.contains(outcome),
+            "Windows acceptance aggregate is missing {outcome}"
+        );
+    }
 
     let release = workflow("release.yml");
     let release_job = job(jobs(&release), "artifacts");
