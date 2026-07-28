@@ -8,6 +8,69 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-28
+
+### Added
+
+- Added stable Apple-silicon Desktop packaging with Developer ID signing, notarization,
+  stapling, Gatekeeper assessment, signed update metadata, and an explicit user-driven
+  update flow.
+- Added a native Windows x64 Managed Local implementation with authenticated named
+  pipes, Job Object lifecycle containment, ConPTY terminals, private credential storage,
+  and a separately labeled unsigned Developer Preview installer path.
+- Added workspace file previews, released artifact and attachment flows, richer run
+  history, capability-driven Desktop controls, and delegated workflow execution across
+  the public API and SDKs.
+- Added operator-supplied CA bundles across supported outbound clients without exposing
+  certificate contents or private storage paths to the renderer.
+
+### Changed
+
+- Split provider connection profiles from model profiles in configuration schema version
+  2 so model identifiers, context limits, capabilities, and logical role routing are
+  explicit and independently validated.
+- Refined Desktop work, settings, diagnostics, files, artifacts, compact timelines, and
+  responsive keyboard and accessibility behavior for production use.
+- Made interactive `colossus run` print only the released assistant response while
+  preserving the structured JSON output contract for automation.
+- Added a locked cross-language development container and consolidated repository checks
+  behind the change-selected `cargo xtask` workflow.
+
+### Fixed
+
+- Hardened provider streaming, OpenAI-compatible tool calls, approval notices, partial
+  failures, and terminal reconstruction so released output remains ordered, bounded, and
+  useful across CLI, TUI, worker, and Desktop clients.
+- Corrected Windows workspace, file-handle, private-storage, settings-migration, process,
+  and release-contract behavior across supported validation runners.
+- Bound context summarization prompts and repaired Desktop, release, Chroma, and
+  cross-platform acceptance paths exposed during production-readiness review.
+
+### Security
+
+- Sanitized provider-controlled failure details before public release and excluded common
+  nested Docker, Kubernetes, cloud, and application-default credential stores from
+  Desktop file previews.
+- Bound Desktop updater metadata, release channels, immutable artifact URLs, updater
+  signatures, sealed bundle manifests, code identities, and nested executable hashes so
+  stable and Developer Preview packages cannot be confused or silently substituted.
+- Revalidated Windows file handles and storage ownership at use time, kept native
+  credentials and CA material outside renderer authority, and preserved fail-closed
+  behavior for missing stable signing or notarization configuration.
+
+### Upgrade Notes
+
+- Configuration schema version 1 is no longer accepted. Generate a fresh schema version
+  2 file with `colossus --config PATH config init`, then deliberately transfer reviewed
+  provider, model, policy, storage, and integration settings. Canonical Rust YAML and
+  redb state remain authoritative; no legacy Python or SQLite state is imported.
+- The stable macOS archive is
+  `Colossus-Desktop-v0.10.1-aarch64-apple-darwin.zip`; verify its adjacent SHA-256
+  sidecar before installation. Existing preview-era workspace bindings may require one
+  explicit folder reselection before Managed Local starts.
+- Windows Desktop remains an unsigned Developer Preview and is not part of the stable
+  release channel. Windows CLI archives remain stable release artifacts.
+
 ## [0.10.1-preview.2] - 2026-07-22
 
 ### Fixed

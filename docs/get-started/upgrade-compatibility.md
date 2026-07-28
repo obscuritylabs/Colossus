@@ -49,8 +49,11 @@ Do not remove the prior executable until the new binary has passed diagnostics.
 ### 4. Regenerate configuration when its shape changed
 
 Colossus is pre-1.0, so configuration shapes may change without an automated migration
-command. If the active file is rejected, generate a fresh configuration at a separate
-path:
+command. Version 0.10.1 requires `schemaVersion: 2`, which separates provider connection
+profiles from model profiles and logical role routing. Schema version 1 is rejected
+instead of being silently reinterpreted.
+
+Generate a fresh configuration at a separate path:
 
 ```bash
 colossus --config .colossus/config.next.yaml config init \
@@ -59,9 +62,11 @@ colossus --config .colossus/config.next.yaml config init \
 
 Configurations without the required `access` block, or with removed `agent.tools`,
 `policy.allow_actions`, or `policy.approval_actions` fields, are rejected. Copy required
-provider, storage, policy, sandbox, and integration settings deliberately; retain
-credential references rather than secret values. `config init` never overwrites an
-existing file. Inspect the completed file before making it active:
+provider connections into `providers.profiles`; copy model identifiers, context limits,
+capabilities, and role mappings into `models.profiles` and `models.roles`. Transfer
+storage, policy, sandbox, and integration settings deliberately, and retain credential
+references rather than secret values. `config init` never overwrites an existing file.
+Inspect the completed file before making it active:
 
 ```bash
 colossus --config .colossus/config.next.yaml config show

@@ -8,9 +8,9 @@ replacement:
 
 # Rust Runtime Status
 
-Rust 0.10.1-preview.2 is the active repository-root Developer Preview candidate. It uses
-Rust 1.96, edition 2024, strict YAML configuration, and encrypted redb state. It never
-imports Python configuration or SQLite state. Python 0.5 remains frozen at
+Rust 0.10.1 is the active repository-root stable release line. It uses Rust 1.96,
+edition 2024, strict schema-version-2 YAML configuration, and encrypted redb state. It
+never imports Python configuration or SQLite state. Python 0.5 remains frozen at
 `python-v0.5.0` and on the `python-legacy` branch.
 
 ## Implemented Baseline
@@ -81,17 +81,16 @@ configuration surface.
 ## Release And Remaining Scope
 
 The repository-root cutover is complete. The 0.10 line adds the authenticated public API
-and language SDKs, the Operations Studio Desktop, and its supervised Managed Local
-runtime to the previously published baseline. `v0.10.1-preview.2` is an explicitly
-unnotarized Developer Preview, not a stable release. Ordinary pull requests use
-classified validation; the full platform, security, CLI, and channel-specific Desktop
-artifact matrix must pass the explicit release gates before it is tagged.
+and language SDKs, Operations Studio Desktop, supervised Managed Local runtime, stable
+signed and notarized Apple-silicon packaging, and a separately labeled unsigned Windows
+Developer Preview path. Ordinary pull requests use classified validation; the full
+platform, security, CLI, and channel-specific Desktop artifact matrix must pass the
+explicit release gates before a version is published.
 
-The latest published release evidence remains the
-[v0.8.1 release](https://github.com/obscuritylabs/Colossus/releases/tag/v0.8.1),
-built from revision `eda0ce42a52b15d627b545067b64967aa95079ac`; its full
-[release validation run](https://github.com/obscuritylabs/Colossus/actions/runs/29541847312)
-passed all native runtime, sandbox, policy, dependency, fuzz, and packaging jobs.
+The latest stable release is
+[v0.10.1](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.1). Its release
+record carries the native runtime, sandbox, policy, dependency, fuzz, package, checksum,
+signature, and notarization evidence produced by the tag workflow.
 
 PostgreSQL event storage, HTTPS WORM audit export, persisted schedules, authenticated
 webhooks, and durable repository-event subscriptions are included in the 0.8 source

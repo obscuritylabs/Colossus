@@ -143,8 +143,9 @@ environment variables.
 When the profile lives outside the default search list, also set
 `COLOSSUS_DESKTOP_NOTARY_KEYCHAIN` to its absolute keychain path.
 
-For the explicitly labeled, runnable Developer Preview, use only the ad-hoc identity and
-preview channel. Never attach a notary profile to this build:
+For an explicitly labeled, runnable Developer Preview, use only the ad-hoc identity and
+preview channel. This historical 0.10.1 preview command illustrates the contract; never
+attach a notary profile to this build:
 
 ```bash
 cd apps/desktop
@@ -183,7 +184,7 @@ Stable release jobs validate the variable and every secret, compare the imported
 certificate's Team ID, grant key access only to the macOS signing tools, store the notary
 profile in that ephemeral keychain, and delete the decoded files and keychain in an
 `always()` cleanup step. Missing or inconsistent configuration fails a stable tag release
-closed. A canonical `vX.Y.Z-preview.N` Developer Preview tag (currently
+closed. A canonical `vX.Y.Z-preview.N` Developer Preview tag (the most recent example is
 `v0.10.1-preview.2`) is the only credential-free runnable tag path: it uses the ad-hoc
 preview channel, reads no Apple signing secret, and creates a clearly named unnotarized
 Desktop asset. Manual `workflow_dispatch` remains

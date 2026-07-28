@@ -29,8 +29,8 @@ channels and must never be presented interchangeably.
 
 The verifier requires the pinned Rust, `cargo-deny`, and `cargo-audit` versions. It rejects
 a reintroduced root Python runtime or tracked Python source outside the maintained public
-SDK, and runs formatting, Clippy, the complete workspace suite, fuzz compilation, and
-production/fuzz supply-chain policy.
+SDK and its credential-free SDK fixtures, and runs formatting, Clippy, the complete
+workspace suite, fuzz compilation, and production/fuzz supply-chain policy.
 
 ## Dry-run artifacts
 
@@ -70,12 +70,12 @@ signed bundle. Linux jobs also prove static linkage and package the AppArmor ins
 ### Developer Preview
 
 `vX.Y.Z-preview.N` with `N > 0` is the only credential-free tag path that may produce a
-runnable Desktop. The current release is `v0.10.1-preview.2`; create it from the reviewed
-`main` commit with:
+runnable Desktop. The most recent example is `v0.10.1-preview.2`; create a preview from
+the reviewed `main` commit with the matching release version:
 
 ```bash
-git tag -a v0.10.1-preview.2 -m "Colossus v0.10.1-preview.2 - Developer Preview"
-git push origin v0.10.1-preview.2
+git tag -a vX.Y.Z-preview.N -m "Colossus vX.Y.Z-preview.N - Developer Preview"
+git push origin vX.Y.Z-preview.N
 ```
 
 This tag pattern selects the `developer_preview` channel, `ADHOC` Team ID sentinel, and
@@ -97,9 +97,10 @@ Gatekeeper assessment.
 ## Review and publish the draft
 
 Only after `Colossus release gate` succeeds does the final job receive `contents: write`.
-It verifies exactly fourteen files—six CLI archives, six checksum sidecars, the
-channel-specific Desktop archive, and its checksum—then creates or idempotently updates a
-draft release. It never publishes automatically.
+It verifies the exact channel-specific asset set: 17 files for stable releases or 22 for
+Developer Previews, including six CLI archives and checksums, Desktop archives, updater
+signatures and metadata, and preview-only Windows provenance where applicable. It then
+creates or idempotently updates a draft release. It never publishes automatically.
 
 Before publishing the draft:
 

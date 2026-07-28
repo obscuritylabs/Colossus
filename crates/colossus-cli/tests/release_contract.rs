@@ -186,14 +186,14 @@ fn developer_preview_is_explicitly_ad_hoc_labeled_and_prerelease() {
 }
 
 #[test]
-fn release_readiness_allows_only_the_public_python_sdk() {
+fn release_readiness_allows_only_the_public_python_sdk_and_fixtures() {
     let source = fs::read_to_string(repository_root().join("release/verify-release-readiness.sh"))
         .expect("read release readiness script");
     for required in [
-        "legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**')",
+        "legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' ':(exclude)examples/sdk/**')",
         "[ -e pyproject.toml ]",
         "[ -n \"$legacy_python_sources\" ]",
-        "tracked Python source outside sdk/python",
+        "tracked Python source outside the maintained public Python SDK and SDK fixtures",
     ] {
         assert!(
             source.contains(required),
