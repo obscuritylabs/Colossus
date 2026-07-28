@@ -304,6 +304,10 @@ impl SettingsStore {
             .map_err(|_| storage_error())?;
         #[cfg(windows)]
         binding.revalidate().map_err(|_| storage_error())?;
+        #[cfg(windows)]
+        // Migration may atomically replace this file below. Release the validated read
+        // handle first so Windows can detach the old destination name.
+        drop(binding);
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_SETTINGS_BYTES {
             return Err(storage_error());
         }
