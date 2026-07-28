@@ -6,13 +6,16 @@ use colossus_sdk::{
 use directories::BaseDirs;
 use serde::Deserialize;
 use std::{
-    fs::{self, File},
+    fs,
     io::Read as _,
     path::{Component, Path, PathBuf},
     str::FromStr as _,
     sync::Arc,
 };
 use uuid::Uuid;
+
+#[cfg(not(windows))]
+use std::fs::File;
 
 use crate::{
     desktop_settings::{

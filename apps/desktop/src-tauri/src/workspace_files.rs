@@ -1,12 +1,15 @@
 use std::{
     cmp::Ordering,
-    fs::{self, File},
+    fs,
     io::Read as _,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
+
+#[cfg(not(windows))]
+use std::fs::File;
 
 use crate::{
     desktop_settings::{
@@ -197,14 +200,22 @@ fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto, CommandErr
     if before.file_type().is_symlink() || !before.is_file() || before.len() > MAX_FILE_BYTES {
         return Err(preview_unavailable());
     }
+    #[cfg(windows)]
+    let binding = colossus_windows_native::BoundPath::open_file(&candidate)
+        .map_err(|_| workspace_read_error())?;
+    #[cfg(windows)]
+    let file = binding
+        .try_clone_file()
+        .map_err(|_| workspace_read_error())?;
+    #[cfg(not(windows))]
     let file = open_file_without_following(&candidate)?;
     let opened = file.metadata().map_err(|_| workspace_read_error())?;
     let after = fs::symlink_metadata(&candidate).map_err(|_| workspace_read_error())?;
-    if !opened.is_file()
-        || after.file_type().is_symlink()
-        || !after.is_file()
-        || !same_file(&opened, &after)
-    {
+    if !opened.is_file() || after.file_type().is_symlink() || !after.is_file() {
+        return Err(workspace_read_error());
+    }
+    #[cfg(not(windows))]
+    if !same_file(&opened, &after) {
         return Err(workspace_read_error());
     }
 
@@ -212,6 +223,8 @@ fn read_file(root: &Path, relative: &str) -> Result<WorkspaceFileDto, CommandErr
     file.take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| workspace_read_error())?;
+    #[cfg(windows)]
+    binding.revalidate().map_err(|_| workspace_read_error())?;
     if bytes.len() as u64 > MAX_FILE_BYTES || bytes.contains(&0) {
         return Err(preview_unavailable());
     }
@@ -288,13 +301,6 @@ fn open_file_without_following(path: &Path) -> Result<File, CommandErrorDto> {
     .map_err(|_| workspace_read_error())
 }
 
-#[cfg(windows)]
-fn open_file_without_following(path: &Path) -> Result<File, CommandErrorDto> {
-    colossus_windows_native::BoundPath::open_file(path)
-        .and_then(|binding| binding.try_clone_file())
-        .map_err(|_| workspace_read_error())
-}
-
 #[cfg(not(any(unix, windows)))]
 fn open_file_without_following(path: &Path) -> Result<File, CommandErrorDto> {
     File::open(path).map_err(|_| workspace_read_error())
@@ -305,15 +311,6 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
 
     left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(windows)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-
-    left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_index().is_some()
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -505,6 +502,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    #[cfg(target_os = "macos")]
     use crate::desktop_settings::validate_workspace;
 
     #[test]

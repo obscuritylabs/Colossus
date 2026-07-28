@@ -251,6 +251,15 @@ test("workspace file preview is read-only, bounded, and workspace-bound", () => 
   );
   assert.match(implementation, /revalidate_workspace\(workspace\)/u);
   assert.match(implementation, /OFlags::NOFOLLOW/u);
+  assert.match(
+    implementation,
+    /colossus_windows_native::BoundPath::open_file/u,
+  );
+  assert.match(implementation, /binding\.revalidate\(\)/u);
+  assert.doesNotMatch(
+    implementation,
+    /std::os::windows::fs::MetadataExt|file_index\(\)|volume_serial_number\(\)/u,
+  );
   assert.match(implementation, /\.file_type\(\)\.is_symlink\(\)/u);
   assert.match(implementation, /"\.colossus"/u);
   assert.match(implementation, /"\.env"/u);
