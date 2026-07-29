@@ -15,8 +15,8 @@ include breaking changes while the public API is still settling.
 - Expanded the sealed Desktop manifest patcher's bounded executable allowance to 1 GiB
   so the stripped Windows Developer Preview PE can be bound without weakening its
   regular-file, canonical-path, or link-count checks.
-- Staged AppArmor acceptance binaries below root-controlled `/opt` so both x64 and ARM64
-  GitHub-hosted Linux runners satisfy the exact-path attachment policy.
+- Staged AppArmor acceptance binaries below root-controlled `/usr/lib` so both x64 and
+  ARM64 GitHub-hosted Linux runners satisfy the exact-path attachment policy.
 - Kept x64 Windows acceptance and preview packaging on the provisioned
   `windows-latest-l` larger runner.
 

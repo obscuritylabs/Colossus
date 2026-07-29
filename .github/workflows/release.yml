@@ -117,11 +117,11 @@ jobs:
       - name: Prepare exact-path AppArmor profile for readiness tests
         run: |
           cargo build --locked -p colossus-cli --bin colossus
-          sudo install -d -o root -g root -m 0755 /opt/colossus-ci/bin
+          sudo install -d -o root -g root -m 0755 /usr/lib/colossus-ci
           sudo install -o root -g root -m 0755 \
-            target/debug/colossus /opt/colossus-ci/bin/colossus
-          sudo release/install-apparmor.sh /opt/colossus-ci/bin/colossus
-          echo 'COLOSSUS_NATIVE_TEST_BINARY=/opt/colossus-ci/bin/colossus' >> "$GITHUB_ENV"
+            target/debug/colossus /usr/lib/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/lib/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/lib/colossus-ci/colossus' >> "$GITHUB_ENV"
 
       - name: Run local release-readiness verifier
         run: ./release/verify-release-readiness.sh
@@ -193,11 +193,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes musl-tools file
           cargo build --locked -p colossus-cli --bin colossus
-          sudo install -d -o root -g root -m 0755 /opt/colossus-ci/bin
+          sudo install -d -o root -g root -m 0755 /usr/lib/colossus-ci
           sudo install -o root -g root -m 0755 \
-            target/debug/colossus /opt/colossus-ci/bin/colossus
-          sudo release/install-apparmor.sh /opt/colossus-ci/bin/colossus
-          echo 'COLOSSUS_NATIVE_TEST_BINARY=/opt/colossus-ci/bin/colossus' >> "$GITHUB_ENV"
+            target/debug/colossus /usr/lib/colossus-ci/colossus
+          sudo release/install-apparmor.sh /usr/lib/colossus-ci/colossus
+          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/lib/colossus-ci/colossus' >> "$GITHUB_ENV"
 
       - name: Run Unix native sandbox acceptance
         if: runner.os != 'Windows'
