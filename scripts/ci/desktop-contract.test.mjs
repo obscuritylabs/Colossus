@@ -80,6 +80,14 @@ test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
   assert.match(packaging, /COLOSSUS_DESKTOP_TEAM_ID -ne "UNSIGNED"/u);
   assert.match(packaging, /cargo xtask desktop prepare/u);
   assert.match(packaging, /--no-sign/u);
+  assert.match(packaging, /\[IO\.Path\]::GetTempPath\(\)/u);
+  assert.match(packaging, /ConvertTo-Json -Compress -Depth 4/u);
+  assert.match(packaging, /\[IO\.File\]::WriteAllText\(/u);
+  assert.equal(
+    packaging.match(/"--config", \$TauriOverridePath/gu)?.length,
+    2,
+  );
+  assert.doesNotMatch(packaging, /\$VersionOverride/u);
   assert.match(packaging, /write-desktop-bundle-manifest\.mjs/u);
   assert.match(packaging, /patch-desktop-manifest-binding\.mjs/u);
   assert.match(packaging, /"--bundles", "nsis"/u);

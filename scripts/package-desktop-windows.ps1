@@ -48,10 +48,28 @@ $StagedSidecar = Join-Path $Native "binaries/colossus-sidecar-$Target.exe"
 $StagedCli = Join-Path $Native "binaries/colossus-$Target.exe"
 $Manifest = Join-Path $Native "binaries/colossus-bundle-manifest.json"
 $Tauri = Join-Path $Desktop "node_modules/.bin/tauri.cmd"
+$TauriOverridePath = Join-Path `
+    ([IO.Path]::GetTempPath()) `
+    "colossus-tauri-override-$([Guid]::NewGuid().ToString('N')).json"
 
 if (-not (Test-Path -LiteralPath $Tauri -PathType Leaf)) {
     Fail "run npm ci in apps/desktop before packaging"
 }
+
+$TauriOverride = [ordered]@{
+    bundle = [ordered]@{
+        createUpdaterArtifacts = $false
+    }
+}
+if ($ReleaseVersion) {
+    $TauriOverride.version = $ReleaseVersion
+}
+$TauriOverrideJson = $TauriOverride | ConvertTo-Json -Compress -Depth 4
+[IO.File]::WriteAllText(
+    $TauriOverridePath,
+    $TauriOverrideJson,
+    [Text.UTF8Encoding]::new($false)
+)
 
 Push-Location $Repository
 try {
@@ -60,12 +78,13 @@ try {
 
     Push-Location $Desktop
     try {
-        $BuildArguments = @("build", "--target", $Target, "--no-sign", "--no-bundle")
-        $VersionOverride = $null
-        if ($ReleaseVersion) {
-            $VersionOverride = "{`"version`":`"$ReleaseVersion`"}"
-            $BuildArguments += @("--config", $VersionOverride)
-        }
+        $BuildArguments = @(
+            "build",
+            "--target", $Target,
+            "--no-sign",
+            "--no-bundle",
+            "--config", $TauriOverridePath
+        )
         $BuildArguments += @("--", "--locked")
         & $Tauri @BuildArguments
         if ($LASTEXITCODE -ne 0) { Fail "Tauri application build failed" }
@@ -101,17 +120,7 @@ try {
             "--no-sign",
             "--ci"
         )
-        $BundleConfiguration = [ordered]@{}
-        if ($VersionOverride) {
-            $BundleConfiguration.version = $ReleaseVersion
-        }
-        $BundleConfiguration.bundle = [ordered]@{
-            createUpdaterArtifacts = $false
-        }
-        if ($BundleConfiguration.Count -gt 0) {
-            $BundleOverride = $BundleConfiguration | ConvertTo-Json -Compress -Depth 4
-            $BundleArguments += @("--config", $BundleOverride)
-        }
+        $BundleArguments += @("--config", $TauriOverridePath)
         & $Tauri @BundleArguments
         if ($LASTEXITCODE -ne 0) { Fail "NSIS packaging failed" }
     } finally {
@@ -138,6 +147,9 @@ try {
 } finally {
     if (Test-Path -LiteralPath $Manifest -PathType Leaf) {
         Remove-Item -LiteralPath $Manifest -Force
+    }
+    if (Test-Path -LiteralPath $TauriOverridePath -PathType Leaf) {
+        Remove-Item -LiteralPath $TauriOverridePath -Force
     }
     Pop-Location
 }
