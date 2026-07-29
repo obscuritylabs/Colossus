@@ -8,13 +8,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-update-channel-${{ github.event.release.prerelease && 'developer-preview' || 'stable' }}
+  group: desktop-update-channel-stable
   cancel-in-progress: false
 
 jobs:
   publish:
     name: Publish verified channel metadata
-    if: startsWith(github.event.release.tag_name, 'v')
+    if: startsWith(github.event.release.tag_name, 'v') && github.event.release.prerelease == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -28,16 +28,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$RELEASE_DRAFT" = false
-          if [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            channel=stable
-            test "$RELEASE_PRERELEASE" = false
-          elif [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$ ]]; then
-            channel=developer_preview
-            test "$RELEASE_PRERELEASE" = true
-          else
-            echo "published release is not a Colossus Desktop channel version" >&2
-            exit 1
-          fi
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$RELEASE_PRERELEASE" = false
+          channel=stable
           printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
 
       - name: Download immutable release update metadata
@@ -74,15 +67,7 @@ jobs:
                and (.value.signature | type == "string" and length > 0)
              ] | all)' \
             "$metadata" >/dev/null
-          if [ "$CHANNEL" = stable ]; then
-            jq -e '.platforms | keys == ["macos-aarch64-stable"]' "$metadata" >/dev/null
-          else
-            jq -e \
-              '.platforms | keys == [
-                "macos-aarch64-developer_preview",
-                "windows-x86_64-developer_preview"
-              ]' "$metadata" >/dev/null
-          fi
+          jq -e '.platforms | keys == ["macos-aarch64-stable"]' "$metadata" >/dev/null
 
       - name: Publish the fixed HTTPS channel endpoint
         env:

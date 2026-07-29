@@ -8,6 +8,24 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2-preview.2] - 2026-07-29
+
+### Fixed
+
+- Made Developer Preview Desktop packaging credential-free end to end: macOS is ad-hoc
+  signed without notarization, Windows is unsigned, and neither preview package requires
+  or emits Tauri updater signatures.
+- Disabled automatic Desktop updates for unsigned previews while preserving the signed,
+  fail-closed updater contract for future stable releases.
+
+### Upgrade Notes
+
+- `v0.10.2-preview.2` supersedes the unpublished `v0.10.2-preview.1` attempt, whose
+  Windows Desktop job stopped before packaging because the unsigned path still required
+  an unavailable updater-signing key.
+- Preview upgrades are manual. Download later preview installers and their checksum
+  sidecars from GitHub Releases.
+
 ## [0.10.2-preview.1] - 2026-07-29
 
 ### Fixed

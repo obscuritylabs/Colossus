@@ -28,14 +28,14 @@ For the unsigned Windows 10/11 x64 package, use the
 
 ### 1. Download and verify Desktop
 
-From the `v0.10.2-preview.1` Developer Preview, download
-`Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.1-aarch64-apple-darwin.zip`
+From the `v0.10.2-preview.2` Developer Preview, download
+`Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.2-aarch64-apple-darwin.zip`
 and its adjacent `.sha256` file. Keep both files together and verify the archive before
 opening it:
 
 ```bash
 shasum -a 256 -c \
-  Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.1-aarch64-apple-darwin.zip.sha256
+  Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.2-aarch64-apple-darwin.zip.sha256
 ```
 
 The check must report success. Expand the zip and move **Colossus Desktop** to
@@ -105,10 +105,11 @@ never receives the original or private storage path.
 
 ### 5. Check the signed update channel
 
-Open **Settings → Desktop updates → Check for updates**. Desktop does not perform a
-background update request: the check occurs only after this explicit action. Stable
-builds query only the stable channel, and Developer Preview builds query only the
-preview channel. Validation-only and development builds have no update authority.
+Only stable builds advertise an automatic update channel. Desktop does not perform a
+background update request: the check occurs only after
+**Settings → Desktop updates → Check for updates**. Developer Preview, validation-only,
+and development builds have no update authority; install later previews manually from
+GitHub Releases.
 
 Both the metadata request and package download use the shared Colossus network
 configuration, including an imported additional CA bundle. The native updater rejects

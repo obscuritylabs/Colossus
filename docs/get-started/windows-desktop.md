@@ -79,16 +79,13 @@ private copy to providers, external gRPC clients, webhooks, search/vector servic
 downloads, policy clients, and the other Colossus-owned network adapters. Removing the
 bundle also restarts Managed Local; public system roots remain available.
 
-### 4. Check the preview update channel
+### 4. Upgrade previews manually
 
-Open **Settings → Desktop updates → Check for updates**. The app makes no background
-update request. The unsigned Windows Developer Preview can read only
-`developer_preview` metadata and can install only the `windows-x86_64-developer_preview`
-target. The metadata endpoint and package download use the shared CA configuration,
-require HTTPS without redirect downgrade, and the package must pass the application
-update-signing key before the NSIS updater starts. This package signature protects
-update integrity but does not add an Authenticode publisher identity; SmartScreen can
-still warn.
+Unsigned Windows Developer Previews do not advertise an automatic update channel.
+**Settings → Desktop updates → Check for updates** therefore reports that updates are
+not configured. Download each later preview and its `.sha256` sidecar from GitHub
+Releases, verify the checksum, close Colossus Desktop, and run the newer installer.
+SmartScreen can still warn because the preview has no Authenticode publisher identity.
 
 ### 5. Export diagnostics
 
@@ -147,12 +144,12 @@ bundle reports only certificate count and fingerprints.
   renderer. Colossus never substitutes an arbitrary shell PTY.
 - Fleet, delegation, agent workflows, skills, and attachments remain hidden unless an
   authenticated runtime advertises them.
-- Preview updates stay on the preview channel. A stable Windows channel remains disabled
-  until the installer, app, CLI, and sidecar can all be Authenticode signed.
+- Preview upgrades are manual. A stable Windows channel remains disabled until the
+  installer, app, CLI, and sidecar can all be Authenticode signed.
 
 ## Next step
 
 Configure the fixed provider preset in Desktop and run one Plan-mode request before
-enabling Execute mode. Keep the Windows installation on the preview update channel;
-move to a future stable Windows release only after its Authenticode publisher identity
-and stable-channel release notes have been verified.
+enabling Execute mode. Install later previews manually; move to a future stable Windows
+release only after its Authenticode publisher identity and stable-channel release notes
+have been verified.

@@ -227,9 +227,10 @@ assessment.
 Within `release.yml`, only the final publication job receives `contents: write`. After
 all six CLI targets and the Desktop artifact pass, automation creates or updates a draft
 GitHub Release. A human reviews the draft and publishes it; the approved Developer
-Preview draft is already marked as a GitHub prerelease. The separate post-publication
-channel workflow has narrow `contents: write` authority only to replace the fixed update
-metadata assets. Manual dispatch is artifact-only and cannot create a release; it uses
+Preview draft is already marked as a GitHub prerelease. The stable-only
+post-publication channel workflow has narrow `contents: write` authority only to replace
+the fixed signed update metadata asset. Manual dispatch is artifact-only and cannot
+create a release; it uses
 the separate `validation_only` channel with an ad-hoc signature and `ADHOC` sentinel,
 never reads production signing secrets, and does not produce a runnable Desktop
 application. Its Actions artifact and archive are explicitly named
@@ -242,26 +243,24 @@ gh workflow run release.yml --ref BRANCH -f version=vX.Y.Z
 
 ### Desktop update signing and channels
 
-Runnable stable and Developer Preview builds require the repository variable
-`DESKTOP_UPDATE_PUBLIC_KEY`, containing the one-line base64 Tauri updater public key.
-The isolated packaging jobs require the protected secrets
-`DESKTOP_UPDATE_PRIVATE_KEY` and, when applicable,
-`DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD`. Validation-only builds reject update endpoints
-and keys and never produce updater artifacts.
+Only stable builds advertise automatic updates. They require the repository variable
+`DESKTOP_UPDATE_PUBLIC_KEY`, containing the one-line base64 Tauri updater public key,
+plus the protected `DESKTOP_UPDATE_PRIVATE_KEY` secret and, when applicable,
+`DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD`. Unsigned Developer Preview and validation-only
+builds reject update endpoints and keys and never produce updater artifacts; users
+install later previews manually from GitHub Releases.
 
-macOS packages a signed `.app.tar.gz` only after nested signing, outer signing,
-notarization when stable, stapling, and final bundle verification. Windows preview
-packaging emits the NSIS updater signature next to the explicitly unsigned installer.
-The versioned draft includes channel-scoped metadata whose platform entries carry those
-signatures and immutable version-release URLs.
+macOS packages the stable signed `.app.tar.gz` only after nested signing, outer signing,
+notarization, stapling, and final bundle verification. The stable versioned draft
+includes channel-scoped metadata whose platform entry carries that signature and an
+immutable version-release URL.
 
-When a human publishes the versioned release,
-`desktop-update-channels.yml` revalidates the tag, prerelease bit, channel, platform
-keys, HTTPS URLs, and immutable release paths before replacing only `stable.json` or
-`developer_preview.json` on the fixed `desktop-update-channels` release. Applications
-compile one corresponding fixed endpoint and use distinct target names, so a preview
-cannot consume stable metadata or vice versa. The native update client also uses the
-shared additional-CA configuration and rejects HTTPS-to-HTTP redirects.
+When a human publishes a stable versioned release,
+`desktop-update-channels.yml` revalidates the tag, release kind, platform key, HTTPS URL,
+and immutable release path before replacing `stable.json` on the fixed
+`desktop-update-channels` release. The native update client also uses the shared
+additional-CA configuration and rejects HTTPS-to-HTTP redirects. Published Developer
+Previews skip this workflow because they deliberately contain no update authority.
 
 The application update signature is separate from platform publisher identity.
 Authenticode remains mandatory before a Windows package can enter the stable channel;
