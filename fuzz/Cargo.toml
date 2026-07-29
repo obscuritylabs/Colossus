@@ -13,7 +13,7 @@ cargo-fuzz = true
 members = ["."]
 
 [dependencies]
-colossus-fuzzing = { version = "=0.10.2-preview.4", path = "../crates/colossus-fuzzing" }
+colossus-fuzzing = { version = "=0.10.2-preview.5", path = "../crates/colossus-fuzzing" }
 libfuzzer-sys = "0.4"
 
 [[bin]]

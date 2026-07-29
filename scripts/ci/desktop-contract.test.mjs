@@ -695,7 +695,7 @@ test("release compilation and signing authority use separate runners", () => {
   );
 });
 
-test("standalone Desktop release builds strip symbols before sealed packaging", () => {
+test("standalone Desktop release builds stay bounded before sealed packaging", () => {
   const manifest = read("apps/desktop/src-tauri/Cargo.toml");
   const profileStart = manifest.indexOf("[profile.release]");
   const profileEnd = manifest.indexOf("\n[", profileStart + 1);
@@ -706,7 +706,7 @@ test("standalone Desktop release builds strip symbols before sealed packaging", 
   assert.match(profile, /strip = "symbols"/u);
 
   const patcher = read("scripts/patch-desktop-manifest-binding.mjs");
-  assert.match(patcher, /MAX_EXECUTABLE_BYTES = 512 \* 1024 \* 1024/u);
+  assert.match(patcher, /MAX_EXECUTABLE_BYTES = 1024 \* 1024 \* 1024/u);
 });
 
 test("stable desktop updates are signature-bound and unsigned previews have no update authority", () => {

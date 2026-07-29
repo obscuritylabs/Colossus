@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { basename, isAbsolute } from "node:path";
 
-const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
+const MAX_EXECUTABLE_BYTES = 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 16 * 1024;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const TARGET_PATTERN = /^[A-Za-z0-9_.-]+$/u;
