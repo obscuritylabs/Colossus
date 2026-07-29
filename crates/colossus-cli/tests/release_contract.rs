@@ -329,6 +329,23 @@ fn linux_profile_and_release_package_remain_hardened() {
     assert!(!unix.contains("mapfile"));
     assert!(unix.contains("release/install-apparmor.sh"));
     assert!(unix.contains("release/colossus.apparmor.in"));
+
+    for workflow_path in [".github/workflows/pr.yml", ".github/workflows/release.yml"] {
+        let source = fs::read_to_string(repository_root().join(workflow_path))
+            .unwrap_or_else(|error| panic!("read {workflow_path}: {error}"));
+        assert!(
+            source.contains("sudo install -d -o root -g root -m 0755 /opt/colossus-ci/bin"),
+            "{workflow_path} must stage the exact-path attachment below root-controlled /opt"
+        );
+        assert!(
+            source.contains("/opt/colossus-ci/bin/colossus"),
+            "{workflow_path} must install and profile the root-controlled binary"
+        );
+        assert!(
+            !source.contains("/usr/local/libexec/colossus-ci"),
+            "{workflow_path} must not rely on a replaceable runner-provided ancestor"
+        );
+    }
 }
 
 #[test]

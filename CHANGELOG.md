@@ -8,6 +8,27 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2-preview.5] - 2026-07-29
+
+### Fixed
+
+- Expanded the sealed Desktop manifest patcher's bounded executable allowance to 1 GiB
+  so the stripped Windows Developer Preview PE can be bound without weakening its
+  regular-file, canonical-path, or link-count checks.
+- Staged AppArmor acceptance binaries below root-controlled `/opt` so both x64 and ARM64
+  GitHub-hosted Linux runners satisfy the exact-path attachment policy.
+- Kept x64 Windows acceptance and preview packaging on the provisioned
+  `windows-latest-l` larger runner.
+
+### Upgrade Notes
+
+- `v0.10.2-preview.5` supersedes the unpublished `v0.10.2-preview.4` attempt. Its
+  Windows Desktop executable remained above the previous 512 MiB patching ceiling, and
+  its ARM64 Linux runner exposed a replaceable `/usr/local/libexec` ancestor. No earlier
+  preview attempt produced a GitHub Release.
+- Preview upgrades are manual. Download later preview installers and their checksum
+  sidecars from GitHub Releases.
+
 ## [0.10.2-preview.4] - 2026-07-29
 
 ### Fixed
@@ -20,7 +41,7 @@ include breaking changes while the public API is still settling.
 - Applied the root workspace's stripped release profile to the standalone Tauri workspace
   so the Windows PE remains inside the sealed-manifest executable-size bound.
 - Moved Windows pre-merge acceptance and preview packaging to the configured
-  `windows-latest-8-cores` larger runner.
+  `windows-latest-l` larger runner.
 - Disabled automatic Desktop updates for unsigned previews while preserving the signed,
   fail-closed updater contract for future stable releases.
 
