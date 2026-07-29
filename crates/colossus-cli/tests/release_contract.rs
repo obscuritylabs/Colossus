@@ -333,22 +333,43 @@ fn linux_profile_and_release_package_remain_hardened() {
     for workflow_path in [".github/workflows/pr.yml", ".github/workflows/release.yml"] {
         let source = fs::read_to_string(repository_root().join(workflow_path))
             .unwrap_or_else(|error| panic!("read {workflow_path}: {error}"));
+        let staging_directory =
+            r#"install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}""#;
+        let expected_staging_count = if workflow_path.ends_with("/pr.yml") {
+            1
+        } else {
+            2
+        };
         assert!(
-            source.contains("sudo install -d -o root -g root -m 0755 /usr/lib/colossus-ci"),
-            "{workflow_path} must stage the exact-path attachment below root-controlled /usr/lib"
+            source.contains(staging_directory),
+            "{workflow_path} must stage the exact-path attachment in a run-unique root-level directory"
+        );
+        assert_eq!(
+            source.matches(staging_directory).count(),
+            expected_staging_count,
+            "{workflow_path} must use the hardened staging directory for every Linux AppArmor setup"
         );
         assert!(
-            source.contains("/usr/lib/colossus-ci/colossus"),
+            source.contains(r#"staged_binary="$install_dir/colossus""#),
             "{workflow_path} must install and profile the root-controlled binary"
         );
-        assert!(
-            !source.contains("/usr/local/libexec/colossus-ci"),
-            "{workflow_path} must not rely on a replaceable runner-provided ancestor"
+        assert_eq!(
+            source
+                .matches("sudo install -o root -g root -m 0755 /bin/true \"$staged_binary\"")
+                .count(),
+            expected_staging_count,
+            "{workflow_path} must fail fast on AppArmor path or parser errors before compiling"
         );
-        assert!(
-            !source.contains("/opt/colossus-ci"),
-            "{workflow_path} must not rely on the runner-owned /opt ancestor"
-        );
+        for forbidden in [
+            "/usr/local/libexec/colossus-ci",
+            "/usr/lib/colossus-ci",
+            "/opt/colossus-ci",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{workflow_path} must not rely on runner-controlled ancestor {forbidden}"
+            );
+        }
     }
 }
 

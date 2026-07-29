@@ -162,12 +162,15 @@ jobs:
 
       - name: Prepare exact-path AppArmor profile for workspace tests
         run: |
+          install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          staged_binary="$install_dir/colossus"
+          sudo install -d -o root -g root -m 0755 "$install_dir"
+          sudo install -o root -g root -m 0755 /bin/true "$staged_binary"
+          sudo release/install-apparmor.sh "$staged_binary"
           cargo build --locked -p colossus-cli --bin colossus
-          sudo install -d -o root -g root -m 0755 /usr/lib/colossus-ci
           sudo install -o root -g root -m 0755 \
-            target/debug/colossus /usr/lib/colossus-ci/colossus
-          sudo release/install-apparmor.sh /usr/lib/colossus-ci/colossus
-          echo 'COLOSSUS_NATIVE_TEST_BINARY=/usr/lib/colossus-ci/colossus' >> "$GITHUB_ENV"
+            target/debug/colossus "$staged_binary"
+          printf 'COLOSSUS_NATIVE_TEST_BINARY=%s\n' "$staged_binary" >> "$GITHUB_ENV"
 
       - name: Run complete Rust validation
         run: cargo xtask check rust

@@ -8,6 +8,29 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2-preview.6] - 2026-07-29
+
+### Fixed
+
+- Staged CI AppArmor attachment binaries in a run-unique, root-level directory so the
+  exact-path profile has no runner-controlled `/usr`, `/usr/local`, or `/opt` ancestor.
+  The executable and its only replaceable parent remain root-owned and non-writable by
+  unprivileged users.
+- Made AppArmor path and parser validation run against a harmless root-owned stub before
+  compiling Colossus, so incompatible runners fail in seconds without starting release
+  artifact jobs.
+- Kept x64 Windows acceptance and unsigned preview packaging on the provisioned
+  `windows-latest-l` larger runner.
+
+### Upgrade Notes
+
+- `v0.10.2-preview.6` supersedes the unpublished `v0.10.2-preview.5` attempt. Its
+  ARM64 release-readiness runner exposed `/usr` as runner-controlled, so the hardened
+  AppArmor installer rejected the attachment before any artifact jobs started. No
+  earlier preview attempt produced a GitHub Release.
+- Preview upgrades are manual. Download later preview installers and their checksum
+  sidecars from GitHub Releases.
+
 ## [0.10.2-preview.5] - 2026-07-29
 
 ### Fixed
