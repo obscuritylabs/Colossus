@@ -254,10 +254,16 @@ fn platform_jobs_combine_acceptance_packaging_install_and_bundle_smoke() {
     assert!(unix.contains(
         "requireApproval: [bundle.key.inspect, pack.trust.add, bundle.build, bundle.install]"
     ));
+    assert!(unix.contains("schemaVersion: 2"));
+    assert!(!unix.contains("schemaVersion: 1"));
+    assert!(unix.contains("providerProfile: echo"));
     assert!(windows.contains("allow = @(\"bundle.verify\")"));
     assert!(windows.contains(
         "requireApproval = @(\"bundle.key.inspect\", \"pack.trust.add\", \"bundle.build\", \"bundle.install\")"
     ));
+    assert!(windows.contains("schemaVersion = 2"));
+    assert!(!windows.contains("schemaVersion = 1"));
+    assert!(windows.contains("providerProfile = \"echo\""));
 }
 
 #[test]
