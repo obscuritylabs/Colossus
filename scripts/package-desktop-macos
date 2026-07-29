@@ -323,7 +323,7 @@ sign_app() {
     updater_archive="$(dirname -- "$app")/Colossus Desktop.app.tar.gz"
     updater_signature="$updater_archive.sig"
     rm -f "$updater_archive" "$updater_signature"
-    if [ "$release_channel" = stable ] || [ "$release_channel" = developer_preview ]; then
+    if [ "$release_channel" = stable ]; then
         [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] ||
             fail "$release_channel packaging requires TAURI_SIGNING_PRIVATE_KEY"
         [ -x "$tauri" ] || fail "run npm ci in apps/desktop before signing update artifacts"

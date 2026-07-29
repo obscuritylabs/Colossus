@@ -382,7 +382,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "smartScreenWarningExpected = $true",
         "Colossus-Desktop-UNSIGNED-$label-$env:RELEASE_TAG-x86_64-pc-windows-msvc-setup.exe",
         "-eq 17",
-        "-eq 22",
+        "-eq 18",
     ] {
         assert!(
             source.contains(required),

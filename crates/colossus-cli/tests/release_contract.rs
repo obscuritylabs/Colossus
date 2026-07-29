@@ -69,7 +69,7 @@ fn tag_validation_and_draft_publication_fail_closed() {
         "--draft --verify-tag --generate-notes",
         "refusing to retain unexpected draft asset",
         "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 17",
-        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 22",
+        "test \"$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')\" -eq 18",
     ] {
         assert!(
             source.contains(required),
@@ -87,7 +87,7 @@ fn tag_validation_and_draft_publication_fail_closed() {
 }
 
 #[test]
-fn validation_only_desktop_builds_do_not_receive_updater_configuration() {
+fn unsigned_desktop_builds_do_not_receive_updater_configuration() {
     let source = fs::read_to_string(repository_root().join(".github/workflows/release.yml"))
         .expect("read release workflow");
     for variable in [
@@ -104,10 +104,16 @@ fn validation_only_desktop_builds_do_not_receive_updater_configuration() {
         );
     }
     assert!(source.contains(
-        "COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel != 'validation_only' && format("
+        "COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel == 'stable' && format("
     ));
     assert!(source.contains(
-        "COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}"
+        "COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'stable' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}"
+    ));
+    assert!(source.contains(
+        "TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel == 'stable' && secrets.DESKTOP_UPDATE_PRIVATE_KEY || '' }}"
+    ));
+    assert!(source.contains(
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel == 'stable' && secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD || '' }}"
     ));
 }
 
@@ -171,6 +177,8 @@ fn developer_preview_is_explicitly_ad_hoc_labeled_and_prerelease() {
         "shasum -a 256 --check $preview_checksum",
         "System Settings > Privacy & Security > Open Anyway",
         "Do not disable Gatekeeper globally",
+        "Automatic Desktop updates are disabled in this unsigned preview",
+        "test ! -e \"dist/developer_preview.json\"",
         ".prerelease == $prerelease",
     ] {
         assert!(

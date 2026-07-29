@@ -26,10 +26,6 @@ if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @("developer_preview", "validat
 if ($env:COLOSSUS_DESKTOP_TEAM_ID -ne "UNSIGNED") {
     Fail "unsigned Windows packaging requires COLOSSUS_DESKTOP_TEAM_ID=UNSIGNED"
 }
-$UpdatesEnabled = $env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -eq "developer_preview"
-if ($UpdatesEnabled -and -not $env:TAURI_SIGNING_PRIVATE_KEY) {
-    Fail "developer_preview packaging requires TAURI_SIGNING_PRIVATE_KEY"
-}
 if (
     $ReleaseVersion -and
     $ReleaseVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
@@ -109,10 +105,8 @@ try {
         if ($VersionOverride) {
             $BundleConfiguration.version = $ReleaseVersion
         }
-        if ($UpdatesEnabled) {
-            $BundleConfiguration.bundle = [ordered]@{
-                createUpdaterArtifacts = $true
-            }
+        $BundleConfiguration.bundle = [ordered]@{
+            createUpdaterArtifacts = $false
         }
         if ($BundleConfiguration.Count -gt 0) {
             $BundleOverride = $BundleConfiguration | ConvertTo-Json -Compress -Depth 4
@@ -133,11 +127,8 @@ try {
     }
     $Installer = $Installers[0]
     $InstallerSignature = "$($Installer.FullName).sig"
-    if ($UpdatesEnabled -and -not (Test-Path -LiteralPath $InstallerSignature -PathType Leaf)) {
-        Fail "NSIS updater signature was not created"
-    }
-    if (-not $UpdatesEnabled -and (Test-Path -LiteralPath $InstallerSignature)) {
-        Fail "validation-only packaging unexpectedly created an updater signature"
+    if (Test-Path -LiteralPath $InstallerSignature) {
+        Fail "unsigned Windows packaging unexpectedly created an updater signature"
     }
     $Checksum = (Get-FileHash -LiteralPath $Installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     "$Checksum  $($Installer.Name)" | Set-Content -LiteralPath "$($Installer.FullName).sha256" -Encoding ascii

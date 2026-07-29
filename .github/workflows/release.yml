@@ -255,8 +255,8 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
-      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel != 'validation_only' && format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) || '' }}
-      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}
+      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel == 'stable' && format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) || '' }}
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'stable' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -347,15 +347,14 @@ jobs:
     env:
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
-      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && secrets.DESKTOP_UPDATE_PRIVATE_KEY || '' }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel != 'validation_only' && secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD || '' }}
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel == 'stable' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel == 'stable' && secrets.DESKTOP_UPDATE_PRIVATE_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel == 'stable' && secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD || '' }}
     steps:
       - name: Check out signing and verification scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Node.js 22.18 for updater signing
-        if: needs.validate.outputs.release_channel != 'validation_only'
+      - name: Install Node.js 22.18
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.18.0
@@ -363,12 +362,12 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
 
       - name: Install locked updater signing tools
-        if: needs.validate.outputs.release_channel != 'validation_only'
+        if: needs.validate.outputs.release_channel == 'stable'
         working-directory: apps/desktop
         run: npm ci --ignore-scripts
 
       - name: Require the application update-signing key
-        if: needs.validate.outputs.release_channel != 'validation_only'
+        if: needs.validate.outputs.release_channel == 'stable'
         shell: bash
         run: test -n "$TAURI_SIGNING_PRIVATE_KEY"
 
@@ -533,7 +532,7 @@ jobs:
               ;;
             developer_preview)
               archive="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
-              updater="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.app.tar.gz"
+              updater=
               ;;
             validation_only)
               archive="Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip"
@@ -602,10 +601,8 @@ jobs:
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       COLOSSUS_DESKTOP_TARGET: x86_64-pc-windows-msvc
       COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED
-      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.validate.outputs.release_channel != 'validation_only' && format('https://github.com/{0}/releases/download/desktop-update-channels/{1}.json', github.repository, needs.validate.outputs.release_channel) || '' }}
-      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && vars.DESKTOP_UPDATE_PUBLIC_KEY || '' }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ needs.validate.outputs.release_channel != 'validation_only' && secrets.DESKTOP_UPDATE_PRIVATE_KEY || '' }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.validate.outputs.release_channel != 'validation_only' && secrets.DESKTOP_UPDATE_PRIVATE_KEY_PASSWORD || '' }}
+      COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""
+      COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""
       SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out repository
@@ -743,19 +740,9 @@ jobs:
           $name = "Colossus-Desktop-UNSIGNED-$label-$env:RELEASE_TAG-x86_64-pc-windows-msvc-setup.exe"
           $installer = Join-Path $destination $name
           Copy-Item -LiteralPath $source[0].FullName -Destination $installer
-          if ($env:RELEASE_CHANNEL -eq "developer_preview") {
-            $signatureSource = "$($source[0].FullName).sig"
-            if (-not (Test-Path -LiteralPath $signatureSource -PathType Leaf)) {
-              throw "signed Windows updater artifact is missing its signature"
-            }
-            node scripts/verify-tauri-updater-signature.mjs `
-              --file $source[0].FullName `
-              --signature $signatureSource `
-              --public-key $env:COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY
-            if ($LASTEXITCODE -ne 0) {
-              throw "Windows updater signature does not match the embedded public key"
-            }
-            Copy-Item -LiteralPath $signatureSource -Destination "$installer.sig"
+          $signatureSource = "$($source[0].FullName).sig"
+          if (Test-Path -LiteralPath $signatureSource) {
+            throw "unsigned Windows packaging unexpectedly produced an updater signature"
           }
           $digest = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
           "$digest  $name" | Set-Content -LiteralPath "$installer.sha256" -Encoding ascii
@@ -785,7 +772,7 @@ jobs:
             smartScreenWarningExpected = $true
             bundleIntegrity = "sealed_manifest"
             updateSignature = if ($env:RELEASE_CHANNEL -eq "developer_preview") {
-              "tauri_minisign"
+              "disabled_unsigned_preview"
             } else {
               "disabled_validation_only"
             }
@@ -867,7 +854,8 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Create channel-scoped signed update metadata
+      - name: Create stable signed update metadata
+        if: needs.validate.outputs.release_channel == 'stable'
         shell: bash
         env:
           RELEASE_CHANNEL: ${{ needs.validate.outputs.release_channel }}
@@ -897,15 +885,15 @@ jobs:
               updater="Colossus-Desktop-${RELEASE_TAG}-aarch64-apple-darwin.app.tar.gz"
               ;;
             developer_preview)
-              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 22
+              test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 18
               desktop="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.zip"
-              updater="Colossus-Desktop-DEVELOPER-PREVIEW-${RELEASE_TAG}-aarch64-apple-darwin.app.tar.gz"
+              updater=
               windows="Colossus-Desktop-UNSIGNED-DEVELOPER-PREVIEW-${RELEASE_TAG}-x86_64-pc-windows-msvc-setup.exe"
               test -f "dist/$windows"
               test -f "dist/$windows.sha256"
-              test -f "dist/$windows.sig"
               test -f "dist/Colossus-Desktop-${RELEASE_TAG}-windows-bundle-manifest.json"
               test -f "dist/Colossus-Desktop-${RELEASE_TAG}-windows-provenance.json"
+              test ! -e "dist/developer_preview.json"
               ;;
             *)
               echo "refusing to publish release channel: $RELEASE_CHANNEL" >&2
@@ -914,9 +902,11 @@ jobs:
           esac
           test -f "dist/$desktop"
           test -f "dist/$desktop.sha256"
-          test -f "dist/$updater"
-          test -f "dist/$updater.sig"
-          test -f "dist/$RELEASE_CHANNEL.json"
+          if [ -n "$updater" ]; then
+            test -f "dist/$updater"
+            test -f "dist/$updater.sig"
+            test -f "dist/$RELEASE_CHANNEL.json"
+          fi
           for checksum in dist/*.sha256; do
             (cd dist && sha256sum --check --strict "$(basename "$checksum")")
           done
@@ -986,6 +976,7 @@ jobs:
                 '> **Developer Preview:** This entire release is pre-release software for testing. The macOS Desktop build is ad-hoc signed and not notarized by Apple. The Windows Desktop installer is unsigned and Microsoft Defender SmartScreen is expected to warn. Do not treat either Desktop build as stable or production-ready.' \
                 '' \
                 'Desktop package names include `DEVELOPER-PREVIEW`; the Windows installer additionally includes `UNSIGNED`.' \
+                'Automatic Desktop updates are disabled in this unsigned preview. Install later previews manually from GitHub Releases.' \
                 "$checksum_note" \
                 '' \
                 'For first launch, extract the archive, Control-click **Colossus Desktop**, choose **Open**, then confirm **Open**. If macOS still blocks it, use **System Settings > Privacy & Security > Open Anyway**. Do not disable Gatekeeper globally.')

@@ -687,7 +687,7 @@ test("release compilation and signing authority use separate runners", () => {
   );
 });
 
-test("desktop updates are signature-bound and channel-isolated", () => {
+test("stable desktop updates are signature-bound and unsigned previews have no update authority", () => {
   const manifest = read("apps/desktop/src-tauri/Cargo.toml");
   const build = read("apps/desktop/src-tauri/build.rs");
   const updater = read("apps/desktop/src-tauri/src/updates.rs");
@@ -699,7 +699,11 @@ test("desktop updates are signature-bound and channel-isolated", () => {
   assert.match(manifest, /tauri-plugin-updater = \{ version = "=2\.9\.0"/u);
   assert.match(build, /COLOSSUS_DESKTOP_UPDATE_ENDPOINT/u);
   assert.match(build, /COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY/u);
-  assert.match(build, /validation-only Desktop builds must not advertise/u);
+  assert.match(build, /let updates_enabled = release_channel == "stable";/u);
+  assert.match(
+    build,
+    /unsigned Developer Preview and validation-only Desktop builds must not advertise/u,
+  );
   assert.match(updater, /AdditionalRootCertificates/u);
   assert.match(updater, /MAX_UPDATE_BYTES/u);
   assert.match(updater, /verify_update_signature/u);
@@ -707,14 +711,24 @@ test("desktop updates are signature-bound and channel-isolated", () => {
   assert.match(updater, /schemaVersion/u);
   assert.match(updater, /attempt\.url\(\)\.scheme\(\) == "https"/u);
   assert.match(macos, /Colossus Desktop\.app\.tar\.gz/u);
+  assert.match(macos, /if \[ "\$release_channel" = stable \]; then/u);
   assert.match(macos, /signer sign "\$updater_archive"/u);
-  assert.match(windows, /createUpdaterArtifacts = \$true/u);
-  assert.match(windows, /NSIS updater signature was not created/u);
+  assert.match(windows, /createUpdaterArtifacts = \$false/u);
+  assert.match(
+    windows,
+    /unsigned Windows packaging unexpectedly created an updater signature/u,
+  );
   assert.match(release, /DESKTOP_UPDATE_PUBLIC_KEY/u);
   assert.match(release, /DESKTOP_UPDATE_PRIVATE_KEY/u);
+  assert.match(
+    release,
+    /release_channel == 'stable' && secrets\.DESKTOP_UPDATE_PRIVATE_KEY/u,
+  );
   assert.match(release, /write-desktop-update-manifest\.mjs/u);
   assert.match(release, /verify-tauri-updater-signature\.mjs/u);
   assert.match(channels, /types: \[published\]/u);
+  assert.match(channels, /github\.event\.release\.prerelease == false/u);
+  assert.doesNotMatch(channels, /developer_preview/u);
   assert.match(channels, /desktop-update-channels/u);
   assert.match(channels, /gh release upload "\$channel_tag"/u);
 });

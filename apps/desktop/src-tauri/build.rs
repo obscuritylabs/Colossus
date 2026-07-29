@@ -122,7 +122,7 @@ fn export_release_trust_configuration() {
         ("macos", "developer_preview" | "validation_only") => "ad_hoc",
         _ => "unsupported",
     };
-    let updates_enabled = matches!(release_channel.as_str(), "stable" | "developer_preview");
+    let updates_enabled = release_channel == "stable";
     let update_endpoint = env::var(UPDATE_ENDPOINT_VARIABLE).unwrap_or_default();
     let update_public_key = env::var(UPDATE_PUBLIC_KEY_VARIABLE).unwrap_or_default();
     if updates_enabled {
@@ -137,7 +137,7 @@ fn export_release_trust_configuration() {
     } else {
         assert!(
             update_endpoint.is_empty() && update_public_key.is_empty(),
-            "validation-only Desktop builds must not advertise an update channel"
+            "unsigned Developer Preview and validation-only Desktop builds must not advertise an update channel"
         );
     }
     println!("cargo:rustc-env={TEAM_VARIABLE}={team_id}");
