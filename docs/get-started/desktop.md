@@ -28,24 +28,24 @@ For the unsigned Windows 10/11 x64 package, use the
 
 ### 1. Download and verify Desktop
 
-From the `v0.10.2` stable release, download
-`Colossus-Desktop-v0.10.2-aarch64-apple-darwin.zip` and its adjacent `.sha256` file.
-Keep both files together and verify the archive before opening it:
+From the `v0.10.2-preview.1` Developer Preview, download
+`Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.1-aarch64-apple-darwin.zip`
+and its adjacent `.sha256` file. Keep both files together and verify the archive before
+opening it:
 
 ```bash
 shasum -a 256 -c \
-  Colossus-Desktop-v0.10.2-aarch64-apple-darwin.zip.sha256
+  Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.1-aarch64-apple-darwin.zip.sha256
 ```
 
 The check must report success. Expand the zip and move **Colossus Desktop** to
 Applications. A checksum detects damage or substitution after the checksum was produced;
 it does not by itself authenticate the publisher.
 
-Stable Desktop releases are signed with Developer ID, notarized, stapled, and assessed
-before the draft asset is published. Confirm the downloaded release is not marked
-**Developer Preview** and that its package name does not contain
-`DEVELOPER-PREVIEW`. Preview builds are a separate ad-hoc-signed, unnotarized channel
-and must not be treated as stable.
+This Developer Preview is ad-hoc signed and is not notarized by Apple. Control-click
+**Colossus Desktop**, choose **Open**, and confirm **Open** on first launch. If macOS
+still blocks it, use **System Settings → Privacy & Security → Open Anyway**. Do not
+disable Gatekeeper globally, and do not treat this preview as a stable production build.
 
 ### 2. Open a workspace
 
