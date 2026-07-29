@@ -8,7 +8,7 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
-## [0.10.2] - 2026-07-28
+## [0.10.2-preview.1] - 2026-07-29
 
 ### Fixed
 
@@ -20,12 +20,14 @@ include breaking changes while the public API is still settling.
 
 ### Upgrade Notes
 
-- `v0.10.2` supersedes the unpublished `v0.10.1` release attempt, whose artifact
-  workflow stopped during packaging verification. No `v0.10.1` GitHub Release assets
-  were published.
-- The stable macOS archive is
-  `Colossus-Desktop-v0.10.2-aarch64-apple-darwin.zip`; verify its adjacent SHA-256
-  sidecar before installation.
+- `v0.10.2-preview.1` supersedes the unpublished `v0.10.1` release attempt, whose
+  artifact workflow stopped during packaging verification. No `v0.10.1` GitHub Release
+  assets were published.
+- This release remains prerelease software. Its macOS Desktop build is ad-hoc signed,
+  is not Apple-notarized, and uses the archive name
+  `Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.2-preview.1-aarch64-apple-darwin.zip`.
+  Its Windows Desktop installer is unsigned and explicitly includes `UNSIGNED` in its
+  filename.
 
 ## [0.10.1] - 2026-07-28
 

@@ -19,7 +19,7 @@ verify that your shell can find it.
 ## Prerequisites
 
 - Access to the official
-  [Colossus Releases](https://github.com/obscuritylabs/Colossus/releases/latest) page.
+  [Colossus Releases](https://github.com/obscuritylabs/Colossus/releases) page.
 - A terminal with permission to write to your chosen installation prefix.
 
 The archive installer does not require a language runtime or make a network request.
@@ -28,8 +28,8 @@ The archive installer does not require a language runtime or make a network requ
 
 ### 1. Choose and download the release asset
 
-Open the latest release and download both the archive and its adjacent `.sha256`
-sidecar. Asset names follow `colossus-VERSION-TARGET.EXT`:
+Open the current release or Developer Preview and download both the archive and its
+adjacent `.sha256` sidecar. Asset names follow `colossus-VERSION-TARGET.EXT`:
 
 | Host | Target | Extension |
 | --- | --- | --- |

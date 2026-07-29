@@ -8,10 +8,10 @@ replacement:
 
 # Rust Runtime Status
 
-Rust 0.10.2 is the active repository-root stable release line. It uses Rust 1.96,
-edition 2024, strict schema-version-2 YAML configuration, and encrypted redb state. It
-never imports Python configuration or SQLite state. Python 0.5 remains frozen at
-`python-v0.5.0` and on the `python-legacy` branch.
+Rust 0.10.2-preview.1 is the active repository-root Developer Preview release line. It
+uses Rust 1.96, edition 2024, strict schema-version-2 YAML configuration, and encrypted
+redb state. It never imports Python configuration or SQLite state. Python 0.5 remains
+frozen at `python-v0.5.0` and on the `python-legacy` branch.
 
 ## Implemented Baseline
 
@@ -87,10 +87,11 @@ Developer Preview path. Ordinary pull requests use classified validation; the fu
 platform, security, CLI, and channel-specific Desktop artifact matrix must pass the
 explicit release gates before a version is published.
 
-The latest stable release is
-[v0.10.2](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.2). Its release
-record carries the native runtime, sandbox, policy, dependency, fuzz, package, checksum,
-signature, and notarization evidence produced by the tag workflow.
+The latest published Developer Preview is
+[v0.10.2-preview.1](https://github.com/obscuritylabs/Colossus/releases/tag/v0.10.2-preview.1).
+Its release record carries the native runtime, sandbox, policy, dependency, fuzz,
+package, checksum, and explicitly unsigned or ad-hoc-signed Desktop evidence produced
+by the tag workflow.
 
 PostgreSQL event storage, HTTPS WORM audit export, persisted schedules, authenticated
 webhooks, and durable repository-event subscriptions are included in the 0.8 source
