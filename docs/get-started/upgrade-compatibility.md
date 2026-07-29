@@ -49,7 +49,7 @@ Do not remove the prior executable until the new binary has passed diagnostics.
 ### 4. Regenerate configuration when its shape changed
 
 Colossus is pre-1.0, so configuration shapes may change without an automated migration
-command. Version 0.10.1 requires `schemaVersion: 2`, which separates provider connection
+command. Version 0.10.1 and later require `schemaVersion: 2`, which separates provider connection
 profiles from model profiles and logical role routing. Schema version 1 is rejected
 instead of being silently reinterpreted.
 

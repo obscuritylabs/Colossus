@@ -8,6 +8,25 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-07-28
+
+### Fixed
+
+- Migrated the Unix and Windows release bundle-install smoke configurations to schema
+  version 2, keeping provider connections separate from model profiles so all six CLI
+  artifact jobs can complete packaging verification.
+- Added release-contract coverage that rejects schema version 1 in either platform
+  packaging script.
+
+### Upgrade Notes
+
+- `v0.10.2` supersedes the unpublished `v0.10.1` release attempt, whose artifact
+  workflow stopped during packaging verification. No `v0.10.1` GitHub Release assets
+  were published.
+- The stable macOS archive is
+  `Colossus-Desktop-v0.10.2-aarch64-apple-darwin.zip`; verify its adjacent SHA-256
+  sidecar before installation.
+
 ## [0.10.1] - 2026-07-28
 
 ### Added

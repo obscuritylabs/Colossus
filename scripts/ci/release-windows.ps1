@@ -73,7 +73,7 @@ New-Item -ItemType Directory -Force $artifactDirectory, $workflows | Out-Null
 Copy-Item $binary (Join-Path $artifactDirectory "colossus.exe")
 Copy-Item LICENSE (Join-Path $bundleStage "LICENSE")
 $config = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     access = [ordered]@{
         profile = "pinned"
         tools = [ordered]@{ include = @("echo"); exclude = @() }
@@ -97,7 +97,18 @@ $config = [ordered]@{
     workflows = [ordered]@{ repository = $workflows; user = $workflows }
     providers = [ordered]@{
         profiles = [ordered]@{
-            echo = [ordered]@{ kind = "echo"; model = "echo"; baseUrl = $null; credentialReference = $null; timeoutMs = 5000 }
+            echo = [ordered]@{ kind = "echo"; baseUrl = $null; credentialReference = $null; timeoutMs = 5000 }
+        }
+    }
+    models = [ordered]@{
+        profiles = [ordered]@{
+            echo = [ordered]@{
+                providerProfile = "echo"
+                model = "echo"
+                contextWindowTokens = 32768
+                maxOutputTokens = 4096
+                capabilities = [ordered]@{ toolCalls = $true; streaming = $true }
+            }
         }
         roles = [ordered]@{ primary = "echo" }
     }

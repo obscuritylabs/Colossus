@@ -71,7 +71,7 @@ mkdir -p "$bundle_stage/artifacts/$target" "$bundle_root/workflows"
 install -m 0755 "$binary" "$bundle_stage/artifacts/$target/colossus"
 cp LICENSE "$bundle_stage/LICENSE"
 cat >"$bundle_root/config.yaml" <<EOF
-schemaVersion: 1
+schemaVersion: 2
 access:
   profile: pinned
   tools:
@@ -99,10 +99,19 @@ providers:
   profiles:
     echo:
       kind: echo
-      model: echo
       baseUrl: null
       credentialReference: null
       timeoutMs: 5000
+models:
+  profiles:
+    echo:
+      providerProfile: echo
+      model: echo
+      contextWindowTokens: 32768
+      maxOutputTokens: 4096
+      capabilities:
+        toolCalls: true
+        streaming: true
   roles:
     primary: echo
 agent:
