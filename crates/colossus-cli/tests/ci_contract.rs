@@ -192,7 +192,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "runs-on").as_str(),
-        Some("windows-2025")
+        Some("windows-latest-8-cores")
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
@@ -376,7 +376,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
         "desktop_macos=${{ needs.desktop_macos.result }}",
         "desktop_windows_preview=\"$WINDOWS_DESKTOP_RESULT\"",
-        "runs-on: windows-2025",
+        "runs-on: windows-latest-8-cores",
         "./scripts/package-desktop-windows.ps1",
         "codeSigning = \"unsigned_developer_preview\"",
         "smartScreenWarningExpected = $true",

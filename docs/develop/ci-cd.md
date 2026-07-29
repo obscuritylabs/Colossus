@@ -186,8 +186,9 @@ lifecycle scripts disabled only for updater signing and verification. It signs b
 bundled executables, writes their final manifest, binds that exact manifest digest into
 the already-built main executable, signs the desktop application, submits it to Apple notarization,
 staples and assesses it, and uploads an Apple-silicon direct-download zip plus checksum.
-Approved prerelease tags additionally build an x64 per-user NSIS package on
-`windows-2025`, run silent install/first-launch/uninstall and process-cleanup smoke
+Approved prerelease tags additionally build an x64 per-user NSIS package on the
+organization's `windows-latest-8-cores` larger runner, run silent
+install/first-launch/uninstall and process-cleanup smoke
 checks, and publish its checksum, sealed manifest, and provenance. That package is
 explicitly labeled unsigned and preview-only. Stable release gating requires the Windows
 preview job to be skipped; it cannot accidentally promote an unsigned Windows package.
