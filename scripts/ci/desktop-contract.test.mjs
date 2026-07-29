@@ -516,7 +516,7 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   const windowsEnd = workflow.indexOf("  fuzz:", windowsStart);
   assert.ok(windowsEnd > windowsStart);
   const windows = workflow.slice(windowsStart, windowsEnd);
-  assert.match(windows, /runs-on: windows-latest-8-cores/u);
+  assert.match(windows, /runs-on: windows-latest-l/u);
   assert.match(windows, /COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"/u);
   assert.match(windows, /cargo xtask desktop prepare --profile debug/u);
   assert.match(
@@ -651,7 +651,7 @@ test("release compilation and signing authority use separate runners", () => {
     windowsJob,
     /if: needs\.validate\.outputs\.release_channel != 'stable'/u,
   );
-  assert.match(windowsJob, /runs-on: windows-latest-8-cores/u);
+  assert.match(windowsJob, /runs-on: windows-latest-l/u);
   assert.match(windowsJob, /COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED/u);
   assert.match(windowsJob, /package-desktop-windows\.ps1/u);
   assert.match(windowsJob, /Get-FileHash/u);

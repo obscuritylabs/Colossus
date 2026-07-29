@@ -39,7 +39,12 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
         ),
         "custom runner labels",
     );
-    assert_eq!(labels, ["ubuntu-latest-m".to_owned()].into_iter().collect());
+    assert_eq!(
+        labels,
+        ["ubuntu-latest-m".to_owned(), "windows-latest-l".to_owned(),]
+            .into_iter()
+            .collect()
+    );
 }
 
 #[test]
@@ -192,7 +197,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "runs-on").as_str(),
-        Some("windows-latest-8-cores")
+        Some("windows-latest-l")
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
@@ -376,7 +381,7 @@ fn release_includes_a_signed_notarized_apple_silicon_desktop() {
         "desktop_macos_build=${{ needs.desktop_macos_build.result }}",
         "desktop_macos=${{ needs.desktop_macos.result }}",
         "desktop_windows_preview=\"$WINDOWS_DESKTOP_RESULT\"",
-        "runs-on: windows-latest-8-cores",
+        "runs-on: windows-latest-l",
         "./scripts/package-desktop-windows.ps1",
         "codeSigning = \"unsigned_developer_preview\"",
         "smartScreenWarningExpected = $true",

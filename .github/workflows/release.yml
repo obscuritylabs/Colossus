@@ -154,7 +154,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             archive: tar.gz
-          - runner: windows-latest-8-cores
+          - runner: windows-latest-l
             target: x86_64-pc-windows-msvc
             archive: zip
           - runner: windows-11-arm
@@ -592,7 +592,7 @@ jobs:
     name: Package unsigned Windows Desktop Developer Preview
     if: needs.validate.outputs.release_channel != 'stable'
     needs: validate
-    runs-on: windows-latest-8-cores
+    runs-on: windows-latest-l
     timeout-minutes: 75
     env:
       CARGO_INCREMENTAL: "0"
