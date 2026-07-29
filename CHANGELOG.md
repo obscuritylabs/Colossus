@@ -8,7 +8,7 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
-## [0.10.2-preview.3] - 2026-07-29
+## [0.10.2-preview.4] - 2026-07-29
 
 ### Fixed
 
@@ -17,16 +17,21 @@ include breaking changes while the public API is still settling.
   or emits Tauri updater signatures.
 - Passed the Windows Tauri release override through a temporary JSON file so PowerShell
   and the `tauri.cmd` shim cannot strip the JSON property-name quotes.
+- Applied the root workspace's stripped release profile to the standalone Tauri workspace
+  so the Windows PE remains inside the sealed-manifest executable-size bound.
+- Moved Windows pre-merge acceptance and preview packaging to the configured
+  `windows-latest-8-cores` larger runner.
 - Disabled automatic Desktop updates for unsigned previews while preserving the signed,
   fail-closed updater contract for future stable releases.
 
 ### Upgrade Notes
 
-- `v0.10.2-preview.3` supersedes the unpublished `v0.10.2-preview.2` attempt, whose
-  Windows Desktop job rejected an inline JSON version override after PowerShell passed
-  it through a command shim without its quotes. It also supersedes
-  `v0.10.2-preview.1`, whose unsigned path still required an unavailable updater-signing
-  key. Neither failed attempt produced a GitHub Release.
+- `v0.10.2-preview.4` supersedes the unpublished `v0.10.2-preview.3` attempt, whose
+  standalone Tauri workspace retained symbols and produced a Windows PE larger than the
+  sealed-manifest guard permits. It also supersedes `v0.10.2-preview.2`, whose inline
+  JSON override lost its quotes in the PowerShell command shim, and
+  `v0.10.2-preview.1`, whose unsigned path still required an updater-signing key. None of
+  the failed attempts produced a GitHub Release.
 - Preview upgrades are manual. Download later preview installers and their checksum
   sidecars from GitHub Releases.
 

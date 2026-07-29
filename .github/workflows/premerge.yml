@@ -181,7 +181,7 @@ jobs:
     name: Representative Windows runtime, sandbox, and Desktop
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: windows-2025
+    runs-on: windows-latest-l
     timeout-minutes: 75
     env:
       CARGO_INCREMENTAL: "0"

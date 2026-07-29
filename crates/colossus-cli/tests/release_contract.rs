@@ -40,7 +40,7 @@ fn release_workflow_has_exactly_six_native_cli_targets() {
             ("macos-14", "aarch64-apple-darwin", "tar.gz"),
             ("ubuntu-latest-m", "x86_64-unknown-linux-musl", "tar.gz"),
             ("ubuntu-24.04-arm", "aarch64-unknown-linux-musl", "tar.gz"),
-            ("windows-2025", "x86_64-pc-windows-msvc", "zip"),
+            ("windows-latest-l", "x86_64-pc-windows-msvc", "zip",),
             ("windows-11-arm", "aarch64-pc-windows-msvc", "zip"),
         ]
         .into_iter()

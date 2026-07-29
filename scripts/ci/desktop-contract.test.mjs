@@ -516,7 +516,7 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   const windowsEnd = workflow.indexOf("  fuzz:", windowsStart);
   assert.ok(windowsEnd > windowsStart);
   const windows = workflow.slice(windowsStart, windowsEnd);
-  assert.match(windows, /runs-on: windows-2025/u);
+  assert.match(windows, /runs-on: windows-latest-l/u);
   assert.match(windows, /COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"/u);
   assert.match(windows, /cargo xtask desktop prepare --profile debug/u);
   assert.match(
@@ -651,7 +651,7 @@ test("release compilation and signing authority use separate runners", () => {
     windowsJob,
     /if: needs\.validate\.outputs\.release_channel != 'stable'/u,
   );
-  assert.match(windowsJob, /runs-on: windows-2025/u);
+  assert.match(windowsJob, /runs-on: windows-latest-l/u);
   assert.match(windowsJob, /COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED/u);
   assert.match(windowsJob, /package-desktop-windows\.ps1/u);
   assert.match(windowsJob, /Get-FileHash/u);
@@ -693,6 +693,20 @@ test("release compilation and signing authority use separate runners", () => {
     workflow,
     /if \[ "\$RELEASE_CHANNEL" = stable \]; then\s+test "\$WINDOWS_DESKTOP_RESULT" = skipped/u,
   );
+});
+
+test("standalone Desktop release builds strip symbols before sealed packaging", () => {
+  const manifest = read("apps/desktop/src-tauri/Cargo.toml");
+  const profileStart = manifest.indexOf("[profile.release]");
+  const profileEnd = manifest.indexOf("\n[", profileStart + 1);
+  assert.ok(profileStart >= 0 && profileEnd > profileStart);
+  const profile = manifest.slice(profileStart, profileEnd);
+  assert.match(profile, /lto = "thin"/u);
+  assert.match(profile, /codegen-units = 1/u);
+  assert.match(profile, /strip = "symbols"/u);
+
+  const patcher = read("scripts/patch-desktop-manifest-binding.mjs");
+  assert.match(patcher, /MAX_EXECUTABLE_BYTES = 512 \* 1024 \* 1024/u);
 });
 
 test("stable desktop updates are signature-bound and unsigned previews have no update authority", () => {
