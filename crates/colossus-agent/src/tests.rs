@@ -17,6 +17,7 @@ use std::{
 
 #[test]
 fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
+    let create = PlanDraftTarget::Create;
     for allowed in [
         "filesystem.read",
         "git.diff",
@@ -25,8 +26,10 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
         "plan.create",
         "memory.search",
         "user.ask",
+        "context.show",
+        "context.snapshots",
     ] {
-        assert!(plan_mode_tool(allowed), "{allowed}");
+        assert!(plan_mode_tool(allowed, &create), "{allowed}");
     }
     for denied in [
         "filesystem.write",
@@ -35,9 +38,27 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
         "patch.apply",
         "git.commit",
         "agent.delegate",
+        "plan.update",
+        "memory.read",
+        "context.status",
+        "context.list",
     ] {
-        assert!(!plan_mode_tool(denied), "{denied}");
+        assert!(!plan_mode_tool(denied, &create), "{denied}");
     }
+    assert!(plan_mode_tool(
+        "plan.update",
+        &PlanDraftTarget::Update {
+            plan_id: "plan-1".into(),
+            revision: 1,
+        }
+    ));
+    assert!(!plan_mode_tool(
+        "plan.create",
+        &PlanDraftTarget::Update {
+            plan_id: "plan-1".into(),
+            revision: 1,
+        }
+    ));
 }
 
 struct ScriptedProvider {
@@ -55,6 +76,47 @@ impl RunEventObserver for RecordingRunObserver {
     async fn observe(&mut self, event: RunEventEnvelope) -> Result<(), ModelProviderError> {
         self.events.push(event);
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RejectedRunEvent {
+    ToolCompleted,
+    PlanWritten,
+}
+
+struct RejectingRunObserver {
+    rejected: RejectedRunEvent,
+    events: Vec<RunEventEnvelope>,
+}
+
+impl RejectingRunObserver {
+    fn new(rejected: RejectedRunEvent) -> Self {
+        Self {
+            rejected,
+            events: Vec::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl RunEventObserver for RejectingRunObserver {
+    async fn observe(&mut self, event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        let reject = matches!(
+            (&self.rejected, &event.event),
+            (
+                RejectedRunEvent::ToolCompleted,
+                RunEvent::ToolCompleted { .. }
+            ) | (RejectedRunEvent::PlanWritten, RunEvent::PlanWritten { .. })
+        );
+        self.events.push(event);
+        if reject {
+            Err(ModelProviderError::Failed(
+                "test observer rejected run event".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -240,6 +302,85 @@ struct CountingTools {
     calls: AtomicUsize,
 }
 
+struct RecordingPlanTools {
+    calls: Mutex<Vec<(ToolCall, ExecutionContext)>>,
+    result_plan_id: Option<String>,
+    result_revision: Option<u64>,
+    cancel_after_write: Option<RunControl>,
+}
+
+impl RecordingPlanTools {
+    fn canonical() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            result_plan_id: None,
+            result_revision: None,
+            cancel_after_write: None,
+        }
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for RecordingPlanTools {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        self.calls
+            .lock()
+            .expect("plan calls")
+            .push((call.clone(), context.clone()));
+        let plan_id = self
+            .result_plan_id
+            .clone()
+            .or_else(|| context.draft_plan_id.clone())
+            .unwrap_or_else(|| "plan-created".into());
+        let revision = self.result_revision.unwrap_or_else(|| {
+            context
+                .draft_plan_revision
+                .map_or(1, |revision| revision.saturating_add(1))
+        });
+        let plan = PlanRecord {
+            id: plan_id,
+            session_id: context.session_id.expect("plan session"),
+            prompt: call
+                .arguments
+                .get("prompt")
+                .and_then(Value::as_str)
+                .unwrap_or("Original objective")
+                .into(),
+            status: colossus_contracts::PlanStatus::Draft,
+            revision,
+            content: call
+                .arguments
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into(),
+            steps: vec![colossus_contracts::PlanStep {
+                index: 1,
+                title: "Verify".into(),
+                detail: "Run focused tests.".into(),
+                requires_mutation: false,
+            }],
+            created_at: "2026-07-29T00:00:00Z".into(),
+            updated_at: "2026-07-29T00:00:01Z".into(),
+            approved_at: None,
+            executed_run_id: None,
+        };
+        if let Some(control) = &self.cancel_after_write {
+            control.cancel();
+        }
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name,
+            output: serde_json::to_string(&plan).expect("plan JSON"),
+            exit_code: 0,
+        })
+    }
+}
+
 struct FixedContext;
 
 #[async_trait]
@@ -370,6 +511,548 @@ fn test_route(role: &str, profile: &str) -> ProviderRoute {
             streaming: true,
         },
     }
+}
+
+fn plan_create_call(call_id: &str) -> ProviderEvent {
+    ProviderEvent::ToolCallRequested {
+        call_id: call_id.into(),
+        name: "plan.create".into(),
+        arguments: json!({
+            "prompt": "Implement Plan Mode",
+            "content": "# Plan",
+            "steps": [{
+                "title": "Verify",
+                "detail": "Run focused tests.",
+                "requires_mutation": false,
+            }],
+        }),
+    }
+}
+
+fn plan_update_call(call_id: &str) -> ProviderEvent {
+    ProviderEvent::ToolCallRequested {
+        call_id: call_id.into(),
+        name: "plan.update".into(),
+        arguments: json!({
+            "content": "# Refined plan",
+            "steps": [{
+                "title": "Verify",
+                "detail": "Run focused tests.",
+                "requires_mutation": false,
+            }],
+        }),
+    }
+}
+
+fn test_actor() -> Actor {
+    Actor {
+        actor_type: ActorType::User,
+        id: "test-user".into(),
+    }
+}
+
+#[tokio::test]
+async fn plan_mode_create_offers_exact_catalog_and_dispatches_only_one_bound_write() {
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![
+            ProviderEvent::ToolCallRequested {
+                call_id: "blocked-write".into(),
+                name: "filesystem.write".into(),
+                arguments: json!({"path": "blocked", "content": "must not run"}),
+            },
+            plan_create_call("plan-create"),
+            plan_create_call("duplicate-create"),
+        ]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "Plan saved.".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let executor = Arc::new(RecordingPlanTools::canonical());
+    let all_tools = colossus_tools::builtin_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect::<Vec<_>>();
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&all_tools).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    let result = service
+        .run_plan_in_session_with_skills_stream(
+            "primary",
+            "Plan only.",
+            "Implement Plan Mode",
+            3,
+            None,
+            &[],
+            &mut observer,
+        )
+        .await
+        .expect("plan run");
+
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(
+        requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "agent.list",
+            "agent.result",
+            "context.show",
+            "context.snapshots",
+            "decision.list",
+            "echo",
+            "filesystem.list",
+            "filesystem.read",
+            "filesystem.search",
+            "git.diff",
+            "git.show",
+            "git.status",
+            "memory.list",
+            "memory.search",
+            "patch.preview",
+            "plan.create",
+            "plan.show",
+            "repo.file_summary",
+            "repo.map",
+            "repo.references",
+            "repo.symbol_search",
+            "skill.resource.read",
+            "task.create",
+            "task.list",
+            "tool.search",
+            "user.ask",
+        ]
+    );
+    let calls = executor.calls.lock().expect("plan calls");
+    assert_eq!(
+        calls.len(),
+        1,
+        "blocked and duplicate calls must not dispatch"
+    );
+    assert_eq!(calls[0].0.name, "plan.create");
+    assert_eq!(calls[0].1.draft_plan_id, None);
+    assert_eq!(calls[0].1.draft_plan_revision, None);
+    let plan = result.plan.expect("created plan");
+    assert_eq!(plan.id, "plan-created");
+    assert_eq!(plan.revision, 1);
+    assert_eq!(
+        observer
+            .events
+            .iter()
+            .filter(|event| matches!(event.event, RunEvent::PlanWritten { .. }))
+            .count(),
+        1
+    );
+    let continuation = &requests[1].messages;
+    assert!(continuation.iter().any(|message| {
+        message.role == ModelMessageRole::Tool
+            && message.content.contains("not available in this run mode")
+    }));
+    assert!(continuation.iter().any(|message| {
+        message.role == ModelMessageRole::Tool
+            && message
+                .content
+                .contains("already completed its one required plan.create write")
+    }));
+}
+
+#[tokio::test]
+async fn plan_mode_tool_completed_observer_failure_preserves_written_plan_evidence() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![plan_create_call(
+        "plan-create",
+    )])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let executor = Arc::new(RecordingPlanTools::canonical());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        provider,
+        Arc::new(StaticToolRegistry::builtins(&["plan.create".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RejectingRunObserver::new(RejectedRunEvent::ToolCompleted);
+
+    let error = service
+        .run_plan_in_session_with_skills_stream(
+            "primary",
+            "Plan only.",
+            "Write a plan",
+            2,
+            None,
+            &[],
+            &mut observer,
+        )
+        .await
+        .expect_err("observer rejection must stop the run");
+    assert!(matches!(
+        error,
+        AgentError::Provider(ModelProviderError::Failed(ref message))
+            if message == "test observer rejected run event"
+    ));
+    assert_eq!(executor.calls.lock().expect("plan calls").len(), 1);
+
+    let plan_written_index = observer
+        .events
+        .iter()
+        .position(|event| {
+            matches!(
+                &event.event,
+                RunEvent::PlanWritten { plan }
+                    if plan.id == "plan-created" && plan.revision == 1
+            )
+        })
+        .expect("typed plan evidence");
+    let tool_completed_index = observer
+        .events
+        .iter()
+        .position(|event| matches!(event.event, RunEvent::ToolCompleted { .. }))
+        .expect("rejected generic completion");
+    assert!(
+        plan_written_index < tool_completed_index,
+        "typed plan evidence must be delivered before generic completion"
+    );
+
+    let durable = journal.read_global(1, 100).expect("journal");
+    let plan_written_index = durable
+        .iter()
+        .position(|event| event.event_type == "plan.written.v1")
+        .expect("durable plan evidence");
+    let plan_payload = journal
+        .decrypt_payload(&durable[plan_written_index])
+        .expect("plan payload");
+    assert_eq!(plan_payload["plan_id"], "plan-created");
+    assert_eq!(plan_payload["revision"], 1);
+    let tool_completed_index = durable
+        .iter()
+        .position(|event| event.event_type == "tool.call.completed.v1")
+        .expect("durable generic completion");
+    assert!(
+        plan_written_index < tool_completed_index,
+        "durable plan evidence must precede generic completion"
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_plan_written_observer_failure_leaves_durable_update_evidence() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![plan_update_call(
+        "plan-update",
+    )])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("session-plan", Some("plan"), test_actor())
+        .expect("session");
+    let executor = Arc::new(RecordingPlanTools::canonical());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        provider,
+        Arc::new(StaticToolRegistry::builtins(&["plan.update".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        sessions,
+    );
+    let mut observer = RejectingRunObserver::new(RejectedRunEvent::PlanWritten);
+
+    let error = service
+        .run_plan_target_in_session_with_skills_stream(
+            "primary",
+            "Refine only.",
+            "Refine the plan",
+            2,
+            Some("session-plan"),
+            &[],
+            PlanDraftTarget::Update {
+                plan_id: "plan-bound".into(),
+                revision: 4,
+            },
+            &mut observer,
+        )
+        .await
+        .expect_err("observer rejection must stop the run");
+    assert!(matches!(
+        error,
+        AgentError::Provider(ModelProviderError::Failed(ref message))
+            if message == "test observer rejected run event"
+    ));
+    assert_eq!(executor.calls.lock().expect("plan calls").len(), 1);
+    assert!(observer.events.iter().any(|event| {
+        matches!(
+            &event.event,
+            RunEvent::PlanWritten { plan }
+                if plan.id == "plan-bound" && plan.revision == 5
+        )
+    }));
+    assert!(
+        !observer
+            .events
+            .iter()
+            .any(|event| matches!(event.event, RunEvent::ToolCompleted { .. })),
+        "generic completion must not overtake rejected typed evidence"
+    );
+
+    let durable = journal.read_global(1, 100).expect("journal");
+    let plan_written = durable
+        .iter()
+        .find(|event| event.event_type == "plan.written.v1")
+        .expect("durable plan evidence");
+    let plan_payload = journal.decrypt_payload(plan_written).expect("plan payload");
+    assert_eq!(plan_payload["plan_id"], "plan-bound");
+    assert_eq!(plan_payload["revision"], 5);
+}
+
+#[tokio::test]
+async fn plan_mode_allows_one_missing_write_correction_then_fails_closed() {
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "Forgot to save the plan.".into(),
+        }]),
+        turn(vec![ProviderEvent::FinalOutput {
+            text: "Still did not save it.".into(),
+        }]),
+    ]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let executor = Arc::new(RecordingPlanTools::canonical());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["plan.create".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let mut observer = RecordingRunObserver::default();
+    let error = service
+        .run_plan_in_session_with_skills_stream(
+            "primary",
+            "Plan only.",
+            "Write a plan",
+            3,
+            None,
+            &[],
+            &mut observer,
+        )
+        .await
+        .expect_err("missing plan write");
+    assert!(
+        matches!(error, AgentError::PlanWriteRequired),
+        "unexpected error: {error:?}"
+    );
+    assert!(executor.calls.lock().expect("plan calls").is_empty());
+    let requests = provider.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|message| message.role == ModelMessageRole::System
+                && message.content.contains("Call the required tool now"))
+    );
+    let errors = observer
+        .events
+        .iter()
+        .filter_map(|event| match &event.event {
+            RunEvent::Error {
+                code, recoverable, ..
+            } if code == "plan.write_required" => Some(*recoverable),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(errors, [true, false]);
+}
+
+#[tokio::test]
+async fn plan_mode_turn_exhaustion_without_a_successful_write_is_plan_specific() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
+        ProviderEvent::ToolCallRequested {
+            call_id: "blocked".into(),
+            name: "filesystem.write".into(),
+            arguments: json!({}),
+        },
+    ])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let executor = Arc::new(RecordingPlanTools::canonical());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        provider,
+        Arc::new(
+            StaticToolRegistry::builtins(&["plan.create".into(), "filesystem.write".into()])
+                .expect("catalog"),
+        ),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal))),
+    );
+    let error = service
+        .run_plan_in_session_with_skills("primary", "Plan only.", "Write a plan", 1, None, &[])
+        .await
+        .expect_err("missing write");
+    assert!(matches!(error, AgentError::PlanWriteRequired));
+    assert!(executor.calls.lock().expect("plan calls").is_empty());
+    let events = journal.read_global(1, 100).expect("events");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == "plan.write.required.v1")
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event_type != "run.max_turns.v1")
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_update_is_context_bound_and_cancellation_retains_the_written_plan() {
+    let control = RunControl::default();
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![plan_update_call(
+        "plan-update",
+    )])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("session-plan", Some("plan"), test_actor())
+        .expect("session");
+    let executor = Arc::new(RecordingPlanTools {
+        cancel_after_write: Some(control.clone()),
+        ..RecordingPlanTools::canonical()
+    });
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["plan.update".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        sessions,
+    );
+    let mut observer = RecordingRunObserver::default();
+    let outcome = service
+        .run_in_session_with_mode_stream_controlled(
+            AgentRunMode::Plan(PlanDraftTarget::Update {
+                plan_id: "plan-bound".into(),
+                revision: 4,
+            }),
+            "primary",
+            "Refine only.",
+            "Refine the plan",
+            2,
+            Some("session-plan"),
+            &[],
+            false,
+            &mut observer,
+            &control,
+        )
+        .await
+        .expect("controlled plan");
+    let AgentRunOutcome::Cancelled { result } = outcome else {
+        panic!("expected cancellation after persistence");
+    };
+    let plan = result.plan.expect("persisted plan");
+    assert_eq!(plan.id, "plan-bound");
+    assert_eq!(plan.revision, 5);
+    let calls = executor.calls.lock().expect("plan calls");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1.draft_plan_id.as_deref(), Some("plan-bound"));
+    assert_eq!(calls[0].1.draft_plan_revision, Some(4));
+    assert!(observer.events.iter().any(
+        |event| matches!(&event.event, RunEvent::PlanWritten { plan } if plan.id == "plan-bound")
+    ));
+}
+
+#[tokio::test]
+async fn plan_mode_rejects_a_tool_result_outside_the_bound_update_target() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![plan_update_call(
+        "plan-update",
+    )])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+    sessions
+        .create_session("session-plan", Some("plan"), test_actor())
+        .expect("session");
+    let executor = Arc::new(RecordingPlanTools {
+        result_plan_id: Some("plan-forged".into()),
+        ..RecordingPlanTools::canonical()
+    });
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        provider,
+        Arc::new(StaticToolRegistry::builtins(&["plan.update".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        sessions,
+    );
+    let mut observer = RecordingRunObserver::default();
+    let error = service
+        .run_plan_target_in_session_with_skills_stream(
+            "primary",
+            "Refine only.",
+            "Refine the plan",
+            2,
+            Some("session-plan"),
+            &[],
+            PlanDraftTarget::Update {
+                plan_id: "plan-bound".into(),
+                revision: 4,
+            },
+            &mut observer,
+        )
+        .await
+        .expect_err("wrong target");
+    assert!(matches!(error, AgentError::Configuration(_)));
+    assert_eq!(executor.calls.lock().expect("plan calls").len(), 1);
+    assert!(
+        !observer
+            .events
+            .iter()
+            .any(|event| matches!(event.event, RunEvent::PlanWritten { .. }))
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_cancellation_before_provider_has_no_plan_evidence() {
+    let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![plan_create_call(
+        "must-not-run",
+    )])]));
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let executor = Arc::new(RecordingPlanTools::canonical());
+    let service = AgentService::new(
+        Arc::clone(&journal),
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        Arc::new(StaticToolRegistry::builtins(&["plan.create".into()]).expect("catalog")),
+        Arc::clone(&executor) as Arc<dyn ToolExecutor>,
+        Arc::new(EventSourcedSessionRepository::new(journal)),
+    );
+    let control = RunControl::default();
+    control.cancel();
+    let mut observer = RecordingRunObserver::default();
+    let outcome = service
+        .run_in_session_with_mode_stream_controlled(
+            AgentRunMode::Plan(PlanDraftTarget::Create),
+            "primary",
+            "Plan only.",
+            "Create a plan",
+            2,
+            None,
+            &[],
+            false,
+            &mut observer,
+            &control,
+        )
+        .await
+        .expect("cancelled plan");
+    let AgentRunOutcome::Cancelled { result } = outcome else {
+        panic!("expected cancellation");
+    };
+    assert!(result.plan.is_none());
+    assert!(provider.requests.lock().expect("requests").is_empty());
+    assert!(executor.calls.lock().expect("plan calls").is_empty());
+    assert!(
+        !observer
+            .events
+            .iter()
+            .any(|event| matches!(event.event, RunEvent::PlanWritten { .. }))
+    );
 }
 
 #[tokio::test]

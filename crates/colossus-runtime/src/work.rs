@@ -1,5 +1,18 @@
 use super::*;
 
+fn validate_plan_lifecycle_selection(
+    plan: &PlanRecord,
+    expected_session_id: &str,
+    expected_revision: u64,
+) -> Result<(), RuntimeError> {
+    if plan.session_id != expected_session_id || plan.revision != expected_revision {
+        return Err(RuntimeError::Config(
+            "Plan lifecycle action requires the selected same-session revision".into(),
+        ));
+    }
+    Ok(())
+}
+
 impl Runtime {
     /// Current task, decision, plan, and goal snapshots.
     pub fn work_repository(&self) -> Arc<dyn WorkRepository> {
@@ -35,9 +48,13 @@ impl Runtime {
                     .ok_or_else(|| StoreError::NotFound(format!("decision {id}")))?
                     .session_id
             }
-            WorkOperation::PlanShow { id }
+            WorkOperation::PlanUpdate { id, .. }
+            | WorkOperation::PlanShow { id }
             | WorkOperation::PlanApprove { id }
-            | WorkOperation::PlanExecute { id, .. } => {
+            | WorkOperation::PlanApproveAtRevision { id, .. }
+            | WorkOperation::PlanDiscard { id, .. }
+            | WorkOperation::PlanExecute { id, .. }
+            | WorkOperation::PlanExecuteAtRevision { id, .. } => {
                 self.work
                     .get_plan(id)?
                     .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?
@@ -75,7 +92,8 @@ impl Runtime {
             WorkOperation::GoalCreate { source_plan_id, .. } => {
                 request.context.plan_id = source_plan_id.clone();
             }
-            WorkOperation::PlanExecute { id, .. } => {
+            WorkOperation::PlanExecute { id, .. }
+            | WorkOperation::PlanExecuteAtRevision { id, .. } => {
                 request.context.plan_id = Some(id.clone());
             }
             WorkOperation::GoalShow { id }
@@ -342,6 +360,62 @@ impl Runtime {
         .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
+    /// Approve one exact draft revision through the configured approval obligation.
+    pub async fn approve_plan_at_revision(
+        &self,
+        expected_session_id: &str,
+        id: &str,
+        revision: u64,
+    ) -> Result<PlanRecord, RuntimeError> {
+        let plan = self
+            .work
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        validate_plan_lifecycle_selection(&plan, expected_session_id, revision)?;
+        serde_json::from_value(
+            self.execute_work_operation(WorkOperation::PlanApproveAtRevision {
+                id: id.into(),
+                expected_revision: revision,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Discard one exact draft or approved revision without deleting its history.
+    pub async fn discard_plan_at_revision(
+        &self,
+        expected_session_id: &str,
+        id: &str,
+        revision: u64,
+    ) -> Result<PlanRecord, RuntimeError> {
+        let plan = self
+            .work
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        validate_plan_lifecycle_selection(&plan, expected_session_id, revision)?;
+        serde_json::from_value(
+            self.execute_work_operation(WorkOperation::PlanDiscard {
+                id: id.into(),
+                expected_revision: Some(revision),
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Discard the newest draft or approved revision without deleting its history.
+    pub async fn discard_plan(&self, id: &str) -> Result<PlanRecord, RuntimeError> {
+        serde_json::from_value(
+            self.execute_work_operation(WorkOperation::PlanDiscard {
+                id: id.into(),
+                expected_revision: None,
+            })
+            .await?,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
     /// Archive one active decision while retaining its complete history.
     pub async fn archive_decision(&self, id: &str) -> Result<KeyDecision, RuntimeError> {
         serde_json::from_value(
@@ -379,5 +453,35 @@ impl Runtime {
             .await?,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod plan_lifecycle_selection_tests {
+    use super::validate_plan_lifecycle_selection;
+    use colossus_contracts::{PlanRecord, PlanStatus};
+
+    fn plan() -> PlanRecord {
+        PlanRecord {
+            id: "plan-1".into(),
+            session_id: "session-1".into(),
+            prompt: "Plan it".into(),
+            status: PlanStatus::Draft,
+            revision: 2,
+            content: "# Plan".into(),
+            steps: Vec::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+            approved_at: None,
+            executed_run_id: None,
+        }
+    }
+
+    #[test]
+    fn lifecycle_actions_require_the_selected_session_and_revision() {
+        let selected = plan();
+        validate_plan_lifecycle_selection(&selected, "session-1", 2).expect("selected plan");
+        assert!(validate_plan_lifecycle_selection(&selected, "session-2", 2).is_err());
+        assert!(validate_plan_lifecycle_selection(&selected, "session-1", 1).is_err());
     }
 }

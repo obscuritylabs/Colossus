@@ -8,7 +8,7 @@ pub(super) enum TranscriptRenderSource {
         output: String,
     },
     RunEvent {
-        event: RunEvent,
+        event: Box<RunEvent>,
         call: Option<colossus_contracts::ToolCall>,
     },
 }
@@ -26,7 +26,9 @@ impl TranscriptRenderSource {
                 name.as_deref(),
                 output.clone(),
             )),
-            Self::RunEvent { event, call } => renderer.run_event_document(event, call.as_ref()),
+            Self::RunEvent { event, call } => {
+                renderer.run_event_document(event.as_ref(), call.as_ref())
+            }
         }
     }
 }
@@ -152,10 +154,39 @@ pub(super) fn help_document() -> PresentationDocument {
                     "Provider diagnostics".into(),
                     "/models doctor [PROFILE]; /provider doctor [PROFILE]; /provider diagnostics on|off".into(),
                 ),
+                (
+                    "Plan mode".into(),
+                    "/plan toggles; on|off|status|new|list; use/show; approve|discard; execute [direct|goal [1-50]]".into(),
+                ),
+                (
+                    "Resume goal".into(),
+                    "/goal resume GOAL_ID continues the remaining iteration budget".into(),
+                ),
                 ("Preferences".into(), "/tui prefs|save|reset".into()),
                 ("Exit".into(), "Ctrl-D while idle or /exit".into()),
             ]),
         ],
+    })
+}
+
+pub(super) fn plan_status_document(
+    mode: InteractiveMode,
+    selected: Option<&PlanRecord>,
+) -> PresentationDocument {
+    let mut rows = vec![("Mode".into(), mode.as_str().into())];
+    if let Some(plan) = selected {
+        rows.extend([
+            ("Selected plan".into(), plan.id.clone()),
+            ("Revision".into(), plan.revision.to_string()),
+            ("Plan status".into(), plan_status_label(plan.status).into()),
+        ]);
+    } else {
+        rows.push(("Selected plan".into(), "none".into()));
+    }
+    PresentationDocument::from_block(PresentationBlock::Card {
+        title: "Plan workflow".into(),
+        tone: PresentationTone::Neutral,
+        body: vec![PresentationBlock::KeyValue(rows)],
     })
 }
 
@@ -216,6 +247,7 @@ pub(super) fn preferences_document(preferences: &TerminalPreferences) -> Present
 pub(super) fn runtime_command_name(command: &RuntimeCommand) -> &str {
     match command {
         RuntimeCommand::Known { name, .. } => name,
+        RuntimeCommand::Plan(_) => "plan",
     }
 }
 

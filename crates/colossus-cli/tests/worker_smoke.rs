@@ -281,7 +281,7 @@ sandbox:
     );
     let status: Value = serde_json::from_slice(&status.stdout).expect("worker status JSON");
     assert_eq!(status["ready"], true);
-    assert_eq!(status["protocol_version"], 5);
+    assert_eq!(status["protocol_version"], 6);
 
     let route = run(binary, &config, &["models", "route", "primary"]);
     assert!(

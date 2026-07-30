@@ -238,8 +238,16 @@ pub trait WorkRepository: Send + Sync {
         actor: Actor,
     ) -> Result<(GoalRecord, PlanRecord), StoreError>;
 
-    /// Append an iteration or terminal goal state transition.
+    /// Append a terminal goal state transition without changing iteration consumption.
     fn update_goal(&self, goal: GoalRecord, actor: Actor) -> Result<GoalRecord, StoreError>;
+
+    /// Atomically append exactly one iteration from the caller's observed count.
+    fn record_goal_iteration(
+        &self,
+        goal: GoalRecord,
+        expected_iterations_completed: u16,
+        actor: Actor,
+    ) -> Result<GoalRecord, StoreError>;
 
     /// Reconstruct one canonical goal.
     fn get_goal(&self, id: &str) -> Result<Option<GoalRecord>, StoreError>;

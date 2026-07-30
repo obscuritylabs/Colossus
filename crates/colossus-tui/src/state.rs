@@ -94,6 +94,10 @@ pub(super) enum Overlay {
     HistorySearch {
         query: String,
     },
+    PlanExecutionChoice {
+        plan: PlanRecord,
+        selected: usize,
+    },
     QueuePaused,
 }
 
@@ -118,6 +122,10 @@ pub struct TuiState {
     pub preferences: TerminalPreferences,
     /// Cached stable footer state.
     pub footer: FooterState,
+    /// Process-local terminal behavior; never loaded from or saved to preferences.
+    pub mode: InteractiveMode,
+    /// Process-local canonical selected plan; cleared on session switches and restart.
+    pub selected_plan: Option<PlanRecord>,
     pub(super) composer: Composer,
     pub(super) history: Vec<String>,
     pub(super) completions: Vec<String>,
@@ -129,6 +137,7 @@ pub struct TuiState {
     pub(super) operation: Option<OperationKind>,
     pub(super) control: Option<RunControl>,
     pub(super) overlay: Option<Overlay>,
+    pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
     pub(super) activity: Option<String>,
     pub(super) started_at: Option<Instant>,
     pub(super) scroll_from_bottom: usize,
@@ -152,9 +161,11 @@ impl TuiState {
             before_sequence: snapshot.transcript.before_sequence,
             preferences: snapshot.preferences,
             footer: snapshot.footer,
+            mode: InteractiveMode::Execute,
+            selected_plan: None,
             composer: Composer::default(),
             history: snapshot.history,
-            completions: snapshot.completions,
+            completions: with_plan_completions(snapshot.completions),
             sticky_skills: Vec::new(),
             provider_response_diagnostics: false,
             active_calls: BTreeMap::new(),
@@ -163,6 +174,7 @@ impl TuiState {
             operation: None,
             control: None,
             overlay: None,
+            pending_plan_execution: None,
             activity: None,
             started_at: None,
             scroll_from_bottom: 0,
@@ -179,14 +191,65 @@ impl TuiState {
         &self.composer.draft
     }
 
-    pub(super) fn run_request(&self, prompt: String) -> InteractiveRunRequest {
-        InteractiveRunRequest {
+    pub(super) fn run_request(&self, prompt: String) -> Result<InteractiveRunRequest, String> {
+        let mode = match self.mode {
+            InteractiveMode::Execute => AgentRunMode::Execute,
+            InteractiveMode::Plan => AgentRunMode::Plan(match self.selected_plan.as_ref() {
+                None => PlanDraftTarget::Create,
+                Some(plan) if plan.status == PlanStatus::Draft => PlanDraftTarget::Update {
+                    plan_id: plan.id.clone(),
+                    revision: plan.revision,
+                },
+                Some(plan) if plan.status == PlanStatus::Approved => {
+                    return Err(format!(
+                        "Plan {} is approved and cannot be refined. Use /plan execute, /plan new, or /plan off.",
+                        short_plan_id(&plan.id)
+                    ));
+                }
+                Some(plan) => {
+                    return Err(format!(
+                        "Plan {} is no longer actionable. Use /plan new or /plan use PLAN_ID.",
+                        short_plan_id(&plan.id)
+                    ));
+                }
+            }),
+        };
+        Ok(InteractiveRunRequest {
             session_id: self.session_id.clone(),
             prompt,
+            mode,
             explicit_skills: Vec::new(),
             sticky_skills: self.sticky_skills.clone(),
             include_provider_response_diagnostics: self.provider_response_diagnostics,
+        })
+    }
+
+    pub(super) fn set_completions(&mut self, completions: Vec<String>) {
+        self.completions = with_plan_completions(completions);
+    }
+
+    pub(super) fn apply_plan_selection(
+        &mut self,
+        update: PlanSelectionUpdate,
+    ) -> Result<(), String> {
+        match update {
+            PlanSelectionUpdate::Unchanged => {}
+            PlanSelectionUpdate::Clear => self.selected_plan = None,
+            PlanSelectionUpdate::Set(plan) if plan.session_id == self.session_id => {
+                self.selected_plan = Some(*plan);
+            }
+            PlanSelectionUpdate::Use(plan) if plan.session_id == self.session_id => {
+                self.selected_plan = Some(*plan);
+                self.mode = InteractiveMode::Plan;
+            }
+            PlanSelectionUpdate::Set(_) | PlanSelectionUpdate::Use(_) => {
+                return Err(
+                    "The host returned a plan for a different session; selection was unchanged."
+                        .into(),
+                );
+            }
         }
+        Ok(())
     }
 
     /// UTF-8 byte cursor, always on a character boundary.
@@ -478,5 +541,45 @@ impl TuiState {
             return true;
         }
         false
+    }
+}
+
+const PLAN_COMPLETIONS: &[&str] = &[
+    "/plan",
+    "/plan on",
+    "/plan off",
+    "/plan status",
+    "/plan new",
+    "/plan list",
+    "/plan use",
+    "/plan show",
+    "/plan approve",
+    "/plan discard",
+    "/plan execute",
+    "/plan execute direct",
+    "/plan execute goal",
+    "/plans",
+    "/goal resume",
+];
+
+fn with_plan_completions(mut completions: Vec<String>) -> Vec<String> {
+    for completion in PLAN_COMPLETIONS {
+        if !completions.iter().any(|candidate| candidate == completion) {
+            completions.push((*completion).into());
+        }
+    }
+    completions
+}
+
+pub(super) fn short_plan_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+pub(super) const fn plan_status_label(status: PlanStatus) -> &'static str {
+    match status {
+        PlanStatus::Draft => "draft",
+        PlanStatus::Approved => "approved",
+        PlanStatus::Executed => "executed",
+        PlanStatus::Discarded => "discarded",
     }
 }

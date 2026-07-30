@@ -36,6 +36,20 @@ pub(super) fn valid_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
+pub(super) fn require_plan_revision(
+    plan: &PlanRecord,
+    expected_revision: u64,
+) -> Result<(), StoreError> {
+    if plan.revision != expected_revision {
+        return Err(StoreError::Conflict {
+            stream_id: format!("plan:{}", plan.id),
+            expected: expected_revision,
+            actual: plan.revision,
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn validate_task(task: &TaskRecord) -> Result<(), StoreError> {
     if !valid_id(&task.id)
         || !valid_id(&task.session_id)

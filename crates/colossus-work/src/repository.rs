@@ -85,6 +85,16 @@ impl EventSourcedWorkRepository {
         stream_id: &str,
         expected_created_event: &str,
     ) -> Result<Option<T>, StoreError> {
+        Ok(self
+            .record_with_version(stream_id, expected_created_event)?
+            .map(|(record, _)| record))
+    }
+
+    fn record_with_version<T: serde::de::DeserializeOwned>(
+        &self,
+        stream_id: &str,
+        expected_created_event: &str,
+    ) -> Result<Option<(T, u64)>, StoreError> {
         let events = self.journal.read_stream(stream_id)?;
         let Some(first) = events.first() else {
             return Ok(None);
@@ -97,6 +107,7 @@ impl EventSourcedWorkRepository {
         let last = events
             .last()
             .ok_or_else(|| StoreError::Verification("work stream disappeared".into()))?;
+        let stream_version = u64::try_from(events.len()).map_err(adapter)?;
         let payload = self.journal.decrypt_payload(last)?;
         serde_json::from_value(
             payload
@@ -104,7 +115,7 @@ impl EventSourcedWorkRepository {
                 .cloned()
                 .ok_or_else(|| StoreError::Verification("work record is absent".into()))?,
         )
-        .map(Some)
+        .map(|record| Some((record, stream_version)))
         .map_err(|error| StoreError::Verification(error.to_string()))
     }
 }
@@ -333,8 +344,10 @@ impl WorkRepository for EventSourcedWorkRepository {
 
     fn create_plan(&self, plan: PlanRecord, actor: Actor) -> Result<PlanRecord, StoreError> {
         validate_plan(&plan)?;
-        if plan.status != PlanStatus::Draft {
-            return Err(StoreError::Adapter("new plans must be drafts".into()));
+        if plan.status != PlanStatus::Draft || plan.revision != 1 {
+            return Err(StoreError::Adapter(
+                "new plans must be drafts at revision one".into(),
+            ));
         }
         self.journal.append(Self::event(
             Self::plan_stream(&plan.id),
@@ -347,14 +360,19 @@ impl WorkRepository for EventSourcedWorkRepository {
         Ok(plan)
     }
 
-    fn update_plan(&self, plan: PlanRecord, actor: Actor) -> Result<PlanRecord, StoreError> {
+    fn update_plan(&self, mut plan: PlanRecord, actor: Actor) -> Result<PlanRecord, StoreError> {
         validate_plan(&plan)?;
-        let current = self
-            .get_plan(&plan.id)?
+        let stream = Self::plan_stream(&plan.id);
+        let (current, expected) = self
+            .record_with_version(&stream, PLAN_CREATED)?
             .ok_or_else(|| StoreError::NotFound(format!("plan {}", plan.id)))?;
-        if current.session_id != plan.session_id || current.created_at != plan.created_at {
+        require_plan_revision(&current, plan.revision)?;
+        if current.session_id != plan.session_id
+            || current.created_at != plan.created_at
+            || current.prompt != plan.prompt
+        {
             return Err(StoreError::Adapter(
-                "plan session and creation timestamp are immutable".into(),
+                "plan session, objective, and creation timestamp are immutable".into(),
             ));
         }
         let transition = (current.status, plan.status);
@@ -386,16 +404,16 @@ impl WorkRepository for EventSourcedWorkRepository {
             ));
         }
         if (current.status != PlanStatus::Draft || plan.status != PlanStatus::Draft)
-            && (current.prompt != plan.prompt
-                || current.content != plan.content
-                || current.steps != plan.steps)
+            && (current.content != plan.content || current.steps != plan.steps)
         {
             return Err(StoreError::Adapter(
                 "plan content is immutable during lifecycle transitions".into(),
             ));
         }
-        let stream = Self::plan_stream(&plan.id);
-        let expected = u64::try_from(self.journal.read_stream(&stream)?.len()).map_err(adapter)?;
+        plan.revision = plan
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Adapter("plan revision overflow".into()))?;
         self.journal.append(Self::event(
             stream,
             expected,
@@ -457,7 +475,7 @@ impl WorkRepository for EventSourcedWorkRepository {
     fn create_goal_from_plan(
         &self,
         goal: GoalRecord,
-        executed_plan: PlanRecord,
+        mut executed_plan: PlanRecord,
         actor: Actor,
     ) -> Result<(GoalRecord, PlanRecord), StoreError> {
         validate_goal(&goal)?;
@@ -466,9 +484,11 @@ impl WorkRepository for EventSourcedWorkRepository {
             .source_plan_id
             .as_deref()
             .ok_or_else(|| StoreError::Adapter("goal plan lineage is absent".into()))?;
-        let current = self
-            .get_plan(plan_id)?
+        let plan_stream = Self::plan_stream(plan_id);
+        let (current, expected) = self
+            .record_with_version(&plan_stream, PLAN_CREATED)?
             .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+        require_plan_revision(&current, executed_plan.revision)?;
         if goal.status != GoalStatus::Active
             || goal.iterations_completed != 0
             || current.status != PlanStatus::Approved
@@ -494,9 +514,10 @@ impl WorkRepository for EventSourcedWorkRepository {
                 actual: 1,
             });
         }
-        let plan_stream = Self::plan_stream(plan_id);
-        let expected =
-            u64::try_from(self.journal.read_stream(&plan_stream)?.len()).map_err(adapter)?;
+        executed_plan.revision = executed_plan
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Adapter("plan revision overflow".into()))?;
         self.journal.append_batch(vec![
             Self::event(
                 plan_stream,
@@ -520,8 +541,9 @@ impl WorkRepository for EventSourcedWorkRepository {
 
     fn update_goal(&self, goal: GoalRecord, actor: Actor) -> Result<GoalRecord, StoreError> {
         validate_goal(&goal)?;
-        let current = self
-            .get_goal(&goal.id)?
+        let stream = Self::goal_stream(&goal.id);
+        let (current, expected) = self
+            .record_with_version::<GoalRecord>(&stream, GOAL_CREATED)?
             .ok_or_else(|| StoreError::NotFound(format!("goal {}", goal.id)))?;
         let terminal_iteration_only = current.status != GoalStatus::Active
             && (goal.status != current.status
@@ -533,19 +555,64 @@ impl WorkRepository for EventSourcedWorkRepository {
             || current.source_plan_id != goal.source_plan_id
             || current.iteration_budget != goal.iteration_budget
             || current.created_at != goal.created_at
-            || goal.iterations_completed < current.iterations_completed
-            || goal.iterations_completed > current.iterations_completed.saturating_add(1)
+            || goal.iterations_completed != current.iterations_completed
         {
             return Err(StoreError::Adapter(
-                "goal provenance, budget, terminal state, and iteration progression are immutable"
+                "goal provenance, budget, terminal state, and iteration count are immutable during status updates"
                     .into(),
             ));
         }
-        let stream = Self::goal_stream(&goal.id);
-        let expected = u64::try_from(self.journal.read_stream(&stream)?.len()).map_err(adapter)?;
         self.journal.append(Self::event(
             stream,
             expected,
+            GOAL_UPDATED,
+            actor,
+            &goal.session_id,
+            json!({"record": &goal}),
+        ))?;
+        Ok(goal)
+    }
+
+    fn record_goal_iteration(
+        &self,
+        goal: GoalRecord,
+        expected_iterations_completed: u16,
+        actor: Actor,
+    ) -> Result<GoalRecord, StoreError> {
+        validate_goal(&goal)?;
+        let stream = Self::goal_stream(&goal.id);
+        let (current, expected_stream_version) = self
+            .record_with_version::<GoalRecord>(&stream, GOAL_CREATED)?
+            .ok_or_else(|| StoreError::NotFound(format!("goal {}", goal.id)))?;
+        if current.iterations_completed != expected_iterations_completed {
+            return Err(StoreError::Conflict {
+                stream_id: stream,
+                expected: u64::from(expected_iterations_completed),
+                actual: u64::from(current.iterations_completed),
+            });
+        }
+        let next_iterations_completed = expected_iterations_completed
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Adapter("goal iteration count overflow".into()))?;
+        if expected_iterations_completed >= current.iteration_budget
+            || goal.iterations_completed != next_iterations_completed
+            || current.session_id != goal.session_id
+            || current.objective != goal.objective
+            || current.source_plan_id != goal.source_plan_id
+            || current.status != goal.status
+            || current.summary != goal.summary
+            || current.blocked_reason != goal.blocked_reason
+            || current.iteration_budget != goal.iteration_budget
+            || current.created_at != goal.created_at
+        {
+            return Err(StoreError::Adapter(
+                "goal iteration reservation requires one unchanged canonical goal with remaining budget"
+                    .into(),
+            ));
+        }
+        self.journal.append(Self::event(
+            stream,
+            expected_stream_version,
             GOAL_UPDATED,
             actor,
             &goal.session_id,

@@ -1,4 +1,7 @@
-use super::{Actor, ActorType, PolicyDecision, RunEvent, ThemeName, ThemeSpinner};
+use super::{
+    Actor, ActorType, AgentRunMode, ExecutionContext, PlanDraftTarget, PlanExecutionStrategy,
+    PlanRecord, PolicyDecision, RunEvent, ThemeName, ThemeSpinner,
+};
 
 #[test]
 fn application_actor_has_stable_journal_provenance() {
@@ -62,6 +65,71 @@ fn run_error_http_status_is_optional_and_structured() {
     let value = serde_json::to_value(event).expect("structured error event");
     assert_eq!(value["http_status"], 503);
     assert_eq!(value["retry_after_ms"], 7_000);
+}
+
+#[test]
+fn legacy_plan_records_default_to_revision_zero() {
+    let document = serde_json::json!({
+        "id": "plan-legacy",
+        "session_id": "session-1",
+        "prompt": "Preserve compatibility",
+        "status": "draft",
+        "content": "# Plan",
+        "steps": [{
+            "index": 1,
+            "title": "Verify",
+            "detail": "",
+            "requires_mutation": false
+        }],
+        "created_at": "2026-07-29T00:00:00Z",
+        "updated_at": "2026-07-29T00:00:00Z",
+        "approved_at": null,
+        "executed_run_id": null
+    });
+    let plan: PlanRecord = serde_json::from_value(document).expect("legacy plan");
+    assert_eq!(plan.revision, 0);
+}
+
+#[test]
+fn plan_mode_and_execution_strategy_have_stable_tagged_shapes() {
+    let mode = AgentRunMode::Plan(PlanDraftTarget::Update {
+        plan_id: "plan-1".into(),
+        revision: 7,
+    });
+    let encoded_mode = serde_json::json!({
+        "mode": "plan",
+        "target": {
+            "operation": "update",
+            "plan_id": "plan-1",
+            "revision": 7
+        }
+    });
+    assert_eq!(serde_json::to_value(&mode).expect("mode"), encoded_mode);
+    assert_eq!(
+        serde_json::from_value::<AgentRunMode>(encoded_mode).expect("mode round trip"),
+        mode
+    );
+    assert_eq!(
+        serde_json::to_value(PlanExecutionStrategy::Goal { max_iterations: 5 }).expect("strategy"),
+        serde_json::json!({"strategy": "goal", "max_iterations": 5})
+    );
+    assert_eq!(AgentRunMode::default(), AgentRunMode::Execute);
+}
+
+#[test]
+fn draft_plan_dispatch_target_is_never_serialized() {
+    let context = ExecutionContext {
+        correlation_id: "run-1".into(),
+        draft_plan_id: Some("plan-1".into()),
+        draft_plan_revision: Some(7),
+        ..ExecutionContext::default()
+    };
+    let value = serde_json::to_value(&context).expect("context");
+    assert!(value.get("draft_plan_id").is_none());
+    assert!(value.get("draft_plan_revision").is_none());
+    let restored: ExecutionContext = serde_json::from_value(value).expect("restore");
+    assert_eq!(restored.draft_plan_id, None);
+    assert_eq!(restored.draft_plan_revision, None);
 }
 
 #[test]

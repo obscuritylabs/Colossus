@@ -8,6 +8,49 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Added
+
+- Added the complete interactive Plan workflow to full-screen TUI and scripted line
+  mode, with process-local Execute/Plan state, same-session Draft selection and
+  refinement, approval, discard, and Direct or bounded Goal execution in embedded and
+  worker-backed runtimes.
+- Added `/goal resume GOAL_ID` for continuing the remaining budget of an Active goal
+  after cancellation or bounded failure.
+- Added typed `PlanWritten` run events and canonical plan evidence on completed and
+  cancelled Plan Mode runs. Public API, protobuf, and SDK completed results and
+  cancellations now expose the optional canonical `plan_id`.
+- Added authenticated worker protocol v6 `RunInteractive` variants for Execute and Plan
+  turns, plan lifecycle operations, Direct and Goal execution, Goal resume, notices,
+  prompts, released events, and cancellation.
+
+### Changed
+
+- Added optimistic plan revisions: legacy records default to revision 0, new plans start
+  at 1, and refinement or any lifecycle transition increments the revision and rejects
+  stale requests.
+- Made every completed Plan Mode turn perform exactly one successful `plan.create` or
+  runtime-bound `plan.update`. A missing write receives one corrective turn before
+  failing closed, while duplicate writes are blocked before dispatch.
+- Made approved-plan consumption atomic. Cancel or failure before consumption preserves
+  terminal Plan mode and selection; after consumption, Direct and Goal outcomes retain
+  canonical plan plus completion, cancellation, or bounded-failure evidence.
+
+### Security
+
+- Bound `plan.update` to the server-selected Draft id and revision, kept
+  `plan.discard` operator-only, and routed update, discard, approval, Direct execution,
+  and Goal handoff through the normal effect gateway.
+- Corrected the Plan Mode inspection allowlist to `context.show` and
+  `context.snapshots` while continuing to exclude filesystem writes, patch application,
+  command execution, approval, networking, delegation, and plan consumption.
+
+### Upgrade Notes
+
+- Worker protocol v6 is intentionally incompatible with stale resident workers. Restart
+  the worker and client with the same Colossus version after upgrading. Interrupted
+  interactive operations are not automatically retried; inspect `/plans` and linked run
+  or Goal evidence first.
+
 ## [0.10.2-preview.8] - 2026-07-30
 
 ### Fixed

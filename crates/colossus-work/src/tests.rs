@@ -195,17 +195,46 @@ fn plans_reconstruct_and_enforce_single_execution_lifecycle() {
             user_actor(),
         )
         .expect("create");
+    assert_eq!(draft.revision, 1);
     let edited = service
-        .update_draft_plan(&draft.id, None, Some("# Updated plan"), None, user_actor())
+        .update_draft_plan(
+            &draft.id,
+            draft.revision,
+            "# Updated plan",
+            draft.steps.clone(),
+            user_actor(),
+        )
         .expect("edit");
+    assert_eq!(edited.revision, 2);
+    assert_eq!(edited.prompt, draft.prompt);
+    let mut stale_repository_edit = draft.clone();
+    stale_repository_edit.content = "# Stale repository write".into();
+    let error = repository
+        .update_plan(stale_repository_edit, user_actor())
+        .expect_err("repository CAS");
+    assert!(matches!(
+        error,
+        StoreError::Conflict {
+            expected: 1,
+            actual: 2,
+            ..
+        }
+    ));
     let approved = service
         .approve_plan(&draft.id, user_actor())
         .expect("approve");
     assert_eq!(approved.status, PlanStatus::Approved);
+    assert_eq!(approved.revision, 3);
     assert!(approved.approved_at.is_some());
     assert!(
         service
-            .update_draft_plan(&draft.id, Some("changed"), None, None, user_actor())
+            .update_draft_plan(
+                &draft.id,
+                approved.revision,
+                "changed",
+                approved.steps.clone(),
+                user_actor(),
+            )
             .is_err()
     );
     let mut forged = approved.clone();
@@ -213,10 +242,30 @@ fn plans_reconstruct_and_enforce_single_execution_lifecycle() {
     forged.approved_at = Some("forged".into());
     forged.executed_run_id = Some("run-forged".into());
     assert!(repository.update_plan(forged, user_actor()).is_err());
+    let stale_execution = service
+        .execute_plan_at_revision(&draft.id, edited.revision, "run-stale", user_actor())
+        .expect_err("stale execution");
+    assert!(matches!(
+        stale_execution,
+        StoreError::Conflict {
+            expected: 2,
+            actual: 3,
+            ..
+        }
+    ));
+    assert_eq!(
+        repository
+            .get_plan(&draft.id)
+            .expect("plan after stale execution")
+            .expect("record")
+            .status,
+        PlanStatus::Approved
+    );
     let executed = service
         .execute_plan(&draft.id, "run-1", user_actor())
         .expect("execute");
     assert_eq!(executed.status, PlanStatus::Executed);
+    assert_eq!(executed.revision, 4);
     assert_eq!(executed.executed_run_id.as_deref(), Some("run-1"));
     assert!(
         service
@@ -232,6 +281,81 @@ fn plans_reconstruct_and_enforce_single_execution_lifecycle() {
     let reopened = EventSourcedWorkRepository::new(journal);
     assert_eq!(reopened.get_plan(&draft.id).expect("get"), Some(executed));
     assert_eq!(edited.content, "# Updated plan");
+}
+
+#[test]
+fn plan_updates_and_discards_reject_stale_revisions() {
+    let (_journal, repository, service) = fixture();
+    let draft = service
+        .create_plan(
+            "session-1",
+            "Preserve the objective",
+            "# First",
+            vec![PlanStep {
+                index: 1,
+                title: "Inspect".into(),
+                detail: String::new(),
+                requires_mutation: false,
+            }],
+            user_actor(),
+        )
+        .expect("create");
+    let replacement_steps = vec![PlanStep {
+        index: 1,
+        title: "Verify".into(),
+        detail: "Run focused tests.".into(),
+        requires_mutation: false,
+    }];
+    let updated = service
+        .update_draft_plan(
+            &draft.id,
+            draft.revision,
+            "# Refined",
+            replacement_steps,
+            user_actor(),
+        )
+        .expect("update");
+    assert_eq!(updated.revision, 2);
+    assert_eq!(updated.prompt, draft.prompt);
+
+    let stale_update = service
+        .update_draft_plan(
+            &draft.id,
+            draft.revision,
+            "# Stale",
+            draft.steps.clone(),
+            user_actor(),
+        )
+        .expect_err("stale update");
+    assert!(matches!(
+        stale_update,
+        StoreError::Conflict {
+            expected: 1,
+            actual: 2,
+            ..
+        }
+    ));
+    let stale_discard = service
+        .discard_plan_at_revision(&draft.id, draft.revision, user_actor())
+        .expect_err("stale discard");
+    assert!(matches!(
+        stale_discard,
+        StoreError::Conflict {
+            expected: 1,
+            actual: 2,
+            ..
+        }
+    ));
+
+    let discarded = service
+        .discard_plan_at_revision(&draft.id, updated.revision, user_actor())
+        .expect("discard");
+    assert_eq!(discarded.status, PlanStatus::Discarded);
+    assert_eq!(discarded.revision, 3);
+    assert_eq!(
+        repository.get_plan(&draft.id).expect("get"),
+        Some(discarded)
+    );
 }
 
 #[test]
@@ -287,6 +411,99 @@ fn goals_reconstruct_enforce_budget_and_preserve_terminal_evidence() {
 }
 
 #[test]
+fn started_goal_iterations_remain_consumed_when_a_run_does_not_complete() {
+    let (_, repository, service) = fixture();
+    let goal = service
+        .create_goal(
+            "session-1",
+            "Use a bounded retry budget",
+            2,
+            None,
+            user_actor(),
+        )
+        .expect("create");
+
+    service
+        .record_goal_iteration(&goal.id, user_actor())
+        .expect("reserve failed attempt");
+    let resumable = repository
+        .get_goal(&goal.id)
+        .expect("goal")
+        .expect("record");
+    assert_eq!(resumable.status, GoalStatus::Active);
+    assert_eq!(resumable.iterations_completed, 1);
+
+    let exhausted = service
+        .record_goal_iteration(&goal.id, user_actor())
+        .expect("reserve remaining attempt");
+    assert_eq!(exhausted.iterations_completed, 2);
+    assert!(
+        service
+            .record_goal_iteration(&goal.id, user_actor())
+            .is_err(),
+        "a failed run must not make the same bounded slot reusable"
+    );
+}
+
+#[test]
+fn concurrent_stale_goal_iteration_reservations_commit_only_one_budget_slot() {
+    let (journal, repository, service) = fixture();
+    let goal = service
+        .create_goal(
+            "session-1",
+            "Reserve each concurrent iteration once",
+            2,
+            None,
+            user_actor(),
+        )
+        .expect("create");
+    let mut reservation = goal.clone();
+    reservation.iterations_completed = 1;
+    reservation.updated_at = "2026-01-01T00:00:01Z".into();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let repository = Arc::clone(&repository);
+        let reservation = reservation.clone();
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            repository.record_goal_iteration(reservation, 0, user_actor())
+        }));
+    }
+    barrier.wait();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("reservation thread"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(StoreError::Conflict { .. })))
+            .count(),
+        1,
+        "{results:?}"
+    );
+    let current = repository
+        .get_goal(&goal.id)
+        .expect("goal")
+        .expect("record");
+    assert_eq!(current.iterations_completed, 1);
+    assert_eq!(
+        journal
+            .read_stream(&format!("goal:{}", goal.id))
+            .expect("goal events")
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn approved_plan_is_atomically_consumed_by_only_one_goal() {
     let (journal, repository, service) = fixture();
     let plan = service
@@ -303,15 +520,48 @@ fn approved_plan_is_atomically_consumed_by_only_one_goal() {
             user_actor(),
         )
         .expect("plan");
-    service
+    let approved = service
         .approve_plan(&plan.id, user_actor())
         .expect("approve");
-    let goal = service
-        .create_goal(
+    let stale_handoff = service
+        .create_goal_at_plan_revision(
+            "session-1",
+            "Execute stale approved plan",
+            5,
+            Some(plan.id.clone()),
+            Some(plan.revision),
+            user_actor(),
+        )
+        .expect_err("stale plan handoff");
+    assert!(matches!(
+        stale_handoff,
+        StoreError::Conflict {
+            expected: 1,
+            actual: 2,
+            ..
+        }
+    ));
+    assert!(
+        repository
+            .list_goals(Some("session-1"), None, 10)
+            .expect("goals after stale handoff")
+            .is_empty()
+    );
+    assert_eq!(
+        repository
+            .get_plan(&plan.id)
+            .expect("plan after stale handoff")
+            .expect("record")
+            .status,
+        PlanStatus::Approved
+    );
+    let (goal, committed_plan) = service
+        .create_goal_with_plan_at_revision(
             "session-1",
             "Execute approved plan",
             5,
             Some(plan.id.clone()),
+            Some(approved.revision),
             user_actor(),
         )
         .expect("goal");
@@ -319,7 +569,9 @@ fn approved_plan_is_atomically_consumed_by_only_one_goal() {
         .get_plan(&plan.id)
         .expect("plan")
         .expect("record");
+    assert_eq!(committed_plan.as_ref(), Some(&consumed));
     assert_eq!(consumed.status, PlanStatus::Executed);
+    assert_eq!(consumed.revision, 3);
     assert_eq!(consumed.executed_run_id.as_deref(), Some(goal.id.as_str()));
     assert_eq!(goal.source_plan_id.as_deref(), Some(plan.id.as_str()));
     assert!(

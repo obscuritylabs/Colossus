@@ -991,9 +991,9 @@ pub(super) async fn dispatch(
         WorkerOperation::Drain => drain_once(runtime, maintenance).await,
         WorkerOperation::Shutdown => Ok(json!({"stopping": true})),
         WorkerOperation::RunModel { .. }
-        | WorkerOperation::RunModelControlled { .. }
+        | WorkerOperation::RunInteractive { .. }
         | WorkerOperation::RunPlan { .. } => Err(WorkerError::Protocol(
-            "model runs must use the streaming dispatch path".into(),
+            "model and interactive operations must use the streaming dispatch path".into(),
         )),
     }
 }

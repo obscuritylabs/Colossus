@@ -184,6 +184,7 @@ pub(super) fn run_update(
             RunUpdateKind::Cancellation(RunCancellation {
                 turn: cancellation.turn,
                 message: cancellation.message,
+                plan_id: cancellation.plan_id,
             })
         }
     };
@@ -210,6 +211,7 @@ fn run(value: core::Run) -> ApiResult<Run> {
             Some(RunTerminal::Cancellation(RunCancellation {
                 turn: cancellation.turn,
                 message: cancellation.message,
+                plan_id: cancellation.plan_id,
             }))
         }
         _ if value.result.is_none() && value.failure.is_none() && value.cancellation.is_none() => {
@@ -242,6 +244,7 @@ fn run(value: core::Run) -> ApiResult<Run> {
 fn run_result(value: core::RunResult) -> RunResult {
     RunResult {
         output: value.output,
+        plan_id: value.plan_id,
         profile: value.profile,
         model_profile: value.model_profile,
         provider_profile: value.provider_profile,

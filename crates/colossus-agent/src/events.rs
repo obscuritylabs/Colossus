@@ -143,37 +143,61 @@ pub(super) fn tool_error_code(error: &ToolError) -> &'static str {
     }
 }
 
-pub(super) fn plan_mode_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "echo"
-            | "filesystem.list"
-            | "filesystem.read"
-            | "filesystem.search"
-            | "git.status"
-            | "git.diff"
-            | "git.show"
-            | "repo.map"
-            | "repo.symbol_search"
-            | "repo.references"
-            | "repo.file_summary"
-            | "patch.preview"
-            | "task.create"
-            | "task.list"
-            | "decision.list"
-            | "plan.create"
-            | "plan.show"
-            | "memory.read"
-            | "memory.list"
-            | "memory.search"
-            | "agent.result"
-            | "agent.list"
-            | "tool.search"
-            | "user.ask"
-            | "context.status"
-            | "context.list"
-            | "skill.resource.read"
-    )
+pub(super) fn plan_mode_tool(name: &str, target: &PlanDraftTarget) -> bool {
+    let target_write = match target {
+        PlanDraftTarget::Create => name == "plan.create",
+        PlanDraftTarget::Update { .. } => name == "plan.update",
+    };
+    target_write
+        || matches!(
+            name,
+            "echo"
+                | "filesystem.list"
+                | "filesystem.read"
+                | "filesystem.search"
+                | "git.status"
+                | "git.diff"
+                | "git.show"
+                | "repo.map"
+                | "repo.symbol_search"
+                | "repo.references"
+                | "repo.file_summary"
+                | "patch.preview"
+                | "task.create"
+                | "task.list"
+                | "decision.list"
+                | "plan.show"
+                | "memory.list"
+                | "memory.search"
+                | "agent.result"
+                | "agent.list"
+                | "tool.search"
+                | "user.ask"
+                | "context.show"
+                | "context.snapshots"
+                | "skill.resource.read"
+        )
+}
+
+pub(super) fn validate_plan_write_once(
+    call: &ToolCall,
+    target: Option<&PlanDraftTarget>,
+    written_plan: Option<&PlanRecord>,
+) -> Result<(), ToolError> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let required_tool = match target {
+        PlanDraftTarget::Create => "plan.create",
+        PlanDraftTarget::Update { .. } => "plan.update",
+    };
+    if call.name == required_tool && written_plan.is_some() {
+        return Err(ToolError::InvalidArguments {
+            tool: call.name.clone(),
+            message: format!("Plan Mode already completed its one required {required_tool} write"),
+        });
+    }
+    Ok(())
 }
 
 pub(super) fn session_title(prompt: &str) -> String {

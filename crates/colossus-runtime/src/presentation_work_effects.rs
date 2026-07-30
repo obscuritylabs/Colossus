@@ -62,6 +62,40 @@ impl WorkEffectExecutor {
             request.context.session_id.as_deref().ok_or_else(|| {
                 ExecutionError::Failed("work tool session context is absent".into())
             })?;
+        if let WorkOperation::PlanUpdate {
+            id,
+            expected_revision,
+            ..
+        } = operation
+            && (request.context.draft_plan_id.as_deref() != Some(id)
+                || request.context.draft_plan_revision != Some(*expected_revision))
+        {
+            return Err(ExecutionError::Failed(
+                "plan.update is not bound to the active Plan Mode draft revision".into(),
+            ));
+        }
+        match operation {
+            WorkOperation::PlanExecute { id, .. }
+            | WorkOperation::PlanExecuteAtRevision { id, .. }
+                if request.context.plan_id.as_deref() != Some(id.as_str()) =>
+            {
+                return Err(ExecutionError::Failed(
+                    "plan execution is not bound to the requested Plan".into(),
+                ));
+            }
+            WorkOperation::GoalCreate {
+                source_plan_id,
+                source_plan_revision,
+                ..
+            } if source_plan_id.is_some() != source_plan_revision.is_some()
+                || request.context.plan_id.as_deref() != source_plan_id.as_deref() =>
+            {
+                return Err(ExecutionError::Failed(
+                    "Goal handoff is not bound to one exact approved Plan revision".into(),
+                ));
+            }
+            _ => {}
+        }
         let operation_session = match operation {
             WorkOperation::TaskCreate { session_id, .. }
             | WorkOperation::TaskList { session_id, .. }
@@ -78,9 +112,13 @@ impl WorkEffectExecutor {
                     .ok_or_else(|| ExecutionError::Failed(format!("task {id} was not found")))?
                     .session_id
             }
-            WorkOperation::PlanShow { id }
+            WorkOperation::PlanUpdate { id, .. }
+            | WorkOperation::PlanShow { id }
             | WorkOperation::PlanApprove { id }
-            | WorkOperation::PlanExecute { id, .. } => {
+            | WorkOperation::PlanApproveAtRevision { id, .. }
+            | WorkOperation::PlanDiscard { id, .. }
+            | WorkOperation::PlanExecute { id, .. }
+            | WorkOperation::PlanExecuteAtRevision { id, .. } => {
                 self.repository
                     .get_plan(id)
                     .map_err(|error| ExecutionError::Failed(error.to_string()))?
@@ -282,27 +320,72 @@ impl EffectExecutor for WorkEffectExecutor {
                         .create_plan(&session_id, &prompt, &content, steps, actor),
                 )
             }
+            WorkOperation::PlanUpdate {
+                id,
+                expected_revision,
+                content,
+                steps,
+            } => work_result(self.service.update_draft_plan(
+                &id,
+                expected_revision,
+                &content,
+                steps,
+                actor,
+            )),
             WorkOperation::PlanShow { id } => {
                 work_result(self.repository.get_plan(&id).and_then(|plan| {
                     plan.ok_or_else(|| StoreError::NotFound(format!("plan {id}")))
                 }))
             }
             WorkOperation::PlanApprove { id } => work_result(self.service.approve_plan(&id, actor)),
+            WorkOperation::PlanApproveAtRevision {
+                id,
+                expected_revision,
+            } => work_result(
+                self.service
+                    .approve_plan_at_revision(&id, expected_revision, actor),
+            ),
+            WorkOperation::PlanDiscard {
+                id,
+                expected_revision,
+            } => work_result(match expected_revision {
+                Some(revision) => self.service.discard_plan_at_revision(&id, revision, actor),
+                None => self.service.discard_plan(&id, actor),
+            }),
             WorkOperation::PlanExecute { id, run_id } => {
                 work_result(self.service.execute_plan(&id, &run_id, actor))
             }
+            WorkOperation::PlanExecuteAtRevision {
+                id,
+                expected_revision,
+                run_id,
+            } => work_result(self.service.execute_plan_at_revision(
+                &id,
+                expected_revision,
+                &run_id,
+                actor,
+            )),
             WorkOperation::GoalCreate {
                 session_id,
                 objective,
                 iteration_budget,
                 source_plan_id,
-            } => work_result(self.service.create_goal(
-                &session_id,
-                &objective,
-                iteration_budget,
-                source_plan_id,
-                actor,
-            )),
+                source_plan_revision,
+            } => work_result(
+                self.service
+                    .create_goal_with_plan_at_revision(
+                        &session_id,
+                        &objective,
+                        iteration_budget,
+                        source_plan_id,
+                        source_plan_revision,
+                        actor,
+                    )
+                    .map(|(goal, consumed_plan)| GoalCreationResult {
+                        goal,
+                        consumed_plan,
+                    }),
+            ),
             WorkOperation::GoalShow { id } => {
                 work_result(self.repository.get_goal(&id).and_then(|goal| {
                     goal.ok_or_else(|| StoreError::NotFound(format!("goal {id}")))

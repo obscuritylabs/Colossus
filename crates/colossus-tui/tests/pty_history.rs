@@ -7,8 +7,9 @@ use colossus_contracts::{
 use colossus_ports::RunControl;
 use colossus_presentation::{PresentationBlock, PresentationDocument};
 use colossus_tui::{
-    BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostRunResult, InteractiveHost,
-    InteractiveRunRequest, InteractiveSnapshot, RuntimeCommand, ScreenMode, TuiOptions, run_tui,
+    BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionResult,
+    HostRunResult, InteractiveHost, InteractivePlanExecutionRequest, InteractiveRunRequest,
+    InteractiveSnapshot, RuntimeCommand, ScreenMode, TuiOptions, run_tui,
 };
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::{
@@ -65,6 +66,7 @@ impl InteractiveHost for FixtureHost {
         _session_id: &str,
         _sticky_skills: &[String],
         _events: mpsc::Sender<HostEvent>,
+        _control: RunControl,
     ) -> Result<HostCommandResult, String> {
         Ok(HostCommandResult::document(
             PresentationDocument::from_block(PresentationBlock::Text("ok".into())),
@@ -78,6 +80,15 @@ impl InteractiveHost for FixtureHost {
         _control: RunControl,
     ) -> Result<HostRunResult, String> {
         Err("fixture does not run model turns".into())
+    }
+
+    async fn run_plan_execution(
+        &self,
+        _request: InteractivePlanExecutionRequest,
+        _events: mpsc::Sender<HostEvent>,
+        _control: RunControl,
+    ) -> Result<HostPlanExecutionResult, String> {
+        Err("fixture does not execute plans".into())
     }
 
     async fn append_history(&self, _entry: String) -> Result<(), String> {

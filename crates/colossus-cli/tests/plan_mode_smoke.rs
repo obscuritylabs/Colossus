@@ -97,7 +97,12 @@ fn plan_mode_cannot_mutate_and_approved_plans_are_consumed_once() {
 data: [DONE]
 
 "#;
-    let denied_finished = r#"data: {"id":"plan-corrected","choices":[{"index":0,"delta":{"content":"mutation-not-available"},"finish_reason":"stop"}]}
+    let denied_plan = r##"data: {"id":"plan-corrected","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"safe-plan-1","type":"function","function":{"name":"plan.create","arguments":"{\"prompt\":\"Attempt a mutation\",\"content\":\"# Safe alternative\",\"steps\":[{\"title\":\"Review\",\"detail\":\"Keep the requested mutation pending\",\"requires_mutation\":true}]}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"##;
+    let denied_finished = r#"data: {"id":"plan-corrected-final","choices":[{"index":0,"delta":{"content":"mutation-not-available"},"finish_reason":"stop"}]}
 
 data: [DONE]
 
@@ -129,6 +134,7 @@ data: [DONE]
 "#;
     let (origin, server) = serve(vec![
         denied_write,
+        denied_plan,
         denied_finished,
         create_plan,
         plan_finished,
@@ -240,6 +246,8 @@ data: [DONE]
         "plan mutation correction JSON",
     );
     assert_eq!(denied["output"], "mutation-not-available");
+    assert_eq!(denied["plan"]["revision"], 1);
+    assert_eq!(denied["plan"]["status"], "draft");
     assert!(!directory.path().join("plan-mode-escape.txt").exists());
 
     let planned = parse(
@@ -257,11 +265,13 @@ data: [DONE]
         "plan mode JSON",
     );
     assert_eq!(planned["output"], "draft-created");
+    assert_eq!(planned["plan"]["revision"], 1);
+    assert_eq!(planned["plan"]["status"], "draft");
     let plans = parse(
         &run(binary, &config, &["plans", "list", "--session", session_id]),
         "plans JSON",
     );
-    assert_eq!(plans.as_array().map(Vec::len), Some(1));
+    assert_eq!(plans.as_array().map(Vec::len), Some(2));
 
     let direct = parse(
         &run(
@@ -348,4 +358,5 @@ data: [DONE]
     let correction_body = requests[1].split("\r\n\r\n").nth(1).expect("body");
     assert!(correction_body.contains("not available in this run mode"));
     assert!(correction_body.contains("unknown_tool"));
+    assert!(correction_body.contains("plan_create"));
 }

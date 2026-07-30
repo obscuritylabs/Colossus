@@ -107,6 +107,44 @@ fn every_enum_has_an_unspecified_zero_value() {
 }
 
 #[test]
+fn run_result_exposes_an_optional_plan_identity() {
+    let descriptors = descriptors();
+    let run_result = descriptors
+        .file
+        .iter()
+        .flat_map(|file| &file.message_type)
+        .find(|message| message.name.as_deref() == Some("RunResult"))
+        .expect("RunResult descriptor");
+    let plan_id = run_result
+        .field
+        .iter()
+        .find(|field| field.name.as_deref() == Some("plan_id"))
+        .expect("RunResult.plan_id descriptor");
+
+    assert_eq!(plan_id.number, Some(7));
+    assert_eq!(plan_id.proto3_optional, Some(true));
+}
+
+#[test]
+fn run_cancellation_exposes_an_optional_plan_identity() {
+    let descriptors = descriptors();
+    let cancellation = descriptors
+        .file
+        .iter()
+        .flat_map(|file| &file.message_type)
+        .find(|message| message.name.as_deref() == Some("RunCancellation"))
+        .expect("RunCancellation descriptor");
+    let plan_id = cancellation
+        .field
+        .iter()
+        .find(|field| field.name.as_deref() == Some("plan_id"))
+        .expect("RunCancellation.plan_id descriptor");
+
+    assert_eq!(plan_id.number, Some(3));
+    assert_eq!(plan_id.proto3_optional, Some(true));
+}
+
+#[test]
 fn durable_run_and_artifact_stream_shapes_are_fixed() {
     let methods = methods();
 

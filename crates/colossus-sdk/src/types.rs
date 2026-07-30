@@ -104,6 +104,8 @@ pub struct CreateRunRequest {
 pub struct RunResult {
     /// Complete visible assistant output.
     pub output: String,
+    /// Canonical plan written by a completed Plan Mode run.
+    pub plan_id: Option<String>,
     /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
     /// Credential-free model profile.
@@ -140,6 +142,8 @@ pub struct RunCancellation {
     pub turn: u32,
     /// Bounded cancellation summary.
     pub message: String,
+    /// Canonical plan written before a cancelled Plan Mode run stopped.
+    pub plan_id: Option<String>,
 }
 
 /// Exactly one terminal run payload.

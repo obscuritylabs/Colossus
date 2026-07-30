@@ -1,4 +1,5 @@
 use super::*;
+use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
 /// Launch the terminal UI and retain exclusive ownership of all terminal writes.
 pub async fn run_tui(
@@ -24,12 +25,12 @@ pub async fn run_tui(
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
         }
-        if !state.is_busy()
-            && !state.queue_paused
-            && state.overlay.is_none()
-            && let Some(line) = state.queue.pop_front()
-        {
-            start_line(&mut state, line, Arc::clone(&host), event_tx.clone());
+        if !state.is_busy() && !state.queue_paused && state.overlay.is_none() {
+            if let Some(request) = state.pending_plan_execution.take() {
+                start_plan_execution(&mut state, request, Arc::clone(&host), event_tx.clone());
+            } else if let Some(line) = state.queue.pop_front() {
+                start_line(&mut state, line, Arc::clone(&host), event_tx.clone());
+            }
         }
         if state.should_exit {
             break;
@@ -254,6 +255,36 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             }
             _ => {}
         },
+        Overlay::PlanExecutionChoice { plan, selected } => match key.code {
+            KeyCode::Enter => {
+                let plan = plan.clone();
+                let strategy = match *selected {
+                    0 => Some(PlanExecutionStrategy::Direct),
+                    1 => Some(PlanExecutionStrategy::Goal {
+                        max_iterations: DEFAULT_GOAL_ITERATIONS,
+                    }),
+                    _ => None,
+                };
+                state.overlay = None;
+                if let Some(strategy) = strategy {
+                    state.pending_plan_execution = Some(InteractivePlanExecutionRequest {
+                        session_id: state.session_id.clone(),
+                        plan_id: plan.id,
+                        revision: plan.revision,
+                        strategy,
+                    });
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                *selected = if *selected == 0 { 2 } else { *selected - 1 };
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                *selected = (*selected + 1) % 3;
+            }
+            KeyCode::Home => *selected = 0,
+            KeyCode::End => *selected = 2,
+            _ => {}
+        },
         Overlay::QueuePaused => match key.code {
             KeyCode::Char('r' | 'R') | KeyCode::Enter => {
                 state.queue_paused = false;
@@ -295,7 +326,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
             Overlay::Prompt { input, .. } | Overlay::HistorySearch { query: input } => {
                 input.push_str(&text);
             }
-            Overlay::QueuePaused => {}
+            Overlay::PlanExecutionChoice { .. } | Overlay::QueuePaused => {}
         }
     } else {
         state.composer.insert(&text);
@@ -350,31 +381,26 @@ pub(super) fn start_line(
         InteractiveCommand::Empty => {}
         InteractiveCommand::Local(command) => handle_local_command(state, command, host, event_tx),
         InteractiveCommand::Runtime(command) => {
-            state.append_entry(user_entry(&line, TranscriptKind::Command));
-            state.operation = Some(OperationKind::Command);
-            state.started_at = Some(Instant::now());
-            state.activity = Some(format!("running /{}", runtime_command_name(&command)));
-            let session_id = state.session_id.clone();
-            let sticky_skills = state.sticky_skills.clone();
-            let task_tx = event_tx.clone();
-            tokio::spawn(async move {
-                let result = host
-                    .execute_command(command, &session_id, &sticky_skills, task_tx.clone())
-                    .await
-                    .map(OperationResult::Command);
-                let _ = task_tx
-                    .send(HostEvent::OperationFinished(Box::new(result)))
-                    .await;
-            });
+            start_host_command(state, &line, command, host, event_tx);
         }
+        InteractiveCommand::Plan(command) => {
+            handle_plan_command(state, command, &line, host, event_tx);
+        }
+        InteractiveCommand::Invalid(message) => state.append_entry(error_entry(&message)),
         InteractiveCommand::Turn(prompt) => {
+            let request = match state.run_request(prompt.clone()) {
+                Ok(request) => request,
+                Err(error) => {
+                    state.append_entry(error_entry(&error));
+                    return;
+                }
+            };
             state.append_entry(user_entry(&prompt, TranscriptKind::User));
             state.operation = Some(OperationKind::Run);
             state.started_at = Some(Instant::now());
             state.activity = Some("waiting for model".into());
             let control = RunControl::default();
             state.control = Some(control.clone());
-            let request = state.run_request(prompt);
             let task_tx = event_tx.clone();
             tokio::spawn(async move {
                 let result = host
@@ -387,6 +413,244 @@ pub(super) fn start_line(
             });
         }
     }
+}
+
+fn start_host_command(
+    state: &mut TuiState,
+    line: &str,
+    command: RuntimeCommand,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    state.append_entry(user_entry(line, TranscriptKind::Command));
+    state.operation = Some(OperationKind::Command);
+    state.started_at = Some(Instant::now());
+    state.activity = Some(format!("running /{}", runtime_command_name(&command)));
+    let session_id = state.session_id.clone();
+    let sticky_skills = state.sticky_skills.clone();
+    let control = RunControl::default();
+    state.control = Some(control.clone());
+    let task_tx = event_tx.clone();
+    tokio::spawn(async move {
+        let result = host
+            .execute_command(
+                command,
+                &session_id,
+                &sticky_skills,
+                task_tx.clone(),
+                control,
+            )
+            .await
+            .map(OperationResult::Command);
+        let _ = task_tx
+            .send(HostEvent::OperationFinished(Box::new(result)))
+            .await;
+    });
+}
+
+fn handle_plan_command(
+    state: &mut TuiState,
+    command: PlanCommand,
+    line: &str,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    match command {
+        PlanCommand::Toggle => {
+            state.mode = match state.mode {
+                InteractiveMode::Execute => InteractiveMode::Plan,
+                InteractiveMode::Plan => InteractiveMode::Execute,
+            };
+            append_plan_status(state);
+        }
+        PlanCommand::On => {
+            state.mode = InteractiveMode::Plan;
+            append_plan_status(state);
+        }
+        PlanCommand::Off => {
+            state.mode = InteractiveMode::Execute;
+            append_plan_status(state);
+        }
+        PlanCommand::Status => append_plan_status(state),
+        PlanCommand::New => {
+            state.mode = InteractiveMode::Plan;
+            state.selected_plan = None;
+            append_plan_status(state);
+        }
+        PlanCommand::List => start_host_command(
+            state,
+            line,
+            RuntimeCommand::Plan(PlanHostCommand::List),
+            host,
+            event_tx,
+        ),
+        PlanCommand::Use { plan_id } => start_host_command(
+            state,
+            line,
+            RuntimeCommand::Plan(PlanHostCommand::Use { plan_id }),
+            host,
+            event_tx,
+        ),
+        PlanCommand::Show { plan_id } => {
+            let plan_id =
+                plan_id.or_else(|| state.selected_plan.as_ref().map(|plan| plan.id.clone()));
+            let Some(plan_id) = plan_id else {
+                state.append_entry(error_entry(
+                    "No plan is selected. Use /plan show PLAN_ID or /plan use PLAN_ID.",
+                ));
+                return;
+            };
+            start_host_command(
+                state,
+                line,
+                RuntimeCommand::Plan(PlanHostCommand::Show { plan_id }),
+                host,
+                event_tx,
+            );
+        }
+        PlanCommand::Approve => {
+            let Some(plan) = selected_draft(state, "approve") else {
+                return;
+            };
+            start_host_command(
+                state,
+                line,
+                RuntimeCommand::Plan(PlanHostCommand::Approve {
+                    plan_id: plan.id,
+                    revision: plan.revision,
+                }),
+                host,
+                event_tx,
+            );
+        }
+        PlanCommand::Discard => {
+            let Some(plan) = selected_actionable_plan(state, "discard") else {
+                return;
+            };
+            start_host_command(
+                state,
+                line,
+                RuntimeCommand::Plan(PlanHostCommand::Discard {
+                    plan_id: plan.id,
+                    revision: plan.revision,
+                }),
+                host,
+                event_tx,
+            );
+        }
+        PlanCommand::Execute { strategy } => {
+            let Some(plan) = selected_approved_plan(state) else {
+                return;
+            };
+            state.append_entry(user_entry(line, TranscriptKind::Command));
+            if let Some(strategy) = strategy {
+                start_plan_execution(
+                    state,
+                    InteractivePlanExecutionRequest {
+                        session_id: state.session_id.clone(),
+                        plan_id: plan.id,
+                        revision: plan.revision,
+                        strategy,
+                    },
+                    host,
+                    event_tx,
+                );
+            } else {
+                state.overlay = Some(Overlay::PlanExecutionChoice { plan, selected: 0 });
+            }
+        }
+    }
+}
+
+fn selected_draft(state: &mut TuiState, action: &str) -> Option<PlanRecord> {
+    let Some(plan) = state.selected_plan.clone() else {
+        state.append_entry(error_entry(&format!(
+            "No plan is selected. Use /plan use PLAN_ID before /plan {action}."
+        )));
+        return None;
+    };
+    if plan.status != PlanStatus::Draft {
+        state.append_entry(error_entry(&format!(
+            "Plan {} is {} and cannot be used for /plan {action}.",
+            short_plan_id(&plan.id),
+            plan_status_label(plan.status)
+        )));
+        return None;
+    }
+    Some(plan)
+}
+
+fn selected_actionable_plan(state: &mut TuiState, action: &str) -> Option<PlanRecord> {
+    let Some(plan) = state.selected_plan.clone() else {
+        state.append_entry(error_entry(&format!(
+            "No plan is selected. Use /plan use PLAN_ID before /plan {action}."
+        )));
+        return None;
+    };
+    if !matches!(plan.status, PlanStatus::Draft | PlanStatus::Approved) {
+        state.append_entry(error_entry(&format!(
+            "Plan {} is {} and cannot be used for /plan {action}.",
+            short_plan_id(&plan.id),
+            plan_status_label(plan.status)
+        )));
+        return None;
+    }
+    Some(plan)
+}
+
+fn selected_approved_plan(state: &mut TuiState) -> Option<PlanRecord> {
+    let Some(plan) = state.selected_plan.clone() else {
+        state.append_entry(error_entry(
+            "No plan is selected. Use /plan use PLAN_ID before /plan execute.",
+        ));
+        return None;
+    };
+    if plan.status != PlanStatus::Approved {
+        state.append_entry(error_entry(&format!(
+            "Plan {} is {}. Approve it before execution.",
+            short_plan_id(&plan.id),
+            plan_status_label(plan.status)
+        )));
+        return None;
+    }
+    Some(plan)
+}
+
+fn start_plan_execution(
+    state: &mut TuiState,
+    request: InteractivePlanExecutionRequest,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    state.operation = Some(OperationKind::Run);
+    state.started_at = Some(Instant::now());
+    state.activity = Some(match request.strategy {
+        PlanExecutionStrategy::Direct => "executing approved plan".into(),
+        PlanExecutionStrategy::Goal { max_iterations } => {
+            format!("running approved plan in Goal Mode ({max_iterations} iterations)")
+        }
+    });
+    let control = RunControl::default();
+    state.control = Some(control.clone());
+    let task_tx = event_tx.clone();
+    tokio::spawn(async move {
+        let result = host
+            .run_plan_execution(request, task_tx.clone(), control)
+            .await
+            .map(OperationResult::PlanExecution);
+        let _ = task_tx
+            .send(HostEvent::OperationFinished(Box::new(result)))
+            .await;
+    });
+}
+
+fn append_plan_status(state: &mut TuiState) {
+    state.append_entry(TranscriptEntry {
+        sequence: None,
+        kind: TranscriptKind::Command,
+        document: plan_status_document(state.mode, state.selected_plan.as_ref()),
+        temporary: false,
+    });
 }
 
 pub(super) fn handle_local_command(
@@ -436,6 +700,8 @@ pub(super) fn handle_local_command(
                         completions: None,
                         sticky_skills: None,
                         footer: None,
+                        plan_selection: PlanSelectionUpdate::Unchanged,
+                        continue_queue: true,
                         clear_transcript: false,
                     })
                 });
@@ -485,28 +751,34 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             }
         }
         HostEvent::OperationFinished(result) => {
+            if matches!(state.overlay, Some(Overlay::Prompt { .. }))
+                && let Some(Overlay::Prompt { request, .. }) = state.overlay.take()
+            {
+                let _ = request.response.send(PromptResponse::Cancelled);
+            }
             let result = *result;
             state.operation = None;
             state.control = None;
             state.activity = None;
             state.started_at = None;
             let successful = match result {
-                Ok(OperationResult::Command(result)) => {
-                    apply_command_result(state, result);
-                    true
-                }
+                Ok(OperationResult::Command(result)) => apply_command_result(state, result),
                 Ok(OperationResult::Run(HostRunResult {
                     outcome: AgentRunOutcome::Completed { result },
                     footer,
+                    plan_selection,
                 })) => {
+                    let selection_valid = apply_plan_selection(state, plan_selection);
                     finalize_assistant(state, &result.output);
                     state.footer = footer;
-                    true
+                    selection_valid
                 }
                 Ok(OperationResult::Run(HostRunResult {
                     outcome: AgentRunOutcome::Cancelled { .. },
                     footer,
+                    plan_selection,
                 })) => {
+                    apply_plan_selection(state, plan_selection);
                     state.footer = footer;
                     state.append_entry(TranscriptEntry {
                         sequence: None,
@@ -521,6 +793,97 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                         temporary: false,
                     });
                     false
+                }
+                Ok(OperationResult::PlanExecution(result)) => {
+                    let session_matches = result.plan.session_id == state.session_id;
+                    if !session_matches {
+                        state.append_entry(error_entry(
+                            "The host returned consumed-plan evidence for a different session.",
+                        ));
+                    }
+                    let selection_valid = apply_plan_selection(state, result.plan_selection);
+                    state.footer = result.footer;
+                    if !result.document.is_empty() {
+                        state.append_entry(TranscriptEntry {
+                            sequence: None,
+                            kind: TranscriptKind::Command,
+                            document: result.document,
+                            temporary: false,
+                        });
+                    }
+                    match result.outcome {
+                        HostPlanExecutionOutcome::CancelledBeforeStart => {
+                            state.append_entry(TranscriptEntry {
+                                sequence: None,
+                                kind: TranscriptKind::Command,
+                                document: PresentationDocument::from_block(
+                                    PresentationBlock::Card {
+                                        title: "Plan execution cancelled".into(),
+                                        tone: PresentationTone::Warning,
+                                        body: vec![PresentationBlock::Text(
+                                            "The plan was not consumed. Plan mode and the current selection remain active.".into(),
+                                        )],
+                                    },
+                                ),
+                                temporary: false,
+                            });
+                            false
+                        }
+                        HostPlanExecutionOutcome::FailedBeforeConsumption(error) => {
+                            state.append_entry(error_entry(&format!(
+                                "Plan execution failed before consumption: {error}"
+                            )));
+                            false
+                        }
+                        HostPlanExecutionOutcome::Completed => {
+                            state.mode = InteractiveMode::Execute;
+                            state.selected_plan = None;
+                            session_matches && selection_valid
+                        }
+                        HostPlanExecutionOutcome::CancelledAfterConsumption => {
+                            state.mode = InteractiveMode::Execute;
+                            state.selected_plan = None;
+                            state.append_entry(TranscriptEntry {
+                                sequence: None,
+                                kind: TranscriptKind::Command,
+                                document: PresentationDocument::from_block(
+                                    PresentationBlock::Card {
+                                        title: "Plan execution cancelled".into(),
+                                        tone: PresentationTone::Warning,
+                                        body: vec![PresentationBlock::Text(
+                                            "The plan was already consumed. Inspect /plans before starting new work.".into(),
+                                        )],
+                                    },
+                                ),
+                                temporary: false,
+                            });
+                            false
+                        }
+                        HostPlanExecutionOutcome::FailedAfterConsumption(error) => {
+                            state.mode = InteractiveMode::Execute;
+                            state.selected_plan = None;
+                            state.append_entry(error_entry(&format!(
+                                "Plan execution failed after consumption: {error}"
+                            )));
+                            false
+                        }
+                        HostPlanExecutionOutcome::ConsumedOutcomeUnknown(error) => {
+                            state.mode = InteractiveMode::Execute;
+                            state.selected_plan = None;
+                            state.append_entry(error_entry(&format!(
+                                "The plan was consumed, but its execution outcome is unknown: {error}. Inspect /plans and linked run or Goal evidence before retrying."
+                            )));
+                            false
+                        }
+                        HostPlanExecutionOutcome::OutcomeUnknown(error) => {
+                            state.mode = InteractiveMode::Execute;
+                            state.selected_plan = None;
+                            state.append_entry(error_entry(&format!(
+                                "Plan execution outcome is unknown: {error}. Inspect /plans before retrying."
+                            )));
+                            false
+                        }
+                    }
                 }
                 Err(error) => {
                     state.footer.status = "error".into();
@@ -575,6 +938,9 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
                 .insert(call.call_id.clone(), call.clone());
             return;
         }
+        RunEvent::PlanWritten { plan } => {
+            apply_plan_selection(state, PlanSelectionUpdate::Set(Box::new(plan.clone())));
+        }
         _ => {}
     }
 
@@ -588,6 +954,7 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
             (TranscriptKind::Tool, None)
         }
         RunEvent::Error { .. } => (TranscriptKind::Error, None),
+        RunEvent::PlanWritten { .. } => (TranscriptKind::Command, None),
         RunEvent::Provider {
             event: ProviderEvent::ReasoningSummary { .. },
         } => (TranscriptKind::Assistant, None),
@@ -597,7 +964,10 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
         RunEvent::Provider { .. } => return,
         RunEvent::Phase { .. } | RunEvent::ToolStarted { .. } => return,
     };
-    let source = TranscriptRenderSource::RunEvent { event, call };
+    let source = TranscriptRenderSource::RunEvent {
+        event: Box::new(event),
+        call,
+    };
     if let Some(document) = source.render(&state.preferences) {
         state.append_entry_with_source(
             TranscriptEntry {
@@ -611,7 +981,8 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
     }
 }
 
-pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResult) {
+pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResult) -> bool {
+    let continue_queue = result.continue_queue;
     if result.clear_transcript {
         state.transcript.clear();
         state.transcript_sources.clear();
@@ -627,6 +998,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
     }
     if let Some((session_id, page)) = result.session {
         state.session_id = session_id;
+        state.selected_plan = None;
         let (transcript, transcript_sources) =
             transcript_from_messages(page.messages, &state.preferences);
         state.transcript = transcript;
@@ -639,13 +1011,23 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         state.set_preferences(preferences);
     }
     if let Some(completions) = result.completions {
-        state.completions = completions;
+        state.set_completions(completions);
     }
     if let Some(sticky_skills) = result.sticky_skills {
         state.sticky_skills = sticky_skills;
     }
     if let Some(footer) = result.footer {
         state.footer = footer;
+    }
+    apply_plan_selection(state, result.plan_selection) && continue_queue
+}
+
+fn apply_plan_selection(state: &mut TuiState, update: PlanSelectionUpdate) -> bool {
+    if let Err(error) = state.apply_plan_selection(update) {
+        state.append_entry(error_entry(&error));
+        false
+    } else {
+        true
     }
 }
 

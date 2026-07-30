@@ -6,11 +6,12 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_api::ArtifactPurpose;
 use colossus_contracts::{
-    AgentRunOutcome, AgentRunResult, ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice,
-    DecisionPriority, DecisionStatus, EffectRequest, GoalStatus, IntegrationAuth, MemoryScope,
-    MemoryStatus, PlanStatus, PlanStep, PolicyDecision, ResearchDepth, ResearchSourceKind,
-    RiskReviewFallbackNotice, RunEventEnvelope, SubagentStatus, TaskStatus, TerminalPreferences,
-    UserPromptRequest, UserPromptResponse, WorkflowScheduleMisfirePolicy,
+    AgentRunMode, AgentRunOutcome, AgentRunResult, ApprovalProof, ApprovalReviewNotice,
+    AutomaticApprovalNotice, DecisionPriority, DecisionStatus, EffectRequest, GoalStatus,
+    IntegrationAuth, MemoryScope, MemoryStatus, PlanExecutionStrategy, PlanStatus, PlanStep,
+    PolicyDecision, ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEventEnvelope,
+    SubagentStatus, TaskStatus, TerminalPreferences, UserPromptRequest, UserPromptResponse,
+    WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -36,7 +37,7 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use uuid::Uuid;
 
-const PROTOCOL_VERSION: u16 = 5;
+const PROTOCOL_VERSION: u16 = 6;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CLOCK_SKEW_MS: i128 = 30_000;
@@ -77,7 +78,7 @@ mod server;
 pub use authentication_key::WorkerAuthenticationKey;
 pub use client::{WorkerClient, WorkerPromptHandler};
 pub use frames::{WorkerApprovalMode, WorkerPrompt, WorkerPromptKind};
-pub use operations::{WorkerError, WorkerOperation};
+pub use operations::{InteractiveWorkerRequest, WorkerError, WorkerOperation};
 pub use public_api::{PublicApiDeploymentMode, PublicApiHostOptions, PublicApiReadyMetadata};
 pub use public_credentials::{
     ApplicationGrant, IssuedCredential, PublicApiAuthenticationKey, PublicApiCredentialError,

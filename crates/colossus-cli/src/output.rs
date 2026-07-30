@@ -227,6 +227,16 @@ pub(super) fn write_stderr_document(document: &PresentationDocument) -> io::Resu
 }
 
 pub(super) fn print_terminal_help(preferences: &TerminalPreferences) {
+    let document = terminal_help_document(preferences);
+    println!(
+        "{}",
+        TerminalDocumentRenderer::new(preferences.clone(), terminal_width())
+            .with_color(io::stdout().is_terminal())
+            .render(&document)
+    );
+}
+
+fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocument {
     let mut table = PresentationTable::new(
         ["Area", "Commands", "What it does"],
         "No interactive terminal commands are available.",
@@ -239,8 +249,13 @@ pub(super) fn print_terminal_help(preferences: &TerminalPreferences) {
         ],
         [
             "Work",
-            "/work · /tasks · /decisions · /plans · /goals · /goal · /agents",
+            "/work · /tasks · /decisions · /plans · /goals · /goal resume GOAL_ID · /agents",
             "Inspect and drive durable work",
+        ],
+        [
+            "Plan workflow",
+            "/plan [on|off|status|new|list] · /plan use PLAN_ID · /plan show [PLAN_ID] · /plan approve|discard · /plan execute [direct|goal [ITERATIONS]]",
+            "Create, refine, approve, discard, or execute a selected plan",
         ],
         [
             "Memory & context",
@@ -281,7 +296,7 @@ pub(super) fn print_terminal_help(preferences: &TerminalPreferences) {
     ] {
         table.push_row(row);
     }
-    let document = PresentationDocument {
+    PresentationDocument {
         blocks: vec![
             PresentationBlock::Markdown(
                 "# Colossus Terminal\n\nType a normal message to talk to the configured primary model. Press **Tab** to complete commands and `@skill` names."
@@ -306,13 +321,7 @@ pub(super) fn print_terminal_help(preferences: &TerminalPreferences) {
             ]),
             PresentationBlock::Table(table),
         ],
-    };
-    println!(
-        "{}",
-        TerminalDocumentRenderer::new(preferences.clone(), terminal_width())
-            .with_color(io::stdout().is_terminal())
-            .render(&document)
-    );
+    }
 }
 
 pub(super) fn parse_toggle(value: &str) -> Option<bool> {
@@ -320,5 +329,29 @@ pub(super) fn parse_toggle(value: &str) -> Option<bool> {
         "on" | "true" => Some(true),
         "off" | "false" => Some(false),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_terminal_help_documents_the_complete_plan_workflow() {
+        let preferences = TerminalPreferences::default();
+        let rendered = TerminalDocumentRenderer::new(preferences.clone(), 240)
+            .with_color(false)
+            .render(&terminal_help_document(&preferences));
+
+        for command in [
+            "/plan [on|off|status|new|list]",
+            "/plan use PLAN_ID",
+            "/plan show [PLAN_ID]",
+            "/plan approve|discard",
+            "/plan execute [direct|goal [ITERATIONS]]",
+            "/goal resume GOAL_ID",
+        ] {
+            assert!(rendered.contains(command), "missing {command}: {rendered}");
+        }
     }
 }

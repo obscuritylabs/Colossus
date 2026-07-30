@@ -24,6 +24,12 @@ impl AgentService {
             .requested_run_id
             .map(str::to_owned)
             .unwrap_or_else(|| Uuid::now_v7().to_string());
+        let plan_target = match &scope.mode {
+            AgentRunMode::Execute => None,
+            AgentRunMode::Plan(target) => Some(target.clone()),
+        };
+        let mut written_plan = None::<PlanRecord>;
+        let mut plan_write_recovery_attempted = false;
         let session_id = match requested_session_id {
             Some(id) => {
                 if self.sessions.get_session(id)?.is_none() {
@@ -62,6 +68,14 @@ impl AgentService {
             step_id: scope.step_id.map(str::to_owned),
             attempt: scope.attempt,
             skill_ids: scope.active_skills.to_vec(),
+            draft_plan_id: plan_target.as_ref().and_then(|target| match target {
+                PlanDraftTarget::Create => None,
+                PlanDraftTarget::Update { plan_id, .. } => Some(plan_id.clone()),
+            }),
+            draft_plan_revision: plan_target.as_ref().and_then(|target| match target {
+                PlanDraftTarget::Create => None,
+                PlanDraftTarget::Update { revision, .. } => Some(*revision),
+            }),
             ..ExecutionContext::default()
         };
         let mut messages = self
@@ -98,7 +112,9 @@ impl AgentService {
             (scope.goal_id.is_some()
                 || !matches!(definition.name.as_str(), "goal.show" | "goal.update"))
                 && (scope.subagent_id.is_none() || definition.name != "agent.delegate")
-                && (!scope.plan_mode || plan_mode_tool(&definition.name))
+                && plan_target
+                    .as_ref()
+                    .is_none_or(|target| plan_mode_tool(&definition.name, target))
                 && scope
                     .allowed_tools
                     .is_none_or(|allowed| allowed.contains(&definition.name))
@@ -136,6 +152,7 @@ impl AgentService {
                 "streaming": route.capabilities.streaming,
                 "max_turns": max_turns,
                 "active_skills": scope.active_skills,
+                "mode": &scope.mode,
             }),
         )?;
         emit_run_event(
@@ -162,6 +179,7 @@ impl AgentService {
                         &run_id,
                         &session_id,
                         turn,
+                        written_plan.as_ref(),
                         &started,
                     )
                     .await;
@@ -230,6 +248,7 @@ impl AgentService {
                         &run_id,
                         &session_id,
                         turn,
+                        written_plan.as_ref(),
                         &started,
                     )
                     .await;
@@ -406,6 +425,7 @@ impl AgentService {
                         &run_id,
                         &session_id,
                         turn,
+                        written_plan.as_ref(),
                         &started,
                     )
                     .await;
@@ -434,6 +454,75 @@ impl AgentService {
                 let output = final_output
                     .or_else(|| (!visible_text.is_empty()).then_some(visible_text.clone()));
                 if let Some(output) = output {
+                    if let Some(target) = plan_target.as_ref()
+                        && written_plan.is_none()
+                    {
+                        let recoverable = !plan_write_recovery_attempted && turn < max_turns;
+                        let required_tool = match target {
+                            PlanDraftTarget::Create => "plan.create",
+                            PlanDraftTarget::Update { .. } => "plan.update",
+                        };
+                        let message = format!(
+                            "Plan Mode cannot complete until {required_tool} succeeds exactly once"
+                        );
+                        self.append(
+                            &stream_id,
+                            &mut stream_version,
+                            "plan.write.required.v1",
+                            system_actor(),
+                            &context,
+                            json!({
+                                "turn": turn,
+                                "required_tool": required_tool,
+                                "recoverable": recoverable,
+                            }),
+                        )?;
+                        emit_run_event(
+                            &mut released_observer,
+                            &run_id,
+                            &session_id,
+                            RunEvent::Error {
+                                code: "plan.write_required".into(),
+                                message: message.clone(),
+                                recoverable,
+                                http_status: None,
+                                retry_after_ms: None,
+                                turn: Some(turn),
+                                elapsed_seconds: started.elapsed().as_secs_f64(),
+                            },
+                        )
+                        .await?;
+                        if !recoverable {
+                            return Err(AgentError::PlanWriteRequired);
+                        }
+                        let assistant_message = ModelMessage {
+                            role: ModelMessageRole::Assistant,
+                            content: output,
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                        };
+                        self.sessions.append_message(
+                            &session_id,
+                            &run_id,
+                            assistant_message.clone(),
+                            Actor {
+                                actor_type: ActorType::Model,
+                                id: route.model_profile.clone(),
+                            },
+                        )?;
+                        messages.push(assistant_message);
+                        let correction = ModelMessage {
+                            role: ModelMessageRole::System,
+                            content: format!(
+                                "{message}. Call the required tool now; do not provide final output first."
+                            ),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                        };
+                        messages.push(correction);
+                        plan_write_recovery_attempted = true;
+                        continue;
+                    }
                     self.sessions.append_message(
                         &session_id,
                         &run_id,
@@ -484,6 +573,7 @@ impl AgentService {
                         output,
                         event_count: stream_version,
                         elapsed_seconds,
+                        plan: written_plan,
                     });
                 }
                 self.append(
@@ -593,13 +683,16 @@ impl AgentService {
                             &run_id,
                             &session_id,
                             turn,
+                            written_plan.as_ref(),
                             &started,
                         )
                         .await;
                 }
                 let tool_started = Instant::now();
                 let validation = if offered_tools.contains(call.name.as_str()) {
-                    self.tools.validate(&call)
+                    self.tools.validate(&call).and_then(|_| {
+                        validate_plan_write_once(&call, plan_target.as_ref(), written_plan.as_ref())
+                    })
                 } else {
                     Err(ToolError::Unknown(format!(
                         "tool {} is not available in this run mode",
@@ -681,6 +774,65 @@ impl AgentService {
                     }
                     Err(error) => return Err(error.into()),
                 };
+                if result.exit_code == 0
+                    && let Some(target) = plan_target.as_ref()
+                    && result.name
+                        == match target {
+                            PlanDraftTarget::Create => "plan.create",
+                            PlanDraftTarget::Update { .. } => "plan.update",
+                        }
+                {
+                    let plan =
+                        serde_json::from_str::<PlanRecord>(&result.output).map_err(|error| {
+                            AgentError::Configuration(format!(
+                                "plan tool returned an invalid canonical record: {error}"
+                            ))
+                        })?;
+                    let valid_target = plan.session_id == session_id
+                        && match target {
+                            PlanDraftTarget::Create => {
+                                !plan.id.is_empty()
+                                    && plan.revision == 1
+                                    && plan.status == colossus_contracts::PlanStatus::Draft
+                            }
+                            PlanDraftTarget::Update { plan_id, revision } => {
+                                plan.id == *plan_id
+                                    && plan.revision == revision.saturating_add(1)
+                                    && plan.status == colossus_contracts::PlanStatus::Draft
+                            }
+                        };
+                    if !valid_target {
+                        return Err(AgentError::Configuration(
+                            "plan tool returned a record outside the bound Plan Mode target".into(),
+                        ));
+                    }
+
+                    // The plan tool has already committed at this point. Capture its canonical
+                    // result and durable typed identity before any downstream observer can reject
+                    // a generic tool-completion event. Cancellation and later terminal paths can
+                    // therefore retain the exact persisted plan.
+                    written_plan = Some(plan);
+                    let plan = written_plan.as_ref().expect("plan was just captured");
+                    self.append(
+                        &stream_id,
+                        &mut stream_version,
+                        "plan.written.v1",
+                        system_actor(),
+                        &context,
+                        json!({
+                            "turn": turn,
+                            "plan_id": &plan.id,
+                            "revision": plan.revision,
+                        }),
+                    )?;
+                    emit_run_event(
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        RunEvent::PlanWritten { plan: plan.clone() },
+                    )
+                    .await?;
+                }
                 self.append(
                     &stream_id,
                     &mut stream_version,
@@ -730,12 +882,50 @@ impl AgentService {
                         &run_id,
                         &session_id,
                         turn,
+                        written_plan.as_ref(),
                         &started,
                     )
                     .await;
             }
         }
 
+        if written_plan.is_none()
+            && let Some(target) = plan_target.as_ref()
+        {
+            self.append(
+                &stream_id,
+                &mut stream_version,
+                "plan.write.required.v1",
+                system_actor(),
+                &context,
+                json!({
+                    "turn": max_turns,
+                    "required_tool": match target {
+                        PlanDraftTarget::Create => "plan.create",
+                        PlanDraftTarget::Update { .. } => "plan.update",
+                    },
+                    "recoverable": false,
+                }),
+            )?;
+            emit_run_event(
+                &mut released_observer,
+                &run_id,
+                &session_id,
+                RunEvent::Error {
+                    code: "plan.write_required".into(),
+                    message:
+                        "Plan Mode exhausted its turn limit without its required durable write"
+                            .into(),
+                    recoverable: false,
+                    http_status: None,
+                    retry_after_ms: None,
+                    turn: Some(max_turns),
+                    elapsed_seconds: started.elapsed().as_secs_f64(),
+                },
+            )
+            .await?;
+            return Err(AgentError::PlanWriteRequired);
+        }
         let event_count = stream_version;
         self.append(
             &stream_id,
@@ -773,6 +963,7 @@ impl AgentService {
         run_id: &str,
         session_id: &str,
         turn: u16,
+        plan: Option<&PlanRecord>,
         started: &Instant,
     ) -> Result<AgentRunResult, AgentError> {
         let elapsed_seconds = started.elapsed().as_secs_f64();
@@ -809,13 +1000,14 @@ impl AgentService {
         )
         .await?;
         Err(AgentError::Cancelled {
-            result: AgentRunCancellation {
+            result: Box::new(AgentRunCancellation {
                 run_id: run_id.into(),
                 session_id: session_id.into(),
                 turn,
                 event_count: *stream_version,
                 elapsed_seconds,
-            },
+                plan: plan.cloned(),
+            }),
         })
     }
 

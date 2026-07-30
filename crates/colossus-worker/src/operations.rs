@@ -59,12 +59,88 @@ pub enum WorkerError {
     /// The worker returned an application error.
     #[error("worker operation failed: {0}")]
     Remote(String),
+    /// An interactive operation was cancelled before its request was dispatched.
+    #[error("worker interactive operation was cancelled before dispatch")]
+    Cancelled,
     /// No worker answered at the configured endpoint.
     #[error("worker is unavailable at {0}")]
     Unavailable(String),
     /// A live worker could not accept another connection before the bounded deadline.
     #[error("worker is busy at {0}")]
     Busy(String),
+}
+
+/// One operation carried by the authenticated protocol-v6 interactive duplex channel.
+///
+/// The request selects application behavior only. Prompts, notices, released run
+/// events, and cooperative cancellation remain connection-scoped transport concerns.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InteractiveWorkerRequest {
+    /// Run either normal Execute Mode or structurally constrained Plan Mode.
+    Run {
+        /// Explicit application run mode and optional selected Plan draft.
+        mode: AgentRunMode,
+        /// Logical model role.
+        role: String,
+        /// Composed caller instructions.
+        instructions: String,
+        /// User prompt.
+        prompt: String,
+        /// Optional bounded turn override.
+        max_turns: Option<u16>,
+        /// Exact durable session.
+        session_id: String,
+        /// Explicit declarative skills.
+        explicit_skills: Vec<String>,
+        /// TUI-sticky declarative skills.
+        sticky_skills: Vec<String>,
+        /// Include bounded provider evidence on a failed turn for a trusted local client.
+        #[serde(default, skip_serializing_if = "is_false")]
+        include_provider_response_diagnostics: bool,
+    },
+    /// Approve one exact optimistic Plan revision.
+    PlanApprove {
+        /// Exact durable session that selected the Plan.
+        session_id: String,
+        /// Exact durable Plan identifier.
+        plan_id: String,
+        /// Expected canonical Plan revision.
+        revision: u64,
+    },
+    /// Discard one exact optimistic Plan revision.
+    PlanDiscard {
+        /// Exact durable session that selected the Plan.
+        session_id: String,
+        /// Exact durable Plan identifier.
+        plan_id: String,
+        /// Expected canonical Plan revision.
+        revision: u64,
+    },
+    /// Atomically consume and execute one approved Plan revision.
+    PlanExecute {
+        /// Logical model role.
+        role: String,
+        /// Exact durable session that selected the Plan.
+        session_id: String,
+        /// Exact durable Plan identifier.
+        plan_id: String,
+        /// Expected canonical Plan revision.
+        revision: u64,
+        /// Direct execution or bounded Goal Mode handoff.
+        strategy: PlanExecutionStrategy,
+        /// Optional bounded turn override for direct execution.
+        max_turns: Option<u16>,
+    },
+    /// Resume the remaining budget of one active Goal.
+    GoalResume {
+        /// Logical model role.
+        role: String,
+        /// Exact durable session that owns the Goal.
+        session_id: String,
+        /// Exact durable Goal identifier.
+        goal_id: String,
+    },
 }
 
 /// Versioned operations exposed by the local worker application API.
@@ -191,25 +267,10 @@ pub enum WorkerOperation {
         /// TUI-sticky declarative skills.
         sticky_skills: Vec<String>,
     },
-    /// Execute a model run with protocol-v5 prompts, notices, and cooperative cancellation.
-    RunModelControlled {
-        /// Logical role.
-        role: String,
-        /// Composed caller instructions.
-        instructions: String,
-        /// User prompt.
-        prompt: String,
-        /// Optional bounded turn override.
-        max_turns: Option<u16>,
-        /// Exact durable session.
-        session_id: String,
-        /// Explicit declarative skills.
-        explicit_skills: Vec<String>,
-        /// TUI-sticky declarative skills.
-        sticky_skills: Vec<String>,
-        /// Include bounded provider evidence on a failed turn for the trusted local TUI.
-        #[serde(default, skip_serializing_if = "is_false")]
-        include_provider_response_diagnostics: bool,
+    /// Execute any protocol-v6 interactive operation with authenticated duplex control.
+    RunInteractive {
+        /// Strict application request carried by the interactive channel.
+        request: InteractiveWorkerRequest,
     },
     /// Execute structurally read-only Plan Mode.
     RunPlan {

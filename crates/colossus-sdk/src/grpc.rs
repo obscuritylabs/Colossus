@@ -1005,6 +1005,9 @@ fn terminal_from_proto(value: run::Terminal) -> ApiResult<RunTerminal> {
 
 fn run_result_from_proto(value: proto::RunResult) -> ApiResult<RunResult> {
     validate_text(&value.output, MAX_VISIBLE_TEXT_BYTES)?;
+    if let Some(plan_id) = value.plan_id.as_deref() {
+        validate_identifier(plan_id)?;
+    }
     validate_identifier(&value.profile)?;
     validate_identifier(&value.model_profile)?;
     validate_identifier(&value.provider_profile)?;
@@ -1017,6 +1020,7 @@ fn run_result_from_proto(value: proto::RunResult) -> ApiResult<RunResult> {
     }
     Ok(RunResult {
         output: value.output,
+        plan_id: value.plan_id,
         profile: value.profile,
         model_profile: value.model_profile,
         provider_profile: value.provider_profile,
@@ -1048,9 +1052,13 @@ fn run_failure_from_proto(value: proto::RunFailure) -> ApiResult<RunFailure> {
 
 fn cancellation_from_proto(value: proto::RunCancellation) -> ApiResult<RunCancellation> {
     validate_text(&value.message, MAX_SUMMARY_BYTES)?;
+    if let Some(plan_id) = value.plan_id.as_deref() {
+        validate_identifier(plan_id)?;
+    }
     Ok(RunCancellation {
         turn: value.turn,
         message: value.message,
+        plan_id: value.plan_id,
     })
 }
 
@@ -1923,6 +1931,7 @@ mod tests {
             pending_interaction_count: 0,
             terminal: Some(run::Terminal::Result(proto::RunResult {
                 output: "unexpected".into(),
+                plan_id: None,
                 profile: "default".into(),
                 model_profile: "default".into(),
                 provider_profile: "provider".into(),
@@ -1968,6 +1977,7 @@ mod tests {
     fn proto_run_result_rejects_compatibility_profile_mismatch() {
         let error = run_result_from_proto(proto::RunResult {
             output: "answer".into(),
+            plan_id: None,
             profile: "legacy-alias".into(),
             model_profile: "different-model-profile".into(),
             provider_profile: "provider".into(),
@@ -1977,6 +1987,34 @@ mod tests {
         .expect_err("profile mismatch");
 
         assert_eq!(error.reason, ApiErrorReason::InternalInvariant);
+    }
+
+    #[test]
+    fn proto_run_result_preserves_optional_plan_identity() {
+        let result = run_result_from_proto(proto::RunResult {
+            output: "Plan saved".into(),
+            plan_id: Some("plan-1".into()),
+            profile: "default".into(),
+            model_profile: "default".into(),
+            provider_profile: "provider".into(),
+            model: "model".into(),
+            elapsed_seconds: 1.0,
+        })
+        .expect("plan result");
+
+        assert_eq!(result.plan_id.as_deref(), Some("plan-1"));
+    }
+
+    #[test]
+    fn proto_run_cancellation_preserves_optional_plan_identity() {
+        let cancellation = cancellation_from_proto(proto::RunCancellation {
+            turn: 2,
+            message: "cancelled after persistence".into(),
+            plan_id: Some("plan-1".into()),
+        })
+        .expect("plan cancellation");
+
+        assert_eq!(cancellation.plan_id.as_deref(), Some("plan-1"));
     }
 
     #[test]

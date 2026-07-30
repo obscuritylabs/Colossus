@@ -107,6 +107,9 @@ pub enum RunMode {
 pub struct RunResult {
     /// Complete released assistant output.
     pub output: String,
+    /// Canonical plan written by a completed Plan Mode run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
     /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
     /// Resolved model profile.
@@ -135,6 +138,8 @@ impl<'de> Deserialize<'de> for LegacyRunResultProfile {
 #[serde(deny_unknown_fields)]
 struct RunResultFields {
     output: String,
+    #[serde(default)]
+    plan_id: Option<String>,
     profile: String,
     #[serde(default)]
     model_profile: LegacyRunResultProfile,
@@ -152,6 +157,7 @@ impl<'de> Deserialize<'de> for RunResult {
         let fields = RunResultFields::deserialize(deserializer)?;
         Ok(Self {
             output: fields.output,
+            plan_id: fields.plan_id,
             model_profile: fields
                 .model_profile
                 .0
@@ -196,6 +202,9 @@ pub struct RunCancellation {
     pub turn: u32,
     /// Bounded released cancellation summary.
     pub message: String,
+    /// Canonical plan written before a cancelled Plan Mode run stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
 }
 
 /// Released lifecycle state for one bounded tool activity.

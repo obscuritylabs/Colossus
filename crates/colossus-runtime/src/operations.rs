@@ -24,6 +24,14 @@ impl PresentationOperation {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct GoalCreationResult {
+    pub(super) goal: GoalRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) consumed_plan: Option<PlanRecord>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum WorkOperation {
     TaskCreate {
@@ -89,14 +97,33 @@ pub(super) enum WorkOperation {
         content: String,
         steps: Vec<PlanStep>,
     },
+    PlanUpdate {
+        id: String,
+        expected_revision: u64,
+        content: String,
+        steps: Vec<PlanStep>,
+    },
     PlanShow {
         id: String,
     },
     PlanApprove {
         id: String,
     },
+    PlanApproveAtRevision {
+        id: String,
+        expected_revision: u64,
+    },
+    PlanDiscard {
+        id: String,
+        expected_revision: Option<u64>,
+    },
     PlanExecute {
         id: String,
+        run_id: String,
+    },
+    PlanExecuteAtRevision {
+        id: String,
+        expected_revision: u64,
         run_id: String,
     },
     GoalCreate {
@@ -104,6 +131,7 @@ pub(super) enum WorkOperation {
         objective: String,
         iteration_budget: u16,
         source_plan_id: Option<String>,
+        source_plan_revision: Option<u64>,
     },
     GoalShow {
         id: String,
@@ -163,9 +191,15 @@ impl WorkOperation {
             Self::DecisionSupersede { .. } => "decision.supersede",
             Self::DecisionList { .. } => "decision.list",
             Self::PlanCreate { .. } => "plan.create",
+            Self::PlanUpdate { .. } => "plan.update",
             Self::PlanShow { .. } => "plan.show",
-            Self::PlanApprove { .. } => "plan.approve_request",
-            Self::PlanExecute { .. } => "plan.execute",
+            Self::PlanApprove { .. } | Self::PlanApproveAtRevision { .. } => "plan.approve_request",
+            Self::PlanDiscard { .. } => "plan.discard",
+            Self::PlanExecute { .. } | Self::PlanExecuteAtRevision { .. } => "plan.execute",
+            Self::GoalCreate {
+                source_plan_id: Some(_),
+                ..
+            } => "plan.execute",
             Self::GoalCreate { .. } => "goal.create",
             Self::GoalShow { .. } => "goal.show",
             Self::GoalUpdate { .. } => "goal.update",
@@ -191,16 +225,28 @@ impl WorkOperation {
             | Self::DecisionCreate { session_id, .. }
             | Self::DecisionList { session_id, .. }
             | Self::PlanCreate { session_id, .. }
-            | Self::GoalCreate { session_id, .. }
+            | Self::GoalCreate {
+                session_id,
+                source_plan_id: None,
+                ..
+            }
             | Self::SubagentCreate { session_id, .. }
             | Self::SubagentList { session_id, .. } => session_id,
+            Self::GoalCreate {
+                source_plan_id: Some(plan_id),
+                ..
+            } => plan_id,
             Self::TaskUpdate { id, .. }
             | Self::DecisionUpdate { id, .. }
             | Self::DecisionArchive { id }
             | Self::DecisionSupersede { id, .. }
+            | Self::PlanUpdate { id, .. }
             | Self::PlanShow { id }
             | Self::PlanApprove { id }
+            | Self::PlanApproveAtRevision { id, .. }
+            | Self::PlanDiscard { id, .. }
             | Self::PlanExecute { id, .. }
+            | Self::PlanExecuteAtRevision { id, .. }
             | Self::GoalShow { id }
             | Self::GoalUpdate { id, .. }
             | Self::GoalIteration { id }
@@ -210,6 +256,34 @@ impl WorkOperation {
             | Self::SubagentStop { id, .. }
             | Self::SubagentRequeue { id } => id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkOperation;
+
+    #[test]
+    fn approved_plan_goal_handoff_uses_execution_authority_and_plan_resource() {
+        let handoff = WorkOperation::GoalCreate {
+            session_id: "session-1".into(),
+            objective: "Execute the plan".into(),
+            iteration_budget: 5,
+            source_plan_id: Some("plan-1".into()),
+            source_plan_revision: Some(3),
+        };
+        assert_eq!(handoff.action(), "plan.execute");
+        assert_eq!(handoff.resource(), "plan-1");
+
+        let standalone = WorkOperation::GoalCreate {
+            session_id: "session-1".into(),
+            objective: "Independent goal".into(),
+            iteration_budget: 5,
+            source_plan_id: None,
+            source_plan_revision: None,
+        };
+        assert_eq!(standalone.action(), "goal.create");
+        assert_eq!(standalone.resource(), "session-1");
     }
 }
 

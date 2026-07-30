@@ -56,7 +56,8 @@ arguments in the current runtime.
 | Activity | `/stream on`, `/stream raw`, `/stream off`, `/events compact`, `/events verbose`, `/events off`, `/reasoning on`, `/reasoning off` |
 | Composer and transcript | `/transcript comfortable`, `/transcript compact`, `/multiline on`, `/multiline off`, `/multiline toggle`, `/trace` |
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume`, `/resume` |
-| Work | `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/agents`, `/agents drain` |
+| Work | `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
+| Plan workflow | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
 | Memory and research | `/memories`, `/memory search`, `/research`, `/research list` |
 | Telemetry | `/telemetry`, `/telemetry metrics` |
 | Skills | `/skills`, `/skill active`, `/skill use`, `/skill clear`, `/skill show`, `/skill resources`, `/skill read` |
@@ -68,6 +69,45 @@ arguments in the current runtime.
 
 Use `/resume` or `/session resume` without an ID for the picker; exact session IDs are
 accepted when deterministic selection matters.
+
+## Plan workflow
+
+The terminal starts in Execute mode. Plan mode and its selected plan are process-local:
+they are not presentation preferences and are not restored after a restart. The mode
+survives a session switch, but the selection is cleared so a plan from one session
+cannot become authority in another. The footer and composer title show the current mode,
+selected plan, status, and revision when space permits.
+
+| Command | Behavior |
+| --- | --- |
+| `/plan` | Toggle between Execute and Plan modes |
+| `/plan on` | Enter Plan mode |
+| `/plan off` | Return to Execute mode without clearing the selection |
+| `/plan status` | Show the process-local mode and selected-plan revision |
+| `/plan new` | Enter Plan mode and clear the selection without discarding the old plan |
+| `/plan list` | List plans in the current session |
+| `/plans` | Canonical current-session listing alias |
+| `/plan use PLAN_ID` | Select a same-session Draft or Approved plan and enter Plan mode |
+| `/plan show [PLAN_ID]` | Show the named plan, or the selected plan when the ID is omitted; showing a named plan does not select it |
+| `/plan approve` | Approve the selected Draft at its displayed revision |
+| `/plan discard` | Discard the selected Draft or Approved plan at its displayed revision |
+| `/plan execute direct` | Atomically consume the selected Approved plan, then run it once |
+| `/plan execute goal [ITERATIONS]` | Atomically consume the selected Approved plan into Goal Mode; the default is 5 and the accepted range is 1–50 |
+| `/plan execute` | Choose Direct, Goal Mode, or Cancel in an overlay; line mode uses choices 1, 2, and 3 |
+| `/goal resume GOAL_ID` | Continue the remaining budget of an Active goal in the current session |
+
+Submitting a prompt in Plan mode creates a new Draft when nothing is selected. With a
+selected Draft, the prompt refines that exact revision. An Approved plan cannot be
+refined; use `/plan execute`, `/plan new`, `/plan discard`, or `/plan off`. Concurrent
+changes reject the stale revision. Reload the current record explicitly with
+`/plan use PLAN_ID` before retrying.
+
+Canceling the execution-choice overlay, or cancellation/failure before plan consumption,
+keeps the mode and selection. Once Direct execution or Goal handoff commits consumption,
+the terminal returns to Execute mode and clears the selection even if later work fails
+or is cancelled. The consumed plan and completed, cancelled, or failed evidence remain
+inspectable. A cancelled or failed Goal stays Active; `/goal resume GOAL_ID` uses only
+its remaining iteration budget.
 
 `/events compact` shows only a short preview of raw `web.fetch`, `docs.fetch`, and
 `network.http` response bodies. Use `/events verbose` when inspecting the full released
@@ -92,6 +132,9 @@ Use the CLI `research run` route when depth or lane selection must be explicit.
 ## Interaction contract
 
 - Input stays available during a run; up to eight future turns may queue.
+- Mode and lifecycle commands share that FIFO. Returned plan state is applied before the
+  next item starts, and the queue does not drain while the execution-choice overlay is
+  open.
 - A failure or cooperative cancellation pauses the queue for explicit confirmation.
 - Approval and `user.ask` use focus-taking, one-use overlays and preserve the draft.
 - Blank, cancelled, timed-out, disconnected, replayed, or malformed prompt answers fail

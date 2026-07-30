@@ -62,6 +62,7 @@ where
         session_id: "session-conformance".into(),
         prompt: "Complete the Rust transition.".into(),
         status: PlanStatus::Draft,
+        revision: 1,
         content: "Execute the shared contract.".into(),
         steps: vec![PlanStep {
             index: 1,
@@ -81,9 +82,10 @@ where
     approved.status = PlanStatus::Approved;
     approved.updated_at = LATER.into();
     approved.approved_at = Some(LATER.into());
-    repository
+    let approved = repository
         .update_plan(approved.clone(), actor.clone())
         .expect("approve plan");
+    assert_eq!(approved.revision, 2);
 
     let goal = GoalRecord {
         id: "goal-conformance".into(),
@@ -101,7 +103,13 @@ where
     repository
         .create_goal(goal.clone(), actor.clone())
         .expect("create goal");
-    let mut completed_goal = goal.clone();
+    let mut iterated_goal = goal.clone();
+    iterated_goal.iterations_completed = 1;
+    iterated_goal.updated_at = LATER.into();
+    repository
+        .record_goal_iteration(iterated_goal.clone(), 0, actor.clone())
+        .expect("record goal iteration");
+    let mut completed_goal = iterated_goal;
     completed_goal.status = GoalStatus::Complete;
     completed_goal.summary = "Conformance verified.".into();
     completed_goal.updated_at = LATER.into();
