@@ -8,6 +8,24 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2-preview.8] - 2026-07-30
+
+### Fixed
+
+- Replaced the Windows executable detachment's backup-oriented `File.Replace` call
+  with the same-volume overwrite form of `File.Move`. This keeps the verified
+  single-link replacement atomic without passing an empty backup path to .NET on
+  the `windows-latest-l` runner image.
+
+### Upgrade Notes
+
+- `v0.10.2-preview.8` supersedes the unpublished `v0.10.2-preview.7` attempt.
+  Preview.7 passed release readiness and compiled the Windows Desktop application,
+  but Windows packaging stopped when `File.Replace` rejected its null backup-path
+  argument. That attempt produced no GitHub Release.
+- Preview upgrades are manual. Download later preview installers and their checksum
+  sidecars from GitHub Releases.
+
 ## [0.10.2-preview.7] - 2026-07-30
 
 ### Fixed

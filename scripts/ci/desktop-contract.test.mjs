@@ -90,9 +90,14 @@ test("Windows Desktop is a per-user unsigned Developer Preview package", () => {
   assert.doesNotMatch(packaging, /\$VersionOverride/u);
   assert.match(packaging, /write-desktop-bundle-manifest\.mjs/u);
   assert.match(packaging, /patch-desktop-manifest-binding\.mjs/u);
-  const detach = packaging.indexOf("[IO.File]::Replace");
+  const detach = packaging.indexOf("[IO.File]::Move");
   const binding = packaging.indexOf("patch-desktop-manifest-binding.mjs");
   assert.ok(detach >= 0 && detach < binding);
+  assert.match(
+    packaging,
+    /\[IO\.File\]::Move\(\$Detached, \$Path, \$true\)/u,
+  );
+  assert.doesNotMatch(packaging, /\[IO\.File\]::Replace/u);
   assert.match(packaging, /Get-FileHash[\s\S]*detached executable/u);
   assert.match(packaging, /"--bundles", "nsis"/u);
   assert.match(packaging, /Get-FileHash/u);

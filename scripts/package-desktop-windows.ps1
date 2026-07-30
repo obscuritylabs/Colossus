@@ -22,7 +22,7 @@ function Detach-Executable([string]$Path) {
         if ($SourceHash -ne $DetachedHash) {
             Fail "detached executable does not match the built application"
         }
-        [IO.File]::Replace($Detached, $Path, $null, $true)
+        [IO.File]::Move($Detached, $Path, $true)
     } finally {
         if (Test-Path -LiteralPath $Detached) {
             Remove-Item -LiteralPath $Detached -Force
