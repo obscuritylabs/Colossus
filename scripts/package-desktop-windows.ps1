@@ -9,6 +9,27 @@ function Fail([string]$Message) {
     throw "package-desktop-windows: $Message"
 }
 
+function Detach-Executable([string]$Path) {
+    $Detached = "$Path.colossus-detached"
+    if (Test-Path -LiteralPath $Detached) {
+        Fail "detached executable staging path already exists"
+    }
+
+    try {
+        [IO.File]::Copy($Path, $Detached, $false)
+        $SourceHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+        $DetachedHash = (Get-FileHash -LiteralPath $Detached -Algorithm SHA256).Hash
+        if ($SourceHash -ne $DetachedHash) {
+            Fail "detached executable does not match the built application"
+        }
+        [IO.File]::Replace($Detached, $Path, $null, $true)
+    } finally {
+        if (Test-Path -LiteralPath $Detached) {
+            Remove-Item -LiteralPath $Detached -Force
+        }
+    }
+}
+
 $Repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Desktop = Join-Path $Repository "apps/desktop"
 $Native = Join-Path $Desktop "src-tauri"
@@ -97,6 +118,10 @@ try {
             Fail "expected release input is missing"
         }
     }
+
+    # Cargo may hard-link the top-level Windows executable to its hashed artifact.
+    # Replace it with an identical single-link file before the binding helper opens it.
+    Detach-Executable $Main
 
     node (Join-Path $PSScriptRoot "write-desktop-bundle-manifest.mjs") `
         --target $Target `
