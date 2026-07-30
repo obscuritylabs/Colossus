@@ -1,4 +1,38 @@
 use super::*;
+use uuid::Uuid;
+
+pub(super) fn worker_run_outcome(
+    outcome: Result<AgentRunOutcome, WorkerError>,
+    session_id: &str,
+) -> Result<AgentRunOutcome, String> {
+    match outcome {
+        Ok(outcome) => Ok(outcome),
+        Err(WorkerError::Cancelled) => Ok(AgentRunOutcome::Cancelled {
+            result: AgentRunCancellation {
+                run_id: Uuid::now_v7().to_string(),
+                session_id: session_id.into(),
+                turn: 1,
+                plan: None,
+                event_count: 0,
+                elapsed_seconds: 0.0,
+            },
+        }),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub(super) fn worker_plan_execution_outcome(
+    outcome: Result<PlanExecutionOutcome, WorkerError>,
+    selected: &PlanRecord,
+) -> Result<PlanExecutionOutcome, String> {
+    match outcome {
+        Ok(outcome) => Ok(outcome),
+        Err(WorkerError::Cancelled) => Ok(PlanExecutionOutcome::CancelledBeforeStart {
+            plan: selected.clone(),
+        }),
+        Err(error) => Err(error.to_string()),
+    }
+}
 
 pub(super) fn parse_toggle(value: &str, current: bool) -> Result<bool, String> {
     match value.trim() {
@@ -1158,8 +1192,8 @@ impl InteractiveHost for WorkerInteractiveHost {
                 &prompts,
                 &control,
             )
-            .await
-            .map_err(|error| error.to_string())?;
+            .await;
+        let outcome = worker_run_outcome(outcome, &request.session_id)?;
         let status = match &outcome {
             AgentRunOutcome::Completed { .. } => "ok",
             AgentRunOutcome::Cancelled { .. } => "cancelled",
@@ -1217,8 +1251,8 @@ impl InteractiveHost for WorkerInteractiveHost {
                 &prompts,
                 &control,
             )
-            .await
-            .map_err(|error| error.to_string());
+            .await;
+        let outcome = worker_plan_execution_outcome(outcome, &selected);
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {

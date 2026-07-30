@@ -3,11 +3,12 @@
 use super::{ApprovalMode, TERMINAL_HISTORY_CAPACITY, doctor_profile, terminal_completion_values};
 use async_trait::async_trait;
 use colossus_contracts::{
-    AgentRunOutcome, ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice, ContextStatus,
-    ControlledAgentTerminal, EffectRequest, GoalRunOutcome, MemoryStatus, PlanExecutionOutcome,
-    PlanRecord, PlanStatus, PolicyDecision, ProviderRoute, ResearchDepth, ResearchSourceKind,
-    RiskReviewFallbackNotice, RunEventEnvelope, SessionMessagePage, SessionSummary,
-    TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
+    AgentRunCancellation, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice,
+    AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
+    MemoryStatus, PlanExecutionOutcome, PlanRecord, PlanStatus, PolicyDecision, ProviderRoute,
+    ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEventEnvelope,
+    SessionMessagePage, SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse,
+    WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{

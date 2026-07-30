@@ -86,6 +86,40 @@ fn plan_execution_mapping_distinguishes_pre_and_post_consumption() {
 }
 
 #[test]
+fn worker_setup_cancellation_returns_typed_run_cancellation() {
+    let outcome =
+        worker::worker_run_outcome(Err(WorkerError::Cancelled), "session-1").expect("cancellation");
+
+    let AgentRunOutcome::Cancelled { result } = outcome else {
+        panic!("expected typed cancellation");
+    };
+    assert!(uuid::Uuid::parse_str(&result.run_id).is_ok());
+    assert_eq!(result.session_id, "session-1");
+    assert_eq!(result.turn, 1);
+    assert!(result.plan.is_none());
+    assert_eq!(result.event_count, 0);
+    assert_eq!(result.elapsed_seconds, 0.0);
+}
+
+#[test]
+fn worker_setup_cancellation_returns_typed_pre_consumption_plan_outcome() {
+    let approved = plan("plan-1", "session-1", PlanStatus::Approved, 2);
+    let outcome = worker::worker_plan_execution_outcome(Err(WorkerError::Cancelled), &approved)
+        .expect("cancellation");
+    let result = host_plan_execution_result(outcome, FooterState::default()).expect("host mapping");
+
+    assert_eq!(
+        result.outcome,
+        HostPlanExecutionOutcome::CancelledBeforeStart
+    );
+    assert_eq!(result.plan, approved);
+    assert!(matches!(
+        result.plan_selection,
+        PlanSelectionUpdate::Set(plan) if *plan == approved
+    ));
+}
+
+#[test]
 fn plan_execution_errors_reconcile_durable_consumption_or_fail_unknown() {
     let approved = plan("plan-1", "session-1", PlanStatus::Approved, 2);
     approved_plan_at_revision(Some(approved.clone()), "plan-1", "session-1", 2)

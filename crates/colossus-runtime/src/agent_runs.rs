@@ -1228,6 +1228,10 @@ impl Runtime {
                     current.id, current.objective
                 )
             };
+            self.execute_work_operation(WorkOperation::GoalIteration {
+                id: current.id.clone(),
+            })
+            .await?;
             let result = self
                 .run_with_subagent_scheduling(self.agent.run_goal_iteration(
                     role,
@@ -1246,10 +1250,6 @@ impl Runtime {
                 event_count: result.event_count,
                 elapsed_seconds: result.elapsed_seconds,
             });
-            self.execute_work_operation(WorkOperation::GoalIteration {
-                id: current.id.clone(),
-            })
-            .await?;
         }
         let final_goal = self
             .work
@@ -1268,12 +1268,89 @@ impl Runtime {
 #[cfg(test)]
 mod plan_mode_instruction_tests {
     use super::{
-        cancelled_goal_outcome, failed_goal_outcome, validate_goal_resume_selection,
-        validate_plan_execution_selection, with_plan_mode_instructions,
+        KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions, cancelled_goal_outcome,
+        failed_goal_outcome, validate_goal_resume_selection, validate_plan_execution_selection,
+        with_plan_mode_instructions,
     };
     use colossus_contracts::{
-        GoalRecord, GoalRunOutcome, GoalStatus, PlanDraftTarget, PlanRecord, PlanStatus,
+        ExecutionContext, GoalRecord, GoalRunOutcome, GoalStatus, ModelCapabilities, ModelLimits,
+        ModelRequest, PlanDraftTarget, PlanRecord, PlanStatus, ProviderRoute, ProviderTurn,
+        RunEventEnvelope, ToolCall, ToolResult,
     };
+    use colossus_ports::{
+        ModelProvider, ModelProviderError, RunControl, RunEventObserver, ToolError, ToolExecutor,
+    };
+    use std::{
+        fs,
+        process::Command,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    use uuid::Uuid;
+
+    struct FailingGoalProvider {
+        turns: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelProvider for FailingGoalProvider {
+        fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+            Ok(ProviderRoute {
+                role: role.into(),
+                profile: "failing".into(),
+                model_profile: "failing".into(),
+                provider_profile: "failing-provider".into(),
+                provider: "test".into(),
+                model: "test-model".into(),
+                limits: ModelLimits {
+                    context_window_tokens: 32_768,
+                    max_output_tokens: 4_096,
+                    safety_margin_tokens: 3_276,
+                    input_budget_tokens: 25_396,
+                },
+                capabilities: ModelCapabilities {
+                    tool_calls: true,
+                    streaming: true,
+                },
+            })
+        }
+
+        async fn turn(
+            &self,
+            _role: &str,
+            _request: ModelRequest,
+            _context: ExecutionContext,
+        ) -> Result<ProviderTurn, ModelProviderError> {
+            self.turns.fetch_add(1, Ordering::SeqCst);
+            Err(ModelProviderError::Failed(
+                "intentional goal iteration failure".into(),
+            ))
+        }
+    }
+
+    struct UnusedToolExecutor;
+
+    #[async_trait::async_trait]
+    impl ToolExecutor for UnusedToolExecutor {
+        async fn execute(
+            &self,
+            _call: ToolCall,
+            _context: ExecutionContext,
+        ) -> Result<ToolResult, ToolError> {
+            panic!("the failing provider must not dispatch tools")
+        }
+    }
+
+    struct SilentRunObserver;
+
+    #[async_trait::async_trait]
+    impl RunEventObserver for SilentRunObserver {
+        async fn observe(&mut self, _event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+            Ok(())
+        }
+    }
 
     fn goal(status: GoalStatus) -> GoalRecord {
         GoalRecord {
@@ -1397,5 +1474,138 @@ mod plan_mode_instruction_tests {
         let error = validate_goal_resume_selection(&exhausted, "session-1")
             .expect_err("an exhausted goal has no remaining work to resume");
         assert!(error.to_string().contains("remaining iteration budget"));
+    }
+
+    #[test]
+    fn failed_initial_goal_iteration_consumes_budget_before_resume() {
+        const CHILD_MARKER: &str = "COLOSSUS_RUNTIME_GOAL_RESERVATION_TEST_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let status = Command::new(std::env::current_exe().expect("current test executable"))
+                .args([
+                    "--exact",
+                    "agent_runs::plan_mode_instruction_tests::failed_initial_goal_iteration_consumes_budget_before_resume",
+                    "--nocapture",
+                ])
+                .env(CHILD_MARKER, "1")
+                .env("COLOSSUS_RUNTIME_GOAL_TEST_JOURNAL", "33".repeat(32))
+                .env("COLOSSUS_RUNTIME_GOAL_TEST_SIGNING", "44".repeat(32))
+                .status()
+                .expect("spawn isolated goal reservation test");
+            assert!(status.success(), "goal reservation child failed");
+            return;
+        }
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async {
+                let directory = tempfile::tempdir().expect("runtime directory");
+                let root = fs::canonicalize(directory.path()).expect("canonical runtime directory");
+                let suffix = Uuid::now_v7().simple().to_string();
+                let mut config = RuntimeConfig::offline_template(root.join("state.redb"));
+                config.storage.keys = KeyConfig::Environment {
+                    journal_variable: "COLOSSUS_RUNTIME_GOAL_TEST_JOURNAL".into(),
+                    journal_key_id: format!("journal-{suffix}"),
+                    signing_variable: "COLOSSUS_RUNTIME_GOAL_TEST_SIGNING".into(),
+                    anchor_path: root.join("anchor.json"),
+                };
+                config.workflows.repository = root.join("workflows-bundled");
+                config.workflows.user = root.join("workflows-user");
+                config.skills.bundled = root.join("skills-bundled");
+                config.skills.repository = root.join("skills-repository");
+                config.skills.user = root.join("skills-user");
+                config.packs.install_root = root.join("packs");
+                for path in [
+                    &config.workflows.repository,
+                    &config.workflows.user,
+                    &config.skills.bundled,
+                    &config.skills.repository,
+                    &config.skills.user,
+                    &config.packs.install_root,
+                ] {
+                    fs::create_dir_all(path).expect("fixture directory");
+                }
+
+                let mut runtime = Runtime::open_with_options(
+                    &config,
+                    Arc::new(colossus_policy::DenyApproval),
+                    None,
+                    RuntimeOpenOptions::for_workspace(&root).expect("workspace options"),
+                )
+                .expect("runtime");
+                let provider = Arc::new(FailingGoalProvider {
+                    turns: AtomicUsize::new(0),
+                });
+                runtime.agent = Arc::new(colossus_agent::AgentService::new(
+                    Arc::clone(&runtime.journal),
+                    Arc::clone(&provider) as Arc<dyn ModelProvider>,
+                    Arc::new(
+                        colossus_tools::StaticToolRegistry::new(Vec::new())
+                            .expect("empty tool registry"),
+                    ),
+                    Arc::new(UnusedToolExecutor),
+                    Arc::clone(&runtime.sessions),
+                ));
+
+                let session = runtime
+                    .create_session(Some("goal reservation"))
+                    .expect("session");
+                runtime
+                    .run_goal(
+                        "primary",
+                        "Use exactly two bounded attempts",
+                        &session.id,
+                        2,
+                        None,
+                    )
+                    .await
+                    .expect_err("the first provider turn fails");
+                let goal = runtime
+                    .list_goals(Some(&session.id), Some(GoalStatus::Active), 10)
+                    .expect("goals")
+                    .into_iter()
+                    .next()
+                    .expect("active goal");
+                assert_eq!(
+                    goal.iterations_completed, 1,
+                    "the failed initial run must consume its budget slot"
+                );
+                assert_eq!(provider.turns.load(Ordering::SeqCst), 1);
+
+                let mut observer = SilentRunObserver;
+                let resumed = runtime
+                    .resume_goal_stream_controlled(
+                        "primary",
+                        &session.id,
+                        &goal.id,
+                        &mut observer,
+                        &RunControl::default(),
+                    )
+                    .await
+                    .expect("resume dispatch");
+                let GoalRunOutcome::Failed { result, .. } = resumed else {
+                    panic!("the resumed failing provider must return a failed goal outcome");
+                };
+                assert_eq!(result.goal.iterations_completed, 2);
+                assert!(result.iteration_budget_exhausted);
+                assert_eq!(provider.turns.load(Ordering::SeqCst), 2);
+
+                runtime
+                    .resume_goal_stream_controlled(
+                        "primary",
+                        &session.id,
+                        &goal.id,
+                        &mut observer,
+                        &RunControl::default(),
+                    )
+                    .await
+                    .expect_err("the exhausted goal cannot replay either failed slot");
+                assert_eq!(
+                    provider.turns.load(Ordering::SeqCst),
+                    2,
+                    "resume must reject before dispatch after both failed slots are consumed"
+                );
+            });
     }
 }
