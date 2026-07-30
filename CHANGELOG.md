@@ -8,6 +8,26 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.10.2-preview.7] - 2026-07-30
+
+### Fixed
+
+- Detached Cargo's hard-linked top-level Windows Desktop executable with a verified,
+  same-volume atomic replacement before sealing its manifest binding. The manifest
+  patcher still rejects symbolic links, additional hard links, noncanonical paths, and
+  oversized files.
+- Kept x64 Windows acceptance, CLI packaging, and unsigned Desktop packaging on the
+  exact `windows-latest-l` larger-runner label.
+
+### Upgrade Notes
+
+- `v0.10.2-preview.7` supersedes the unpublished `v0.10.2-preview.6` attempt. Its
+  AppArmor readiness check, all six CLI targets, and macOS Desktop package passed, but
+  Windows Desktop packaging correctly rejected Cargo's multiply linked PE before
+  manifest binding. No earlier preview attempt produced a GitHub Release.
+- Preview upgrades are manual. Download later preview installers and their checksum
+  sidecars from GitHub Releases.
+
 ## [0.10.2-preview.6] - 2026-07-29
 
 ### Fixed

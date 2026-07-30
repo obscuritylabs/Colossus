@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  linkSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -131,6 +133,35 @@ test("patches a Windows PE image using Windows bundle names", () => {
       ),
       true,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a hard-linked executable without modifying either name", () => {
+  const { root, executablePath, manifestPath } = fixture();
+  const otherPath = join(root, "other-hard-link");
+  try {
+    const original = portableExecutable([placeholder]);
+    writeFileSync(
+      manifestPath,
+      manifest({
+        targetTriple: "x86_64-pc-windows-msvc",
+        sidecar: "colossus-sidecar.exe",
+        cli: "colossus.exe",
+      }),
+      { mode: 0o644 },
+    );
+    writeFileSync(executablePath, original, { mode: 0o755 });
+    chmodSync(executablePath, 0o755);
+    linkSync(executablePath, otherPath);
+    assert.equal(lstatSync(executablePath).nlink, 2);
+
+    const result = run(executablePath, manifestPath);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /not a bounded regular file/u);
+    assert.deepEqual(readFileSync(executablePath), original);
+    assert.deepEqual(readFileSync(otherPath), original);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
