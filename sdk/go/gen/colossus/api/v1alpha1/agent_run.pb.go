@@ -412,8 +412,10 @@ type RunResult struct {
 	ModelProfile string `protobuf:"bytes,5,opt,name=model_profile,json=modelProfile,proto3" json:"model_profile,omitempty"`
 	// provider_profile is the credential-free provider connection profile.
 	ProviderProfile string `protobuf:"bytes,6,opt,name=provider_profile,json=providerProfile,proto3" json:"provider_profile,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// plan_id is the canonical plan written by a completed Plan Mode run.
+	PlanId        *string `protobuf:"bytes,7,opt,name=plan_id,json=planId,proto3,oneof" json:"plan_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunResult) Reset() {
@@ -484,6 +486,13 @@ func (x *RunResult) GetModelProfile() string {
 func (x *RunResult) GetProviderProfile() string {
 	if x != nil {
 		return x.ProviderProfile
+	}
+	return ""
+}
+
+func (x *RunResult) GetPlanId() string {
+	if x != nil && x.PlanId != nil {
+		return *x.PlanId
 	}
 	return ""
 }
@@ -585,7 +594,9 @@ type RunCancellation struct {
 	// turn is the model turn at which cancellation became terminal; zero is before turn one.
 	Turn uint32 `protobuf:"varint,1,opt,name=turn,proto3" json:"turn,omitempty"`
 	// message is a bounded cancellation summary.
-	Message       string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Message string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	// plan_id is the canonical plan written before a cancelled Plan Mode run stopped.
+	PlanId        *string `protobuf:"bytes,3,opt,name=plan_id,json=planId,proto3,oneof" json:"plan_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -630,6 +641,13 @@ func (x *RunCancellation) GetTurn() uint32 {
 func (x *RunCancellation) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *RunCancellation) GetPlanId() string {
+	if x != nil && x.PlanId != nil {
+		return *x.PlanId
 	}
 	return ""
 }
@@ -2893,14 +2911,17 @@ var File_colossus_api_v1alpha1_agent_run_proto protoreflect.FileDescriptor
 
 const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\n" +
-	"%colossus/api/v1alpha1/agent_run.proto\x12\x15colossus.api.v1alpha1\x1a\"colossus/api/v1alpha1/common.proto\x1a#colossus/api/v1alpha1/session.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcc\x01\n" +
+	"%colossus/api/v1alpha1/agent_run.proto\x12\x15colossus.api.v1alpha1\x1a\"colossus/api/v1alpha1/common.proto\x1a#colossus/api/v1alpha1/session.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf6\x01\n" +
 	"\tRunResult\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x18\n" +
 	"\aprofile\x18\x02 \x01(\tR\aprofile\x12\x14\n" +
 	"\x05model\x18\x03 \x01(\tR\x05model\x12'\n" +
 	"\x0felapsed_seconds\x18\x04 \x01(\x01R\x0eelapsedSeconds\x12#\n" +
 	"\rmodel_profile\x18\x05 \x01(\tR\fmodelProfile\x12)\n" +
-	"\x10provider_profile\x18\x06 \x01(\tR\x0fproviderProfile\"\xaa\x02\n" +
+	"\x10provider_profile\x18\x06 \x01(\tR\x0fproviderProfile\x12\x1c\n" +
+	"\aplan_id\x18\a \x01(\tH\x00R\x06planId\x88\x01\x01B\n" +
+	"\n" +
+	"\b_plan_id\"\xaa\x02\n" +
 	"\n" +
 	"RunFailure\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x18\n" +
@@ -2911,10 +2932,13 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"httpStatus\x88\x01\x01\x12)\n" +
 	"\x0eretry_after_ms\x18\x06 \x01(\x04H\x01R\fretryAfterMs\x88\x01\x01B\x0e\n" +
 	"\f_http_statusB\x11\n" +
-	"\x0f_retry_after_ms\"?\n" +
+	"\x0f_retry_after_ms\"i\n" +
 	"\x0fRunCancellation\x12\x12\n" +
 	"\x04turn\x18\x01 \x01(\rR\x04turn\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xb4\x06\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1c\n" +
+	"\aplan_id\x18\x03 \x01(\tH\x00R\x06planId\x88\x01\x01B\n" +
+	"\n" +
+	"\b_plan_id\"\xb4\x06\n" +
 	"\x03Run\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -3257,7 +3281,9 @@ func file_colossus_api_v1alpha1_agent_run_proto_init() {
 	}
 	file_colossus_api_v1alpha1_common_proto_init()
 	file_colossus_api_v1alpha1_session_proto_init()
+	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[0].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[1].OneofWrappers = []any{}
+	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[2].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[3].OneofWrappers = []any{
 		(*Run_Result)(nil),
 		(*Run_Failure)(nil),

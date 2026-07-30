@@ -211,6 +211,8 @@ impl WorkerInteractiveHost {
             completions: None,
             sticky_skills: None,
             footer: Some(self.footer(&session_id, "ready").await?),
+            plan_selection: PlanSelectionUpdate::Clear,
+            continue_queue: true,
             clear_transcript: false,
         })
     }
@@ -359,6 +361,8 @@ impl WorkerInteractiveHost {
             completions: None,
             sticky_skills: None,
             footer: None,
+            plan_selection: PlanSelectionUpdate::Unchanged,
+            continue_queue: true,
             clear_transcript: false,
         }))
     }
@@ -370,6 +374,7 @@ impl WorkerInteractiveHost {
         session_id: &str,
         sticky_skills: &[String],
         events: &mpsc::Sender<HostEvent>,
+        control: &RunControl,
     ) -> Result<HostCommandResult, String> {
         if let Some(result) = self.presentation_command(name, arguments).await? {
             return Ok(result);
@@ -382,6 +387,8 @@ impl WorkerInteractiveHost {
                 completions: None,
                 sticky_skills: None,
                 footer: None,
+                plan_selection: PlanSelectionUpdate::Unchanged,
+                continue_queue: true,
                 clear_transcript: true,
             }),
             "status" => {
@@ -516,6 +523,63 @@ impl WorkerInteractiveHost {
                     Some("Goals"),
                 )
                 .await
+            }
+            "goal" if arguments.trim() == "resume" => {
+                Err("/goal resume expects exactly one GOAL_ID".into())
+            }
+            "goal" if arguments.starts_with("resume ") => {
+                let goal_id = arguments.trim_start_matches("resume ").trim();
+                if goal_id.is_empty() || goal_id.split_whitespace().count() != 1 {
+                    return Err("/goal resume expects exactly one GOAL_ID".into());
+                }
+                let goal = serde_json::from_value::<Option<colossus_contracts::GoalRecord>>(
+                    self.value(WorkerOperation::GoalGet {
+                        goal_id: goal_id.into(),
+                    })
+                    .await?,
+                )
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("goal not found: {goal_id}"))?;
+                if goal.session_id != session_id {
+                    return Err(format!(
+                        "goal {goal_id} does not belong to the active session"
+                    ));
+                }
+                let mut observer = WorkerChannelObserver {
+                    sender: events.clone(),
+                };
+                let prompts = TuiWorkerPromptHandler {
+                    sender: events.clone(),
+                };
+                let outcome = self
+                    .client
+                    .call_interactive::<GoalRunOutcome>(
+                        WorkerOperation::RunInteractive {
+                            request: InteractiveWorkerRequest::GoalResume {
+                                role: "primary".into(),
+                                session_id: session_id.into(),
+                                goal_id: goal_id.into(),
+                            },
+                        },
+                        &mut observer,
+                        &prompts,
+                        control,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let status = match &outcome {
+                    GoalRunOutcome::Completed { .. } => "ok",
+                    GoalRunOutcome::Cancelled { .. } => "cancelled",
+                    GoalRunOutcome::Failed { .. } => "failed",
+                };
+                let result = HostCommandResult::document(document_from_json(
+                    &serde_json::to_value(outcome).map_err(|error| error.to_string())?,
+                    Some("Goal resume"),
+                ));
+                Ok(HostCommandResult {
+                    footer: Some(self.footer(session_id, status).await?),
+                    ..result
+                })
             }
             "goal" if !arguments.trim().is_empty() => {
                 self.document(
@@ -660,6 +724,8 @@ impl WorkerInteractiveHost {
                     completions: None,
                     sticky_skills: Some(sticky),
                     footer: None,
+                    plan_selection: PlanSelectionUpdate::Unchanged,
+                    continue_queue: true,
                     clear_transcript: false,
                 })
             }
@@ -797,6 +863,167 @@ impl WorkerInteractiveHost {
             )),
         }
     }
+
+    async fn plan_command(
+        &self,
+        command: PlanHostCommand,
+        session_id: &str,
+        events: mpsc::Sender<HostEvent>,
+        control: &RunControl,
+    ) -> Result<HostCommandResult, String> {
+        match command {
+            PlanHostCommand::List => {
+                self.document(
+                    WorkerOperation::PlanList {
+                        session_id: Some(session_id.into()),
+                        status: None,
+                        limit: 100,
+                    },
+                    Some("Plans"),
+                )
+                .await
+            }
+            PlanHostCommand::Use { plan_id } => {
+                self.read_plan_command(&plan_id, session_id, true).await
+            }
+            PlanHostCommand::Show { plan_id } => {
+                self.read_plan_command(&plan_id, session_id, false).await
+            }
+            PlanHostCommand::Approve { plan_id, revision } => {
+                self.plan_lifecycle_command(plan_id, revision, session_id, events, control, true)
+                    .await
+            }
+            PlanHostCommand::Discard { plan_id, revision } => {
+                self.plan_lifecycle_command(plan_id, revision, session_id, events, control, false)
+                    .await
+            }
+        }
+    }
+
+    async fn read_plan_command(
+        &self,
+        plan_id: &str,
+        session_id: &str,
+        selecting: bool,
+    ) -> Result<HostCommandResult, String> {
+        let plan = current_session_plan(
+            serde_json::from_value::<Option<PlanRecord>>(
+                self.value(WorkerOperation::PlanGet {
+                    plan_id: plan_id.into(),
+                })
+                .await?,
+            )
+            .map_err(|error| error.to_string())?,
+            plan_id,
+            session_id,
+        )?;
+        let plan = if selecting {
+            selectable_plan(plan)?
+        } else {
+            plan
+        };
+        let document = document_from_json(
+            &serde_json::to_value(&plan).map_err(|error| error.to_string())?,
+            Some(if selecting { "Selected plan" } else { "Plan" }),
+        );
+        Ok(HostCommandResult {
+            plan_selection: if selecting {
+                PlanSelectionUpdate::Use(Box::new(plan))
+            } else {
+                PlanSelectionUpdate::Unchanged
+            },
+            ..HostCommandResult::document(document)
+        })
+    }
+
+    async fn plan_lifecycle_command(
+        &self,
+        plan_id: String,
+        revision: u64,
+        session_id: &str,
+        events: mpsc::Sender<HostEvent>,
+        control: &RunControl,
+        approving: bool,
+    ) -> Result<HostCommandResult, String> {
+        let selected = current_session_plan(
+            serde_json::from_value::<Option<PlanRecord>>(
+                self.value(WorkerOperation::PlanGet {
+                    plan_id: plan_id.clone(),
+                })
+                .await?,
+            )
+            .map_err(|error| error.to_string())?,
+            &plan_id,
+            session_id,
+        )?;
+        let request = if approving {
+            InteractiveWorkerRequest::PlanApprove {
+                session_id: session_id.into(),
+                plan_id: plan_id.clone(),
+                revision,
+            }
+        } else {
+            InteractiveWorkerRequest::PlanDiscard {
+                session_id: session_id.into(),
+                plan_id: plan_id.clone(),
+                revision,
+            }
+        };
+        let mut observer = WorkerChannelObserver {
+            sender: events.clone(),
+        };
+        let prompts = TuiWorkerPromptHandler { sender: events };
+        let plan = match self
+            .client
+            .call_interactive::<PlanRecord>(
+                WorkerOperation::RunInteractive { request },
+                &mut observer,
+                &prompts,
+                control,
+            )
+            .await
+        {
+            Ok(plan) => plan,
+            Err(error) => {
+                let readback = match self
+                    .value(WorkerOperation::PlanGet {
+                        plan_id: plan_id.clone(),
+                    })
+                    .await
+                {
+                    Ok(value) => serde_json::from_value::<Option<PlanRecord>>(value)
+                        .map_err(|read_error| read_error.to_string()),
+                    Err(read_error) => Err(read_error),
+                };
+                return Ok(host_plan_lifecycle_failure(
+                    selected,
+                    readback,
+                    if approving {
+                        PlanStatus::Approved
+                    } else {
+                        PlanStatus::Discarded
+                    },
+                    error.to_string(),
+                ));
+            }
+        };
+        let document = document_from_json(
+            &serde_json::to_value(&plan).map_err(|error| error.to_string())?,
+            Some(if approving {
+                "Approved plan"
+            } else {
+                "Discarded plan"
+            }),
+        );
+        Ok(HostCommandResult {
+            plan_selection: if approving {
+                PlanSelectionUpdate::Set(Box::new(plan))
+            } else {
+                PlanSelectionUpdate::Clear
+            },
+            ..HostCommandResult::document(document)
+        })
+    }
 }
 
 #[async_trait]
@@ -864,10 +1091,22 @@ impl InteractiveHost for WorkerInteractiveHost {
         session_id: &str,
         sticky_skills: &[String],
         events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<HostCommandResult, String> {
         match command {
             RuntimeCommand::Known { name, arguments } => {
-                self.execute_known(&name, &arguments, session_id, sticky_skills, &events)
+                self.execute_known(
+                    &name,
+                    &arguments,
+                    session_id,
+                    sticky_skills,
+                    &events,
+                    &control,
+                )
+                .await
+            }
+            RuntimeCommand::Plan(command) => {
+                self.plan_command(command, session_id, events, &control)
                     .await
             }
         }
@@ -900,17 +1139,20 @@ impl InteractiveHost for WorkerInteractiveHost {
         let prompts = TuiWorkerPromptHandler { sender: events };
         let outcome = self
             .client
-            .run_model_controlled(
-                WorkerOperation::RunModelControlled {
-                    role: "primary".into(),
-                    instructions: "You are Colossus.".into(),
-                    prompt: request.prompt,
-                    max_turns: None,
-                    session_id: request.session_id.clone(),
-                    explicit_skills: request.explicit_skills,
-                    sticky_skills: request.sticky_skills,
-                    include_provider_response_diagnostics: request
-                        .include_provider_response_diagnostics,
+            .call_interactive::<AgentRunOutcome>(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::Run {
+                        mode: request.mode,
+                        role: "primary".into(),
+                        instructions: "You are Colossus.".into(),
+                        prompt: request.prompt,
+                        max_turns: None,
+                        session_id: request.session_id.clone(),
+                        explicit_skills: request.explicit_skills,
+                        sticky_skills: request.sticky_skills,
+                        include_provider_response_diagnostics: request
+                            .include_provider_response_diagnostics,
+                    },
                 },
                 &mut observer,
                 &prompts,
@@ -918,14 +1160,130 @@ impl InteractiveHost for WorkerInteractiveHost {
             )
             .await
             .map_err(|error| error.to_string())?;
-        let status = match outcome {
-            colossus_contracts::AgentRunOutcome::Completed { .. } => "ok",
-            colossus_contracts::AgentRunOutcome::Cancelled { .. } => "cancelled",
+        let status = match &outcome {
+            AgentRunOutcome::Completed { .. } => "ok",
+            AgentRunOutcome::Cancelled { .. } => "cancelled",
+        };
+        let plan = match &outcome {
+            AgentRunOutcome::Completed { result } => result.plan.clone(),
+            AgentRunOutcome::Cancelled { result } => result.plan.clone(),
         };
         Ok(HostRunResult {
             outcome,
             footer: self.footer(&request.session_id, status).await?,
+            plan_selection: plan.map_or(PlanSelectionUpdate::Unchanged, |plan| {
+                PlanSelectionUpdate::Set(Box::new(plan))
+            }),
         })
+    }
+
+    async fn run_plan_execution(
+        &self,
+        request: InteractivePlanExecutionRequest,
+        events: mpsc::Sender<HostEvent>,
+        control: RunControl,
+    ) -> Result<HostPlanExecutionResult, String> {
+        let selected = approved_plan_at_revision(
+            serde_json::from_value::<Option<PlanRecord>>(
+                self.value(WorkerOperation::PlanGet {
+                    plan_id: request.plan_id.clone(),
+                })
+                .await?,
+            )
+            .map_err(|error| error.to_string())?,
+            &request.plan_id,
+            &request.session_id,
+            request.revision,
+        )?;
+        let mut fallback_footer = self.footer(&request.session_id, "executing").await?;
+        let mut observer = WorkerChannelObserver {
+            sender: events.clone(),
+        };
+        let prompts = TuiWorkerPromptHandler { sender: events };
+        let outcome = self
+            .client
+            .call_interactive::<PlanExecutionOutcome>(
+                WorkerOperation::RunInteractive {
+                    request: InteractiveWorkerRequest::PlanExecute {
+                        role: "primary".into(),
+                        session_id: request.session_id.clone(),
+                        plan_id: request.plan_id.clone(),
+                        revision: request.revision,
+                        strategy: request.strategy,
+                        max_turns: None,
+                    },
+                },
+                &mut observer,
+                &prompts,
+                &control,
+            )
+            .await
+            .map_err(|error| error.to_string());
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                fallback_footer.status = "failed".into();
+                let readback = match self
+                    .value(WorkerOperation::PlanGet {
+                        plan_id: selected.id.clone(),
+                    })
+                    .await
+                {
+                    Ok(value) => serde_json::from_value::<Option<PlanRecord>>(value)
+                        .map_err(|read_error| read_error.to_string()),
+                    Err(read_error) => Err(read_error),
+                };
+                let (footer, footer_warning) =
+                    match self.footer(&request.session_id, "failed").await {
+                        Ok(footer) => (footer, None),
+                        Err(footer_error) => (fallback_footer, Some(footer_error)),
+                    };
+                let mut result = host_plan_execution_failure(selected, readback, error, footer);
+                if let Some(footer_error) = footer_warning {
+                    append_footer_warning(&mut result, footer_error);
+                }
+                return Ok(result);
+            }
+        };
+        let status = match &outcome {
+            PlanExecutionOutcome::CancelledBeforeStart { .. } => "cancelled",
+            PlanExecutionOutcome::Direct {
+                terminal: ControlledAgentTerminal::Completed { .. },
+                ..
+            }
+            | PlanExecutionOutcome::Goal {
+                terminal: GoalRunOutcome::Completed { .. },
+                ..
+            } => "ok",
+            PlanExecutionOutcome::Direct {
+                terminal: ControlledAgentTerminal::Cancelled { .. },
+                ..
+            }
+            | PlanExecutionOutcome::Goal {
+                terminal: GoalRunOutcome::Cancelled { .. },
+                ..
+            } => "cancelled",
+            PlanExecutionOutcome::Direct {
+                terminal: ControlledAgentTerminal::Failed { .. },
+                ..
+            }
+            | PlanExecutionOutcome::Goal {
+                terminal: GoalRunOutcome::Failed { .. },
+                ..
+            } => "failed",
+        };
+        let (footer, footer_warning) = match self.footer(&request.session_id, status).await {
+            Ok(footer) => (footer, None),
+            Err(error) => {
+                fallback_footer.status = status.into();
+                (fallback_footer, Some(error))
+            }
+        };
+        let mut result = host_plan_execution_result(outcome, footer)?;
+        if let Some(error) = footer_warning {
+            append_footer_warning(&mut result, error);
+        }
+        Ok(result)
     }
 
     async fn append_history(&self, entry: String) -> Result<(), String> {

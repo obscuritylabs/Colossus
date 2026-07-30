@@ -1,14 +1,43 @@
 use super::*;
 
+pub(super) struct AbortTaskOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> AbortTaskOnDrop<T> {
+    pub(super) fn new(handle: tokio::task::JoinHandle<T>) -> Self {
+        Self(handle)
+    }
+
+    pub(super) fn abort(&self) {
+        self.0.abort();
+    }
+}
+
+impl<T> Drop for AbortTaskOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct InteractiveRunBridge {
-    pub(super) prompts: tokio::sync::mpsc::Sender<WorkerPrompt>,
-    pub(super) notices: tokio::sync::mpsc::Sender<ApprovalReviewNotice>,
-    pub(super) responses:
-        Arc<tokio::sync::Mutex<BTreeMap<String, tokio::sync::oneshot::Sender<Option<String>>>>>,
+    pub(super) outbound: tokio::sync::mpsc::Sender<WorkerFrameContent>,
+    pub(super) responses: Arc<tokio::sync::Mutex<InteractiveResponseState>>,
+}
+
+#[derive(Default)]
+pub(super) struct InteractiveResponseState {
+    pub(super) cancelled: bool,
+    pub(super) pending: BTreeMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
 }
 
 impl InteractiveRunBridge {
+    pub(super) fn new(outbound: tokio::sync::mpsc::Sender<WorkerFrameContent>) -> Self {
+        Self {
+            outbound,
+            responses: Arc::new(tokio::sync::Mutex::new(InteractiveResponseState::default())),
+        }
+    }
+
     pub(super) async fn request(&self, prompt: WorkerPrompt) -> Result<Option<String>, String> {
         self.request_with_timeout(prompt, INTERACTIVE_PROMPT_TIMEOUT)
             .await
@@ -21,24 +50,30 @@ impl InteractiveRunBridge {
     ) -> Result<Option<String>, String> {
         let prompt_id = prompt.prompt_id.clone();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        if self
-            .responses
-            .lock()
-            .await
-            .insert(prompt_id.clone(), response_tx)
-            .is_some()
         {
-            return Err("duplicate interactive prompt id".into());
+            let mut responses = self.responses.lock().await;
+            if responses.cancelled {
+                return Ok(None);
+            }
+            if responses.pending.contains_key(&prompt_id) {
+                return Err("duplicate interactive prompt id".into());
+            }
+            responses.pending.insert(prompt_id.clone(), response_tx);
         }
-        if self.prompts.send(prompt).await.is_err() {
-            self.responses.lock().await.remove(&prompt_id);
+        if self
+            .outbound
+            .send(WorkerFrameContent::Prompt { prompt })
+            .await
+            .is_err()
+        {
+            self.responses.lock().await.pending.remove(&prompt_id);
             return Err("interactive worker client disconnected".into());
         }
         match tokio::time::timeout(timeout, response_rx).await {
             Ok(Ok(answer)) => Ok(answer),
             Ok(Err(_)) => Err("interactive worker response channel closed".into()),
             Err(_) => {
-                self.responses.lock().await.remove(&prompt_id);
+                self.responses.lock().await.pending.remove(&prompt_id);
                 Err("interactive worker prompt timed out".into())
             }
         }
@@ -53,6 +88,7 @@ impl InteractiveRunBridge {
             .responses
             .lock()
             .await
+            .pending
             .remove(prompt_id)
             .ok_or_else(|| WorkerError::Protocol("unknown, replayed, or wrong prompt id".into()))?;
         response
@@ -61,10 +97,19 @@ impl InteractiveRunBridge {
     }
 
     pub(super) async fn cancel_all(&self) {
-        let pending = std::mem::take(&mut *self.responses.lock().await);
+        let pending = {
+            let mut responses = self.responses.lock().await;
+            responses.cancelled = true;
+            std::mem::take(&mut responses.pending)
+        };
         for (_, response) in pending {
             let _ = response.send(None);
         }
+    }
+
+    pub(super) async fn cancel_run(&self, control: &RunControl) {
+        control.cancel();
+        self.cancel_all().await;
     }
 }
 
@@ -86,18 +131,18 @@ impl ApprovalProvider for WorkerInteractiveApproval {
         let Ok(bridge) = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone) else {
             return;
         };
-        let _ = bridge
-            .notices
-            .try_send(ApprovalReviewNotice::AutomaticApproval { notice });
+        let _ = bridge.outbound.try_send(WorkerFrameContent::Notice {
+            notice: ApprovalReviewNotice::AutomaticApproval { notice },
+        });
     }
 
     async fn risk_review_fallback(&self, notice: RiskReviewFallbackNotice) {
         let Ok(bridge) = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone) else {
             return;
         };
-        let _ = bridge
-            .notices
-            .try_send(ApprovalReviewNotice::RiskReviewFallback { notice });
+        let _ = bridge.outbound.try_send(WorkerFrameContent::Notice {
+            notice: ApprovalReviewNotice::RiskReviewFallback { notice },
+        });
     }
 
     async fn request_approval(

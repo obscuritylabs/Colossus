@@ -944,6 +944,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "keyring",
+ "portable-pty",
  "rustix",
  "serde",
  "serde-saphyr",
@@ -953,6 +954,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+ "vt100",
  "zeroize",
 ]
 

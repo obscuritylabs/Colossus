@@ -138,6 +138,16 @@ pub struct ExecutionContext {
     pub goal_id: Option<String>,
     /// Approved plan lineage for this run.
     pub plan_id: Option<String>,
+    /// Active Plan Mode update target.
+    ///
+    /// This is an in-process dispatch hint and never durable provenance.
+    #[serde(skip)]
+    pub draft_plan_id: Option<String>,
+    /// Expected optimistic revision for the active Plan Mode update target.
+    ///
+    /// This is an in-process dispatch hint and never durable provenance.
+    #[serde(skip)]
+    pub draft_plan_revision: Option<u64>,
     /// Durable child-agent job lineage for this run.
     pub subagent_id: Option<String>,
     /// Declarative active skill identities; these do not grant capabilities.

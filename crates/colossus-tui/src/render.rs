@@ -1,4 +1,5 @@
 use super::*;
+use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
 pub(super) fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     let area = frame.area();
@@ -265,10 +266,34 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &TuiState, area: Rec
     } else {
         text.extend(logical_lines.into_iter().map(Line::from));
     }
-    let title = if state.preferences.multiline {
-        " Message · Ctrl/Alt+Enter sends "
+    let action = if state.preferences.multiline {
+        "Ctrl/Alt+Enter sends"
     } else {
-        " Message · Enter sends "
+        "Enter sends"
+    };
+    let title = match state.mode {
+        InteractiveMode::Execute => format!(" Message · {action} "),
+        InteractiveMode::Plan if state.selected_plan.is_none() => {
+            format!(" Plan · new draft · {action} ")
+        }
+        InteractiveMode::Plan => {
+            let plan = state
+                .selected_plan
+                .as_ref()
+                .expect("selected plan checked above");
+            if plan.status == PlanStatus::Approved {
+                format!(
+                    " Plan {} · approved · use /plan execute ",
+                    short_plan_id(&plan.id)
+                )
+            } else {
+                format!(
+                    " Plan {} · refine r{} · {action} ",
+                    short_plan_id(&plan.id),
+                    plan.revision
+                )
+            }
+        }
     };
     frame.render_widget(
         Paragraph::new(text)
@@ -294,6 +319,17 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, state: &TuiState, area: Rect)
     let width = usize::from(area.width);
     let short_session = state.session_id.chars().take(8).collect::<String>();
     let mut segments = vec![format!(" Colossus {short_session}")];
+    segments.push(format!("mode={}", state.mode.as_str()));
+    if width >= 72
+        && let Some(plan) = state.selected_plan.as_ref()
+    {
+        segments.push(format!(
+            "plan={}:r{}:{}",
+            short_plan_id(&plan.id),
+            plan.revision,
+            plan_status_label(plan.status)
+        ));
+    }
     if width >= 60 {
         segments.push(format!("{}:{}", state.footer.role, state.footer.route));
     }
@@ -325,6 +361,7 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
         {
             picker_rect(area, &request.choices)
         }
+        Some(Overlay::PlanExecutionChoice { .. }) => picker_rect(area, &plan_execution_choices()),
         _ => centered_rect(80, 60, area),
     };
     frame.render_widget(Clear, overlay_area);
@@ -373,6 +410,35 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
                 ),
             ],
         ),
+        Some(Overlay::PlanExecutionChoice { plan, selected }) => {
+            let choices = plan_execution_choices();
+            let palette = TerminalPalette::for_preferences(&state.preferences);
+            let lines = choices
+                .iter()
+                .enumerate()
+                .map(|(index, choice)| {
+                    let marker = if index == *selected { "›" } else { " " };
+                    let style = if index == *selected {
+                        palette.user_style()
+                    } else {
+                        palette.meta_style()
+                    };
+                    Line::from(Span::styled(
+                        format!("{marker} {}. {choice}", index + 1),
+                        ratatui_style(style),
+                    ))
+                })
+                .collect();
+            (
+                format!(
+                    "Execute plan {} · {}/{}",
+                    short_plan_id(&plan.id),
+                    selected + 1,
+                    choices.len()
+                ),
+                lines,
+            )
+        }
         Some(Overlay::QueuePaused) => (
             "Queued turns paused".into(),
             vec![
@@ -398,6 +464,14 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect
             .wrap(Wrap { trim: false }),
         overlay_area,
     );
+}
+
+fn plan_execution_choices() -> Vec<String> {
+    vec![
+        "Direct — run once with normal execution authority".into(),
+        format!("Goal Mode — up to {DEFAULT_GOAL_ITERATIONS} autonomous iterations"),
+        "Cancel — keep Plan mode and the current selection".into(),
+    ]
 }
 
 pub(super) fn picker_rect(area: Rect, choices: &[String]) -> Rect {

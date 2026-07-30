@@ -22,7 +22,7 @@ and output bounds.
 | Repository context | `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary` | Workspace-confined reads |
 | Tasks | `task.create`, `task.update`, `task.list` | Canonical session work |
 | Decisions | `decision.create`, `decision.update`, `decision.list`, `decision.archive`, `decision.supersede` | Binding canonical decisions |
-| Plans | `plan.create`, `plan.show`, `plan.approve_request` | Session-scoped lifecycle |
+| Plans | `plan.create`, `plan.update`, `plan.show`, `plan.approve_request` | Session-scoped, revision-aware lifecycle; the update target is bound by the runtime |
 | Goals | `goal.show`, `goal.update` | Active goal lineage only |
 | Subagents | `agent.delegate`, `agent.result`, `agent.list` | Durable child jobs; recursive delegation denied |
 | Memories | `memory.create`, `memory.update`, `memory.list`, `memory.search`, `memory.archive`, `memory.supersede` | Canonical lifecycle; retrieval post-gated |
@@ -36,6 +36,33 @@ Every tool schema denies unknown fields. Tool availability does not imply permis
 The access profile and exact overrides decide visibility and the built-in decision;
 policy, approval, trust, the Safety Kernel, permits, sandbox obligations, quarantine, and
 post-effect release remain independent.
+
+## Plan Mode catalog and lifecycle actions
+
+Plan Mode narrows the already-resolved tool catalog; it never widens access. A Create
+turn exposes `plan.create`, while an Update turn exposes `plan.update`. The latter schema
+contains only replacement content and steps: the runtime binds the exact plan ID and
+expected revision, so the model cannot redirect the write.
+
+The remaining Plan Mode allowlist is:
+
+- `echo`, `tool.search`, and interactive `user.ask`;
+- `filesystem.list`, `filesystem.read`, `filesystem.search`, `git.status`, `git.diff`,
+  `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`,
+  `repo.file_summary`, and `patch.preview`;
+- `context.show`, `context.snapshots`, `skill.resource.read`, `task.create`,
+  `task.list`, `decision.list`, `plan.show`, `memory.list`, `memory.search`,
+  `agent.result`, and `agent.list`.
+
+Normal access resolution and prerequisites can remove entries from that list. Plan Mode
+never offers filesystem writes, patch application, command/process execution, approval,
+networking, delegation, plan execution, or plan discard.
+
+`plan.discard` is an operator-only Local State action rather than a model tool.
+`plan.approve_request` remains Administration. Direct execution and approved-plan Goal
+handoff both use the `plan.execute` Execution action. Update, discard, approval, and
+execution all cross the ordinary effect gateway; terminal commands do not bypass access,
+policy, approval, permits, or audit.
 
 ## `shell.run`
 
@@ -84,6 +111,9 @@ Verified pack tools use `pack.tool.PACK.TOOL`; pack MCP operations use
 `pack.mcp.PACK.SERVER.tools` and `pack.mcp.PACK.SERVER.call`. Inspect the exact active
 names with `config effective`.
 
+Plan lifecycle operations that have no model-callable tool keep their action identity:
+operator discard is `plan.discard`, and either execution strategy is `plan.execute`.
+
 ## Exact built-in action catalog
 
 The following names are the complete first-party catalog accepted by exact access
@@ -94,7 +124,7 @@ active trusted declarations.
 | --- | --- |
 | Provider | `provider.echo`, `provider.openai.responses`, `provider.openai.chat`, `provider.models`, `provider.call` |
 | Read | `filesystem.read`, `filesystem.list`, `filesystem.metadata`, `filesystem.search`, `git.status`, `git.diff`, `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`, `repo.file_summary`, `context.show`, `context.snapshots`, `patch.preview`, `task.list`, `decision.list`, `plan.show`, `goal.show`, `subagent.read`, `subagent.list`, `memory.read`, `memory.list`, `memory.search`, `memory.index.status`, `skill.inspect`, `skill.read`, `skill.validate`, `skill.resource.list`, `skill.resource.read`, `pack.verify`, `bundle.verify`, `bundle.key.inspect`, `collection.verify`, `mcp.tools` |
-| Local state | `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch` |
+| Local state | `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch` |
 | Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `skill.scaffold`, `skill.write`, `skill.install`, `audit.export.write` |
 | Execution | `process.spawn`, `shell.run`, `workflow.execute`, `workflow.start`, `agent.run`, `plan.execute` |
 | External network | `network.http`, `web.search`, `embedding.openai.create`, `memory.index.chroma.search`, `memory.index.chroma.status`, `memory.index.chroma.upsert`, `memory.index.chroma.remove`, `memory.index.chroma.reset`, `research.run`, `integration.openapi.import`, `integration.connect`, `integration.disconnect`, `integration.invoke`, `mcp.invoke`, `mcp.call` |

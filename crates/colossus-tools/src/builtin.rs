@@ -482,6 +482,36 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
             max_output_bytes: 1024 * 1024,
         },
         ToolSpec {
+            name: "plan.update".into(),
+            description:
+                "Replace the content and ordered steps of the active draft plan while preserving its objective."
+                    .into(),
+            input_schema: object_schema(
+                json!({
+                    "content": {"type": "string", "maxLength": 65536},
+                    "steps": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "title": {"type": "string", "minLength": 1, "maxLength": 512},
+                                "detail": {"type": "string", "maxLength": 65536, "default": ""},
+                                "requires_mutation": {"type": "boolean", "default": false}
+                            },
+                            "required": ["title"]
+                        }
+                    }
+                }),
+                &["content", "steps"],
+            ),
+            effect_action: Some("plan.update".into()),
+            capability: Some("plan.update".into()),
+            max_output_bytes: 1024 * 1024,
+        },
+        ToolSpec {
             name: "goal.show".into(),
             description: "Show the active bounded-autonomy goal for this run.".into(),
             input_schema: object_schema(json!({}), &[]),

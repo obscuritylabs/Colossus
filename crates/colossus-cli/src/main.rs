@@ -7,15 +7,17 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use colossus_access::AccessProfile;
 use colossus_contracts::{
-    ApprovalProof, AutomaticApprovalNotice, DecisionPriority, DecisionStatus, EffectRequest,
-    GoalStatus, IntegrationAuth, MemoryScope, MemoryStatus, PlanStatus, PlanStep, PolicyDecision,
-    ProviderEvent, ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEvent,
-    RunEventEnvelope, SessionSummary, SubagentStatus, TaskStatus, ToolCall, UserPromptRequest,
-    UserPromptResponse, WorkflowScheduleMisfirePolicy,
+    AgentRunMode, AgentRunOutcome, ApprovalProof, ApprovalReviewNotice, AutomaticApprovalNotice,
+    DecisionPriority, DecisionStatus, EffectRequest, GoalRunOutcome, GoalStatus, IntegrationAuth,
+    MemoryScope, MemoryStatus, PlanDraftTarget, PlanExecutionOutcome, PlanExecutionStrategy,
+    PlanRecord, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
+    ResearchSourceKind, RiskReviewFallbackNotice, RunEvent, RunEventEnvelope, SessionSummary,
+    SubagentStatus, TaskStatus, ToolCall, UserPromptRequest, UserPromptResponse,
+    WorkflowScheduleMisfirePolicy,
 };
 use colossus_policy::{AllowApproval, DenyApproval};
 use colossus_ports::{
-    ApprovalProvider, ModelProviderError, PolicyError, RunEventObserver, ToolError,
+    ApprovalProvider, ModelProviderError, PolicyError, RunControl, RunEventObserver, ToolError,
     UserPromptProvider,
 };
 use colossus_presentation::{
@@ -26,7 +28,10 @@ use colossus_presentation::{
 };
 use colossus_runtime::{Runtime, RuntimeConfig, RuntimeOpenOptions};
 use colossus_tui::{BootstrapRequest, ScreenMode, TuiOptions, run_tui};
-use colossus_worker::{WorkerApprovalMode, WorkerClient, WorkerOperation, WorkerServer};
+use colossus_worker::{
+    InteractiveWorkerRequest, WorkerApprovalMode, WorkerClient, WorkerError, WorkerOperation,
+    WorkerPrompt, WorkerPromptHandler, WorkerPromptKind, WorkerServer,
+};
 use serde_json::{Value, json};
 #[cfg(windows)]
 use std::fmt;
@@ -53,6 +58,7 @@ mod configuration;
 mod desktop_tui_auth;
 mod entrypoint;
 mod extension_args;
+mod line_plan;
 mod line_runner;
 mod memory_research_args;
 mod output;
@@ -76,6 +82,7 @@ use configuration::*;
 use desktop_tui_auth::*;
 use entrypoint::*;
 use extension_args::*;
+use line_plan::*;
 use line_runner::*;
 use memory_research_args::*;
 use output::*;

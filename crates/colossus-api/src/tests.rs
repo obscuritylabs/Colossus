@@ -282,6 +282,55 @@ fn run_result_reads_pre_profile_split_durable_payloads() {
     assert_eq!(result.model_profile, "legacy-provider");
     assert_eq!(result.provider_profile, "legacy-provider");
     assert_eq!(result.model, "legacy-model");
+    assert_eq!(result.plan_id, None);
+    assert!(
+        serde_json::to_value(&result)
+            .expect("serialize legacy run result")
+            .get("plan_id")
+            .is_none()
+    );
+}
+
+#[test]
+fn run_result_preserves_optional_plan_identity() {
+    let result: RunResult = serde_json::from_value(serde_json::json!({
+        "output": "Plan saved",
+        "plan_id": "plan-1",
+        "profile": "default",
+        "model_profile": "default",
+        "provider_profile": "default-provider",
+        "model": "model",
+        "elapsed_seconds": 1.25
+    }))
+    .expect("plan run result");
+
+    assert_eq!(result.plan_id.as_deref(), Some("plan-1"));
+    let value = serde_json::to_value(&result).expect("serialize run result");
+    assert_eq!(value["plan_id"], "plan-1");
+}
+
+#[test]
+fn run_cancellation_preserves_optional_plan_identity_and_reads_legacy_payloads() {
+    let legacy: RunCancellation = serde_json::from_value(serde_json::json!({
+        "turn": 1,
+        "message": "cancelled"
+    }))
+    .expect("legacy run cancellation");
+    assert_eq!(legacy.plan_id, None);
+    assert!(
+        serde_json::to_value(&legacy)
+            .expect("serialize legacy cancellation")
+            .get("plan_id")
+            .is_none()
+    );
+
+    let cancellation: RunCancellation = serde_json::from_value(serde_json::json!({
+        "turn": 2,
+        "message": "cancelled after persistence",
+        "plan_id": "plan-1"
+    }))
+    .expect("plan run cancellation");
+    assert_eq!(cancellation.plan_id.as_deref(), Some("plan-1"));
 }
 
 #[test]
@@ -612,6 +661,7 @@ fn released_updates_replay_in_sequence_and_reconstruct_after_restart() {
             RunUpdateKind::Result {
                 result: RunResult {
                     output: "Done".into(),
+                    plan_id: None,
                     profile: "default".into(),
                     model_profile: "default".into(),
                     provider_profile: "default-provider".into(),
@@ -977,6 +1027,7 @@ fn terminal_cancellation_no_op_claims_its_idempotency_key() {
             RunUpdateKind::Result {
                 result: RunResult {
                     output: "done".into(),
+                    plan_id: None,
                     profile: "default".into(),
                     model_profile: "default".into(),
                     provider_profile: "default-provider".into(),
@@ -1180,6 +1231,7 @@ fn maximum_valid_cancellation_lifecycle_remains_listable() {
                 cancellation: RunCancellation {
                     turn: 0,
                     message: "cancelled".into(),
+                    plan_id: None,
                 },
             },
         )

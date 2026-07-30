@@ -18,7 +18,8 @@ use colossus_api::{
     ToolActivity, ToolActivityState, WatchRunRequest, scopes,
 };
 use colossus_contracts::{
-    ActorType, AgentRunOutcome, ProviderEvent, RunEvent, RunEventEnvelope, RunPhase,
+    ActorType, AgentRunCancellation, AgentRunOutcome, AgentRunResult, ProviderEvent, RunEvent,
+    RunEventEnvelope, RunPhase,
 };
 use colossus_ports::{ModelProviderError, RunControl, RunEventObserver, StoreError};
 use colossus_runtime::{Runtime, RuntimeError};
@@ -833,22 +834,8 @@ impl RuntimeAgentRunApi {
             .scope(Arc::clone(&writer), execution)
             .await;
         let kind = match outcome {
-            Ok(AgentRunOutcome::Completed { result }) => RunUpdateKind::Result {
-                result: RunResult {
-                    output: result.output,
-                    profile: result.profile,
-                    model_profile: result.model_profile,
-                    provider_profile: result.provider_profile,
-                    model: result.model,
-                    elapsed_seconds: result.elapsed_seconds,
-                },
-            },
-            Ok(AgentRunOutcome::Cancelled { result }) => RunUpdateKind::Cancellation {
-                cancellation: RunCancellation {
-                    turn: result.turn.into(),
-                    message: "the run was cancelled at a safe boundary".into(),
-                },
-            },
+            Ok(AgentRunOutcome::Completed { result }) => public_result(result),
+            Ok(AgentRunOutcome::Cancelled { result }) => public_cancellation(result),
             Err(error) => runtime_failure(&error),
         };
         if fail_terminal_append {
@@ -1202,6 +1189,15 @@ fn public_event(event: RunEvent) -> RunUpdateKind {
                 summary: format!("tool execution was cancelled before start at turn {turn}"),
             },
         },
+        RunEvent::PlanWritten { plan } => RunUpdateKind::Notice {
+            notice: colossus_api::RunNotice {
+                reason: "plan.written".into(),
+                message: format!(
+                    "plan {} was persisted at revision {}",
+                    plan.id, plan.revision
+                ),
+            },
+        },
         RunEvent::Error {
             code, recoverable, ..
         } => RunUpdateKind::Notice {
@@ -1268,6 +1264,31 @@ fn cancelled_before_start() -> RunUpdateKind {
         cancellation: RunCancellation {
             turn: 0,
             message: "the run was cancelled before execution began".into(),
+            plan_id: None,
+        },
+    }
+}
+
+fn public_result(result: AgentRunResult) -> RunUpdateKind {
+    RunUpdateKind::Result {
+        result: RunResult {
+            output: result.output,
+            plan_id: result.plan.map(|plan| plan.id),
+            profile: result.profile,
+            model_profile: result.model_profile,
+            provider_profile: result.provider_profile,
+            model: result.model,
+            elapsed_seconds: result.elapsed_seconds,
+        },
+    }
+}
+
+fn public_cancellation(result: AgentRunCancellation) -> RunUpdateKind {
+    RunUpdateKind::Cancellation {
+        cancellation: RunCancellation {
+            turn: result.turn.into(),
+            message: "the run was cancelled at a safe boundary".into(),
+            plan_id: result.plan.map(|plan| plan.id),
         },
     }
 }
@@ -1526,6 +1547,7 @@ fn agent_error_outcome_unknown(error: &colossus_agent::AgentError) -> bool {
         | colossus_agent::AgentError::ToolArgumentRecoveryExhausted { .. }
         | colossus_agent::AgentError::MaxTurns { .. }
         | colossus_agent::AgentError::EmptyTurn
+        | colossus_agent::AgentError::PlanWriteRequired
         | colossus_agent::AgentError::Cancelled { .. } => false,
     }
 }
@@ -1568,6 +1590,23 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use colossus_contracts::{PlanRecord, PlanStatus};
+
+    fn draft_plan() -> PlanRecord {
+        PlanRecord {
+            id: "plan-1".into(),
+            session_id: "session-1".into(),
+            prompt: "Draft the change".into(),
+            status: PlanStatus::Draft,
+            revision: 1,
+            content: "Plan".into(),
+            steps: Vec::new(),
+            created_at: "2026-07-29T00:00:00Z".into(),
+            updated_at: "2026-07-29T00:00:00Z".into(),
+            approved_at: None,
+            executed_run_id: None,
+        }
+    }
 
     #[test]
     fn public_error_updates_do_not_release_internal_error_text() {
@@ -1587,6 +1626,45 @@ mod tests {
         assert_eq!(notice.reason, "provider.failed");
         assert!(!notice.message.contains(private));
         assert!(!notice.message.contains("/private/provider/socket"));
+    }
+
+    #[test]
+    fn public_plan_cancellation_preserves_the_written_plan_identity() {
+        let update = public_cancellation(AgentRunCancellation {
+            run_id: "run-1".into(),
+            session_id: "session-1".into(),
+            turn: 2,
+            plan: Some(draft_plan()),
+            event_count: 7,
+            elapsed_seconds: 0.25,
+        });
+
+        let RunUpdateKind::Cancellation { cancellation } = update else {
+            panic!("cancellation must remain terminal");
+        };
+        assert_eq!(cancellation.plan_id.as_deref(), Some("plan-1"));
+    }
+
+    #[test]
+    fn public_plan_result_preserves_the_written_plan_identity() {
+        let update = public_result(AgentRunResult {
+            run_id: "run-1".into(),
+            session_id: Some("session-1".into()),
+            role: "primary".into(),
+            profile: "default".into(),
+            model_profile: "default".into(),
+            provider_profile: "provider".into(),
+            model: "model".into(),
+            plan: Some(draft_plan()),
+            output: "Plan saved".into(),
+            event_count: 7,
+            elapsed_seconds: 0.25,
+        });
+
+        let RunUpdateKind::Result { result } = update else {
+            panic!("result must remain terminal");
+        };
+        assert_eq!(result.plan_id.as_deref(), Some("plan-1"));
     }
 
     #[test]

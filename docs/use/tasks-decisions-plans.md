@@ -62,7 +62,44 @@ colossus --config .colossus/config.yaml plans create SESSION_ID \
   "Cut a release" --step "Run gates" --step "Build archives"
 ```
 
-### 4. Inspect, approve, and execute
+Every completed Plan Mode turn performs exactly one successful durable write:
+`plan.create` for a new Draft or `plan.update` for the runtime-bound selected Draft.
+The model cannot choose another plan ID. A second write is blocked before dispatch. If
+the model answers without writing, Colossus permits one corrective turn and then fails
+closed. A failed or cancelled turn can therefore have persisted zero or one plan; inspect
+the typed `PlanWritten` event or returned plan evidence before retrying.
+
+New plans start at revision 1. Existing legacy records without the field read as
+revision 0. Refinement replaces Markdown content and ordered steps while preserving the
+original prompt, and every refinement or lifecycle transition increments the optimistic
+revision. Stale updates, approvals, discards, and executions are rejected.
+
+### 4. Create or refine in the terminal
+
+Full-screen TUI and non-TTY line mode use the same process-local workflow in embedded
+and worker-backed runtimes:
+
+```text
+/plan new
+Plan the release, including rollback and focused verification.
+/plan show
+```
+
+The completed turn selects its Draft. Another ordinary prompt in Plan mode refines that
+exact selected revision. To return to an existing plan:
+
+```text
+/plans
+/plan use PLAN_ID
+/plan show
+```
+
+`/plan use` accepts only a same-session Draft or Approved plan. An Approved plan cannot
+be refined. `/plan new` enters Plan mode and clears selection without discarding the old
+record; `/plan off` returns to Execute mode while retaining selection. Mode survives a
+session switch, but selection does not, and neither is restored after process restart.
+
+### 5. Approve, discard, or execute
 
 ```bash
 colossus --config .colossus/config.yaml plans show PLAN_ID
@@ -71,13 +108,43 @@ colossus --config .colossus/config.yaml --approval-mode ask \
 colossus --config .colossus/config.yaml run --execute-plan PLAN_ID
 ```
 
-Approval consumes the reviewed draft transition. Execution still authorizes every tool
-effect independently.
+Approval advances the reviewed Draft to Approved. Execution still authorizes every tool
+effect independently. In the terminal, use:
+
+```text
+/plan approve
+/plan execute direct
+```
+
+`/plan discard` is an operator-only transition for a selected Draft or Approved plan; it
+retains the record for audit. `/plan execute` without a strategy offers Direct, Goal
+Mode, and Cancel. Direct uses one ordinary execution run. Goal Mode defaults to five
+iterations, accepts an explicit value from 1 through 50, and preserves the source plan
+as lineage:
+
+```text
+/plan execute goal 12
+```
+
+Cancel or failure before consumption preserves Plan mode and selection. Once consumption
+commits, the plan becomes Executed, the terminal switches to Execute mode, and selection
+clears even if the subsequent direct run or Goal run fails or is cancelled. Goal failure
+or cancellation leaves the Goal Active. Resume only its remaining budget:
+
+```text
+/goal resume GOAL_ID
+```
+
+The public `RunMode::Plan` entry point continues to mean “create a plan.” Completed
+results and cancellations expose the canonical identity as optional `plan_id` in the
+public API, protobuf contract, and SDK terminal types. A cancellation before persistence
+leaves it absent.
 
 ## Expected result
 
 The session exposes current work, its active commitment, and a plan with an auditable
-status. An approved plan can be consumed for execution exactly through the runtime.
+status and revision. An approved plan can be consumed atomically once, directly or into
+bounded Goal Mode, through the normal effect gateway.
 
 ## Verification
 
@@ -87,14 +154,22 @@ colossus --config .colossus/config.yaml decisions show DECISION_ID
 colossus --config .colossus/config.yaml plans show PLAN_ID
 ```
 
-Confirm the session identity and lifecycle status on each record.
+Confirm the session identity, lifecycle status, and latest revision on each record.
 
 ## Failure path
 
 - **A plan cannot be approved:** confirm it is still a draft and that approval is
   available.
+- **A revision conflict is reported:** reload the plan with `/plan use PLAN_ID`, inspect
+  the new revision, and make a fresh deliberate choice.
+- **Plan Mode reports a missing write:** the corrective turn was exhausted without the
+  required `plan.create` or bound `plan.update`; inspect `/plans` before retrying.
 - **Execution is denied:** plan approval is not blanket effect authority; inspect the
   denied action and sandbox prerequisite.
+- **Execution disconnects after consumption may have begun:** do not retry
+  automatically. Inspect `/plans` and the linked run or Goal evidence first.
+- **A Goal remains Active after cancellation or failure:** use
+  `/goal resume GOAL_ID`; a new Goal would discard the remaining-budget lineage.
 - **A task or decision belongs to another session:** use the owning session rather than
   copying its identifier into unrelated work.
 - **A decision is outdated:** supersede or archive it so later context is unambiguous.

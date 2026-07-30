@@ -224,7 +224,7 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
             Some(Arc::new(tui_host::TuiUserPromptProvider {
                 router: Arc::clone(router),
             }))
-        } else if matches!(&cli.command, Command::Tui { .. }) && io::stdin().is_terminal() {
+        } else if matches!(&cli.command, Command::Tui { .. }) {
             Some(Arc::new(TerminalUserPrompt {
                 lock: Mutex::new(()),
             }))

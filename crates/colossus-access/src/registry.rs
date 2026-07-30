@@ -37,7 +37,9 @@ pub fn builtin_tool_descriptor(name: &str) -> Result<ToolDescriptor, AccessError
         "task.create" | "task.update" | "task.list" => simple_tool("tasks"),
         "decision.create" | "decision.update" | "decision.list" | "decision.archive"
         | "decision.supersede" => simple_tool("decisions"),
-        "plan.create" | "plan.show" | "plan.approve_request" => simple_tool("plans"),
+        "plan.create" | "plan.update" | "plan.show" | "plan.approve_request" => {
+            simple_tool("plans")
+        }
         "goal.show" | "goal.update" => simple_tool("goals"),
         "agent.delegate" | "agent.result" | "agent.list" => simple_tool("subagents"),
         "memory.create" | "memory.update" | "memory.list" | "memory.search" | "memory.archive"
@@ -140,6 +142,8 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
             "decision.archive",
             "decision.supersede",
             "plan.create",
+            "plan.update",
+            "plan.discard",
             "goal.create",
             "goal.update",
             "goal.iteration.record",

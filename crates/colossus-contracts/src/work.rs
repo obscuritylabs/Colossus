@@ -1,5 +1,49 @@
 use super::*;
 
+/// Application-level behavior for one agent run.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "mode",
+    content = "target",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum AgentRunMode {
+    /// Execute with the caller's normal tool and effect ceiling.
+    #[default]
+    Execute,
+    /// Produce or refine one durable draft plan without execution authority.
+    Plan(PlanDraftTarget),
+}
+
+/// Trusted durable write target for one Plan Mode run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanDraftTarget {
+    /// Create one new draft plan.
+    Create,
+    /// Replace one exact optimistic revision of an existing draft plan.
+    Update {
+        /// Stable plan identifier, supplied by the trusted caller rather than the model.
+        plan_id: String,
+        /// Expected canonical plan revision.
+        revision: u64,
+    },
+}
+
+/// Operator-selected handoff for one approved plan.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "strategy", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanExecutionStrategy {
+    /// Consume the plan in one ordinary agent run.
+    Direct,
+    /// Consume the plan into bounded Goal Mode.
+    Goal {
+        /// Maximum autonomous Goal Mode iterations.
+        max_iterations: u16,
+    },
+}
+
 /// Durable task lifecycle status.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,6 +120,9 @@ pub struct PlanRecord {
     pub prompt: String,
     /// Current lifecycle status.
     pub status: PlanStatus,
+    /// Optimistic lifecycle revision. Legacy records deserialize as revision zero.
+    #[serde(default)]
+    pub revision: u64,
     /// Optional bounded Markdown overview.
     pub content: String,
     /// Ordered executable intent without inline code semantics.
@@ -122,7 +169,7 @@ pub struct GoalRecord {
     pub blocked_reason: String,
     /// Maximum autonomous iterations.
     pub iteration_budget: u16,
-    /// Completed iterations, never greater than the budget.
+    /// Consumed iteration slots, including started runs that failed or were cancelled.
     pub iterations_completed: u16,
     /// UTC creation timestamp.
     pub created_at: String,
@@ -158,6 +205,83 @@ pub struct GoalRunResult {
     pub iteration_budget_exhausted: bool,
     /// Total loop wall time.
     pub elapsed_seconds: f64,
+}
+
+/// Terminal state of one controlled ordinary agent execution.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ControlledAgentTerminal {
+    /// The agent returned a normal released result.
+    Completed {
+        /// Durable completed run result.
+        result: AgentRunResult,
+    },
+    /// The operator cooperatively cancelled the run.
+    Cancelled {
+        /// Durable cancellation evidence.
+        result: AgentRunCancellation,
+    },
+    /// The consumed run failed after its identity became durable.
+    Failed {
+        /// Durable run identity allocated before Plan consumption.
+        run_id: String,
+        /// Bounded policy-released failure message.
+        message: String,
+    },
+}
+
+/// Terminal state of one controlled Goal Mode invocation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GoalRunOutcome {
+    /// The invocation stopped because the goal became terminal or exhausted its budget.
+    Completed {
+        /// Current goal and iterations completed by this invocation.
+        result: GoalRunResult,
+    },
+    /// The operator stopped at a safe boundary; the active goal remains resumable.
+    Cancelled {
+        /// Current goal and iterations completed before cancellation.
+        result: GoalRunResult,
+        /// Cancellation evidence when a concrete agent iteration had started.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cancellation: Option<Box<AgentRunCancellation>>,
+    },
+    /// An iteration failed after the goal became durable; the active goal remains resumable.
+    Failed {
+        /// Current goal and iterations completed before failure.
+        result: GoalRunResult,
+        /// Durable run identity allocated for the failed iteration, when it reached run setup.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
+        /// Bounded policy-released failure message.
+        message: String,
+    },
+}
+
+/// Result of one controlled approved-Plan handoff.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "execution", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanExecutionOutcome {
+    /// Cancellation won before the approved Plan was consumed.
+    CancelledBeforeStart {
+        /// Canonical still-approved Plan record.
+        plan: PlanRecord,
+    },
+    /// The Plan was consumed by one ordinary bounded agent run.
+    Direct {
+        /// Canonical executed Plan record.
+        plan: PlanRecord,
+        /// Terminal state of the consuming run.
+        terminal: ControlledAgentTerminal,
+    },
+    /// The Plan was atomically consumed into one bounded Goal.
+    Goal {
+        /// Canonical executed Plan record linked to the Goal id.
+        plan: PlanRecord,
+        /// Terminal state of this Goal Mode invocation.
+        terminal: GoalRunOutcome,
+    },
 }
 
 /// Durable subagent job status.

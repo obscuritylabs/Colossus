@@ -243,6 +243,8 @@ impl EmbeddedInteractiveHost {
             completions: None,
             sticky_skills: None,
             footer: None,
+            plan_selection: PlanSelectionUpdate::Unchanged,
+            continue_queue: true,
             clear_transcript: false,
         }))
     }
@@ -254,6 +256,7 @@ impl EmbeddedInteractiveHost {
         session_id: &str,
         sticky_skills: &[String],
         events: &mpsc::Sender<HostEvent>,
+        control: &RunControl,
     ) -> Result<HostCommandResult, String> {
         if let Some(result) = self.presentation_command(name, arguments, events).await? {
             return Ok(result);
@@ -266,6 +269,8 @@ impl EmbeddedInteractiveHost {
                 completions: None,
                 sticky_skills: None,
                 footer: None,
+                plan_selection: PlanSelectionUpdate::Unchanged,
+                continue_queue: true,
                 clear_transcript: true,
             }),
             "status" => {
@@ -363,6 +368,49 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())?,
                 Some("Goals"),
             ),
+            "goal" if arguments.trim() == "resume" => {
+                Err("/goal resume expects exactly one GOAL_ID".into())
+            }
+            "goal" if arguments.starts_with("resume ") => {
+                let goal_id = arguments.trim_start_matches("resume ").trim();
+                if goal_id.is_empty() || goal_id.split_whitespace().count() != 1 {
+                    return Err("/goal resume expects exactly one GOAL_ID".into());
+                }
+                let goal = self
+                    .runtime
+                    .get_goal(goal_id)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("goal not found: {goal_id}"))?;
+                if goal.session_id != session_id {
+                    return Err(format!(
+                        "goal {goal_id} does not belong to the active session"
+                    ));
+                }
+                let mut observer = ChannelRunObserver {
+                    sender: events.clone(),
+                };
+                let outcome = self
+                    .runtime
+                    .resume_goal_stream_controlled(
+                        "primary",
+                        session_id,
+                        goal_id,
+                        &mut observer,
+                        control,
+                    )
+                    .await
+                    .map_err(|error| interactive_runtime_error(&error))?;
+                let status = match &outcome {
+                    GoalRunOutcome::Completed { .. } => "ok",
+                    GoalRunOutcome::Cancelled { .. } => "cancelled",
+                    GoalRunOutcome::Failed { .. } => "failed",
+                };
+                let result = self.result(&outcome, Some("Goal resume"))?;
+                Ok(HostCommandResult {
+                    footer: Some(self.footer(session_id, status).await?),
+                    ..result
+                })
+            }
             "goal" if !arguments.is_empty() => self.result(
                 &self
                     .runtime
@@ -519,6 +567,8 @@ impl EmbeddedInteractiveHost {
             completions: None,
             sticky_skills: None,
             footer: Some(self.footer(&session_id, "ready").await?),
+            plan_selection: PlanSelectionUpdate::Clear,
+            continue_queue: true,
             clear_transcript: false,
         })
     }
@@ -948,6 +998,121 @@ impl EmbeddedInteractiveHost {
             _ => Err("/mcp expects servers or tools [SERVER]".into()),
         }
     }
+
+    async fn plan_command(
+        &self,
+        command: PlanHostCommand,
+        session_id: &str,
+    ) -> Result<HostCommandResult, String> {
+        match command {
+            PlanHostCommand::List => self.result(
+                &self
+                    .runtime
+                    .list_plans(Some(session_id), None, 100)
+                    .map_err(|error| error.to_string())?,
+                Some("Plans"),
+            ),
+            PlanHostCommand::Use { plan_id } => {
+                let plan = selectable_plan(current_session_plan(
+                    self.runtime
+                        .get_plan(&plan_id)
+                        .map_err(|error| error.to_string())?,
+                    &plan_id,
+                    session_id,
+                )?)?;
+                let document = document_from_json(
+                    &serde_json::to_value(&plan).map_err(|error| error.to_string())?,
+                    Some("Selected plan"),
+                );
+                Ok(HostCommandResult {
+                    plan_selection: PlanSelectionUpdate::Use(Box::new(plan)),
+                    ..HostCommandResult::document(document)
+                })
+            }
+            PlanHostCommand::Show { plan_id } => {
+                let plan = current_session_plan(
+                    self.runtime
+                        .get_plan(&plan_id)
+                        .map_err(|error| error.to_string())?,
+                    &plan_id,
+                    session_id,
+                )?;
+                self.result(&plan, Some("Plan"))
+            }
+            PlanHostCommand::Approve { plan_id, revision } => {
+                let selected = current_session_plan(
+                    self.runtime
+                        .get_plan(&plan_id)
+                        .map_err(|error| error.to_string())?,
+                    &plan_id,
+                    session_id,
+                )?;
+                let plan = match self
+                    .runtime
+                    .approve_plan_at_revision(session_id, &plan_id, revision)
+                    .await
+                {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        let readback = self
+                            .runtime
+                            .get_plan(&plan_id)
+                            .map_err(|read_error| read_error.to_string());
+                        return Ok(host_plan_lifecycle_failure(
+                            selected,
+                            readback,
+                            PlanStatus::Approved,
+                            error.to_string(),
+                        ));
+                    }
+                };
+                let document = document_from_json(
+                    &serde_json::to_value(&plan).map_err(|error| error.to_string())?,
+                    Some("Approved plan"),
+                );
+                Ok(HostCommandResult {
+                    plan_selection: PlanSelectionUpdate::Set(Box::new(plan)),
+                    ..HostCommandResult::document(document)
+                })
+            }
+            PlanHostCommand::Discard { plan_id, revision } => {
+                let selected = current_session_plan(
+                    self.runtime
+                        .get_plan(&plan_id)
+                        .map_err(|error| error.to_string())?,
+                    &plan_id,
+                    session_id,
+                )?;
+                let plan = match self
+                    .runtime
+                    .discard_plan_at_revision(session_id, &plan_id, revision)
+                    .await
+                {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        let readback = self
+                            .runtime
+                            .get_plan(&plan_id)
+                            .map_err(|read_error| read_error.to_string());
+                        return Ok(host_plan_lifecycle_failure(
+                            selected,
+                            readback,
+                            PlanStatus::Discarded,
+                            error.to_string(),
+                        ));
+                    }
+                };
+                let document = document_from_json(
+                    &serde_json::to_value(&plan).map_err(|error| error.to_string())?,
+                    Some("Discarded plan"),
+                );
+                Ok(HostCommandResult {
+                    plan_selection: PlanSelectionUpdate::Clear,
+                    ..HostCommandResult::document(document)
+                })
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -1002,13 +1167,22 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         session_id: &str,
         sticky_skills: &[String],
         events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<HostCommandResult, String> {
         self.router.install(Some(events.clone()));
         let result = match command {
             RuntimeCommand::Known { name, arguments } => {
-                self.execute_known(&name, &arguments, session_id, sticky_skills, &events)
-                    .await
+                self.execute_known(
+                    &name,
+                    &arguments,
+                    session_id,
+                    sticky_skills,
+                    &events,
+                    &control,
+                )
+                .await
             }
+            RuntimeCommand::Plan(command) => self.plan_command(command, session_id).await,
         };
         self.router.install(None);
         result
@@ -1036,46 +1210,133 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         request.explicit_skills = explicit_skills;
         self.router.install(Some(events.clone()));
         let mut observer = ChannelRunObserver { sender: events };
-        let outcome = if request.include_provider_response_diagnostics {
-            self.runtime
-                .run_model_with_skills_stream_controlled_with_provider_diagnostics(
-                    "primary",
-                    "You are Colossus.",
-                    &request.prompt,
-                    None,
-                    Some(&request.session_id),
-                    &request.explicit_skills,
-                    &request.sticky_skills,
-                    &mut observer,
-                    &control,
-                )
-                .await
-        } else {
-            self.runtime
-                .run_model_with_skills_stream_controlled(
-                    "primary",
-                    "You are Colossus.",
-                    &request.prompt,
-                    None,
-                    Some(&request.session_id),
-                    &request.explicit_skills,
-                    &request.sticky_skills,
-                    &mut observer,
-                    &control,
-                )
-                .await
-        }
-        .map_err(|error| interactive_runtime_error(&error));
+        let outcome = self
+            .runtime
+            .run_with_mode_with_skills_stream_controlled(
+                request.mode,
+                "primary",
+                "You are Colossus.",
+                &request.prompt,
+                None,
+                Some(&request.session_id),
+                &request.explicit_skills,
+                &request.sticky_skills,
+                request.include_provider_response_diagnostics,
+                &mut observer,
+                &control,
+            )
+            .await
+            .map_err(|error| interactive_runtime_error(&error));
         self.router.install(None);
         let outcome = outcome?;
-        let status = match outcome {
-            colossus_contracts::AgentRunOutcome::Completed { .. } => "ok",
-            colossus_contracts::AgentRunOutcome::Cancelled { .. } => "cancelled",
+        let status = match &outcome {
+            AgentRunOutcome::Completed { .. } => "ok",
+            AgentRunOutcome::Cancelled { .. } => "cancelled",
+        };
+        let plan = match &outcome {
+            AgentRunOutcome::Completed { result } => result.plan.clone(),
+            AgentRunOutcome::Cancelled { result } => result.plan.clone(),
         };
         Ok(HostRunResult {
             outcome,
             footer: self.footer(&request.session_id, status).await?,
+            plan_selection: plan.map_or(PlanSelectionUpdate::Unchanged, |plan| {
+                PlanSelectionUpdate::Set(Box::new(plan))
+            }),
         })
+    }
+
+    async fn run_plan_execution(
+        &self,
+        request: InteractivePlanExecutionRequest,
+        events: mpsc::Sender<HostEvent>,
+        control: RunControl,
+    ) -> Result<HostPlanExecutionResult, String> {
+        let selected = approved_plan_at_revision(
+            self.runtime
+                .get_plan(&request.plan_id)
+                .map_err(|error| error.to_string())?,
+            &request.plan_id,
+            &request.session_id,
+            request.revision,
+        )?;
+        let mut fallback_footer = self.footer(&request.session_id, "executing").await?;
+        self.router.install(Some(events.clone()));
+        let mut observer = ChannelRunObserver { sender: events };
+        let outcome = self
+            .runtime
+            .execute_plan_stream_controlled(
+                "primary",
+                &request.session_id,
+                &request.plan_id,
+                request.revision,
+                request.strategy,
+                None,
+                &mut observer,
+                &control,
+            )
+            .await
+            .map_err(|error| interactive_runtime_error(&error));
+        self.router.install(None);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                fallback_footer.status = "failed".into();
+                let readback = self
+                    .runtime
+                    .get_plan(&selected.id)
+                    .map_err(|read_error| read_error.to_string());
+                let (footer, footer_warning) =
+                    match self.footer(&request.session_id, "failed").await {
+                        Ok(footer) => (footer, None),
+                        Err(footer_error) => (fallback_footer, Some(footer_error)),
+                    };
+                let mut result = host_plan_execution_failure(selected, readback, error, footer);
+                if let Some(footer_error) = footer_warning {
+                    append_footer_warning(&mut result, footer_error);
+                }
+                return Ok(result);
+            }
+        };
+        let status = match &outcome {
+            PlanExecutionOutcome::CancelledBeforeStart { .. } => "cancelled",
+            PlanExecutionOutcome::Direct {
+                terminal: ControlledAgentTerminal::Completed { .. },
+                ..
+            }
+            | PlanExecutionOutcome::Goal {
+                terminal: GoalRunOutcome::Completed { .. },
+                ..
+            } => "ok",
+            PlanExecutionOutcome::Direct {
+                terminal: ControlledAgentTerminal::Cancelled { .. },
+                ..
+            }
+            | PlanExecutionOutcome::Goal {
+                terminal: GoalRunOutcome::Cancelled { .. },
+                ..
+            } => "cancelled",
+            PlanExecutionOutcome::Direct {
+                terminal: ControlledAgentTerminal::Failed { .. },
+                ..
+            }
+            | PlanExecutionOutcome::Goal {
+                terminal: GoalRunOutcome::Failed { .. },
+                ..
+            } => "failed",
+        };
+        let (footer, footer_warning) = match self.footer(&request.session_id, status).await {
+            Ok(footer) => (footer, None),
+            Err(error) => {
+                fallback_footer.status = status.into();
+                (fallback_footer, Some(error))
+            }
+        };
+        let mut result = host_plan_execution_result(outcome, footer)?;
+        if let Some(error) = footer_warning {
+            append_footer_warning(&mut result, error);
+        }
+        Ok(result)
     }
 
     async fn append_history(&self, entry: String) -> Result<(), String> {

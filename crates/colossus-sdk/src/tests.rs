@@ -475,6 +475,7 @@ async fn owned_run_update_stream_preserves_order() {
             update: RunUpdateKind::Cancellation(RunCancellation {
                 turn: 0,
                 message: "cancelled".into(),
+                plan_id: None,
             }),
         }),
     ]));
@@ -545,6 +546,7 @@ impl AgentRunClient for CheckedSnapshotClient {
                     RunTerminal::Cancellation(RunCancellation {
                         turn: 0,
                         message: "cancelled".into(),
+                        plan_id: None,
                     })
                 }),
                 etag: "snapshot-etag".into(),
@@ -884,6 +886,7 @@ impl AgentRunClient for TerminalSnapshotWatchClient {
                 terminal: Some(RunTerminal::Cancellation(RunCancellation {
                     turn: 0,
                     message: "cancelled".into(),
+                    plan_id: None,
                 })),
                 etag: "terminal-etag".into(),
                 selected_skills: Vec::new(),
@@ -990,6 +993,7 @@ async fn resilient_run_updates_reconnect_from_cursor_and_deduplicate_replay() {
             RunUpdateKind::Cancellation(RunCancellation {
                 turn: 1,
                 message: "cancelled".into(),
+                plan_id: None,
             }),
         )),
     ]));
@@ -1042,6 +1046,7 @@ async fn resilient_run_updates_retries_only_unavailable_open_failures() {
         RunUpdateKind::Cancellation(RunCancellation {
             turn: 0,
             message: "cancelled".into(),
+            plan_id: None,
         }),
     ))]));
     let client = Arc::new(ScriptedWatchClient {

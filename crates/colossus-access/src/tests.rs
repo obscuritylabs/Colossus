@@ -316,6 +316,22 @@ fn built_in_action_descriptors_are_unique_and_deterministic() {
 }
 
 #[test]
+fn plan_update_and_discard_are_local_state_actions() {
+    let update_tool = builtin_tool_descriptor("plan.update").expect("plan update tool");
+    assert_eq!(update_tool.family, "plans");
+    let descriptors = builtin_action_descriptors();
+    for action in ["plan.update", "plan.discard"] {
+        assert_eq!(
+            descriptors
+                .iter()
+                .find(|descriptor| descriptor.name == action)
+                .map(|descriptor| descriptor.class),
+            Some(ActionClass::LocalState)
+        );
+    }
+}
+
+#[test]
 fn unknown_core_tool_fails_closed() {
     let error = resolve_access(
         &AccessConfig::default(),

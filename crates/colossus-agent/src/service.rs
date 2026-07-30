@@ -140,18 +140,61 @@ impl AgentService {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
-        self.run_in_session_with_skills_stream_controlled_as(
+        self.run_in_session_with_mode_stream_controlled(
+            AgentRunMode::Execute,
             role,
             instructions,
             prompt,
             max_turns,
             requested_session_id,
             active_skills,
-            terminal_actor(),
+            false,
             observer,
             control,
         )
         .await
+    }
+
+    /// Execute one typed run mode with ordered events and cooperative cancellation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_in_session_with_mode_stream_controlled(
+        &self,
+        mode: AgentRunMode,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        include_provider_response_diagnostics: bool,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
+        match self
+            .run_with_lineage(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                requested_session_id,
+                RunScope {
+                    active_skills,
+                    mode,
+                    include_provider_response_diagnostics,
+                    ..RunScope::default()
+                },
+                terminal_actor(),
+                Some(observer),
+                Some(control),
+            )
+            .await
+        {
+            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
+            Err(AgentError::Cancelled { result }) => {
+                Ok(AgentRunOutcome::Cancelled { result: *result })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Execute a trusted local run with explicit provider response diagnostics.
@@ -170,28 +213,19 @@ impl AgentService {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
-        match self
-            .run_with_lineage(
-                role,
-                instructions,
-                prompt,
-                max_turns,
-                requested_session_id,
-                RunScope {
-                    active_skills,
-                    include_provider_response_diagnostics: true,
-                    ..RunScope::default()
-                },
-                terminal_actor(),
-                Some(observer),
-                Some(control),
-            )
-            .await
-        {
-            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
-            Err(AgentError::Cancelled { result }) => Ok(AgentRunOutcome::Cancelled { result }),
-            Err(error) => Err(error),
-        }
+        self.run_in_session_with_mode_stream_controlled(
+            AgentRunMode::Execute,
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            active_skills,
+            true,
+            observer,
+            control,
+        )
+        .await
     }
 
     /// Execute a skilled run for one immutable authenticated initiator.
@@ -230,7 +264,9 @@ impl AgentService {
             .await
         {
             Ok(result) => Ok(AgentRunOutcome::Completed { result }),
-            Err(AgentError::Cancelled { result }) => Ok(AgentRunOutcome::Cancelled { result }),
+            Err(AgentError::Cancelled { result }) => {
+                Ok(AgentRunOutcome::Cancelled { result: *result })
+            }
             Err(error) => Err(error),
         }
     }
@@ -268,7 +304,11 @@ impl AgentService {
                     requested_run_id: Some(run_id),
                     active_skills,
                     allowed_tools: Some(allowed_tools),
-                    plan_mode,
+                    mode: if plan_mode {
+                        AgentRunMode::Plan(PlanDraftTarget::Create)
+                    } else {
+                        AgentRunMode::Execute
+                    },
                     create_requested_session: create_session,
                     ..RunScope::default()
                 },
@@ -279,7 +319,9 @@ impl AgentService {
             .await
         {
             Ok(result) => Ok(AgentRunOutcome::Completed { result }),
-            Err(AgentError::Cancelled { result }) => Ok(AgentRunOutcome::Cancelled { result }),
+            Err(AgentError::Cancelled { result }) => {
+                Ok(AgentRunOutcome::Cancelled { result: *result })
+            }
             Err(error) => Err(error),
         }
     }
@@ -295,6 +337,30 @@ impl AgentService {
         requested_session_id: Option<&str>,
         active_skills: &[String],
     ) -> Result<AgentRunResult, AgentError> {
+        self.run_plan_target_in_session_with_skills(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            active_skills,
+            PlanDraftTarget::Create,
+        )
+        .await
+    }
+
+    /// Execute one exact Plan Mode create or update target without implementation effects.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_plan_target_in_session_with_skills(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        target: PlanDraftTarget,
+    ) -> Result<AgentRunResult, AgentError> {
         self.run_with_lineage(
             role,
             instructions,
@@ -303,7 +369,7 @@ impl AgentService {
             requested_session_id,
             RunScope {
                 active_skills,
-                plan_mode: true,
+                mode: AgentRunMode::Plan(target),
                 ..RunScope::default()
             },
             terminal_actor(),
@@ -325,6 +391,32 @@ impl AgentService {
         active_skills: &[String],
         observer: &mut dyn RunEventObserver,
     ) -> Result<AgentRunResult, AgentError> {
+        self.run_plan_target_in_session_with_skills_stream(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            requested_session_id,
+            active_skills,
+            PlanDraftTarget::Create,
+            observer,
+        )
+        .await
+    }
+
+    /// Execute one exact Plan Mode target and forward ordered released events.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_plan_target_in_session_with_skills_stream(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        requested_session_id: Option<&str>,
+        active_skills: &[String],
+        target: PlanDraftTarget,
+        observer: &mut dyn RunEventObserver,
+    ) -> Result<AgentRunResult, AgentError> {
         self.run_with_lineage(
             role,
             instructions,
@@ -333,7 +425,7 @@ impl AgentService {
             requested_session_id,
             RunScope {
                 active_skills,
-                plan_mode: true,
+                mode: AgentRunMode::Plan(target),
                 ..RunScope::default()
             },
             terminal_actor(),
@@ -373,6 +465,46 @@ impl AgentService {
         .await
     }
 
+    /// Execute one consumed approved plan with ordered events and cooperative cancellation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_approved_plan_stream_controlled(
+        &self,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        session_id: &str,
+        plan_id: &str,
+        run_id: &str,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
+        match self
+            .run_with_lineage(
+                role,
+                instructions,
+                prompt,
+                max_turns,
+                Some(session_id),
+                RunScope {
+                    requested_run_id: Some(run_id),
+                    plan_id: Some(plan_id),
+                    ..RunScope::default()
+                },
+                terminal_actor(),
+                Some(observer),
+                Some(control),
+            )
+            .await
+        {
+            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
+            Err(AgentError::Cancelled { result }) => {
+                Ok(AgentRunOutcome::Cancelled { result: *result })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Execute one goal-mode iteration with goal-only tools and durable lineage.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_goal_iteration(
@@ -385,7 +517,7 @@ impl AgentService {
         goal_id: &str,
         plan_id: Option<&str>,
     ) -> Result<AgentRunResult, AgentError> {
-        self.run_with_lineage(
+        Box::pin(self.run_with_lineage(
             role,
             instructions,
             prompt,
@@ -399,8 +531,49 @@ impl AgentService {
             terminal_actor(),
             None,
             None,
-        )
+        ))
         .await
+    }
+
+    /// Execute one Goal Mode iteration with ordered events and cooperative cancellation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_goal_iteration_stream_controlled(
+        &self,
+        run_id: &str,
+        role: &str,
+        instructions: &str,
+        prompt: &str,
+        max_turns: u16,
+        session_id: &str,
+        goal_id: &str,
+        plan_id: Option<&str>,
+        observer: &mut dyn RunEventObserver,
+        control: &RunControl,
+    ) -> Result<AgentRunOutcome, AgentError> {
+        match Box::pin(self.run_with_lineage(
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            Some(session_id),
+            RunScope {
+                requested_run_id: Some(run_id),
+                goal_id: Some(goal_id),
+                plan_id,
+                ..RunScope::default()
+            },
+            terminal_actor(),
+            Some(observer),
+            Some(control),
+        ))
+        .await
+        {
+            Ok(result) => Ok(AgentRunOutcome::Completed { result }),
+            Err(AgentError::Cancelled { result }) => {
+                Ok(AgentRunOutcome::Cancelled { result: *result })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Execute one durable child-agent job without exposing nested delegation.

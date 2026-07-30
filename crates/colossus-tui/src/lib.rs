@@ -5,7 +5,8 @@
 
 use async_trait::async_trait;
 use colossus_contracts::{
-    AgentRunOutcome, ModelMessageRole, ProviderEvent, RunEvent, RunEventEnvelope, SessionMessage,
+    AgentRunMode, AgentRunOutcome, ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy,
+    PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope, SessionMessage,
     SessionMessagePage, TerminalPreferences, ThemeTextStyle,
 };
 use colossus_ports::RunControl;
@@ -62,10 +63,12 @@ mod transcript;
 
 pub use app::run_tui;
 pub use contract::{
-    BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostRunResult, InteractiveCommand,
-    InteractiveHost, InteractivePrompt, InteractiveRunRequest, InteractiveSnapshot, LocalCommand,
-    OperationResult, PromptResponse, RuntimeCommand, ScreenMode, TranscriptEntry, TranscriptKind,
-    TuiError, TuiOptions, parse_interactive_command,
+    BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionOutcome,
+    HostPlanExecutionResult, HostRunResult, InteractiveCommand, InteractiveHost, InteractiveMode,
+    InteractivePlanExecutionRequest, InteractivePrompt, InteractiveRunRequest, InteractiveSnapshot,
+    LocalCommand, OperationResult, PlanCommand, PlanHostCommand, PlanSelectionUpdate,
+    PromptResponse, RuntimeCommand, ScreenMode, TranscriptEntry, TranscriptKind, TuiError,
+    TuiOptions, parse_interactive_command,
 };
 pub use state::TuiState;
 

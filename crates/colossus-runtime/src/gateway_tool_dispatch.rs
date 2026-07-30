@@ -653,6 +653,27 @@ impl ToolExecutor for GatewayToolExecutor {
                 )
                 .await?
             }
+            "plan.update" => {
+                let id = context.draft_plan_id.clone().ok_or_else(|| {
+                    ToolError::Denied(
+                        "plan.update requires a runtime-bound Plan Mode draft target".into(),
+                    )
+                })?;
+                let expected_revision = context.draft_plan_revision.ok_or_else(|| {
+                    ToolError::Denied("plan.update requires a runtime-bound draft revision".into())
+                })?;
+                self.execute_work_tool(
+                    &call,
+                    context,
+                    WorkOperation::PlanUpdate {
+                        id,
+                        expected_revision,
+                        content: required_tool_string(&call, "content")?.into(),
+                        steps: tool_plan_steps(&call)?,
+                    },
+                )
+                .await?
+            }
             "plan.show" => {
                 self.execute_work_tool(
                     &call,

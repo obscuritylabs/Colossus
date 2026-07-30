@@ -443,10 +443,9 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
             if value.result.is_some() || value.failure.is_some() {
                 return Err(projection_invariant());
             }
-            Some(run::Terminal::Cancellation(RunCancellation {
-                turn: cancellation.turn,
-                message: cancellation.message,
-            }))
+            Some(run::Terminal::Cancellation(proto_cancellation(
+                cancellation,
+            )))
         }
         _ => {
             if value.result.is_some() || value.failure.is_some() || value.cancellation.is_some() {
@@ -506,11 +505,20 @@ fn proto_outcome(value: CoreOutcomeCertainty) -> OutcomeCertainty {
 fn proto_result(value: colossus_api::RunResult) -> RunResult {
     RunResult {
         output: value.output,
+        plan_id: value.plan_id,
         profile: value.profile,
         model: value.model,
         elapsed_seconds: value.elapsed_seconds,
         model_profile: value.model_profile,
         provider_profile: value.provider_profile,
+    }
+}
+
+fn proto_cancellation(value: colossus_api::RunCancellation) -> RunCancellation {
+    RunCancellation {
+        turn: value.turn,
+        message: value.message,
+        plan_id: value.plan_id,
     }
 }
 
@@ -730,10 +738,7 @@ async fn proto_update(
             failure: Some(proto_failure(failure)),
         }),
         CoreRunUpdateKind::Cancellation { cancellation } => {
-            run_update::Update::Cancellation(RunCancellation {
-                turn: cancellation.turn,
-                message: cancellation.message,
-            })
+            run_update::Update::Cancellation(proto_cancellation(cancellation))
         }
     };
     Ok(RunUpdate {
@@ -1159,5 +1164,31 @@ mod tests {
                 "private parse detail must not leak"
             );
         }
+    }
+
+    #[test]
+    fn result_projection_preserves_optional_plan_identity() {
+        let result = proto_result(colossus_api::RunResult {
+            output: "Plan saved".into(),
+            plan_id: Some("plan-1".into()),
+            profile: "default".into(),
+            model_profile: "default".into(),
+            provider_profile: "provider".into(),
+            model: "model".into(),
+            elapsed_seconds: 1.0,
+        });
+
+        assert_eq!(result.plan_id.as_deref(), Some("plan-1"));
+    }
+
+    #[test]
+    fn cancellation_projection_preserves_optional_plan_identity() {
+        let cancellation = proto_cancellation(colossus_api::RunCancellation {
+            turn: 2,
+            message: "cancelled after persistence".into(),
+            plan_id: Some("plan-1".into()),
+        });
+
+        assert_eq!(cancellation.plan_id.as_deref(), Some("plan-1"));
     }
 }

@@ -126,6 +126,11 @@ pub enum RunEvent {
         /// Wall time since the run began.
         elapsed_seconds: f64,
     },
+    /// One canonical draft plan was created or updated during Plan Mode.
+    PlanWritten {
+        /// Canonical plan after the durable write.
+        plan: PlanRecord,
+    },
     /// A validated model-requested tool was not executed because cancellation won first.
     ToolCancelled {
         /// One-based model turn.
@@ -511,6 +516,9 @@ pub struct AgentRunResult {
     pub provider_profile: String,
     /// Model used for the turn.
     pub model: String,
+    /// Canonical plan created or updated by a completed Plan Mode run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanRecord>,
     /// Complete visible assistant output.
     pub output: String,
     /// Number of events durably recorded on the run stream, including preparation.
@@ -529,6 +537,9 @@ pub struct AgentRunCancellation {
     pub session_id: String,
     /// One-based turn at which cancellation became terminal.
     pub turn: u16,
+    /// Canonical plan persisted before cancellation, when one write completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanRecord>,
     /// Number of events durably recorded on the run stream.
     pub event_count: u64,
     /// Elapsed wall time in fractional seconds.

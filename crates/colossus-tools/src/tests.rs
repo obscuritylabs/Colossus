@@ -614,6 +614,7 @@ fn durable_memory_tools_have_strict_scoped_schemas_and_reject_noop_updates() {
 fn plan_tools_require_ordered_structured_steps_and_exact_arguments() {
     let registry = StaticToolRegistry::builtins(&[
         "plan.create".into(),
+        "plan.update".into(),
         "plan.show".into(),
         "plan.approve_request".into(),
     ])
@@ -634,6 +635,22 @@ fn plan_tools_require_ordered_structured_steps_and_exact_arguments() {
             })
             .is_ok()
     );
+    assert!(
+        registry
+            .validate(&ToolCall {
+                call_id: "plan-update".into(),
+                name: "plan.update".into(),
+                arguments: json!({
+                    "content": "# Refined plan",
+                    "steps": [{
+                        "title": "Verify",
+                        "detail": "Run focused tests",
+                        "requires_mutation": false,
+                    }],
+                }),
+            })
+            .is_ok()
+    );
     for arguments in [
         json!({"prompt": "missing steps"}),
         json!({"prompt": "empty", "steps": []}),
@@ -643,6 +660,30 @@ fn plan_tools_require_ordered_structured_steps_and_exact_arguments() {
             registry.validate(&ToolCall {
                 call_id: "plan-create".into(),
                 name: "plan.create".into(),
+                arguments,
+            }),
+            Err(ToolError::InvalidArguments { .. })
+        ));
+    }
+    for arguments in [
+        json!({"steps": [{"title": "missing content"}]}),
+        json!({"content": "missing steps"}),
+        json!({"content": "empty steps", "steps": []}),
+        json!({
+            "plan_id": "caller-controlled",
+            "content": "forged target",
+            "steps": [{"title": "x"}],
+        }),
+        json!({
+            "revision": 7,
+            "content": "forged revision",
+            "steps": [{"title": "x"}],
+        }),
+    ] {
+        assert!(matches!(
+            registry.validate(&ToolCall {
+                call_id: "plan-update".into(),
+                name: "plan.update".into(),
                 arguments,
             }),
             Err(ToolError::InvalidArguments { .. })

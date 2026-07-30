@@ -83,6 +83,27 @@ fn custom_theme() -> CustomTheme {
     }
 }
 
+fn plan_record(status: PlanStatus, revision: u64) -> PlanRecord {
+    PlanRecord {
+        id: "plan-019fabcdef".into(),
+        session_id: "019f-test".into(),
+        prompt: "Plan the terminal workflow".into(),
+        status,
+        revision,
+        content: "A bounded plan".into(),
+        steps: vec![colossus_contracts::PlanStep {
+            index: 1,
+            title: "Implement".into(),
+            detail: "Keep behavior behind the host.".into(),
+            requires_mutation: true,
+        }],
+        created_at: "2026-07-15T00:00:00Z".into(),
+        updated_at: "2026-07-15T00:00:00Z".into(),
+        approved_at: None,
+        executed_run_id: None,
+    }
+}
+
 #[test]
 fn parser_handles_tui_commands_without_a_repl_alias() {
     assert_eq!(
@@ -118,15 +139,74 @@ fn parser_handles_tui_commands_without_a_repl_alias() {
 }
 
 #[test]
+fn parser_enforces_the_exact_plan_command_grammar() {
+    assert_eq!(
+        parse_interactive_command("/plan"),
+        InteractiveCommand::Plan(PlanCommand::Toggle)
+    );
+    assert_eq!(
+        parse_interactive_command("/plan on"),
+        InteractiveCommand::Plan(PlanCommand::On)
+    );
+    assert_eq!(
+        parse_interactive_command("/plan use plan-1"),
+        InteractiveCommand::Plan(PlanCommand::Use {
+            plan_id: "plan-1".into(),
+        })
+    );
+    assert_eq!(
+        parse_interactive_command("/plan show"),
+        InteractiveCommand::Plan(PlanCommand::Show { plan_id: None })
+    );
+    assert_eq!(
+        parse_interactive_command("/plan execute direct"),
+        InteractiveCommand::Plan(PlanCommand::Execute {
+            strategy: Some(PlanExecutionStrategy::Direct),
+        })
+    );
+    assert_eq!(
+        parse_interactive_command("/plan execute goal"),
+        InteractiveCommand::Plan(PlanCommand::Execute {
+            strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 5 }),
+        })
+    );
+    assert_eq!(
+        parse_interactive_command("/plan execute goal 50"),
+        InteractiveCommand::Plan(PlanCommand::Execute {
+            strategy: Some(PlanExecutionStrategy::Goal { max_iterations: 50 }),
+        })
+    );
+    for input in [
+        "/plan use",
+        "/plan approve extra",
+        "/plan execute goal 0",
+        "/plan execute goal 51",
+        "/plan execute other",
+        "/plan unknown",
+    ] {
+        assert!(
+            matches!(
+                parse_interactive_command(input),
+                InteractiveCommand::Invalid(_)
+            ),
+            "{input}"
+        );
+    }
+}
+
+#[test]
 fn run_request_carries_only_process_local_provider_diagnostic_state() {
     let mut state = TuiState::from_snapshot(snapshot());
     assert!(
         !state
             .run_request("normal".into())
+            .expect("execute request")
             .include_provider_response_diagnostics
     );
     state.provider_response_diagnostics = true;
-    let request = state.run_request("reproduce".into());
+    let request = state
+        .run_request("reproduce".into())
+        .expect("execute request");
     assert!(request.include_provider_response_diagnostics);
     assert_eq!(request.prompt, "reproduce");
 
@@ -134,8 +214,277 @@ fn run_request_carries_only_process_local_provider_diagnostic_state() {
     assert!(
         !restarted
             .run_request("after restart".into())
+            .expect("execute request")
             .include_provider_response_diagnostics
     );
+}
+
+#[test]
+fn plan_mode_derives_create_or_revision_bound_update_targets() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    assert_eq!(state.mode, InteractiveMode::Execute);
+    assert_eq!(
+        state
+            .run_request("execute".into())
+            .expect("execute request")
+            .mode,
+        AgentRunMode::Execute
+    );
+
+    state.mode = InteractiveMode::Plan;
+    assert_eq!(
+        state
+            .run_request("create".into())
+            .expect("create request")
+            .mode,
+        AgentRunMode::Plan(PlanDraftTarget::Create)
+    );
+
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 7));
+    assert_eq!(
+        state
+            .run_request("refine".into())
+            .expect("refine request")
+            .mode,
+        AgentRunMode::Plan(PlanDraftTarget::Update {
+            plan_id: "plan-019fabcdef".into(),
+            revision: 7,
+        })
+    );
+
+    state.selected_plan = Some(plan_record(PlanStatus::Approved, 8));
+    assert!(
+        state
+            .run_request("must not refine".into())
+            .expect_err("approved plans are immutable")
+            .contains("cannot be refined")
+    );
+}
+
+#[test]
+fn plan_state_is_process_local_and_session_switch_clears_only_selection() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    assert!(
+        state
+            .apply_plan_selection(PlanSelectionUpdate::Use(Box::new(plan_record(
+                PlanStatus::Draft,
+                3,
+            ))))
+            .is_ok()
+    );
+    assert_eq!(state.mode, InteractiveMode::Plan);
+    assert_eq!(
+        state.selected_plan.as_ref().map(|plan| plan.revision),
+        Some(3)
+    );
+
+    state.mode = InteractiveMode::Plan;
+
+    let mut switched = HostCommandResult::document(PresentationDocument::new());
+    switched.session = Some((
+        "019f-other".into(),
+        SessionMessagePage {
+            messages: Vec::new(),
+            before_sequence: None,
+            has_more: false,
+        },
+    ));
+    assert!(apply_command_result(&mut state, switched));
+    assert_eq!(state.session_id, "019f-other");
+    assert_eq!(state.mode, InteractiveMode::Plan);
+    assert!(state.selected_plan.is_none());
+
+    let restarted = TuiState::from_snapshot(snapshot());
+    assert_eq!(restarted.mode, InteractiveMode::Execute);
+    assert!(restarted.selected_plan.is_none());
+}
+
+#[test]
+fn plan_commands_are_always_available_for_completion() {
+    let state = TuiState::from_snapshot(snapshot());
+    for command in [
+        "/plan",
+        "/plan new",
+        "/plan use",
+        "/plan execute direct",
+        "/plan execute goal",
+        "/plans",
+    ] {
+        assert!(
+            state
+                .completions
+                .iter()
+                .any(|candidate| candidate == command),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn execution_choice_builds_a_bounded_goal_request_or_cancels_without_state_changes() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let approved = plan_record(PlanStatus::Approved, 4);
+    state.selected_plan = Some(approved.clone());
+    state.overlay = Some(Overlay::PlanExecutionChoice {
+        plan: approved,
+        selected: 0,
+    });
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.overlay.is_none());
+    assert_eq!(
+        state.pending_plan_execution,
+        Some(InteractivePlanExecutionRequest {
+            session_id: "019f-test".into(),
+            plan_id: "plan-019fabcdef".into(),
+            revision: 4,
+            strategy: PlanExecutionStrategy::Goal { max_iterations: 5 },
+        })
+    );
+
+    state.pending_plan_execution = None;
+    let approved = state.selected_plan.clone().expect("selected plan");
+    state.overlay = Some(Overlay::PlanExecutionChoice {
+        plan: approved,
+        selected: 2,
+    });
+    handle_overlay_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+    assert!(state.pending_plan_execution.is_none());
+    assert_eq!(state.mode, InteractiveMode::Plan);
+    assert!(state.selected_plan.is_some());
+}
+
+#[test]
+fn plan_write_events_select_the_exact_canonical_revision() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let plan = plan_record(PlanStatus::Draft, 9);
+    handle_run_event(
+        &mut state,
+        RunEventEnvelope {
+            schema_version: 1,
+            run_id: "run-plan".into(),
+            session_id: "019f-test".into(),
+            event: RunEvent::PlanWritten { plan: plan.clone() },
+        },
+    );
+    assert_eq!(state.selected_plan, Some(plan));
+}
+
+#[test]
+fn post_consumption_failure_returns_to_execute_and_clears_selection() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let mut consumed = plan_record(PlanStatus::Executed, 6);
+    consumed.executed_run_id = Some("run-consumed".into());
+    state.selected_plan = Some(plan_record(PlanStatus::Approved, 5));
+    state.queue.push_back("next turn".into());
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::PlanExecution(
+            HostPlanExecutionResult {
+                plan: consumed,
+                document: PresentationDocument::new(),
+                outcome: HostPlanExecutionOutcome::FailedAfterConsumption(
+                    "provider unavailable".into(),
+                ),
+                footer: FooterState {
+                    status: "error".into(),
+                    ..FooterState::default()
+                },
+                plan_selection: PlanSelectionUpdate::Clear,
+            },
+        )))),
+    );
+    assert_eq!(state.mode, InteractiveMode::Execute);
+    assert!(state.selected_plan.is_none());
+    assert!(state.queue_paused);
+    assert!(matches!(state.overlay, Some(Overlay::QueuePaused)));
+}
+
+#[test]
+fn cancellation_before_consumption_preserves_plan_mode_and_selection() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let approved = plan_record(PlanStatus::Approved, 5);
+    state.selected_plan = Some(approved.clone());
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::PlanExecution(
+            HostPlanExecutionResult {
+                plan: approved.clone(),
+                document: PresentationDocument::new(),
+                outcome: HostPlanExecutionOutcome::CancelledBeforeStart,
+                footer: FooterState {
+                    status: "cancelled".into(),
+                    ..FooterState::default()
+                },
+                plan_selection: PlanSelectionUpdate::Set(Box::new(approved.clone())),
+            },
+        )))),
+    );
+    assert_eq!(state.mode, InteractiveMode::Plan);
+    assert_eq!(state.selected_plan, Some(approved));
+}
+
+#[test]
+fn execution_failure_reconciliation_preserves_known_unconsumed_and_clears_unknown() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    let approved = plan_record(PlanStatus::Approved, 5);
+    state.selected_plan = Some(approved.clone());
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::PlanExecution(
+            HostPlanExecutionResult {
+                plan: approved.clone(),
+                document: PresentationDocument::new(),
+                outcome: HostPlanExecutionOutcome::FailedBeforeConsumption("policy denied".into()),
+                footer: FooterState::default(),
+                plan_selection: PlanSelectionUpdate::Set(Box::new(approved.clone())),
+            },
+        )))),
+    );
+    assert_eq!(state.mode, InteractiveMode::Plan);
+    assert_eq!(state.selected_plan, Some(approved.clone()));
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::PlanExecution(
+            HostPlanExecutionResult {
+                plan: approved,
+                document: PresentationDocument::new(),
+                outcome: HostPlanExecutionOutcome::OutcomeUnknown("worker disconnected".into()),
+                footer: FooterState::default(),
+                plan_selection: PlanSelectionUpdate::Clear,
+            },
+        )))),
+    );
+    assert_eq!(state.mode, InteractiveMode::Execute);
+    assert!(state.selected_plan.is_none());
+}
+
+#[test]
+fn plan_mode_and_selection_are_visible_in_composer_and_footer() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.mode = InteractiveMode::Plan;
+    state.selected_plan = Some(plan_record(PlanStatus::Draft, 7));
+    terminal
+        .draw(|frame| render(frame, &mut state))
+        .expect("draw plan mode");
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Plan plan-019"), "{rendered}");
+    assert!(rendered.contains("mode=plan"), "{rendered}");
+    assert!(rendered.contains("plan=plan-019:r7:draft"), "{rendered}");
 }
 
 #[test]
@@ -197,10 +546,10 @@ fn structured_completion_tracks_slash_commands_and_skill_tokens() {
             kind: CompletionKind::Command,
         })
     );
-    assert_eq!(
-        state.completion_menu_candidates(),
-        vec!["/tools", "/tui prefs"]
-    );
+    let commands = state.completion_menu_candidates();
+    assert!(commands.starts_with(&["/tools", "/tui prefs"]));
+    assert!(commands.contains(&"/plan"));
+    assert!(commands.contains(&"/plan execute goal"));
 
     state.composer.clear();
     state.composer.insert("please @off");
@@ -403,7 +752,7 @@ fn historical_web_fetch_results_keep_compact_preview_semantics() {
 
     let mut verbose_preferences = state.preferences.clone();
     verbose_preferences.events_mode = EventDisplayMode::Verbose;
-    apply_command_result(
+    assert!(apply_command_result(
         &mut state,
         HostCommandResult {
             document: PresentationDocument::new(),
@@ -412,9 +761,11 @@ fn historical_web_fetch_results_keep_compact_preview_semantics() {
             completions: None,
             sticky_skills: None,
             footer: None,
+            plan_selection: PlanSelectionUpdate::Unchanged,
+            continue_queue: true,
             clear_transcript: false,
         },
-    );
+    ));
     let rerendered = transcript_lines(&state, 80)
         .into_iter()
         .map(|line| line.to_string())
@@ -479,7 +830,7 @@ fn live_web_fetch_result_rebuilds_when_event_mode_changes() {
 
     let mut preferences = state.preferences.clone();
     preferences.events_mode = EventDisplayMode::Verbose;
-    apply_command_result(
+    assert!(apply_command_result(
         &mut state,
         HostCommandResult {
             document: PresentationDocument::new(),
@@ -488,9 +839,11 @@ fn live_web_fetch_result_rebuilds_when_event_mode_changes() {
             completions: None,
             sticky_skills: None,
             footer: None,
+            plan_selection: PlanSelectionUpdate::Unchanged,
+            continue_queue: true,
             clear_transcript: false,
         },
-    );
+    ));
     let verbose = transcript_lines(&state, 80)
         .into_iter()
         .map(|line| line.to_string())
@@ -543,7 +896,7 @@ fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.page_up();
     state.new_items = 3;
-    apply_command_result(
+    assert!(apply_command_result(
         &mut state,
         HostCommandResult {
             document: PresentationDocument::new(),
@@ -570,9 +923,11 @@ fn session_switch_replaces_transcript_and_resets_live_scroll_state() {
             completions: None,
             sticky_skills: None,
             footer: None,
+            plan_selection: PlanSelectionUpdate::Unchanged,
+            continue_queue: true,
             clear_transcript: false,
         },
-    );
+    ));
     assert_eq!(state.session_id, "019f-other");
     assert_eq!(state.transcript.len(), 1);
     assert_eq!(state.scroll_from_bottom, 0);
@@ -653,6 +1008,32 @@ fn prompt_cancel_is_one_use_and_preserves_the_composer_draft() {
     handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(received.try_recv(), Ok(PromptResponse::Cancelled));
     assert_eq!(state.draft(), "draft stays here");
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn terminal_operation_releases_an_open_prompt_overlay() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    let (response, mut received) = oneshot::channel();
+    handle_host_event(
+        &mut state,
+        HostEvent::Prompt(InteractivePrompt {
+            id: "prompt-disconnect".into(),
+            title: "Approval".into(),
+            document: PresentationDocument::from_block(PresentationBlock::Text("Allow?".into())),
+            choices: vec!["allow".into(), "deny".into()],
+            initial_choice: None,
+            allow_free_form: false,
+            response,
+        }),
+    );
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Err("worker disconnected".into()))),
+    );
+
+    assert_eq!(received.try_recv(), Ok(PromptResponse::Cancelled));
     assert!(state.overlay.is_none());
 }
 

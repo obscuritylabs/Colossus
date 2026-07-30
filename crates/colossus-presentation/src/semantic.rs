@@ -191,6 +191,13 @@ impl SemanticRenderer {
             } => {
                 self.render_tool_completed(*turn, result, *duration_seconds, *elapsed_seconds, None)
             }
+            RunEvent::PlanWritten { plan } => Ok(Some(format!(
+                "{} {} revision={} status={:?}",
+                self.label("plan"),
+                plan.id,
+                plan.revision,
+                plan.status
+            ))),
             RunEvent::Error {
                 code,
                 message,

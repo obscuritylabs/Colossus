@@ -77,7 +77,42 @@ Enter these commands in the composer:
 
 Unknown slash commands remain in the terminal parser and are not sent to the model.
 
-### 3. Compose and navigate
+### 3. Plan before executing
+
+Enter Plan mode without selecting an older draft:
+
+```text
+/plan new
+Plan the requested change, including focused verification.
+```
+
+A completed planning turn durably creates one Draft and selects it. Further prompts
+refine that selected Draft at its current revision. Inspect and approve it with:
+
+```text
+/plan status
+/plan show
+/plan approve
+/plan execute
+```
+
+The last command opens Direct, Goal Mode, and Cancel choices. Direct consumes the
+Approved plan into one ordinary run. Goal Mode defaults to five iterations; use
+`/plan execute goal ITERATIONS` for an explicit value from 1 through 50. In non-TTY
+line mode, the same unspecified-strategy choice is numbered on stdin. Use
+`/goal resume GOAL_ID` to continue the remaining budget of an Active goal after a
+cancelled or failed Goal run.
+
+Use `/plan use PLAN_ID` only for a Draft or Approved plan in the current session.
+`/plan new` clears the selection without discarding the old plan, while `/plan off`
+returns to Execute mode and retains it. `/plan discard` is the explicit operator-only
+abandonment transition.
+
+Mode and selection are local to this terminal process. Mode survives session switches,
+but selection is cleared; both restart in Execute mode with no selected plan. These
+values are never stored as presentation preferences.
+
+### 4. Compose and navigate
 
 - Type `/` at the start of a draft for slash-command completion.
 - Type `@` at a skill-token boundary for installed skill completion.
@@ -90,7 +125,7 @@ Unknown slash commands remain in the terminal parser and are not sent to the mod
 The composer accepts up to eight future turns while a run is active. Failure or
 cancellation pauses the queue for confirmation.
 
-### 4. Handle approvals and questions
+### 5. Handle approvals and questions
 
 Approval and `user.ask` prompts take focus without discarding your draft. Select an exact
 option or type an answer, then press Enter. Esc or a blank response fails closed.
@@ -98,7 +133,7 @@ option or type an answer, then press Enter. Esc or a blank response fails closed
 Use `wait_for_input` in a workflow when a run must wait durably without an attached
 terminal; `user.ask` is turn-scoped.
 
-### 5. Leave cleanly
+### 6. Leave cleanly
 
 Enter `/exit`, or press Ctrl-D only while idle with an empty draft. Ctrl-C clears a
 draft, cancels a modal, or requests cooperative run cancellation according to the
@@ -124,6 +159,13 @@ and `/audit verify` to confirm the active session and journal.
   whether the queue should continue.
 - **A modal disconnects or times out:** the answer fails closed; reopen the operation
   rather than assuming it continued.
+- **A selected plan is stale:** another lifecycle change advanced its optimistic
+  revision. Reload it with `/plan use PLAN_ID`, inspect it, and deliberately retry.
+- **An Approved plan will not refine:** Approved plans are immutable. Execute, discard,
+  start a new plan, or return to Execute mode.
+- **A worker protocol mismatch appears:** protocol v6 is not compatible with an older
+  resident worker. Restart the worker and client with the same Colossus version, inspect
+  `/plans`, and do not assume an interrupted request was retried.
 - **Terminal state looks damaged after a crash:** reset the terminal, then use durable
   session and audit commands to inspect application state.
 

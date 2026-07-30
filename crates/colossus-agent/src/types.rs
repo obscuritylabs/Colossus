@@ -19,7 +19,7 @@ pub(super) struct RunScope<'a> {
     pub(super) attempt: Option<u32>,
     pub(super) active_skills: &'a [String],
     pub(super) allowed_tools: Option<&'a [String]>,
-    pub(super) plan_mode: bool,
+    pub(super) mode: AgentRunMode,
     pub(super) create_requested_session: bool,
     pub(super) include_provider_response_diagnostics: bool,
 }
@@ -57,10 +57,13 @@ pub enum AgentError {
     /// Normalized turn contained neither visible output nor a tool call.
     #[error("provider returned no visible assistant output or tool calls")]
     EmptyTurn,
+    /// Plan Mode exhausted its correction opportunity without persisting its required draft.
+    #[error("plan mode completed without the required plan create or update")]
+    PlanWriteRequired,
     /// The operator requested a cooperative stop at a safe boundary.
     #[error("agent run cancelled by the operator")]
     Cancelled {
         /// Durable cancellation evidence.
-        result: AgentRunCancellation,
+        result: Box<AgentRunCancellation>,
     },
 }

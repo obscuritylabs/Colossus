@@ -1,11 +1,175 @@
 use super::*;
 
+fn plan(id: &str, session_id: &str, status: PlanStatus, revision: u64) -> PlanRecord {
+    PlanRecord {
+        id: id.into(),
+        session_id: session_id.into(),
+        prompt: "Implement Plan Mode".into(),
+        status,
+        revision,
+        content: "# Plan".into(),
+        steps: Vec::new(),
+        created_at: "2026-07-29T00:00:00Z".into(),
+        updated_at: "2026-07-29T00:00:00Z".into(),
+        approved_at: (status == PlanStatus::Approved).then(|| "2026-07-29T00:01:00Z".into()),
+        executed_run_id: (status == PlanStatus::Executed).then(|| "run-1".into()),
+    }
+}
+
 #[test]
 fn provider_doctor_commands_accept_at_most_one_optional_profile() {
     assert_eq!(doctor_profile("doctor", "models"), Ok(None));
     assert_eq!(doctor_profile("doctor local", "models"), Ok(Some("local")));
     assert!(doctor_profile("doctor local extra", "models").is_err());
     assert!(doctor_profile("status", "provider").is_err());
+}
+
+#[test]
+fn terminal_plan_selection_is_session_scoped_and_actionable() {
+    let selected = selectable_plan(
+        current_session_plan(
+            Some(plan("plan-1", "session-1", PlanStatus::Draft, 1)),
+            "plan-1",
+            "session-1",
+        )
+        .expect("current-session plan"),
+    )
+    .expect("actionable plan");
+    assert_eq!(selected.id, "plan-1");
+
+    assert!(
+        current_session_plan(
+            Some(plan("plan-2", "session-2", PlanStatus::Draft, 1)),
+            "plan-2",
+            "session-1",
+        )
+        .is_err()
+    );
+    assert!(selectable_plan(plan("plan-3", "session-1", PlanStatus::Executed, 3)).is_err());
+}
+
+#[test]
+fn plan_execution_mapping_distinguishes_pre_and_post_consumption() {
+    let approved = plan("plan-1", "session-1", PlanStatus::Approved, 2);
+    let cancelled = host_plan_execution_result(
+        PlanExecutionOutcome::CancelledBeforeStart {
+            plan: approved.clone(),
+        },
+        FooterState::default(),
+    )
+    .expect("cancelled mapping");
+    assert_eq!(
+        cancelled.outcome,
+        HostPlanExecutionOutcome::CancelledBeforeStart
+    );
+    assert!(matches!(
+        cancelled.plan_selection,
+        PlanSelectionUpdate::Set(plan) if *plan == approved
+    ));
+
+    let failed = host_plan_execution_result(
+        PlanExecutionOutcome::Direct {
+            plan: plan("plan-1", "session-1", PlanStatus::Executed, 3),
+            terminal: ControlledAgentTerminal::Failed {
+                run_id: "run-1".into(),
+                message: "bounded failure".into(),
+            },
+        },
+        FooterState::default(),
+    )
+    .expect("failed mapping");
+    assert_eq!(
+        failed.outcome,
+        HostPlanExecutionOutcome::FailedAfterConsumption("bounded failure".into())
+    );
+    assert!(matches!(failed.plan_selection, PlanSelectionUpdate::Clear));
+}
+
+#[test]
+fn plan_execution_errors_reconcile_durable_consumption_or_fail_unknown() {
+    let approved = plan("plan-1", "session-1", PlanStatus::Approved, 2);
+    approved_plan_at_revision(Some(approved.clone()), "plan-1", "session-1", 2)
+        .expect("selected approved revision");
+
+    let before = host_plan_execution_failure(
+        approved.clone(),
+        Ok(Some(approved.clone())),
+        "policy denied".into(),
+        FooterState::default(),
+    );
+    assert_eq!(
+        before.outcome,
+        HostPlanExecutionOutcome::FailedBeforeConsumption("policy denied".into())
+    );
+    assert!(matches!(
+        before.plan_selection,
+        PlanSelectionUpdate::Set(plan) if *plan == approved
+    ));
+
+    let executed = plan("plan-1", "session-1", PlanStatus::Executed, 3);
+    let after = host_plan_execution_failure(
+        approved.clone(),
+        Ok(Some(executed.clone())),
+        "connection closed".into(),
+        FooterState::default(),
+    );
+    assert_eq!(
+        after.outcome,
+        HostPlanExecutionOutcome::ConsumedOutcomeUnknown("connection closed".into())
+    );
+    assert_eq!(after.plan, executed);
+    assert!(matches!(after.plan_selection, PlanSelectionUpdate::Clear));
+
+    let unknown = host_plan_execution_failure(
+        approved.clone(),
+        Err("worker unavailable".into()),
+        "connection closed".into(),
+        FooterState::default(),
+    );
+    assert_eq!(
+        unknown.outcome,
+        HostPlanExecutionOutcome::OutcomeUnknown("connection closed".into())
+    );
+    assert_eq!(unknown.plan, approved);
+    assert!(matches!(unknown.plan_selection, PlanSelectionUpdate::Clear));
+}
+
+#[test]
+fn plan_lifecycle_errors_apply_readback_before_pausing_the_queue() {
+    let draft = plan("plan-1", "session-1", PlanStatus::Draft, 2);
+    let approved = plan("plan-1", "session-1", PlanStatus::Approved, 3);
+    let committed = host_plan_lifecycle_failure(
+        draft.clone(),
+        Ok(Some(approved.clone())),
+        PlanStatus::Approved,
+        "connection closed".into(),
+    );
+    assert!(!committed.continue_queue);
+    assert!(matches!(
+        committed.plan_selection,
+        PlanSelectionUpdate::Set(plan) if *plan == approved
+    ));
+
+    let unchanged = host_plan_lifecycle_failure(
+        draft.clone(),
+        Ok(Some(draft.clone())),
+        PlanStatus::Approved,
+        "policy denied".into(),
+    );
+    assert!(!unchanged.continue_queue);
+    assert!(matches!(
+        unchanged.plan_selection,
+        PlanSelectionUpdate::Set(plan) if *plan == draft
+    ));
+
+    let unknown = host_plan_lifecycle_failure(
+        draft,
+        Err("worker unavailable".into()),
+        PlanStatus::Discarded,
+        "connection closed".into(),
+    );
+    assert!(!unknown.continue_queue);
+    assert!(matches!(unknown.plan_selection, PlanSelectionUpdate::Clear));
 }
 
 fn session(

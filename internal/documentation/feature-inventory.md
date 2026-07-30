@@ -143,10 +143,10 @@ inspect hashes, audit records, and package contents without network access.
 | UX-02 | Human-first terminal presentation | P1 | Interactive CLI and TUI surfaces restore the Python 0.5 semantic cards, Markdown, tables, guided choices, completion, and transcript behavior without weakening structured automation output. |
 | UX-03 | Responsive terminal UI | P1 | A Ratatui TUI owns terminal rendering, restores the durable transcript, pins the composer and footer, keeps input responsive during runs, and bridges approvals, questions, and cancellation identically in embedded and worker modes. |
 | CTX-01 | Context composition and compaction | P1 | Raw history is retained while provider input stays within budget. |
-| WORK-01 | Tasks, decisions, memories, and plans | P1 | Long-running work state is persisted and inspectable. |
+| WORK-01 | Tasks, decisions, memories, and plans | P1 | Long-running work state is persisted and inspectable; plans support optimistic refinement, discard, approval, and atomic Direct or Goal consumption. |
 | MEM-01 | Canonical memory and disposable indexes | P1 | Memory lifecycle state remains authoritative and usable while lexical or semantic indexes lag or rebuild. |
 | FLOW-01 | Durable versioned workflows | P1 | YAML workflows, fixed-cadence schedules, authenticated webhooks, and repository-event subscriptions are validated, hash-pinned, restartable, bounded, and use normal authorization for every dispatch and effectful step. |
-| GOAL-01 | Bounded Goal Mode | P1 | Autonomous iterations stop on terminal status or budget exhaustion. |
+| GOAL-01 | Bounded Goal Mode | P1 | Autonomous iterations stop on terminal status or budget exhaustion, and an Active goal can resume only its remaining budget. |
 | AGENT-01 | Durable subagents | P1 | Queued child jobs support bounded concurrency and lifecycle controls. |
 | RES-01 | Deep Research | P1 | Evidence collection, claims, citations, progress, and fallback are durable. |
 | OBS-01 | Telemetry and observability | P1 | Run duration, event, tool, approval, risk, research, and error metrics are queryable. |
@@ -233,9 +233,14 @@ A completed run returns at least:
 - final visible assistant output
 - number of recorded events
 - elapsed seconds
+- for a completed Plan Mode run, the canonical created or updated plan and its identity
 
 The terminal MUST display a human-readable elapsed duration after normal runs and Goal
 Mode runs.
+
+The public application API, protobuf contract, and SDK completed-result and cancellation
+types expose that identity as optional `plan_id`. Execute runs, cancellations before
+persistence, and older durable payloads read it as absent.
 
 ## 8. Model Providers And Routing
 
@@ -295,6 +300,7 @@ hidden reasoning MUST NOT be persisted as default events.
 | `approval.auto_granted` | Record `call_id` and no-prompt approval reason. |
 | `risk.assessment` | Record tool, risk level, summary, concerns, recommendation, and model route. |
 | `tool.call.completed` | Record call id, name, bounded output, and exit code. |
+| `PlanWritten` (`plan_written`) | Release the canonical Draft and revision after the one required Plan Mode write succeeds. |
 | `handoff` | Record source agent, destination agent, and optional reason. |
 | `subagent.status` | Record job id, lifecycle status, role, task, and safe message. |
 | `research.status` | Record coarse research phase, status, message, and source count. |
@@ -361,7 +367,7 @@ extension fails closed.
   `decision.archive`, `decision.supersede`.
 - Memories: `memory.create`, `memory.update`, `memory.list`, `memory.search`,
   `memory.archive`, `memory.supersede`.
-- Plans: `plan.create`, `plan.show`, `plan.approve_request`.
+- Plans: `plan.create`, `plan.update`, `plan.show`, `plan.approve_request`.
 - Active goals: `goal.show`, `goal.update`.
 - Patches: `patch.preview`, `patch.apply`, `patch.reverse`.
 - Repository context: `repo.map`, `repo.symbol_search`, `repo.references`,
@@ -594,12 +600,45 @@ gateway.
 
 ### 12.6 Plans
 
-Plans are `draft`, `approved`, or `executed`. A plan stores the originating prompt,
-markdown content, ordered steps, mutation flags, session id, and timestamps.
+Plans are `draft`, `approved`, `executed`, or `discarded`. A plan stores the originating
+prompt, Markdown content, ordered steps, mutation flags, session id, timestamps, and an
+optimistic revision. Legacy records without a revision read as zero; new records start
+at one. Every content update and lifecycle transition increments the revision, and a
+stale update, approval, discard, Direct execution, or Goal handoff MUST fail with a
+conflict.
 
-Plan Mode may inspect context and create tasks, but it MUST NOT mutate the workspace or
-claim implementation is complete. A draft can be reviewed, approved, discarded,
-executed once, or handed to Goal Mode. Execution preserves the plan id for lineage.
+Plan Mode has trusted Create and Update targets. Create permits exactly one successful
+`plan.create`. Update binds an exact same-session Draft id and revision on the server and
+permits exactly one successful `plan.update`; the model supplies only replacement
+content and ordered steps, and the original prompt remains unchanged. The target-specific
+instructions are appended after skill composition and therefore retain precedence.
+
+A completed planning turn MUST persist exactly one target write. A second write is
+blocked before dispatch. If the model produces final output before writing, the runtime
+permits one corrective provider turn and then fails closed. A failed, cancelled, or
+disconnected turn is not retried automatically and can contain zero or one durable plan;
+the typed `PlanWritten` event and run/cancellation result preserve the canonical evidence
+when a write completed.
+
+Plan Mode may use the target write plus its exact inspection/state allowlist:
+`echo`, `filesystem.list`, `filesystem.read`, `filesystem.search`, `git.status`,
+`git.diff`, `git.show`, `repo.map`, `repo.symbol_search`, `repo.references`,
+`repo.file_summary`, `patch.preview`, `task.create`, `task.list`, `decision.list`,
+`plan.show`, `memory.list`, `memory.search`, `agent.result`, `agent.list`,
+`tool.search`, `user.ask`, `context.show`, `context.snapshots`, and
+`skill.resource.read`. Normal access and prerequisites may narrow it further. Plan Mode
+MUST exclude filesystem writes, patch application, execution, approval, networking,
+delegation, discard, and plan execution, and MUST NOT claim implementation is complete.
+
+`plan.update` and operator-only `plan.discard` are Local State actions.
+`plan.approve_request` is Administration. Both Direct execution and approved-plan Goal
+handoff are `plan.execute` Execution actions. Every transition crosses the normal effect
+gateway; no terminal command owns a policy or persistence bypass.
+
+A Draft can be refined, reviewed, approved, or discarded. An Approved plan is immutable
+and can be discarded, executed directly once, or atomically consumed into Goal Mode.
+Consumption preserves the plan id for lineage and returns tagged canonical evidence for
+completion, cancellation, or bounded failure.
 
 ### 12.7 Durable Workflows
 
@@ -695,6 +734,21 @@ schedules, audit and runtime diagnostics, context and telemetry, plus canonical 
 decisions, plans, goals, subagents, memories, and memory-index maintenance. Approval mode
 belongs to the worker process; a client-side approval override MUST fail rather than
 silently change authority.
+
+Worker protocol v6 replaces the single-purpose controlled operation with one
+authenticated `RunInteractive` duplex loop. Its typed variants cover Execute or Plan
+turns, exact-revision plan approval and discard, Direct or Goal plan execution, and
+Active-goal resume. The same bounded connection carries ordered released events,
+automatic-approval notices, focus-taking approval and user prompts, and cooperative
+cancellation. Cancellation stops the run and releases every pending prompt waiter.
+Non-interactive operations remain available for one-shot CLI and scripted use.
+
+Client and server MUST reject every other protocol version before disclosing operation
+content. The released error MUST tell the operator to restart the worker and client with
+the same Colossus version. A disconnected or stale-worker request is not replayed
+automatically; the operator inspects `/plans` and durable run/Goal evidence before any
+retry.
+
 Research, skills, packs, bundles, integrations, MCP, process, and network commands use
 typed operations too; `@path` JSON and other file-backed inputs are read by the worker
 through the normal filesystem permission boundary rather than by the client.
@@ -719,6 +773,9 @@ orchestrator. It is not a separate permission domain.
   external state change, and records a reason.
 - If work remains, the goal stays active and the next iteration begins.
 - The loop stops on complete, blocked, error, or iteration-budget exhaustion.
+- Cancellation or bounded failure leaves the goal Active. `/goal resume GOAL_ID`
+  validates same-session ownership and continues at `iterations_completed + 1` through
+  the original iteration budget; it does not allocate a new budget.
 
 The default budget is 5 iterations and the CLI maximum is 50. Each iteration also has
 the normal model-turn limit. Budget exhaustion returns control to the user; it does not
@@ -894,14 +951,25 @@ The TUI includes:
 - Sessions/context: `/resume`, `/sessions`, `/session`, `/context`, `/compact`.
 - Rendering: `/stream`, `/events`, `/reasoning`, `/transcript`, `/multiline`, `/trace`.
 - Preferences/themes: `/theme` and `/tui`.
-- Work state: `/tasks`, `/decision`, `/decisions`, `/memory`, `/memories`.
-- Workflows: `/plan`, `/goal`, `/research`, `/agents`.
+- Work state: `/tasks`, `/decision`, `/decisions`, `/memory`, `/memories`, `/plans`,
+  and `/goals`.
+- Plan workflow: `/plan`, `/plan on|off|status|new|list`, `/plan use PLAN_ID`,
+  `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, and
+  `/plan execute [direct|goal [ITERATIONS]]`.
+- Workflows: `/goal`, `/goal resume GOAL_ID`, `/research`, `/agents`.
 - Extensions: `/skill`, `/skills`, `/integrations`, `/packs`.
 - Discovery: `/help`.
 
 The TUI persists display preferences for theme, multiline composition, streaming mode,
 event detail, transcript density, and reasoning-summary visibility. Preferences affect
 rendering only and MUST NOT change provider, policy, tool, or approval behavior.
+Execute/Plan mode and selected-plan state are process-local and MUST NOT enter those
+preferences. A process starts in Execute mode with no selection. Mode survives a session
+switch, while selection clears on switch or restart. `/plan new` enters Plan mode and
+clears selection without discarding the old plan; `/plan off` retains selection.
+`/plan use` accepts only same-session Draft or Approved plans. Prompts refine only a
+selected Draft; an Approved plan cannot be refined.
+
 Submitted input history MUST be encrypted in the authoritative journal and persisted
 through the normal policy/permit/audit boundary. Rust MUST NOT silently create or reuse a
 plaintext history sidecar. Embedded and authenticated-worker REPLs MUST hydrate the same
@@ -945,9 +1013,21 @@ new-item count until returning with End.
 Ctrl-C clears a draft, cancels a modal, or requests cooperative run cancellation in that
 order. Cancellation prevents the next provider or tool effect from starting, lets an
 already-started effect reach an auditable terminal state, and appends durable cancelled
-tool results for remaining calls. Worker protocol v4 authenticates and sequences
-bidirectional approval, `user.ask`, and cancellation frames; version mismatch identifies
-that the worker must be restarted.
+tool results for remaining calls.
+
+Plan mode/lifecycle commands and ordinary turns share the existing FIFO queue. Returned
+plan state MUST be applied before the next queued item starts, and the queue MUST NOT
+drain while the execution-choice overlay is open. With no explicit strategy, that
+overlay offers Direct, Goal Mode, and Cancel. Line mode uses the same semantics with a
+numbered stdin choice. Goal defaults to 5 iterations and accepts 1 through 50.
+Cancellation or failure before consumption preserves mode and selection. Once Direct or
+Goal consumption commits, the interface switches to Execute and clears selection even
+if later execution fails or is cancelled.
+
+Worker protocol v6 authenticates and sequences the unified interactive duplex frames for
+events, notices, approvals, `user.ask`, and cancellation. A version mismatch identifies
+that the worker and client must be restarted on the same Colossus version; the failed
+operation is not replayed automatically.
 
 ### 18.5 Rendering
 

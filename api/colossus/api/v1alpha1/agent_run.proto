@@ -96,6 +96,9 @@ message RunResult {
 
   // provider_profile is the credential-free provider connection profile.
   string provider_profile = 6;
+
+  // plan_id is the canonical plan written by a completed Plan Mode run.
+  optional string plan_id = 7;
 }
 
 // RunFailure contains a bounded user-safe terminal failure.
@@ -126,6 +129,9 @@ message RunCancellation {
 
   // message is a bounded cancellation summary.
   string message = 2;
+
+  // plan_id is the canonical plan written before a cancelled Plan Mode run stopped.
+  optional string plan_id = 3;
 }
 
 // Run is the durable public run projection.

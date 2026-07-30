@@ -238,6 +238,7 @@ impl WorkService {
                 session_id: session_id.into(),
                 prompt: prompt.trim().into(),
                 status: PlanStatus::Draft,
+                revision: 1,
                 content: content.into(),
                 steps,
                 created_at: timestamp.clone(),
@@ -249,41 +250,50 @@ impl WorkService {
         )
     }
 
-    /// Replace editable draft content while preserving identity and lineage.
+    /// Replace one exact draft revision while preserving its objective and lineage.
     pub fn update_draft_plan(
         &self,
         id: &str,
-        prompt: Option<&str>,
-        content: Option<&str>,
-        steps: Option<Vec<PlanStep>>,
+        expected_revision: u64,
+        content: &str,
+        steps: Vec<PlanStep>,
         actor: Actor,
     ) -> Result<PlanRecord, StoreError> {
         let mut plan = self
             .repository
             .get_plan(id)?
             .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        require_plan_revision(&plan, expected_revision)?;
         if plan.status != PlanStatus::Draft {
             return Err(StoreError::Adapter("only draft plans can be edited".into()));
         }
-        if let Some(prompt) = prompt {
-            plan.prompt = prompt.trim().into();
-        }
-        if let Some(content) = content {
-            plan.content = content.into();
-        }
-        if let Some(steps) = steps {
-            plan.steps = steps;
-        }
+        plan.content = content.into();
+        plan.steps = steps;
         plan.updated_at = now()?;
         self.repository.update_plan(plan, actor)
     }
 
     /// Approve one draft exactly once.
     pub fn approve_plan(&self, id: &str, actor: Actor) -> Result<PlanRecord, StoreError> {
+        let plan = self
+            .repository
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        self.approve_plan_at_revision(id, plan.revision, actor)
+    }
+
+    /// Approve one exact draft revision.
+    pub fn approve_plan_at_revision(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        actor: Actor,
+    ) -> Result<PlanRecord, StoreError> {
         let mut plan = self
             .repository
             .get_plan(id)?
             .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        require_plan_revision(&plan, expected_revision)?;
         if plan.status != PlanStatus::Draft {
             return Err(StoreError::Adapter(
                 "only draft plans can be approved".into(),
@@ -303,10 +313,26 @@ impl WorkService {
         run_id: &str,
         actor: Actor,
     ) -> Result<PlanRecord, StoreError> {
+        let plan = self
+            .repository
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        self.execute_plan_at_revision(id, plan.revision, run_id, actor)
+    }
+
+    /// Consume one exact approved plan revision for a single execution run.
+    pub fn execute_plan_at_revision(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        run_id: &str,
+        actor: Actor,
+    ) -> Result<PlanRecord, StoreError> {
         let mut plan = self
             .repository
             .get_plan(id)?
             .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        require_plan_revision(&plan, expected_revision)?;
         if plan.status != PlanStatus::Approved || !valid_id(run_id) {
             return Err(StoreError::Adapter(
                 "plan execution requires one approved plan and a valid run id".into(),
@@ -320,10 +346,25 @@ impl WorkService {
 
     /// Discard a draft or approved plan without deleting history.
     pub fn discard_plan(&self, id: &str, actor: Actor) -> Result<PlanRecord, StoreError> {
+        let plan = self
+            .repository
+            .get_plan(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        self.discard_plan_at_revision(id, plan.revision, actor)
+    }
+
+    /// Discard one exact draft or approved plan revision without deleting history.
+    pub fn discard_plan_at_revision(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        actor: Actor,
+    ) -> Result<PlanRecord, StoreError> {
         let mut plan = self
             .repository
             .get_plan(id)?
             .ok_or_else(|| StoreError::NotFound(format!("plan {id}")))?;
+        require_plan_revision(&plan, expected_revision)?;
         if !matches!(plan.status, PlanStatus::Draft | PlanStatus::Approved) {
             return Err(StoreError::Adapter(
                 "only draft or approved plans can be discarded".into(),
@@ -343,7 +384,62 @@ impl WorkService {
         source_plan_id: Option<String>,
         actor: Actor,
     ) -> Result<GoalRecord, StoreError> {
+        let source_plan_revision = source_plan_id
+            .as_deref()
+            .map(|plan_id| {
+                self.repository
+                    .get_plan(plan_id)?
+                    .map(|plan| plan.revision)
+                    .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))
+            })
+            .transpose()?;
+        self.create_goal_at_plan_revision(
+            session_id,
+            objective,
+            iteration_budget,
+            source_plan_id,
+            source_plan_revision,
+            actor,
+        )
+    }
+
+    /// Create a goal while atomically consuming one exact approved Plan revision.
+    pub fn create_goal_at_plan_revision(
+        &self,
+        session_id: &str,
+        objective: &str,
+        iteration_budget: u16,
+        source_plan_id: Option<String>,
+        source_plan_revision: Option<u64>,
+        actor: Actor,
+    ) -> Result<GoalRecord, StoreError> {
+        self.create_goal_with_plan_at_revision(
+            session_id,
+            objective,
+            iteration_budget,
+            source_plan_id,
+            source_plan_revision,
+            actor,
+        )
+        .map(|(goal, _)| goal)
+    }
+
+    /// Create a goal and return the exact Plan consumed by the same atomic commit, when any.
+    pub fn create_goal_with_plan_at_revision(
+        &self,
+        session_id: &str,
+        objective: &str,
+        iteration_budget: u16,
+        source_plan_id: Option<String>,
+        source_plan_revision: Option<u64>,
+        actor: Actor,
+    ) -> Result<(GoalRecord, Option<PlanRecord>), StoreError> {
         self.require_session(session_id)?;
+        if source_plan_id.is_some() != source_plan_revision.is_some() {
+            return Err(StoreError::Adapter(
+                "goal plan lineage requires both a plan id and revision".into(),
+            ));
+        }
         let timestamp = now()?;
         let goal = GoalRecord {
             id: format!("goal-{}", Uuid::now_v7()),
@@ -359,12 +455,19 @@ impl WorkService {
             updated_at: timestamp,
         };
         let Some(plan_id) = source_plan_id else {
-            return self.repository.create_goal(goal, actor);
+            return self
+                .repository
+                .create_goal(goal, actor)
+                .map(|goal| (goal, None));
         };
         let mut plan = self
             .repository
             .get_plan(&plan_id)?
             .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+        require_plan_revision(
+            &plan,
+            source_plan_revision.expect("source plan revision is paired"),
+        )?;
         if plan.session_id != session_id || plan.status != PlanStatus::Approved {
             return Err(StoreError::Adapter(
                 "goal plan lineage requires an approved same-session plan".into(),
@@ -375,10 +478,13 @@ impl WorkService {
         plan.executed_run_id = Some(goal.id.clone());
         self.repository
             .create_goal_from_plan(goal, plan, actor)
-            .map(|(goal, _)| goal)
+            .map(|(goal, plan)| (goal, Some(plan)))
     }
 
-    /// Record one completed iteration without changing a terminal outcome.
+    /// Consume one bounded iteration before its agent run starts.
+    ///
+    /// The reservation remains durable when the run fails or is cancelled so resume cannot
+    /// replay the same budget slot.
     pub fn record_goal_iteration(&self, id: &str, actor: Actor) -> Result<GoalRecord, StoreError> {
         let mut goal = self
             .repository
@@ -389,9 +495,11 @@ impl WorkService {
                 "only a goal with remaining budget can record an iteration".into(),
             ));
         }
+        let expected_iterations_completed = goal.iterations_completed;
         goal.iterations_completed = goal.iterations_completed.saturating_add(1);
         goal.updated_at = now()?;
-        self.repository.update_goal(goal, actor)
+        self.repository
+            .record_goal_iteration(goal, expected_iterations_completed, actor)
     }
 
     /// Mark an active goal complete or blocked with required evidence text.

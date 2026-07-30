@@ -61,7 +61,7 @@ impl WorkerServer {
         })
     }
 
-    /// Open a worker whose protocol-v5 attached clients own prompts, notices, and cancellation.
+    /// Open a worker whose protocol-v6 attached clients own prompts, notices, and cancellation.
     pub fn open_with_mode(
         config: &RuntimeConfig,
         approval_mode: WorkerApprovalMode,
@@ -442,6 +442,271 @@ pub(super) fn operation_requests_drain(operation: &WorkerOperation) -> bool {
     )
 }
 
+async fn dispatch_interactive(
+    runtime: &Runtime,
+    request: InteractiveWorkerRequest,
+    observer: &mut dyn RunEventObserver,
+    control: &RunControl,
+) -> Result<Value, WorkerError> {
+    match request {
+        InteractiveWorkerRequest::Run {
+            mode,
+            role,
+            instructions,
+            prompt,
+            max_turns,
+            session_id,
+            explicit_skills,
+            sticky_skills,
+            include_provider_response_diagnostics,
+        } => Ok(serde_json::to_value(
+            runtime
+                .run_with_mode_with_skills_stream_controlled(
+                    mode,
+                    &role,
+                    &instructions,
+                    &prompt,
+                    max_turns,
+                    Some(&session_id),
+                    &explicit_skills,
+                    &sticky_skills,
+                    include_provider_response_diagnostics,
+                    observer,
+                    control,
+                )
+                .await?,
+        )?),
+        InteractiveWorkerRequest::PlanApprove {
+            session_id,
+            plan_id,
+            revision,
+        } => Ok(serde_json::to_value(
+            runtime
+                .approve_plan_at_revision(&session_id, &plan_id, revision)
+                .await?,
+        )?),
+        InteractiveWorkerRequest::PlanDiscard {
+            session_id,
+            plan_id,
+            revision,
+        } => Ok(serde_json::to_value(
+            runtime
+                .discard_plan_at_revision(&session_id, &plan_id, revision)
+                .await?,
+        )?),
+        InteractiveWorkerRequest::PlanExecute {
+            role,
+            session_id,
+            plan_id,
+            revision,
+            strategy,
+            max_turns,
+        } => Ok(serde_json::to_value(
+            runtime
+                .execute_plan_stream_controlled(
+                    &role,
+                    &session_id,
+                    &plan_id,
+                    revision,
+                    strategy,
+                    max_turns,
+                    observer,
+                    control,
+                )
+                .await?,
+        )?),
+        InteractiveWorkerRequest::GoalResume {
+            role,
+            session_id,
+            goal_id,
+        } => Ok(serde_json::to_value(
+            runtime
+                .resume_goal_stream_controlled(&role, &session_id, &goal_id, observer, control)
+                .await?,
+        )?),
+    }
+}
+
+async fn handle_interactive_connection<S>(
+    stream: S,
+    key: &[u8; 32],
+    runtime: &Runtime,
+    request_id: &str,
+    connection_nonce: &str,
+    request: InteractiveWorkerRequest,
+) -> Result<bool, WorkerError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(256);
+    let bridge = InteractiveRunBridge::new(outbound_tx.clone());
+    let control = RunControl::default();
+    let mut observer = ChannelWorkerObserver {
+        sender: outbound_tx,
+    };
+    let run = ACTIVE_INTERACTIVE_RUN.scope(bridge.clone(), async {
+        dispatch_interactive(runtime, request, &mut observer, &control).await
+    });
+    drive_interactive_connection(
+        stream,
+        InteractiveConnectionContext {
+            key,
+            request_id,
+            connection_nonce,
+        },
+        outbound_rx,
+        bridge,
+        &control,
+        run,
+    )
+    .await
+}
+
+pub(super) struct InteractiveConnectionContext<'a> {
+    pub(super) key: &'a [u8; 32],
+    pub(super) request_id: &'a str,
+    pub(super) connection_nonce: &'a str,
+}
+
+pub(super) async fn drive_interactive_connection<S, F>(
+    stream: S,
+    context: InteractiveConnectionContext<'_>,
+    mut outbound_rx: tokio::sync::mpsc::Receiver<WorkerFrameContent>,
+    bridge: InteractiveRunBridge,
+    control: &RunControl,
+    run: F,
+) -> Result<bool, WorkerError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    F: std::future::Future<Output = Result<Value, WorkerError>>,
+{
+    tokio::pin!(run);
+    let InteractiveConnectionContext {
+        key,
+        request_id,
+        connection_nonce,
+    } = context;
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let (client_tx, mut client_rx) = tokio::sync::mpsc::channel(16);
+    let reader_key = *key;
+    let reader_request_id = request_id.to_owned();
+    let reader_connection_nonce = connection_nonce.to_owned();
+    let reader_task = AbortTaskOnDrop::new(tokio::spawn(async move {
+        let mut sequence = 0_u64;
+        loop {
+            let frame = read_message::<_, WorkerClientFrame>(&mut reader, MAX_REQUEST_BYTES)
+                .await
+                .and_then(|frame| {
+                    validate_client_frame(
+                        &reader_key,
+                        &reader_request_id,
+                        &reader_connection_nonce,
+                        &mut sequence,
+                        &frame,
+                    )
+                });
+            let finished = frame.is_err();
+            if client_tx.send(frame).await.is_err() || finished {
+                break;
+            }
+        }
+    }));
+
+    let mut sequence = 0_u64;
+    loop {
+        tokio::select! {
+            result = &mut run => {
+                // A runtime future may become ready immediately after enqueueing its
+                // last released output. Flush the one ordered queue before the
+                // terminal frame so clients never observe completion out of order.
+                while let Ok(content) = outbound_rx.try_recv() {
+                    sequence = sequence.saturating_add(1);
+                    if let Err(error) = write_signed_frame(
+                        &mut writer,
+                        key,
+                        request_id,
+                        sequence,
+                        content,
+                    ).await {
+                        bridge.cancel_run(control).await;
+                        reader_task.abort();
+                        return Err(error);
+                    }
+                }
+                sequence = sequence.saturating_add(1);
+                let content = match result {
+                    Ok(result) => WorkerFrameContent::Complete { result },
+                    Err(error) => WorkerFrameContent::Error {
+                        message: interactive_error(&error),
+                    },
+                };
+                let write_result =
+                    write_signed_frame(&mut writer, key, request_id, sequence, content).await;
+                reader_task.abort();
+                bridge.cancel_all().await;
+                write_result?;
+                return Ok(false);
+            }
+            outbound = outbound_rx.recv() => {
+                let Some(content) = outbound else { continue; };
+                sequence = sequence.saturating_add(1);
+                if let Err(error) = write_signed_frame(
+                    &mut writer,
+                    key,
+                    request_id,
+                    sequence,
+                    content,
+                ).await {
+                    bridge.cancel_run(control).await;
+                    reader_task.abort();
+                    return Err(error);
+                }
+            }
+            client = client_rx.recv() => {
+                match client {
+                    Some(Ok(ClientFrameContent::PromptResponse { prompt_id, answer })) => {
+                        if let Err(error) = bridge.respond(&prompt_id, answer).await {
+                            bridge.cancel_run(control).await;
+                            reader_task.abort();
+                            return Err(error);
+                        }
+                    }
+                    Some(Ok(ClientFrameContent::Cancel)) => {
+                        // Cancellation must release both the application loop and an
+                        // effect or tool currently waiting for attached-user input.
+                        bridge.cancel_run(control).await;
+                    }
+                    Some(Err(error)) => {
+                        bridge.cancel_run(control).await;
+                        reader_task.abort();
+                        return Err(error);
+                    }
+                    None => {
+                        bridge.cancel_run(control).await;
+                        reader_task.abort();
+                        return Err(WorkerError::Protocol(
+                            "interactive worker client disconnected".into(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn interactive_error(error: &WorkerError) -> String {
+    match error {
+        WorkerError::Runtime(error) => match error.provider_response_diagnostic() {
+            Some(diagnostic) => bounded_diagnostic_error(&format!(
+                "{error}\n\n{}",
+                format_provider_response_diagnostic(diagnostic)
+            )),
+            None => bounded_error(&error.to_string()),
+        },
+        _ => bounded_error(&error.to_string()),
+    }
+}
+
 async fn handle_connection<S>(
     mut stream: S,
     key: &[u8; 32],
@@ -497,167 +762,16 @@ where
     let request_id = request.request_id.clone();
     let requests_drain = operation_requests_drain(&request.operation);
     match request.operation {
-        WorkerOperation::RunModelControlled {
-            role,
-            instructions,
-            prompt,
-            max_turns,
-            session_id,
-            explicit_skills,
-            sticky_skills,
-            include_provider_response_diagnostics,
-        } => {
-            let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
-            let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(16);
-            let (notice_tx, mut notice_rx) = tokio::sync::mpsc::channel(16);
-            let responses = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
-            let bridge = InteractiveRunBridge {
-                prompts: prompt_tx,
-                notices: notice_tx,
-                responses,
-            };
-            let control = RunControl::default();
-            let mut observer = ChannelWorkerObserver { sender: event_tx };
-            let run = ACTIVE_INTERACTIVE_RUN.scope(bridge.clone(), async {
-                if include_provider_response_diagnostics {
-                    runtime
-                        .run_model_with_skills_stream_controlled_with_provider_diagnostics(
-                            &role,
-                            &instructions,
-                            &prompt,
-                            max_turns,
-                            Some(&session_id),
-                            &explicit_skills,
-                            &sticky_skills,
-                            &mut observer,
-                            &control,
-                        )
-                        .await
-                } else {
-                    runtime
-                        .run_model_with_skills_stream_controlled(
-                            &role,
-                            &instructions,
-                            &prompt,
-                            max_turns,
-                            Some(&session_id),
-                            &explicit_skills,
-                            &sticky_skills,
-                            &mut observer,
-                            &control,
-                        )
-                        .await
-                }
-            });
-            tokio::pin!(run);
-            let (mut reader, mut writer) = tokio::io::split(stream);
-            let (client_tx, mut client_rx) = tokio::sync::mpsc::channel(16);
-            let reader_key = *key;
-            let reader_request_id = request_id.clone();
-            let reader_connection_nonce = connection_nonce.clone();
-            let reader_task = tokio::spawn(async move {
-                let mut sequence = 0_u64;
-                loop {
-                    let frame =
-                        read_message::<_, WorkerClientFrame>(&mut reader, MAX_REQUEST_BYTES)
-                            .await
-                            .and_then(|frame| {
-                                validate_client_frame(
-                                    &reader_key,
-                                    &reader_request_id,
-                                    &reader_connection_nonce,
-                                    &mut sequence,
-                                    &frame,
-                                )
-                            });
-                    let finished = frame.is_err();
-                    if client_tx.send(frame).await.is_err() || finished {
-                        break;
-                    }
-                }
-            });
-            let mut sequence = 0_u64;
-            loop {
-                tokio::select! {
-                    result = &mut run => {
-                        sequence = sequence.saturating_add(1);
-                        let content = match result {
-                            Ok(outcome) => WorkerFrameContent::Complete {
-                                result: serde_json::to_value(outcome)?,
-                            },
-                            Err(error) => {
-                                let message = match error.provider_response_diagnostic() {
-                                    Some(diagnostic) => bounded_diagnostic_error(&format!(
-                                        "{error}\n\n{}",
-                                        format_provider_response_diagnostic(diagnostic)
-                                    )),
-                                    None => bounded_error(&error.to_string()),
-                                };
-                                WorkerFrameContent::Error { message }
-                            }
-                        };
-                        write_signed_frame(&mut writer, key, &request_id, sequence, content).await?;
-                        reader_task.abort();
-                        bridge.cancel_all().await;
-                        return Ok(false);
-                    }
-                    event = event_rx.recv() => {
-                        let Some(event) = event else { continue; };
-                        sequence = sequence.saturating_add(1);
-                        write_signed_frame(
-                            &mut writer,
-                            key,
-                            &request_id,
-                            sequence,
-                            WorkerFrameContent::Event { event },
-                        ).await?;
-                    }
-                    notice = notice_rx.recv() => {
-                        let Some(notice) = notice else { continue; };
-                        sequence = sequence.saturating_add(1);
-                        write_signed_frame(
-                            &mut writer,
-                            key,
-                            &request_id,
-                            sequence,
-                            WorkerFrameContent::Notice { notice },
-                        ).await?;
-                    }
-                    prompt = prompt_rx.recv() => {
-                        let Some(prompt) = prompt else { continue; };
-                        sequence = sequence.saturating_add(1);
-                        write_signed_frame(
-                            &mut writer,
-                            key,
-                            &request_id,
-                            sequence,
-                            WorkerFrameContent::Prompt { prompt },
-                        ).await?;
-                    }
-                    client = client_rx.recv() => {
-                        match client {
-                            Some(Ok(ClientFrameContent::PromptResponse { prompt_id, answer })) => {
-                                bridge.respond(&prompt_id, answer).await?;
-                            }
-                            Some(Ok(ClientFrameContent::Cancel)) => control.cancel(),
-                            Some(Err(error)) => {
-                                control.cancel();
-                                bridge.cancel_all().await;
-                                reader_task.abort();
-                                return Err(error);
-                            }
-                            None => {
-                                control.cancel();
-                                bridge.cancel_all().await;
-                                reader_task.abort();
-                                return Err(WorkerError::Protocol(
-                                    "interactive worker client disconnected".into(),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
+        WorkerOperation::RunInteractive { request } => {
+            handle_interactive_connection(
+                stream,
+                key,
+                runtime,
+                &request_id,
+                &connection_nonce,
+                request,
+            )
+            .await
         }
         WorkerOperation::RunModel {
             role,

@@ -1,14 +1,14 @@
 use super::*;
 
 pub(super) struct ChannelWorkerObserver {
-    pub(super) sender: tokio::sync::mpsc::Sender<RunEventEnvelope>,
+    pub(super) sender: tokio::sync::mpsc::Sender<WorkerFrameContent>,
 }
 
 #[async_trait]
 impl RunEventObserver for ChannelWorkerObserver {
     async fn observe(&mut self, event: RunEventEnvelope) -> Result<(), ModelProviderError> {
         self.sender
-            .send(event)
+            .send(WorkerFrameContent::Event { event })
             .await
             .map_err(|_| ModelProviderError::Failed("worker event client disconnected".into()))
     }

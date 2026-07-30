@@ -1060,6 +1060,7 @@ fn approved_plan_goal_objective_preserves_contract_and_mutation_labels() {
         session_id: "session-1".into(),
         prompt: "Ship Rust".into(),
         status: PlanStatus::Approved,
+        revision: 2,
         content: "# Plan".into(),
         steps: vec![PlanStep {
             index: 1,

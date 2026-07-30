@@ -22,7 +22,6 @@ pub(super) async fn line_runner(
     if stdin.is_terminal() {
         return Err("interactive terminals must use the TUI".into());
     }
-    let mut scripted_input = stdin.lock();
     let mut active_session_id = if resume_latest {
         runtime.latest_session()?.id
     } else if let Some(session_id) = initial_session {
@@ -35,8 +34,9 @@ pub(super) async fn line_runner(
     };
     let mut sticky_skills = Vec::<String>::new();
     let mut pending_line = None::<String>;
+    let mut plan_state = LinePlanState::default();
     println!(
-        "Colossus Rust {}. session={active_session_id}; /help for commands; Ctrl-D to exit.",
+        "Colossus Rust {}. session={active_session_id}; mode=execute; /help for commands; Ctrl-D to exit.",
         env!("CARGO_PKG_VERSION")
     );
     loop {
@@ -44,7 +44,7 @@ pub(super) async fn line_runner(
             line
         } else {
             let mut line = String::new();
-            if scripted_input.read_line(&mut line)? == 0 {
+            if stdin.read_line(&mut line)? == 0 {
                 break;
             }
             line
@@ -76,7 +76,11 @@ pub(super) async fn line_runner(
                 continue;
             }
             PresentationCommandResult::ChooseTheme => {
-                match choose_theme(&mut scripted_input, &preferences, themes)? {
+                let selection = {
+                    let mut scripted_input = stdin.lock();
+                    choose_theme(&mut scripted_input, &preferences, themes)?
+                };
+                match selection {
                     ThemePickerInput::Selected(name) => {
                         themes.select(&name, &mut preferences)?;
                         preferences = runtime
@@ -93,6 +97,19 @@ pub(super) async fn line_runner(
                 }
                 continue;
             }
+        }
+        if handle_embedded_line_plan(
+            runtime,
+            line,
+            &active_session_id,
+            &stdin,
+            &mut plan_state,
+            &mut pending_line,
+            &preferences,
+        )
+        .await?
+        {
+            continue;
         }
         if line == "/help" {
             print_terminal_help(&preferences);
@@ -166,8 +183,6 @@ pub(super) async fn line_runner(
                 Some(DecisionStatus::Active),
                 100,
             )?)?;
-        } else if line == "/plans" {
-            print_json(&runtime.list_plans(Some(&active_session_id), None, 100)?)?;
         } else if line == "/goals" {
             print_json(&runtime.list_goals(Some(&active_session_id), None, 100)?)?;
         } else if let Some(objective) = line.strip_prefix("/goal ") {
@@ -392,6 +407,7 @@ pub(super) async fn line_runner(
             )?;
         } else if line == "/session new" {
             active_session_id = runtime.create_session(None)?.id;
+            plan_state.clear_selection();
             println!("session={active_session_id}");
         } else if line == "/session resume" || line == "/resume" || line.starts_with("/resume ") {
             let limit = if line == "/session resume" {
@@ -405,9 +421,14 @@ pub(super) async fn line_runner(
                     .unwrap_or(10)
                     .clamp(1, 100)
             };
-            match choose_session(runtime, &mut scripted_input, limit)? {
+            let selection = {
+                let mut scripted_input = stdin.lock();
+                choose_session(runtime, &mut scripted_input, limit)?
+            };
+            match selection {
                 SessionPickerInput::Selected(session_id) => {
                     active_session_id = session_id;
+                    plan_state.clear_selection();
                     println!("session={active_session_id}");
                 }
                 SessionPickerInput::Command(command) => pending_line = Some(command),
@@ -420,6 +441,7 @@ pub(super) async fn line_runner(
                 .get_session(session_id)?
                 .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?
                 .id;
+            plan_state.clear_selection();
             println!("session={active_session_id}");
         } else if line.starts_with('/') {
             println!("unknown terminal command: {line}; use /help");
@@ -429,29 +451,386 @@ pub(super) async fn line_runner(
                 println!("Add a message after the @skill name.");
                 continue;
             }
+            let mode = match plan_state.agent_mode() {
+                Ok(mode) => mode,
+                Err(error) => {
+                    eprintln!("run was not started: {error}");
+                    continue;
+                }
+            };
             let mut observer =
                 TerminalStreamObserver::with_preferences(StreamTarget::Stdout, preferences.clone());
-            let result = runtime
-                .run_model_with_skills_stream(
-                    "primary",
-                    "You are Colossus.",
-                    &prompt,
-                    None,
-                    Some(&active_session_id),
-                    &explicit_skills,
-                    &sticky_skills,
-                    &mut observer,
-                )
-                .await;
-            let result = match result {
-                Ok(result) => result,
+            let control = RunControl::default();
+            let (outcome, written_plan) = {
+                let mut plan_observer = LinePlanEventObserver::new(&mut observer);
+                let outcome = runtime
+                    .run_with_mode_with_skills_stream_controlled(
+                        mode,
+                        "primary",
+                        "You are Colossus.",
+                        &prompt,
+                        None,
+                        Some(&active_session_id),
+                        &explicit_skills,
+                        &sticky_skills,
+                        false,
+                        &mut plan_observer,
+                        &control,
+                    )
+                    .await;
+                (outcome, plan_observer.into_written_plan())
+            };
+            if let Some(plan) = written_plan
+                && let Err(error) = plan_state.refresh_selected(plan, &active_session_id)
+            {
+                eprintln!("run emitted invalid Plan state: {error}");
+            }
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
                 Err(error) => {
                     eprintln!("run failed; terminal input remains available: {error}");
                     continue;
                 }
             };
-            observer.finish_response(&result.output)?;
+            if let Err(error) = plan_state.apply_run_outcome(&outcome, &active_session_id) {
+                eprintln!("run returned invalid Plan state: {error}");
+            }
+            if let Some(output) = completed_output(&outcome) {
+                observer.finish_response(output)?;
+            } else {
+                print_json(&outcome)?;
+            }
+            if let Some(plan) = plan_state.selected()
+                && plan_state.enabled()
+            {
+                println!(
+                    "selected plan={} status={:?} revision={}",
+                    plan.id, plan.status, plan.revision
+                );
+            }
         }
     }
     Ok(())
+}
+
+async fn handle_embedded_line_plan(
+    runtime: &Runtime,
+    line: &str,
+    active_session_id: &str,
+    stdin: &io::Stdin,
+    state: &mut LinePlanState,
+    pending_line: &mut Option<String>,
+    preferences: &TerminalPreferences,
+) -> Result<bool, Box<dyn Error>> {
+    if line == "/goal resume" {
+        println!("recoverable: usage: /goal resume GOAL_ID");
+        return Ok(true);
+    }
+    if let Some(goal_id) = line.strip_prefix("/goal resume ") {
+        let goal_id = goal_id.trim();
+        if goal_id.is_empty() || goal_id.contains(char::is_whitespace) {
+            println!("recoverable: usage: /goal resume GOAL_ID");
+            return Ok(true);
+        }
+        if let Err(error) =
+            resume_embedded_goal(runtime, goal_id, active_session_id, preferences).await
+        {
+            eprintln!("Goal resume failed; terminal input remains available: {error}");
+        }
+        return Ok(true);
+    }
+
+    let command = match parse_line_plan_command(line) {
+        Ok(Some(command)) => command,
+        Ok(None) => {
+            if line != "/plans" {
+                return Ok(false);
+            }
+            LinePlanCommand::List
+        }
+        Err(error) => {
+            println!("recoverable: {error}");
+            return Ok(true);
+        }
+    };
+    if let Err(error) = run_embedded_plan_command(
+        runtime,
+        command,
+        active_session_id,
+        stdin,
+        state,
+        pending_line,
+        preferences,
+    )
+    .await
+    {
+        eprintln!("Plan command failed; terminal input remains available: {error}");
+    }
+    Ok(true)
+}
+
+async fn run_embedded_plan_command(
+    runtime: &Runtime,
+    command: LinePlanCommand,
+    active_session_id: &str,
+    stdin: &io::Stdin,
+    state: &mut LinePlanState,
+    pending_line: &mut Option<String>,
+    preferences: &TerminalPreferences,
+) -> Result<(), Box<dyn Error>> {
+    match command {
+        LinePlanCommand::Toggle => {
+            state.toggle();
+            println!("{}", state.status_line());
+        }
+        LinePlanCommand::SetEnabled(enabled) => {
+            state.set_enabled(enabled);
+            println!("{}", state.status_line());
+        }
+        LinePlanCommand::Status => println!("{}", state.status_line()),
+        LinePlanCommand::New => {
+            state.start_new();
+            println!("{}", state.status_line());
+        }
+        LinePlanCommand::List => {
+            print_json(&runtime.list_plans(Some(active_session_id), None, 100)?)?;
+        }
+        LinePlanCommand::Use(plan_id) => {
+            let plan = runtime
+                .get_plan(&plan_id)?
+                .ok_or_else(|| cli_error(format!("plan not found: {plan_id}")))?;
+            state.select(plan, active_session_id).map_err(cli_error)?;
+            println!("{}", state.status_line());
+        }
+        LinePlanCommand::Show(plan_id) => {
+            let plan_id = plan_id
+                .as_deref()
+                .or_else(|| state.selected().map(|plan| plan.id.as_str()))
+                .ok_or_else(|| cli_error("no Plan is selected; use /plan show PLAN_ID"))?;
+            let plan = runtime
+                .get_plan(plan_id)?
+                .ok_or_else(|| cli_error(format!("plan not found: {plan_id}")))?;
+            if plan.session_id != active_session_id {
+                return Err(cli_error("the Plan does not belong to the active session").into());
+            }
+            print_json(&plan)?;
+        }
+        LinePlanCommand::Approve => {
+            let selected = state
+                .selected_with_status(PlanStatus::Draft)
+                .map_err(cli_error)?;
+            let plan = match runtime
+                .approve_plan_at_revision(active_session_id, &selected.id, selected.revision)
+                .await
+            {
+                Ok(plan) => plan,
+                Err(error) => {
+                    reconcile_embedded_plan_after_lifecycle_error(
+                        runtime,
+                        &selected,
+                        active_session_id,
+                        PlanStatus::Approved,
+                        state,
+                    );
+                    return Err(error.into());
+                }
+            };
+            state
+                .refresh_selected(plan.clone(), active_session_id)
+                .map_err(cli_error)?;
+            print_json(&plan)?;
+        }
+        LinePlanCommand::Discard => {
+            let selected = state
+                .selected()
+                .cloned()
+                .ok_or_else(|| cli_error("no Plan is selected; use /plan use PLAN_ID"))?;
+            let plan = match runtime
+                .discard_plan_at_revision(active_session_id, &selected.id, selected.revision)
+                .await
+            {
+                Ok(plan) => plan,
+                Err(error) => {
+                    reconcile_embedded_plan_after_lifecycle_error(
+                        runtime,
+                        &selected,
+                        active_session_id,
+                        PlanStatus::Discarded,
+                        state,
+                    );
+                    return Err(error.into());
+                }
+            };
+            state.clear_selection();
+            print_json(&plan)?;
+        }
+        LinePlanCommand::Execute(strategy) => {
+            let selected = state
+                .selected_with_status(PlanStatus::Approved)
+                .map_err(cli_error)?;
+            let strategy = match strategy {
+                Some(strategy) => strategy,
+                None => {
+                    let choice = {
+                        let mut scripted_input = stdin.lock();
+                        choose_plan_execution(&mut scripted_input)?
+                    };
+                    match choice {
+                        PlanExecutionPickerInput::Selected(strategy) => strategy,
+                        PlanExecutionPickerInput::Command(command) => {
+                            *pending_line = Some(command);
+                            return Ok(());
+                        }
+                        PlanExecutionPickerInput::Cancelled => {
+                            println!("Plan execution cancelled before start.");
+                            return Ok(());
+                        }
+                    }
+                }
+            };
+            let mut observer =
+                TerminalStreamObserver::with_preferences(StreamTarget::Stdout, preferences.clone());
+            let control = RunControl::default();
+            let outcome = runtime
+                .execute_plan_stream_controlled(
+                    "primary",
+                    active_session_id,
+                    &selected.id,
+                    selected.revision,
+                    strategy,
+                    None,
+                    &mut observer,
+                    &control,
+                )
+                .await;
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    reconcile_embedded_plan_after_execution_error(
+                        runtime,
+                        &selected.id,
+                        active_session_id,
+                        state,
+                    );
+                    return Err(error.into());
+                }
+            };
+            if let Some(output) = execution_output(&outcome) {
+                observer.finish_response(output)?;
+            }
+            state.apply_execution_outcome(&outcome);
+            print_json(&outcome)?;
+        }
+    }
+    Ok(())
+}
+
+fn reconcile_embedded_plan_after_lifecycle_error(
+    runtime: &Runtime,
+    selected: &PlanRecord,
+    active_session_id: &str,
+    committed_status: PlanStatus,
+    state: &mut LinePlanState,
+) {
+    let expected_revision = selected.revision.saturating_add(1);
+    match runtime.get_plan(&selected.id) {
+        Ok(Some(plan))
+            if plan.session_id == active_session_id
+                && plan.status == committed_status
+                && plan.revision == expected_revision =>
+        {
+            if committed_status == PlanStatus::Approved {
+                let _ = state.refresh_selected(plan, active_session_id);
+            } else {
+                state.clear_selection();
+            }
+            eprintln!(
+                "The Plan transition committed despite the interrupted response; canonical state was refreshed."
+            );
+        }
+        Ok(Some(plan))
+            if plan.session_id == active_session_id
+                && plan.status == selected.status
+                && plan.revision == selected.revision => {}
+        Ok(Some(_)) => {
+            state.clear_selection();
+            eprintln!(
+                "The selected Plan changed concurrently; use /plan use {} to load its current revision.",
+                selected.id
+            );
+        }
+        Ok(None) | Err(_) => {
+            state.set_enabled(false);
+            state.clear_selection();
+            eprintln!(
+                "Plan lifecycle outcome is unknown; selection was cleared. Inspect /plans before retrying."
+            );
+        }
+    }
+}
+
+fn reconcile_embedded_plan_after_execution_error(
+    runtime: &Runtime,
+    plan_id: &str,
+    active_session_id: &str,
+    state: &mut LinePlanState,
+) {
+    match runtime.get_plan(plan_id) {
+        Ok(Some(plan))
+            if plan.session_id == active_session_id
+                && matches!(plan.status, PlanStatus::Draft | PlanStatus::Approved) =>
+        {
+            if state.selected().is_some_and(|selected| {
+                selected.revision != plan.revision || selected.status != plan.status
+            }) {
+                eprintln!(
+                    "The selected Plan changed concurrently; use /plan use {plan_id} to load its current revision."
+                );
+            }
+        }
+        Ok(Some(_)) => {
+            state.set_enabled(false);
+            state.clear_selection();
+        }
+        Ok(None) | Err(_) => {
+            state.set_enabled(false);
+            state.clear_selection();
+            eprintln!(
+                "Plan execution outcome is unknown; selection was cleared. Inspect /plans before retrying."
+            );
+        }
+    }
+}
+
+async fn resume_embedded_goal(
+    runtime: &Runtime,
+    goal_id: &str,
+    active_session_id: &str,
+    preferences: &TerminalPreferences,
+) -> Result<(), Box<dyn Error>> {
+    let goal = runtime
+        .get_goal(goal_id)?
+        .ok_or_else(|| cli_error(format!("goal not found: {goal_id}")))?;
+    if goal.session_id != active_session_id {
+        return Err(cli_error("the Goal does not belong to the active session").into());
+    }
+    if goal.status != GoalStatus::Active {
+        return Err(cli_error("only an active Goal can resume").into());
+    }
+    let mut observer =
+        TerminalStreamObserver::with_preferences(StreamTarget::Stdout, preferences.clone());
+    let control = RunControl::default();
+    let outcome = runtime
+        .resume_goal_stream_controlled(
+            "primary",
+            active_session_id,
+            goal_id,
+            &mut observer,
+            &control,
+        )
+        .await?;
+    if let Some(output) = goal_output(&outcome) {
+        observer.finish_response(output)?;
+    }
+    print_json(&outcome)
 }

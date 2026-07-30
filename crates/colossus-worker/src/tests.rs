@@ -87,34 +87,132 @@ fn model_attachment_protocol_carries_paths_without_client_read_content() {
 }
 
 #[test]
-fn controlled_run_diagnostics_are_explicit_and_backward_compatible() {
-    let operation = WorkerOperation::RunModelControlled {
-        role: "primary".into(),
-        instructions: "test".into(),
-        prompt: "reproduce".into(),
-        max_turns: None,
-        session_id: "session".into(),
-        explicit_skills: Vec::new(),
-        sticky_skills: Vec::new(),
-        include_provider_response_diagnostics: true,
+fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
+    let operation = WorkerOperation::RunInteractive {
+        request: InteractiveWorkerRequest::Run {
+            mode: AgentRunMode::Execute,
+            role: "primary".into(),
+            instructions: "test".into(),
+            prompt: "reproduce".into(),
+            max_turns: None,
+            session_id: "session".into(),
+            explicit_skills: Vec::new(),
+            sticky_skills: Vec::new(),
+            include_provider_response_diagnostics: true,
+        },
     };
-    let encoded = serde_json::to_value(operation).expect("serialize controlled run");
-    assert_eq!(encoded["include_provider_response_diagnostics"], true);
+    let encoded = serde_json::to_value(operation).expect("serialize interactive run");
+    assert_eq!(
+        encoded["request"]["include_provider_response_diagnostics"],
+        true
+    );
 
     let mut prior = encoded;
-    prior
+    prior["request"]
         .as_object_mut()
-        .expect("operation object")
+        .expect("interactive request object")
         .remove("include_provider_response_diagnostics");
     let decoded: WorkerOperation =
-        serde_json::from_value(prior).expect("deserialize prior controlled run");
+        serde_json::from_value(prior).expect("deserialize interactive run without diagnostics");
     assert!(matches!(
         decoded,
-        WorkerOperation::RunModelControlled {
-            include_provider_response_diagnostics: false,
-            ..
+        WorkerOperation::RunInteractive {
+            request: InteractiveWorkerRequest::Run {
+                include_provider_response_diagnostics: false,
+                ..
+            }
         }
     ));
+}
+
+#[test]
+fn interactive_plan_run_binds_the_selected_revision() {
+    let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
+        request: InteractiveWorkerRequest::Run {
+            mode: AgentRunMode::Plan(colossus_contracts::PlanDraftTarget::Update {
+                plan_id: "plan".into(),
+                revision: 7,
+            }),
+            role: "primary".into(),
+            instructions: "plan safely".into(),
+            prompt: "refine the plan".into(),
+            max_turns: None,
+            session_id: "session".into(),
+            explicit_skills: Vec::new(),
+            sticky_skills: Vec::new(),
+            include_provider_response_diagnostics: false,
+        },
+    })
+    .expect("serialize interactive Plan Mode run");
+    assert_eq!(encoded["request"]["mode"]["mode"], "plan");
+    assert_eq!(encoded["request"]["mode"]["target"]["operation"], "update");
+    assert_eq!(encoded["request"]["mode"]["target"]["plan_id"], "plan");
+    assert_eq!(encoded["request"]["mode"]["target"]["revision"], 7);
+    serde_json::from_value::<WorkerOperation>(encoded)
+        .expect("deserialize interactive Plan Mode run");
+}
+
+#[test]
+fn interactive_plan_lifecycle_requests_round_trip_strictly() {
+    for request in [
+        InteractiveWorkerRequest::PlanApprove {
+            session_id: "session".into(),
+            plan_id: "plan".into(),
+            revision: 2,
+        },
+        InteractiveWorkerRequest::PlanDiscard {
+            session_id: "session".into(),
+            plan_id: "plan".into(),
+            revision: 2,
+        },
+        InteractiveWorkerRequest::PlanExecute {
+            role: "primary".into(),
+            session_id: "session".into(),
+            plan_id: "plan".into(),
+            revision: 2,
+            strategy: PlanExecutionStrategy::Direct,
+            max_turns: Some(4),
+        },
+        InteractiveWorkerRequest::GoalResume {
+            role: "primary".into(),
+            session_id: "session".into(),
+            goal_id: "goal".into(),
+        },
+    ] {
+        let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
+            request: request.clone(),
+        })
+        .expect("serialize interactive request");
+        assert_eq!(encoded["operation"], "run_interactive");
+        let decoded: WorkerOperation =
+            serde_json::from_value(encoded).expect("deserialize interactive request");
+        assert!(matches!(decoded, WorkerOperation::RunInteractive { .. }));
+    }
+
+    let invalid = json!({
+        "operation": "run_interactive",
+        "request": {
+            "kind": "plan_approve",
+            "plan_id": "plan",
+            "revision": 2,
+            "unexpected": true
+        }
+    });
+    assert!(serde_json::from_value::<WorkerOperation>(invalid).is_err());
+
+    assert_eq!(
+        operation_name(&WorkerOperation::RunInteractive {
+            request: InteractiveWorkerRequest::PlanExecute {
+                role: "primary".into(),
+                session_id: "session".into(),
+                plan_id: "plan".into(),
+                revision: 2,
+                strategy: PlanExecutionStrategy::Direct,
+                max_turns: None,
+            },
+        }),
+        "run_interactive.plan_execute"
+    );
 }
 
 #[test]
@@ -418,18 +516,14 @@ fn client_frames_reject_wrong_connection_request_and_replay() {
 
 #[tokio::test]
 async fn prompt_ids_are_one_use_and_unknown_ids_fail_closed() {
-    let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
-    let (notice_tx, _notice_rx) = tokio::sync::mpsc::channel(1);
-    let bridge = InteractiveRunBridge {
-        prompts: prompt_tx,
-        notices: notice_tx,
-        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-    };
+    let (outbound_tx, _outbound_rx) = tokio::sync::mpsc::channel(1);
+    let bridge = InteractiveRunBridge::new(outbound_tx.clone());
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
     bridge
         .responses
         .lock()
         .await
+        .pending
         .insert("prompt-one".into(), response_tx);
     bridge
         .respond("prompt-one", Some("answer".into()))
@@ -461,15 +555,19 @@ fn test_prompt(id: &str, kind: WorkerPromptKind) -> WorkerPrompt {
     }
 }
 
+async fn receive_test_prompt(
+    outbound: &mut tokio::sync::mpsc::Receiver<WorkerFrameContent>,
+) -> WorkerPrompt {
+    match outbound.recv().await.expect("worker outbound frame") {
+        WorkerFrameContent::Prompt { prompt } => prompt,
+        other => panic!("expected prompt, received {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() {
-    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(4);
-    let (notice_tx, _notice_rx) = tokio::sync::mpsc::channel(1);
-    let bridge = InteractiveRunBridge {
-        prompts: prompt_tx,
-        notices: notice_tx,
-        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-    };
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(4);
+    let bridge = InteractiveRunBridge::new(outbound_tx);
 
     let answered_bridge = bridge.clone();
     let answered = tokio::spawn(async move {
@@ -477,7 +575,7 @@ async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() 
             .request(test_prompt("answered", WorkerPromptKind::UserInput))
             .await
     });
-    let prompt = prompt_rx.recv().await.expect("answered prompt");
+    let prompt = receive_test_prompt(&mut outbound_rx).await;
     bridge
         .respond(&prompt.prompt_id, Some("Allow once".into()))
         .await
@@ -486,16 +584,6 @@ async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() 
         answered.await.expect("answered task").expect("answer"),
         Some("Allow once".into())
     );
-
-    let cancelled_bridge = bridge.clone();
-    let cancelled = tokio::spawn(async move {
-        cancelled_bridge
-            .request(test_prompt("cancelled", WorkerPromptKind::UserInput))
-            .await
-    });
-    prompt_rx.recv().await.expect("cancelled prompt");
-    bridge.cancel_all().await;
-    assert_eq!(cancelled.await.expect("cancel task").expect("cancel"), None);
 
     let timeout_bridge = bridge.clone();
     let timed_out = tokio::spawn(async move {
@@ -506,30 +594,451 @@ async fn prompt_bridge_covers_answer_cancel_disconnect_timeout_and_run_cancel() 
             )
             .await
     });
-    prompt_rx.recv().await.expect("timeout prompt");
+    receive_test_prompt(&mut outbound_rx).await;
     assert!(matches!(
         timed_out.await.expect("timeout task"),
         Err(message) if message.contains("timed out")
     ));
 
+    let cancelled_bridge = bridge.clone();
+    let cancelled = tokio::spawn(async move {
+        cancelled_bridge
+            .request(test_prompt("cancelled", WorkerPromptKind::UserInput))
+            .await
+    });
+    receive_test_prompt(&mut outbound_rx).await;
     let control = RunControl::default();
-    control.cancel();
+    bridge.cancel_run(&control).await;
     assert!(control.is_cancelled());
+    assert_eq!(cancelled.await.expect("cancel task").expect("cancel"), None);
+    assert_eq!(
+        bridge
+            .request(test_prompt("after-cancel", WorkerPromptKind::Approval))
+            .await
+            .expect("post-cancel request"),
+        None
+    );
+    assert!(matches!(
+        outbound_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
 
     let (disconnected_tx, disconnected_rx) = tokio::sync::mpsc::channel(1);
     drop(disconnected_rx);
-    let (notice_tx, _notice_rx) = tokio::sync::mpsc::channel(1);
-    let disconnected = InteractiveRunBridge {
-        prompts: disconnected_tx,
-        notices: notice_tx,
-        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-    };
+    let disconnected = InteractiveRunBridge::new(disconnected_tx);
     assert!(matches!(
         disconnected
             .request(test_prompt("disconnect", WorkerPromptKind::Approval))
             .await,
         Err(message) if message.contains("disconnected")
     ));
+}
+
+struct SocketTestObserver {
+    order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl RunEventObserver for SocketTestObserver {
+    async fn observe(&mut self, _event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        self.order.lock().expect("order lock").push("event");
+        Ok(())
+    }
+}
+
+struct SilentSocketObserver;
+
+#[async_trait]
+impl RunEventObserver for SilentSocketObserver {
+    async fn observe(&mut self, _event: RunEventEnvelope) -> Result<(), ModelProviderError> {
+        Ok(())
+    }
+}
+
+struct SocketTestPromptHandler {
+    order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl WorkerPromptHandler for SocketTestPromptHandler {
+    async fn notice(&self, _notice: ApprovalReviewNotice) -> Result<(), WorkerError> {
+        self.order.lock().expect("order lock").push("notice");
+        Ok(())
+    }
+
+    async fn prompt(&self, _prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
+        self.order.lock().expect("order lock").push("prompt");
+        Ok(Some("Allow once".into()))
+    }
+}
+
+struct PromptDropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for PromptDropSignal {
+    fn drop(&mut self) {
+        if let Some(signal) = self.0.take() {
+            let _ = signal.send(());
+        }
+    }
+}
+
+struct BlockingSocketPromptHandler {
+    started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    dropped: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl WorkerPromptHandler for BlockingSocketPromptHandler {
+    async fn prompt(&self, _prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        let _drop_signal = PromptDropSignal(self.dropped.lock().expect("drop signal lock").take());
+        if let Some(started) = self.started.lock().expect("start signal lock").take() {
+            let _ = started.send(());
+        }
+        std::future::pending().await
+    }
+}
+
+struct FailingSocketPromptHandler;
+
+#[async_trait]
+impl WorkerPromptHandler for FailingSocketPromptHandler {
+    async fn prompt(&self, _prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
+        Err(WorkerError::Unavailable(
+            "test interactive client disconnected".into(),
+        ))
+    }
+}
+
+fn socket_test_event() -> RunEventEnvelope {
+    RunEventEnvelope {
+        schema_version: 1,
+        run_id: "run".into(),
+        session_id: "session".into(),
+        event: colossus_contracts::RunEvent::Phase {
+            phase: colossus_contracts::RunPhase::Preparing,
+            turn: None,
+            action: Some("test".into()),
+            elapsed_seconds: 0.0,
+        },
+    }
+}
+
+fn socket_test_notice() -> ApprovalReviewNotice {
+    ApprovalReviewNotice::AutomaticApproval {
+        notice: AutomaticApprovalNotice {
+            action: "filesystem.read".into(),
+            resource: "test".into(),
+            risk_level: colossus_contracts::RiskLevel::Low,
+            reason: "test".into(),
+        },
+    }
+}
+
+const SOCKET_TEST_REQUEST_ID: &str = "interactive-request";
+const SOCKET_TEST_CONNECTION_NONCE: &str = "interactive-connection";
+
+#[tokio::test]
+async fn interactive_socket_preserves_event_notice_prompt_order() {
+    let key = [21_u8; 32];
+    let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move {
+        let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(8);
+        let bridge = InteractiveRunBridge::new(outbound_tx.clone());
+        let run_bridge = bridge.clone();
+        let control = RunControl::default();
+        let run = async move {
+            outbound_tx
+                .send(WorkerFrameContent::Event {
+                    event: socket_test_event(),
+                })
+                .await
+                .map_err(|_| WorkerError::Protocol("ordered event channel closed".into()))?;
+            outbound_tx
+                .send(WorkerFrameContent::Notice {
+                    notice: socket_test_notice(),
+                })
+                .await
+                .map_err(|_| WorkerError::Protocol("ordered notice channel closed".into()))?;
+            let answer = run_bridge
+                .request(test_prompt("ordered", WorkerPromptKind::Approval))
+                .await
+                .map_err(WorkerError::Protocol)?;
+            Ok(json!({ "answer": answer }))
+        };
+        server::drive_interactive_connection(
+            server_stream,
+            server::InteractiveConnectionContext {
+                key: &key,
+                request_id: SOCKET_TEST_REQUEST_ID,
+                connection_nonce: SOCKET_TEST_CONNECTION_NONCE,
+            },
+            outbound_rx,
+            bridge,
+            &control,
+            run,
+        )
+        .await
+    });
+
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut observer = SocketTestObserver {
+        order: Arc::clone(&order),
+    };
+    let prompts = SocketTestPromptHandler {
+        order: Arc::clone(&order),
+    };
+    let result = client::drive_interactive_client::<_, Value>(
+        client_stream,
+        &key,
+        SOCKET_TEST_REQUEST_ID,
+        SOCKET_TEST_CONNECTION_NONCE,
+        &mut observer,
+        &prompts,
+        &RunControl::default(),
+    )
+    .await
+    .expect("interactive result");
+    assert_eq!(result["answer"], "Allow once");
+    assert_eq!(
+        *order.lock().expect("order lock"),
+        vec!["event", "notice", "prompt"]
+    );
+    server
+        .await
+        .expect("server task")
+        .expect("server connection");
+}
+
+#[tokio::test]
+async fn interactive_socket_cancel_releases_waiter_and_rejects_late_prompt() {
+    let key = [22_u8; 32];
+    let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move {
+        let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(8);
+        let bridge = InteractiveRunBridge::new(outbound_tx);
+        let run_bridge = bridge.clone();
+        let control = RunControl::default();
+        let run_control = control.clone();
+        let run = async move {
+            let first = run_bridge
+                .request(test_prompt("cancelled", WorkerPromptKind::UserInput))
+                .await
+                .map_err(WorkerError::Protocol)?;
+            let second = run_bridge
+                .request(test_prompt("after-cancel", WorkerPromptKind::Approval))
+                .await
+                .map_err(WorkerError::Protocol)?;
+            Ok(json!({
+                "first": first,
+                "second": second,
+                "cancelled": run_control.is_cancelled(),
+            }))
+        };
+        server::drive_interactive_connection(
+            server_stream,
+            server::InteractiveConnectionContext {
+                key: &key,
+                request_id: SOCKET_TEST_REQUEST_ID,
+                connection_nonce: SOCKET_TEST_CONNECTION_NONCE,
+            },
+            outbound_rx,
+            bridge,
+            &control,
+            run,
+        )
+        .await
+    });
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let prompts = BlockingSocketPromptHandler {
+        started: Mutex::new(Some(started_tx)),
+        dropped: Mutex::new(Some(dropped_tx)),
+        calls: Arc::clone(&calls),
+    };
+    let control = RunControl::default();
+    let client_control = control.clone();
+    let client_task = tokio::spawn(async move {
+        let mut observer = SilentSocketObserver;
+        client::drive_interactive_client::<_, Value>(
+            client_stream,
+            &key,
+            SOCKET_TEST_REQUEST_ID,
+            SOCKET_TEST_CONNECTION_NONCE,
+            &mut observer,
+            &prompts,
+            &client_control,
+        )
+        .await
+    });
+    started_rx.await.expect("prompt started");
+    control.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(2), client_task)
+        .await
+        .expect("cancelled client timeout")
+        .expect("client task")
+        .expect("cancelled interactive result");
+    dropped_rx.await.expect("local prompt future dropped");
+    assert_eq!(result["first"], Value::Null);
+    assert_eq!(result["second"], Value::Null);
+    assert_eq!(result["cancelled"], true);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::Acquire),
+        1,
+        "the post-cancel prompt must never reach the client"
+    );
+    server
+        .await
+        .expect("server task")
+        .expect("server connection");
+}
+
+#[tokio::test]
+async fn interactive_socket_interrupts_open_prompt_on_terminal_frame_or_disconnect() {
+    for terminal in [
+        Some(WorkerFrameContent::Error {
+            message: "terminal failure".into(),
+        }),
+        None,
+    ] {
+        let key = [23_u8; 32];
+        let (client_stream, mut server_stream) = tokio::io::duplex(64 * 1024);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            write_signed_frame(
+                &mut server_stream,
+                &key,
+                SOCKET_TEST_REQUEST_ID,
+                1,
+                WorkerFrameContent::Prompt {
+                    prompt: test_prompt("blocking", WorkerPromptKind::UserInput),
+                },
+            )
+            .await
+            .expect("write prompt frame");
+            started_rx.await.expect("client opened prompt");
+            if let Some(content) = terminal {
+                write_signed_frame(&mut server_stream, &key, SOCKET_TEST_REQUEST_ID, 2, content)
+                    .await
+                    .expect("write terminal frame");
+            }
+        });
+
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let prompts = BlockingSocketPromptHandler {
+            started: Mutex::new(Some(started_tx)),
+            dropped: Mutex::new(Some(dropped_tx)),
+            calls: Arc::clone(&calls),
+        };
+        let mut observer = SilentSocketObserver;
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client::drive_interactive_client::<_, Value>(
+                client_stream,
+                &key,
+                SOCKET_TEST_REQUEST_ID,
+                SOCKET_TEST_CONNECTION_NONCE,
+                &mut observer,
+                &prompts,
+                &RunControl::default(),
+            ),
+        )
+        .await
+        .expect("prompt interruption timeout");
+        assert!(result.is_err());
+        dropped_rx.await.expect("prompt future dropped");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Acquire), 1);
+        server.await.expect("server task");
+    }
+}
+
+#[tokio::test]
+async fn interactive_socket_disconnect_cancels_server_and_clears_waiters() {
+    let key = [24_u8; 32];
+    let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move {
+        let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(8);
+        let bridge = InteractiveRunBridge::new(outbound_tx);
+        let inspect = bridge.clone();
+        let run_bridge = bridge.clone();
+        let control = RunControl::default();
+        let run = async move {
+            run_bridge
+                .request(test_prompt("disconnect", WorkerPromptKind::Approval))
+                .await
+                .map(|answer| json!({ "answer": answer }))
+                .map_err(WorkerError::Protocol)
+        };
+        let result = server::drive_interactive_connection(
+            server_stream,
+            server::InteractiveConnectionContext {
+                key: &key,
+                request_id: SOCKET_TEST_REQUEST_ID,
+                connection_nonce: SOCKET_TEST_CONNECTION_NONCE,
+            },
+            outbound_rx,
+            bridge,
+            &control,
+            run,
+        )
+        .await;
+        let responses = inspect.responses.lock().await;
+        (result, responses.cancelled, responses.pending.len())
+    });
+
+    let mut observer = SilentSocketObserver;
+    let result = client::drive_interactive_client::<_, Value>(
+        client_stream,
+        &key,
+        SOCKET_TEST_REQUEST_ID,
+        SOCKET_TEST_CONNECTION_NONCE,
+        &mut observer,
+        &FailingSocketPromptHandler,
+        &RunControl::default(),
+    )
+    .await;
+    assert!(matches!(result, Err(WorkerError::Unavailable(_))));
+    let (server_result, cancelled, pending) = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("server disconnect timeout")
+        .expect("server task");
+    assert!(server_result.is_err());
+    assert!(cancelled);
+    assert_eq!(pending, 0);
+}
+
+#[tokio::test]
+async fn interactive_client_stale_worker_error_has_restart_guidance() {
+    let key = [25_u8; 32];
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(1024);
+    let server = tokio::spawn(async move {
+        let hello: ClientHello = read_message(&mut server_stream, 1024)
+            .await
+            .expect("client hello");
+        write_message(
+            &mut server_stream,
+            &ServerHello {
+                version: PROTOCOL_VERSION - 1,
+                challenge: hello.challenge,
+                server_nonce: "a".repeat(64),
+                timestamp_ms: now_ms(),
+                authentication_tag: String::new(),
+            },
+            1024,
+        )
+        .await
+        .expect("stale server hello");
+    });
+
+    let error = client_handshake(&mut client_stream, &key)
+        .await
+        .expect_err("stale worker must fail");
+    assert!(error.to_string().contains("restart the worker"));
+    server.await.expect("server task");
 }
 
 #[tokio::test]
@@ -549,17 +1058,12 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
     };
 
     for (answer, expected_approval) in [("Allow once", true), ("Deny", false)] {
-        let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel(1);
-        let (notice_tx, _notice_rx) = tokio::sync::mpsc::channel(1);
-        let bridge = InteractiveRunBridge {
-            prompts: prompt_tx,
-            notices: notice_tx,
-            responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-        };
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(1);
+        let bridge = InteractiveRunBridge::new(outbound_tx);
         let responder_bridge = bridge.clone();
         let answer = answer.to_owned();
         let responder = tokio::spawn(async move {
-            let prompt = prompt_rx.recv().await.expect("approval prompt");
+            let prompt = receive_test_prompt(&mut outbound_rx).await;
             assert_eq!(prompt.kind, WorkerPromptKind::Approval);
             responder_bridge
                 .respond(&prompt.prompt_id, Some(answer))
@@ -583,13 +1087,8 @@ async fn interactive_worker_approval_accepts_only_the_exact_allow_choice() {
 
 #[tokio::test]
 async fn interactive_worker_forwards_automatic_approval_notices_without_prompting() {
-    let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
-    let (notice_tx, mut notice_rx) = tokio::sync::mpsc::channel(1);
-    let bridge = InteractiveRunBridge {
-        prompts: prompt_tx,
-        notices: notice_tx,
-        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-    };
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(1);
+    let bridge = InteractiveRunBridge::new(outbound_tx);
     let provider = WorkerInteractiveApproval {
         mode: WorkerApprovalMode::RiskAuto,
     };
@@ -605,20 +1104,17 @@ async fn interactive_worker_forwards_automatic_approval_notices_without_promptin
         .await;
 
     assert_eq!(
-        notice_rx.recv().await,
-        Some(ApprovalReviewNotice::AutomaticApproval { notice })
+        outbound_rx.recv().await,
+        Some(WorkerFrameContent::Notice {
+            notice: ApprovalReviewNotice::AutomaticApproval { notice }
+        })
     );
 }
 
 #[tokio::test]
 async fn interactive_worker_forwards_risk_review_fallback_without_prompting() {
-    let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
-    let (notice_tx, mut notice_rx) = tokio::sync::mpsc::channel(1);
-    let bridge = InteractiveRunBridge {
-        prompts: prompt_tx,
-        notices: notice_tx,
-        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-    };
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(1);
+    let bridge = InteractiveRunBridge::new(outbound_tx);
     let provider = WorkerInteractiveApproval {
         mode: WorkerApprovalMode::RiskAuto,
     };
@@ -636,15 +1132,16 @@ async fn interactive_worker_forwards_risk_review_fallback_without_prompting() {
         .await;
 
     assert_eq!(
-        notice_rx.recv().await,
-        Some(ApprovalReviewNotice::RiskReviewFallback { notice })
+        outbound_rx.recv().await,
+        Some(WorkerFrameContent::Notice {
+            notice: ApprovalReviewNotice::RiskReviewFallback { notice }
+        })
     );
 }
 
 #[tokio::test]
 async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
-    let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::channel(1);
-    let (notice_tx, mut notice_rx) = tokio::sync::mpsc::channel(1);
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(1);
     let queued = ApprovalReviewNotice::AutomaticApproval {
         notice: AutomaticApprovalNotice {
             action: "web.search".into(),
@@ -653,14 +1150,12 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
             reason: "first read-only configured search".into(),
         },
     };
-    notice_tx
-        .try_send(queued.clone())
+    outbound_tx
+        .try_send(WorkerFrameContent::Notice {
+            notice: queued.clone(),
+        })
         .expect("fill worker notice queue");
-    let bridge = InteractiveRunBridge {
-        prompts: prompt_tx,
-        notices: notice_tx.clone(),
-        responses: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-    };
+    let bridge = InteractiveRunBridge::new(outbound_tx.clone());
     let provider = WorkerInteractiveApproval {
         mode: WorkerApprovalMode::RiskAuto,
     };
@@ -681,15 +1176,19 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
     .await
     .expect("a best-effort worker notice must not wait for queue capacity");
 
-    assert_eq!(notice_rx.recv().await, Some(queued));
+    assert_eq!(
+        outbound_rx.recv().await,
+        Some(WorkerFrameContent::Notice { notice: queued })
+    );
     assert!(matches!(
-        notice_rx.try_recv(),
+        outbound_rx.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
 }
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
+    assert_eq!(PROTOCOL_VERSION, 6);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);
