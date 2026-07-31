@@ -55,7 +55,10 @@ import { WorkComposer } from "./components/WorkComposer";
 import { WorkSidebar } from "./components/WorkSidebar";
 import { WorkSurface } from "./components/WorkSurface";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
-import { buildOperationsStudioFixture } from "./dev/operations-studio-fixture";
+import {
+  buildOperationsStudioFixture,
+  buildPlanWorkflowFixture,
+} from "./dev/operations-studio-fixture";
 import { managedOnboardingRequired } from "./onboarding";
 import {
   agentRoleLabel,
@@ -107,10 +110,14 @@ import {
   readFixtureWorkspaceFile,
 } from "./dev/workspace-files-fixture";
 
+const FIXTURE_SCENARIO = new URLSearchParams(window.location.search).get(
+  "fixture",
+);
 const FIXTURE_MODE =
   import.meta.env.DEV &&
-  new URLSearchParams(window.location.search).get("fixture") ===
-    "operations-studio";
+  (FIXTURE_SCENARIO === "operations-studio" ||
+    FIXTURE_SCENARIO === "interaction-question" ||
+    FIXTURE_SCENARIO === "plan-workflow");
 
 const INITIAL_CONNECTION: ConnectionStatus = FIXTURE_MODE
   ? {
@@ -200,8 +207,10 @@ const INITIAL_DESKTOP: DesktopStatus = {
     delegation: false,
     skills: false,
     tui: FIXTURE_MODE,
+    shellTerminal: FIXTURE_MODE,
     files: FIXTURE_MODE,
     artifacts: FIXTURE_MODE,
+    planContinuation: FIXTURE_MODE,
     updateAvailable: false,
     agentWorkflows: false,
     attachments: false,
@@ -388,10 +397,24 @@ interface RoutedAttempt {
   attempt: IdempotentAttempt;
 }
 
+interface PlanRevisionTarget {
+  sourceRunId: string;
+  planId: string;
+  revision: number;
+}
+
 export default function App() {
   const [chat, dispatch] = useReducer(
     chatReducer,
-    FIXTURE_MODE ? buildOperationsStudioFixture() : initialChatState,
+    FIXTURE_MODE
+      ? FIXTURE_SCENARIO === "plan-workflow"
+        ? buildPlanWorkflowFixture()
+        : buildOperationsStudioFixture(
+            FIXTURE_SCENARIO === "interaction-question"
+              ? "user_prompt"
+              : "approval",
+          )
+      : initialChatState,
   );
   const chatRef = useRef(chat);
   const [desktop, setDesktop] = useState<DesktopStatus>(INITIAL_DESKTOP);
@@ -422,6 +445,9 @@ export default function App() {
   >(new Set());
   const [role, setRole] = useState("primary");
   const [mode, setMode] = useState<RunMode>("execute");
+  const [planRevision, setPlanRevision] = useState<PlanRevisionTarget | null>(
+    null,
+  );
   const [maxTurns, setMaxTurns] = useState(24);
   const [submitting, setSubmitting] = useState(false);
   const [composerError, setComposerError] = useState<CommandError | null>(null);
@@ -434,7 +460,11 @@ export default function App() {
   if (targetRoutes.current === null) {
     targetRoutes.current = new TargetRouteRegistry();
     if (FIXTURE_MODE) {
-      targetRoutes.current.activate("fixture-managed-local", "managed_local");
+      const route = targetRoutes.current.activate(
+        "fixture-managed-local",
+        "managed_local",
+      );
+      targetRoutes.current.bindRuns(chat.views.keys(), route);
     }
   }
   const connectingRef = useRef(false);
@@ -796,6 +826,7 @@ export default function App() {
       return;
     }
     if (FIXTURE_MODE) {
+      setPlanRevision(null);
       setWorkNavigationOpen(false);
       setSurface("work");
       dispatch({ type: "upsert_run", run });
@@ -810,6 +841,7 @@ export default function App() {
       return;
     }
     targetRoutes.current.bindRun(run.runId, route);
+    setPlanRevision(null);
     setWorkNavigationOpen(false);
     setSurface("work");
     dispatch({ type: "upsert_run", run });
@@ -882,6 +914,7 @@ export default function App() {
     setRunLoadError("");
     setActionError(null);
     setComposerError(null);
+    setPlanRevision(null);
     setAttachments([]);
     requestAnimationFrame(() => composerRef.current?.focus());
   }
@@ -904,10 +937,15 @@ export default function App() {
 
     const currentView =
       chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
+    const continuationView =
+      planRevision === null
+        ? currentView
+        : chat.views.get(planRevision.sourceRunId);
     const route =
-      currentView === undefined
+      continuationView === undefined
         ? (targetRoutes.current?.capture() ?? null)
-        : (targetRoutes.current?.routeForRun(currentView.run.runId) ?? null);
+        : (targetRoutes.current?.routeForRun(continuationView.run.runId) ??
+          null);
     if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       setComposerError({
         ...FALLBACK_ACTION_ERROR,
@@ -917,16 +955,21 @@ export default function App() {
       return;
     }
     const sessionId =
-      currentView !== undefined && isTerminalStatus(currentView.run.status)
-        ? currentView.run.sessionId
+      continuationView !== undefined &&
+      isTerminalStatus(continuationView.run.status)
+        ? continuationView.run.sessionId
         : undefined;
+    const effectiveMode: RunMode = planRevision === null ? mode : "plan";
     const fingerprint = operationFingerprint([
       cleanPrompt,
       route.targetId,
       sessionId ?? "",
       cleanRole,
-      mode,
+      effectiveMode,
       maxTurns,
+      planRevision?.sourceRunId ?? "",
+      planRevision?.planId ?? "",
+      planRevision?.revision ?? 0,
       ...attachments.map((attachment) => attachment.artifactId),
     ]);
     const previousRoutedAttempt = createAttempt.current;
@@ -944,9 +987,18 @@ export default function App() {
       prompt: cleanPrompt,
       artifactIds: attachments.map((attachment) => attachment.artifactId),
       role: cleanRole,
-      mode,
+      mode: effectiveMode,
       maxTurns,
       idempotencyKey: attempt.key,
+      ...(planRevision === null
+        ? {}
+        : {
+            planAction: {
+              type: "revise" as const,
+              sourceRunId: planRevision.sourceRunId,
+              expectedRevision: planRevision.revision,
+            },
+          }),
     };
     const request: CreateRunRequest =
       sessionId === undefined ? commonRequest : { ...commonRequest, sessionId };
@@ -964,7 +1016,7 @@ export default function App() {
           sessionId: sessionId ?? `fixture-session-${Date.now()}`,
           title: safeDisplayLabel(cleanPrompt, "Untitled work", 80),
           role: cleanRole,
-          mode,
+          mode: effectiveMode,
           status: "completed",
           createdAt: now,
           updatedAt: now,
@@ -976,7 +1028,16 @@ export default function App() {
             type: "result",
             result: {
               output:
-                "Showcase response: the request was accepted by the local Operations Studio fixture. Live builds send this through the scoped native command boundary.",
+                planRevision === null
+                  ? "Showcase response: the request was accepted by the local Operations Studio fixture. Live builds send this through the scoped native command boundary."
+                  : "The selected Plan was revised in this chat and saved as a new durable draft revision.",
+              ...(planRevision === null
+                ? {}
+                : {
+                    planId: planRevision.planId,
+                    planRevision: planRevision.revision + 1,
+                    planStatus: "draft" as const,
+                  }),
               profile: "desktop-showcase",
               modelProfile: "desktop-showcase",
               providerProfile: "fixture-provider",
@@ -989,6 +1050,7 @@ export default function App() {
         };
         createAttempt.current = null;
         setPrompt("");
+        setPlanRevision(null);
         setAttachments([]);
         targetRoutes.current?.bindRun(runId, route);
         dispatch({ type: "upsert_run", run });
@@ -1006,6 +1068,7 @@ export default function App() {
       }
       createAttempt.current = null;
       setPrompt("");
+      setPlanRevision(null);
       setAttachments([]);
       targetRoutes.current.bindRun(run.runId, route);
       dispatch({ type: "upsert_run", run });
@@ -1023,6 +1086,173 @@ export default function App() {
       const failure = commandError(error);
       markConnectionFailure(failure, route ?? undefined);
       setComposerError(failure);
+    } finally {
+      submitInFlight.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  function beginPlanRevision(
+    sourceRunId: string,
+    planId: string,
+    revision: number,
+  ) {
+    if (submitInFlight.current || connectingRef.current) {
+      return;
+    }
+    const source = chatRef.current.views.get(sourceRunId);
+    if (source === undefined || !isTerminalStatus(source.run.status)) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "plan_source_unavailable",
+        message: "Reload this work before revising its Plan.",
+      });
+      return;
+    }
+    setPlanRevision({ sourceRunId, planId, revision });
+    setMode("plan");
+    setPrompt("");
+    setComposerError(null);
+    setActionError(null);
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  async function executePlan(
+    sourceRunId: string,
+    planId: string,
+    revision: number,
+    strategy: { type: "direct" } | { type: "goal"; maxIterations: number },
+  ) {
+    if (submitInFlight.current || connectingRef.current) {
+      return;
+    }
+    const source = chatRef.current.views.get(sourceRunId);
+    const route = targetRoutes.current?.routeForRun(sourceRunId) ?? null;
+    if (
+      source === undefined ||
+      !isTerminalStatus(source.run.status) ||
+      route === null ||
+      targetRoutes.current?.isCurrent(route) !== true
+    ) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "plan_source_unavailable",
+        message: "Reload this work before executing its Plan.",
+      });
+      return;
+    }
+    const actionPrompt =
+      strategy.type === "direct"
+        ? `Approve and execute Plan revision ${revision} once.`
+        : `Approve and run Plan revision ${revision} as a bounded Goal with ${strategy.maxIterations} iterations.`;
+    const fingerprint = operationFingerprint([
+      actionPrompt,
+      route.targetId,
+      sourceRunId,
+      planId,
+      revision,
+      strategy.type,
+      strategy.type === "goal" ? strategy.maxIterations : 0,
+      source.run.role,
+      maxTurns,
+    ]);
+    const previousRoutedAttempt = createAttempt.current;
+    const previousAttempt =
+      previousRoutedAttempt !== null &&
+      previousRoutedAttempt.targetId === route.targetId
+        ? previousRoutedAttempt.attempt
+        : null;
+    const attempt = stableIdempotentAttempt(previousAttempt, fingerprint);
+    createAttempt.current = {
+      targetId: route.targetId,
+      attempt,
+    };
+    const request: CreateRunRequest = {
+      prompt: actionPrompt,
+      sessionId: source.run.sessionId,
+      role: source.run.role,
+      mode: "execute",
+      planAction: {
+        type: "execute",
+        sourceRunId,
+        expectedRevision: revision,
+        strategy,
+      },
+      maxTurns,
+      idempotencyKey: attempt.key,
+    };
+
+    submitInFlight.current = true;
+    setSubmitting(true);
+    setActionError(null);
+    setComposerError(null);
+    try {
+      let run: Run;
+      if (FIXTURE_MODE) {
+        const now = new Date().toISOString();
+        const runId = `fixture-plan-execution-${Date.now()}`;
+        run = {
+          runId,
+          sessionId: source.run.sessionId,
+          title: actionPrompt,
+          role: source.run.role,
+          mode: "execute",
+          status: "completed",
+          createdAt: now,
+          updatedAt: now,
+          startedAt: now,
+          finishedAt: now,
+          lastSequence: 0,
+          pendingInteractionCount: 0,
+          terminal: {
+            type: "result",
+            result: {
+              output:
+                strategy.type === "direct"
+                  ? "The selected Plan completed as one policy-bound run."
+                  : "The selected Plan was consumed into bounded Goal Mode.",
+              planId,
+              planRevision: revision + 2,
+              planStatus: "executed",
+              ...(strategy.type === "goal"
+                ? { goalId: `goal-fixture-${Date.now()}` }
+                : {}),
+              profile: "desktop-showcase",
+              modelProfile: "desktop-showcase",
+              providerProfile: "fixture-provider",
+              model: "fixture",
+              elapsedSeconds: 0.2,
+            },
+          },
+          etag: `fixture-etag-${runId}`,
+          selectedSkills: [],
+        };
+      } else {
+        run = await createRun(route.targetId, request);
+      }
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      createAttempt.current = null;
+      setPlanRevision(null);
+      targetRoutes.current.bindRun(run.runId, route);
+      dispatch({ type: "upsert_run", run });
+      dispatch({
+        type: "record_local_prompt",
+        runId: run.runId,
+        prompt: actionPrompt,
+      });
+      dispatch({ type: "select_run", runId: run.runId });
+      if (!FIXTURE_MODE) {
+        startWatch(run.runId, 0, route);
+      }
+    } catch (error: unknown) {
+      if (targetRoutes.current?.isCurrent(route) !== true) {
+        return;
+      }
+      const failure = commandError(error);
+      markConnectionFailure(failure, route);
+      setActionError(failure);
     } finally {
       submitInFlight.current = false;
       setSubmitting(false);
@@ -1679,7 +1909,11 @@ export default function App() {
     const selectedTarget = status.targets.find(
       (target) => target.targetId === status.selectedTargetId,
     );
-    if (enabled && selectedTarget?.terminalAvailable !== true) {
+    if (
+      enabled &&
+      selectedTarget?.terminalAvailable !== true &&
+      !status.capabilities.shellTerminal
+    ) {
       setSurface("settings");
       return;
     }
@@ -1694,18 +1928,25 @@ export default function App() {
     }
   }
 
-  async function handleOpenTerminal(kind: TerminalKind) {
+  async function handleOpenTerminal(
+    kind: TerminalKind,
+    planContext?: { sessionId: string; planId: string },
+  ) {
     const status = desktopRef.current;
     const selectedTarget = status.targets.find(
       (target) => target.targetId === status.selectedTargetId,
     );
-    if (!status.terminalEnabled || selectedTarget?.terminalAvailable !== true) {
+    const terminalAvailable =
+      kind === "shell"
+        ? status.capabilities.shellTerminal
+        : selectedTarget?.terminalAvailable === true;
+    if (!status.terminalEnabled || !terminalAvailable) {
       setSurface("settings");
       return;
     }
     try {
       if (!FIXTURE_MODE) {
-        await showTerminalWindow(kind);
+        await showTerminalWindow(kind, planContext);
       }
     } catch (error: unknown) {
       setActionError(commandError(error));
@@ -1854,6 +2095,14 @@ export default function App() {
       canCompose={canCompose}
       submitting={submitting}
       continuation={continuation}
+      planRevision={
+        planRevision === null
+          ? null
+          : {
+              planId: planRevision.planId,
+              revision: planRevision.revision,
+            }
+      }
       activeWorkRunning={
         activeRun !== undefined && !isTerminalStatus(activeRun.status)
       }
@@ -1868,7 +2117,15 @@ export default function App() {
       }}
       onRoleChange={setRole}
       onMaxTurnsChange={(turns) => setMaxTurns(clampMaxTurns(turns))}
-      onModeChange={setMode}
+      onModeChange={(nextMode) => {
+        if (planRevision === null) {
+          setMode(nextMode);
+        }
+      }}
+      onCancelPlanRevision={() => {
+        setPlanRevision(null);
+        setComposerError(null);
+      }}
       onChooseAttachment={() => void chooseAttachment()}
       onRemoveAttachment={(artifactId) =>
         setAttachments((current) =>
@@ -1899,6 +2156,7 @@ export default function App() {
         capabilities={desktop.capabilities}
         onSelect={selectSurface}
         onOpenTerminal={() => void handleOpenTerminal("colossus_tui")}
+        onOpenShell={() => void handleOpenTerminal("shell")}
       />
 
       {!onboardingActive && surface === "work" && workNavigationOpen ? (
@@ -1974,6 +2232,12 @@ export default function App() {
           composer={composer}
           filesAvailable={desktop.capabilities.files}
           artifactsAvailable={desktop.capabilities.artifacts}
+          planContinuationAvailable={desktop.capabilities.planContinuation}
+          planWorkflowAvailable={
+            desktop.terminalEnabled &&
+            terminalAvailable &&
+            desktop.capabilities.tui
+          }
           filesPanel={
             <WorkspaceFiles
               workspace={desktop.workspace}
@@ -2005,6 +2269,11 @@ export default function App() {
           onSelectArtifact={(artifactId) =>
             void loadArtifactPreview(artifactId)
           }
+          onOpenPlanWorkflow={(sessionId, planId) =>
+            void handleOpenTerminal("colossus_tui", { sessionId, planId })
+          }
+          onRevisePlan={beginPlanRevision}
+          onExecutePlan={executePlan}
           onOpenWorkNavigation={openWorkNavigation}
           onCloseWorkNavigation={closeWorkNavigation}
         />

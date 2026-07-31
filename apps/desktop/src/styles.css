@@ -499,6 +499,18 @@ p {
   background: var(--surface-hover);
 }
 
+.button.tertiary {
+  border-color: transparent;
+  background: transparent;
+  color: #88a4c1;
+}
+
+.button.tertiary:hover {
+  border-color: #294563;
+  background: rgba(22, 48, 76, 0.56);
+  color: #c6d7e9;
+}
+
 .button.danger {
   border-color: #963f50;
   background: #6f2b39;
@@ -1590,6 +1602,124 @@ p {
   color: #5879a0;
 }
 
+.plan-result-card {
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid #31547d;
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, rgba(34, 80, 132, 0.22), transparent 72%), #0c1929;
+}
+
+.plan-result-card .feed-marker {
+  border-color: #356394;
+  background: #173756;
+  color: #8fc2ff;
+}
+
+.plan-result-card .feed-entry-heading > span {
+  color: #7090b3;
+  font-size: 0.61rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.plan-result-card p {
+  margin: 5px 0 0;
+  color: #9bb0c7;
+  font-size: 0.7rem;
+}
+
+.plan-workflow-identifiers {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0;
+}
+
+.plan-workflow-identifiers div {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.plan-workflow-identifiers dt {
+  color: #69819b;
+  font-size: 0.61rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.plan-workflow-identifiers dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #c1d3e6;
+  font-family: "SFMono-Regular", "Cascadia Code", monospace;
+  font-size: 0.64rem;
+}
+
+.plan-decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.plan-goal-action {
+  display: flex;
+  align-items: stretch;
+}
+
+.plan-goal-action select {
+  height: 32px;
+  padding: 0 24px 0 9px;
+  border: 1px solid #2c4969;
+  border-right: 0;
+  border-radius: 7px 0 0 7px;
+  outline: 0;
+  background: #0b1827;
+  color: #9db3ca;
+  font: inherit;
+  font-size: 0.68rem;
+}
+
+.plan-goal-action .button {
+  border-radius: 0 7px 7px 0;
+}
+
+.plan-workflow-handoff {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 9px;
+  border-top: 1px solid #203a57;
+}
+
+.plan-workflow-handoff details {
+  min-width: 0;
+}
+
+.plan-workflow-handoff summary {
+  color: #7894b3;
+  cursor: pointer;
+  font-size: 0.66rem;
+}
+
+.plan-workflow-handoff details[open] {
+  flex: 1;
+}
+
+.plan-workflow-handoff .plan-workflow-identifiers {
+  margin: 8px 0 0;
+}
+
+.plan-workflow-handoff .button {
+  flex: none;
+}
+
 .usage-summary {
   align-self: flex-end;
   margin: 1px 0 0;
@@ -1620,6 +1750,12 @@ p {
   border: 1px solid #4d4937;
   border-radius: 10px;
   background: #171d25;
+}
+
+.prompt-card {
+  display: grid;
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .approval-card {
@@ -1655,6 +1791,11 @@ p {
 
 .interaction-heading h3 {
   font-size: 0.92rem;
+}
+
+.prompt-heading {
+  padding-bottom: 10px;
+  border-bottom: 1px solid #26374b;
 }
 
 .interaction-heading + p,
@@ -1720,20 +1861,77 @@ p {
   margin-top: 12px;
 }
 
+.interaction-body {
+  min-height: 0;
+  padding: 11px 2px 11px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #384e69 transparent;
+  scrollbar-width: thin;
+}
+
+.prompt-actions {
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  margin-top: 0;
+  border-top: 1px solid #26374b;
+}
+
+.interaction-guidance {
+  color: #71869f;
+  font-size: 0.65rem;
+  font-weight: 620;
+}
+
 .choice-list {
   display: grid;
-  gap: 6px;
-  padding: 0;
-  margin: 12px 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 0 2px 0 0;
+  margin: 0;
   border: 0;
 }
 
 .choice {
   display: flex;
+  min-width: 0;
+  min-height: 36px;
   align-items: center;
-  gap: 7px;
-  color: #aebed0;
-  font-size: 0.74rem;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 1px solid #2a3b50;
+  border-radius: 7px;
+  background: #111a26;
+  color: #b7c5d5;
+  font-size: 0.73rem;
+  line-height: 1.3;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.choice:hover {
+  border-color: #3b5676;
+  background: #152335;
+  color: #dce7f3;
+}
+
+.choice.is-selected {
+  border-color: #4d91fb;
+  background: #132c4f;
+  color: #edf5ff;
+}
+
+.choice input[type="radio"] {
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  flex: none;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--blue);
 }
 
 .field,
@@ -1745,6 +1943,7 @@ p {
 }
 
 .interaction-text textarea {
+  min-height: 58px;
   resize: vertical;
 }
 
@@ -1784,7 +1983,7 @@ p {
 
 .pending-interaction-dock {
   max-width: 790px;
-  max-height: min(250px, 32vh);
+  max-height: min(280px, 38vh);
   margin: 0 auto 10px;
   overflow: auto;
   scrollbar-width: thin;
@@ -1792,8 +1991,14 @@ p {
 }
 
 .pending-interaction-dock .interaction-card {
+  width: 100%;
+  max-width: none;
   padding: 11px 12px;
   margin: 0;
+}
+
+.pending-interaction-dock .prompt-card {
+  max-height: min(250px, 34vh);
 }
 
 .pending-interaction-dock .interaction-heading + p,
@@ -1807,6 +2012,10 @@ p {
 
 .pending-interaction-dock .interaction-actions {
   margin-top: 8px;
+}
+
+.pending-interaction-dock .prompt-actions {
+  margin-top: 0;
 }
 
 .pending-interaction-dock .button {
@@ -1827,6 +2036,40 @@ p {
 
 .work-composer:focus-within {
   border-color: #457abd;
+}
+
+.composer-plan-revision {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -9px -10px 9px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #31547d;
+  border-radius: 9px 9px 0 0;
+  background: rgba(31, 73, 119, 0.34);
+}
+
+.composer-plan-revision > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.composer-plan-revision strong {
+  color: #bcd9fb;
+  font-size: 0.69rem;
+}
+
+.composer-plan-revision span {
+  color: #829bb7;
+  font-size: 0.61rem;
+}
+
+.composer-plan-revision button {
+  flex: none;
+  color: #94b4d7;
+  font-size: 0.64rem;
 }
 
 .composer-target-row,
@@ -4138,6 +4381,14 @@ textarea {
     padding: 20px 12px 12px;
   }
 
+  .choice-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pending-interaction-dock .prompt-card {
+    max-height: min(300px, 42vh);
+  }
+
   .policy-note {
     right: 12px;
   }
@@ -4234,6 +4485,18 @@ textarea {
 
   .work-composer-dock {
     padding: 10px 8px 8px;
+  }
+
+  .prompt-actions {
+    align-items: stretch;
+  }
+
+  .interaction-guidance {
+    display: none;
+  }
+
+  .prompt-actions .button {
+    width: 100%;
   }
 
   .composer-meta span:first-child {

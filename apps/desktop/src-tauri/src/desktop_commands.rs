@@ -1,4 +1,7 @@
-use colossus_sdk::{ApiErrorCode, ListRunsRequest, PageRequest, RunStatus, ServerCapabilities};
+use colossus_sdk::{
+    ApiErrorCode, ListRunsRequest, PLAN_CONTINUATION_CAPABILITY, PageRequest, RunStatus,
+    ServerCapabilities,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
@@ -16,11 +19,11 @@ use crate::{
         RuntimeTargetKindDto, WorkspaceSummaryDto,
     },
     desktop_settings::{
-        DesktopSettings, ExternalTargetSetting, MAX_EXTERNAL_TARGETS,
-        MAX_PENDING_PROVIDER_CLEANUPS, ModelCapabilitiesSetting, ModelSetting, ProviderSetting,
-        SettingsStore, WorkspaceSetting, application_support_root, delete_provider_secret,
-        load_provider_secret, provider_base_url, revalidate_workspace, store_provider_secret,
-        validate_workspace,
+        DesktopSettings, ExternalTargetSetting, LOCAL_TERMINAL_CONSENT_VERSION,
+        MAX_EXTERNAL_TARGETS, MAX_PENDING_PROVIDER_CLEANUPS, ModelCapabilitiesSetting,
+        ModelSetting, ProviderSetting, SettingsStore, WorkspaceSetting, application_support_root,
+        delete_provider_secret, load_provider_secret, provider_base_url, revalidate_workspace,
+        store_provider_secret, validate_workspace,
     },
     dto::{CommandErrorDto, ConnectionStateDto, ConnectionStatusDto},
     managed_runtime, provider_enrollment,
@@ -50,7 +53,9 @@ pub(crate) async fn initialize_desktop(
     if migrate_legacy_connection(&mut settings) {
         store.save(&settings)?;
     }
-    state.set_terminal_enabled(settings.terminal_enabled).await;
+    state
+        .set_terminal_enabled(settings.local_terminal_enabled())
+        .await;
     set_unstarted_health(&state, &settings).await;
 
     let selected = settings
@@ -81,7 +86,7 @@ pub(crate) async fn initialize_desktop(
         has_managed_configuration(&settings),
         state.connected(MANAGED_TARGET_ID).await,
     ) {
-        let _ = managed_runtime::start(&state, &store, &settings, false).await;
+        spawn_managed_start_on_initialize(app.clone());
     }
     if let Some(target) = selected
         .as_deref()
@@ -1213,16 +1218,51 @@ fn external_consent_message(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn set_terminal_enabled(
+    app: AppHandle,
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     let _guard = connect_guard(&state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
+    if enabled
+        && settings.local_terminal_consent_version != LOCAL_TERMINAL_CONSENT_VERSION
+        && !confirm_local_terminal_access(&app).await?
+    {
+        return desktop_status_from(&state, &settings).await;
+    }
     settings.terminal_enabled = enabled;
+    if enabled {
+        settings.local_terminal_consent_version = LOCAL_TERMINAL_CONSENT_VERSION;
+    }
     store.save(&settings)?;
     state.set_terminal_enabled(enabled).await;
     desktop_status_from(&state, &settings).await
+}
+
+async fn confirm_local_terminal_access(app: &AppHandle) -> Result<bool, CommandErrorDto> {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(
+                "The embedded shell runs as your macOS user and can read, change, or delete anything that user can access. Shell commands are outside Colossus policy and audit, and deliberately detached processes may outlive the app.\n\nOnly enable this on a trusted Colossus Desktop installation.",
+            )
+            .title("Enable local terminal access?")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Enable terminal".into(),
+                "Cancel".into(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| {
+        CommandErrorDto::local_sanitized(
+            "terminal_confirmation",
+            "The native terminal confirmation could not be opened.",
+            true,
+        )
+    })
 }
 
 async fn connect_external(
@@ -1420,6 +1460,32 @@ async fn external_target_ready(state: &AppState, target_id: &str) -> bool {
     connected && health.is_none_or(|health| health.state != "unreachable")
 }
 
+fn desktop_capabilities(
+    state: &AppState,
+    settings: &DesktopSettings,
+    advertised: &ServerCapabilities,
+    selected_managed: bool,
+    workspace_available: bool,
+) -> DesktopCapabilitiesDto {
+    DesktopCapabilitiesDto {
+        delegation: advertised.contains("agent_runs.delegation"),
+        skills: advertised.contains("skills.select"),
+        tui: selected_managed && cfg!(any(target_os = "macos", target_os = "windows")),
+        shell_terminal: managed_workspace_is_selected(settings)
+            && workspace_available
+            && cfg!(target_os = "macos"),
+        files: selected_managed
+            && workspace_available
+            && settings.access_profile
+                == crate::desktop_settings::AccessProfileSetting::Development,
+        artifacts: advertised.contains("artifacts.read"),
+        plan_continuation: advertised.contains(PLAN_CONTINUATION_CAPABILITY),
+        update_available: state.update_available(),
+        agent_workflows: advertised.contains("automation.workflows"),
+        attachments: advertised.contains("attachments.run_input"),
+    }
+}
+
 async fn desktop_status_from(
     state: &AppState,
     settings: &DesktopSettings,
@@ -1493,19 +1559,13 @@ async fn desktop_status_from(
     } else {
         ServerCapabilities::default()
     };
-    let capabilities = DesktopCapabilitiesDto {
-        delegation: advertised.contains("agent_runs.delegation"),
-        skills: advertised.contains("skills.select"),
-        tui: selected_managed && cfg!(any(target_os = "macos", target_os = "windows")),
-        files: selected_managed
-            && workspace.is_some()
-            && settings.access_profile
-                == crate::desktop_settings::AccessProfileSetting::Development,
-        artifacts: advertised.contains("artifacts.read"),
-        update_available: state.update_available(),
-        agent_workflows: advertised.contains("automation.workflows"),
-        attachments: advertised.contains("attachments.run_input"),
-    };
+    let capabilities = desktop_capabilities(
+        state,
+        settings,
+        &advertised,
+        selected_managed,
+        workspace.is_some(),
+    );
     Ok(DesktopStatusDto {
         release_channel: DesktopReleaseChannelDto::current(),
         connection,
@@ -1516,7 +1576,7 @@ async fn desktop_status_from(
         provider: ProviderSummaryDto::from_settings(settings),
         managed_model_configuration: ManagedModelConfigurationDto::from_settings(settings),
         access_profile: settings.access_profile,
-        terminal_enabled: settings.terminal_enabled,
+        terminal_enabled: settings.local_terminal_enabled(),
         additional_ca_bundle: crate::desktop_dto::CaBundleStatusDto::from_settings(settings),
         capabilities,
     })
@@ -1683,6 +1743,31 @@ fn migrate_legacy_connection(settings: &mut DesktopSettings) -> bool {
 
 const fn should_start_managed_on_initialize(managed_configured: bool, connected: bool) -> bool {
     managed_configured && !connected
+}
+
+fn managed_workspace_is_selected(settings: &DesktopSettings) -> bool {
+    settings.selected_target_id.as_deref() == Some(MANAGED_TARGET_ID)
+}
+
+fn spawn_managed_start_on_initialize(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let Ok(_guard) = connect_guard(&state) else {
+            return;
+        };
+        let Ok(store) = settings_store() else {
+            return;
+        };
+        let Ok(settings) = store.load() else {
+            return;
+        };
+        if should_start_managed_on_initialize(
+            has_managed_configuration(&settings),
+            state.connected(MANAGED_TARGET_ID).await,
+        ) {
+            let _ = managed_runtime::start(&state, &store, &settings, false).await;
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1896,6 +1981,24 @@ mod tests {
             has_managed_configuration(&settings),
             true
         ));
+    }
+
+    #[test]
+    fn embedded_shell_selection_survives_transient_runtime_disconnects() {
+        let mut settings = settings_with_provider(&Uuid::now_v7().to_string());
+        settings.workspace = Some(WorkspaceSetting {
+            id: Uuid::now_v7().to_string(),
+            path: "/tmp/selected-workspace".into(),
+            identity: Some(test_workspace_identity()),
+            display_name: "selected-workspace".into(),
+            display_path: "/tmp/selected-workspace".into(),
+        });
+        settings.selected_target_id = Some(MANAGED_TARGET_ID.into());
+
+        assert!(managed_workspace_is_selected(&settings));
+
+        settings.selected_target_id = Some("external-target".into());
+        assert!(!managed_workspace_is_selected(&settings));
     }
 
     #[test]

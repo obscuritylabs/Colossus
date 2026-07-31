@@ -2,8 +2,9 @@ use crate::{
     AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, ApiResult, ArtifactClient,
     ArtifactReference, Backend, BackendKind, CancelRunRequest, CancelRunResponse, CreateRunRequest,
     CreateRunResponse, DownloadedArtifact, GetRunRequest, GetRunResponse, ListRunsRequest,
-    ListRunsResponse, RespondInteractionRequest, RespondInteractionResponse, RunUpdates, SdkResult,
-    ServerCapabilities, UploadArtifactRequest, WatchRunRequest,
+    ListRunsResponse, PLAN_CONTINUATION_CAPABILITY, RespondInteractionRequest,
+    RespondInteractionResponse, RunUpdates, SdkResult, ServerCapabilities, UploadArtifactRequest,
+    WatchRunRequest,
 };
 use std::{fmt, sync::Arc};
 
@@ -81,6 +82,14 @@ impl Colossus {
 
     /// Create a durable agent run.
     pub async fn create_run(&self, request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
+        if request.plan_action.is_some()
+            && !self
+                .backend
+                .capabilities()
+                .contains(PLAN_CONTINUATION_CAPABILITY)
+        {
+            return Err(plan_continuation_unavailable());
+        }
         self.backend.agent_runs().create_run(request).await
     }
 
@@ -145,6 +154,13 @@ fn artifact_service_unavailable() -> ApiError {
         outcome: colossus_api::OutcomeCertainty::Known,
         violations: Vec::new(),
     }
+}
+
+fn plan_continuation_unavailable() -> ApiError {
+    ApiError::failed_precondition(
+        ApiErrorReason::InvalidRunTransition,
+        "the connected runtime did not advertise typed Plan continuation",
+    )
 }
 
 impl fmt::Debug for Colossus {

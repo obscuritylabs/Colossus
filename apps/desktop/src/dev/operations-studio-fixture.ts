@@ -71,7 +71,9 @@ function recentRun(
  * production build; callers should additionally guard it with
  * `import.meta.env.DEV` so production never imports fixture state by default.
  */
-export function buildOperationsStudioFixture(): ChatState {
+export function buildOperationsStudioFixture(
+  interactionKind: Interaction["kind"] = "approval",
+): ChatState {
   if (!import.meta.env.DEV) {
     throw new Error(
       "Operations Studio fixtures are available in development only.",
@@ -128,6 +130,29 @@ export function buildOperationsStudioFixture(): ChatState {
         "0c9fa2e338d64d60336a9ef5d655cf4785bad3eb530995f894ffaac40626d32b",
     },
   };
+  const userPrompt: Interaction = {
+    interactionId: "fixture-interaction-language-question",
+    runId: SELECTED_RUN_ID,
+    kind: "user_prompt",
+    status: "pending",
+    createdAt: "2026-07-20T14:35:00Z",
+    expiresAt: "2026-07-20T15:05:00Z",
+    respondableByCaller: true,
+    etag: "fixture-etag-language-question",
+    content: {
+      type: "user_prompt",
+      question: "What's your favorite programming language?",
+      choices: [
+        { choiceId: "javascript", label: "JavaScript" },
+        { choiceId: "python", label: "Python" },
+        { choiceId: "go", label: "Go" },
+        { choiceId: "rust", label: "Rust" },
+      ],
+      allowFreeForm: false,
+    },
+  };
+  const pendingInteraction =
+    interactionKind === "user_prompt" ? userPrompt : approval;
   const usage: TokenUsage = {
     inputTokens: 12_840,
     outputTokens: 2_416,
@@ -215,7 +240,7 @@ export function buildOperationsStudioFixture(): ChatState {
     }),
     update(8, "2026-07-20T14:35:00Z", {
       type: "interaction",
-      interaction: approval,
+      interaction: pendingInteraction,
     }),
     update(9, "2026-07-20T14:35:01Z", {
       type: "usage",
@@ -261,7 +286,7 @@ The reviewed patch is ready and waiting for your approval.`,
     updates: updates.slice(-MAX_FEED_ITEMS),
     seenSequences: new Set(updates.map(({ sequence }) => sequence)),
     lastSequence: selectedRun.lastSequence,
-    pendingInteractions: [approval],
+    pendingInteractions: [pendingInteraction],
     usage,
     streamState: "watching",
     streamError: null,
@@ -356,6 +381,112 @@ The reviewed patch is ready and waiting for your approval.`,
     activeRunId: SELECTED_RUN_ID,
     views: new Map([[SELECTED_RUN_ID, selectedView]]),
     recentRuns,
+    nextPageToken: "",
+  };
+}
+
+/** Builds a completed Plan Mode turn for the in-chat lifecycle fixture. */
+export function buildPlanWorkflowFixture(): ChatState {
+  if (!import.meta.env.DEV) {
+    throw new Error(
+      "Plan workflow fixtures are available in development only.",
+    );
+  }
+  const runId = "fixture-run-plan-workflow";
+  const sessionId = "fixture-session-plan-workflow";
+  const createdAt = "2026-07-30T18:20:00Z";
+  const run: Run = {
+    runId,
+    sessionId,
+    title: "Plan the Desktop release workflow",
+    role: "primary",
+    mode: "plan",
+    status: "completed",
+    createdAt,
+    updatedAt: "2026-07-30T18:20:18Z",
+    startedAt: createdAt,
+    finishedAt: "2026-07-30T18:20:18Z",
+    lastSequence: 2,
+    pendingInteractionCount: 0,
+    terminal: {
+      type: "result",
+      result: {
+        output: "Plan saved.",
+        planId: "plan-fixture-desktop-release",
+        planRevision: 3,
+        planStatus: "draft",
+        profile: "desktop",
+        modelProfile: "desktop",
+        providerProfile: "fixture-provider",
+        model: "fixture",
+        elapsedSeconds: 18,
+      },
+    },
+    etag: "fixture-etag-plan-workflow",
+    selectedSkills: [],
+  };
+  const updates: RunUpdate[] = [
+    {
+      runId,
+      sequence: 1,
+      createdAt,
+      update: {
+        type: "message",
+        message: {
+          sessionId,
+          runId,
+          sequence: 1,
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Create a safe release plan for the Desktop Plan workflow.",
+            },
+          ],
+          createdAt,
+        },
+      },
+    },
+    {
+      runId,
+      sequence: 2,
+      createdAt: "2026-07-30T18:20:18Z",
+      update: {
+        type: "notice",
+        reason: "plan.written",
+        message:
+          "plan plan-fixture-desktop-release was persisted at revision 3",
+      },
+    },
+  ];
+  const view: RunView = {
+    run,
+    localPrompt: null,
+    output: `## Desktop Plan workflow
+
+1. Add an exact revision-bound public Plan continuation.
+2. Keep revision in structurally constrained Plan Mode.
+3. Route direct and Goal execution through durable public runs.
+4. Preserve policy prompts, cancellation, audit, and the advanced TUI workflow.
+5. Verify the chat decision card at compact and full widths.`,
+    updates,
+    seenSequences: new Set([1, 2]),
+    lastSequence: 2,
+    pendingInteractions: [],
+    usage: {
+      inputTokens: 2_840,
+      outputTokens: 612,
+      totalTokens: 3_452,
+      cachedInputTokens: 1_024,
+      reasoningTokens: 184,
+    },
+    streamState: "complete",
+    streamError: null,
+  };
+  return {
+    activeRunId: runId,
+    views: new Map([[runId, view]]),
+    recentRuns: [run],
     nextPageToken: "",
   };
 }

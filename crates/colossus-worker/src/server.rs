@@ -348,7 +348,7 @@ impl WorkerServer {
                         if handle_connection(
                             stream,
                             key.expose(),
-                            runtime.as_ref(),
+                            runtime,
                             replay.as_ref(),
                             maintenance.as_ref(),
                             &drain_requests,
@@ -710,7 +710,7 @@ fn interactive_error(error: &WorkerError) -> String {
 async fn handle_connection<S>(
     mut stream: S,
     key: &[u8; 32],
-    runtime: &Runtime,
+    runtime: Arc<Runtime>,
     replay: &Mutex<ReplayGuard>,
     maintenance: &tokio::sync::Mutex<()>,
     drain_requests: &tokio::sync::mpsc::Sender<()>,
@@ -766,7 +766,7 @@ where
             handle_interactive_connection(
                 stream,
                 key,
-                runtime,
+                runtime.as_ref(),
                 &request_id,
                 &connection_nonce,
                 request,
@@ -871,7 +871,7 @@ where
         }
         operation => {
             let shutdown = matches!(operation, WorkerOperation::Shutdown);
-            let result = dispatch(runtime, operation, maintenance).await;
+            let result = dispatch(&runtime, operation, maintenance).await;
             let succeeded = result.is_ok();
             if succeeded && requests_drain {
                 // Durable work is committed at this point. Request its drain before

@@ -67,3 +67,26 @@ pub enum AgentError {
         result: Box<AgentRunCancellation>,
     },
 }
+
+impl AgentError {
+    /// Return whether this failure may follow an effect whose outcome is unconfirmed.
+    pub fn outcome_unknown(&self) -> bool {
+        match self {
+            Self::Provider(ModelProviderError::OutcomeUnknown(_))
+            | Self::Tool(ToolError::OutcomeUnknown(_))
+            | Self::Store(StoreError::OutcomeUnknown(_)) => true,
+            Self::Context(ContextError::Store(StoreError::OutcomeUnknown(_)))
+            | Self::Context(ContextError::Provider(ModelProviderError::OutcomeUnknown(_))) => true,
+            Self::Configuration(_)
+            | Self::Provider(_)
+            | Self::Tool(_)
+            | Self::Store(_)
+            | Self::Context(_)
+            | Self::ToolArgumentRecoveryExhausted { .. }
+            | Self::MaxTurns { .. }
+            | Self::EmptyTurn
+            | Self::PlanWriteRequired
+            | Self::Cancelled { .. } => false,
+        }
+    }
+}

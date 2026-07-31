@@ -13,6 +13,10 @@ use url::Url;
 const MAX_PUBLIC_APPROVAL_ORIGIN_BYTES: usize = 512;
 const MAX_RUN_TITLE_CHARACTERS: usize = 80;
 const UNTITLED_RUN: &str = "Untitled work";
+
+/// Authenticated server capability for exact-revision Plan continuation.
+pub const PLAN_CONTINUATION_CAPABILITY: &str = "plans.continue";
+
 use std::pin::Pin;
 
 /// Persistent public run lifecycle state.
@@ -102,6 +106,82 @@ pub enum RunMode {
     Plan,
 }
 
+/// Released canonical Plan lifecycle state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStatus {
+    /// The exact revision remains editable and cannot execute yet.
+    Draft,
+    /// The exact revision was explicitly approved.
+    Approved,
+    /// The approved revision was consumed by direct or Goal execution.
+    Executed,
+    /// The revision was intentionally closed without execution.
+    Discarded,
+}
+
+/// Requested execution strategy for one exact Plan revision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "strategy", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanExecutionStrategy {
+    /// Consume the approved Plan in one normal policy-bound run.
+    Direct,
+    /// Consume the approved Plan into bounded Goal Mode.
+    Goal {
+        /// Maximum autonomous Goal iterations.
+        max_iterations: u16,
+    },
+}
+
+/// Trusted continuation of a Plan produced by a caller-owned source run.
+///
+/// The source run, rather than a caller-supplied Plan identifier, is the authority
+/// anchor. The runtime resolves its Plan and session and then applies the exact
+/// optimistic revision supplied here.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanRunAction {
+    /// Refine one exact draft revision through structurally constrained Plan Mode.
+    Revise {
+        /// Caller-owned completed run that released the Plan reference.
+        source_run_id: String,
+        /// Exact Plan revision visible to the caller.
+        expected_revision: u64,
+    },
+    /// Approve and consume one exact draft revision.
+    Execute {
+        /// Caller-owned completed run that released the Plan reference.
+        source_run_id: String,
+        /// Exact Plan revision visible to the caller.
+        expected_revision: u64,
+        /// Direct execution or bounded Goal Mode.
+        strategy: PlanExecutionStrategy,
+    },
+}
+
+impl PlanRunAction {
+    /// Caller-owned run used to resolve the Plan and its session.
+    pub fn source_run_id(&self) -> &str {
+        match self {
+            Self::Revise { source_run_id, .. } | Self::Execute { source_run_id, .. } => {
+                source_run_id
+            }
+        }
+    }
+
+    /// Exact optimistic Plan revision visible when the action was chosen.
+    pub fn expected_revision(&self) -> u64 {
+        match self {
+            Self::Revise {
+                expected_revision, ..
+            }
+            | Self::Execute {
+                expected_revision, ..
+            } => *expected_revision,
+        }
+    }
+}
+
 /// Released terminal run result.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RunResult {
@@ -110,6 +190,15 @@ pub struct RunResult {
     /// Canonical plan written by a completed Plan Mode run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_id: Option<String>,
+    /// Exact canonical Plan revision paired with `plan_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_revision: Option<u64>,
+    /// Released lifecycle state paired with `plan_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_status: Option<PlanStatus>,
+    /// Durable Goal created by a Plan handoff, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_id: Option<String>,
     /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
     /// Resolved model profile.
@@ -140,6 +229,12 @@ struct RunResultFields {
     output: String,
     #[serde(default)]
     plan_id: Option<String>,
+    #[serde(default)]
+    plan_revision: Option<u64>,
+    #[serde(default)]
+    plan_status: Option<PlanStatus>,
+    #[serde(default)]
+    goal_id: Option<String>,
     profile: String,
     #[serde(default)]
     model_profile: LegacyRunResultProfile,
@@ -158,6 +253,9 @@ impl<'de> Deserialize<'de> for RunResult {
         Ok(Self {
             output: fields.output,
             plan_id: fields.plan_id,
+            plan_revision: fields.plan_revision,
+            plan_status: fields.plan_status,
+            goal_id: fields.goal_id,
             model_profile: fields
                 .model_profile
                 .0
@@ -205,6 +303,15 @@ pub struct RunCancellation {
     /// Canonical plan written before a cancelled Plan Mode run stopped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_id: Option<String>,
+    /// Exact canonical Plan revision paired with `plan_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_revision: Option<u64>,
+    /// Released lifecycle state paired with `plan_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_status: Option<PlanStatus>,
+    /// Durable Goal created by a Plan handoff, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_id: Option<String>,
 }
 
 /// Released lifecycle state for one bounded tool activity.
@@ -665,6 +772,9 @@ pub struct CreateRunRequest {
     /// Reserved for a future public skill ceiling; v1alpha1 requires this to be empty.
     #[serde(default)]
     pub skill_ids: Vec<String>,
+    /// Exact caller-owned Plan continuation, when this run revises or executes a Plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_action: Option<PlanRunAction>,
     /// Model-turn ceiling; zero selects the configured default.
     pub max_turns: u32,
     /// Required key for atomic create replay.
@@ -814,6 +924,55 @@ impl CreateRunRequest {
                 "skill_ids",
                 "public application runs do not support skill activation",
             ));
+        }
+        if let Some(action) = &self.plan_action {
+            token(
+                action.source_run_id(),
+                "plan_action.source_run_id",
+                MAX_IDENTIFIER_BYTES,
+            )?;
+            if action.expected_revision() == 0 {
+                return Err(ApiError::invalid(
+                    ApiErrorReason::InvalidArgument,
+                    "plan_action.expected_revision",
+                    "expected Plan revision must be greater than zero",
+                ));
+            }
+            if self.session_id.is_none() {
+                return Err(ApiError::invalid(
+                    ApiErrorReason::InvalidArgument,
+                    "session_id",
+                    "Plan continuation requires the source run session",
+                ));
+            }
+            match action {
+                PlanRunAction::Revise { .. } if self.mode != RunMode::Plan => {
+                    return Err(ApiError::invalid(
+                        ApiErrorReason::InvalidArgument,
+                        "mode",
+                        "Plan revision requires Plan Mode",
+                    ));
+                }
+                PlanRunAction::Execute { strategy, .. } => {
+                    if self.mode != RunMode::Execute {
+                        return Err(ApiError::invalid(
+                            ApiErrorReason::InvalidArgument,
+                            "mode",
+                            "Plan execution requires Execute Mode",
+                        ));
+                    }
+                    if let PlanExecutionStrategy::Goal { max_iterations } = strategy
+                        && !(1..=50).contains(max_iterations)
+                    {
+                        return Err(ApiError::invalid(
+                            ApiErrorReason::InvalidArgument,
+                            "plan_action.strategy.max_iterations",
+                            "Goal iterations must be in 1..=50",
+                        ));
+                    }
+                }
+                PlanRunAction::Revise { .. } => {}
+            }
         }
         if self.max_turns > 100 {
             return Err(ApiError::invalid(

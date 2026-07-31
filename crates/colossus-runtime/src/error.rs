@@ -52,6 +52,31 @@ impl RuntimeError {
             _ => None,
         }
     }
+
+    /// Return whether this failure may follow an effect whose outcome is unconfirmed.
+    pub fn outcome_unknown(&self) -> bool {
+        match self {
+            Self::Store(StoreError::OutcomeUnknown(_))
+            | Self::SearchPort(SearchError::OutcomeUnknown(_)) => true,
+            Self::Gateway(GatewayError::OutcomeUnknown(_))
+            | Self::Gateway(GatewayError::Journal(StoreError::OutcomeUnknown(_))) => true,
+            Self::Agent(error) => error.outcome_unknown(),
+            Self::Context(ContextError::Store(StoreError::OutcomeUnknown(_)))
+            | Self::Context(ContextError::Provider(ModelProviderError::OutcomeUnknown(_))) => true,
+            Self::Config(_)
+            | Self::Io(_)
+            | Self::Store(_)
+            | Self::Gateway(_)
+            | Self::Provider(_)
+            | Self::Search(_)
+            | Self::SearchPort(_)
+            | Self::Context(_)
+            | Self::ToolCatalog(_)
+            | Self::Mcp(_)
+            | Self::Pack(_)
+            | Self::Workflow(_) => false,
+        }
+    }
 }
 
 pub(super) fn explicit_secret(variable: &str) -> Result<[u8; 32], RuntimeError> {

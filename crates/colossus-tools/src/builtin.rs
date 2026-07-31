@@ -16,7 +16,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "user.ask".into(),
-            description: "Ask the user one bounded question when an interactive interface is available."
+            description: "Ask the user one bounded question when an interactive interface is available; when allow_free_form is false, provide at least one choice."
                 .into(),
             input_schema: object_schema_with(
                 json!({
@@ -319,7 +319,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "shell.run".into(),
             description:
-                "Run a non-interactive shell command or exact argv inside the selected workspace."
+                "Run a non-interactive process inside the selected workspace; provide exactly one of command or argv."
                     .into(),
             input_schema: object_schema_with(
                 json!({
@@ -740,7 +740,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "skill.validate".into(),
-            description: "Validate an installed user skill by name or a workspace-local skill directory by path.".into(),
+            description: "Validate one skill target; provide exactly one of an installed user skill name or a workspace-local skill directory path.".into(),
             input_schema: object_schema_with(
                 json!({
                     "name": {"type": "string", "minLength": 1, "maxLength": 128},

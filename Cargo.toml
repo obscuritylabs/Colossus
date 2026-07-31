@@ -69,6 +69,7 @@ ed25519-dalek = { version = "2.2.0", features = ["pkcs8", "rand_core"] }
 getrandom = "0.4.3"
 hex = "0.4.3"
 hmac = "0.12.1"
+http = "1.4.2"
 futures = "0.3.31"
 flate2 = "1.1.9"
 fs4 = "0.13.1"
@@ -99,6 +100,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }
 serde-saphyr = "0.0.29"
 sha2 = "0.10.9"
+sse-stream = "0.2.1"
 tempfile = "3.25.0"
 tar = "0.4.46"
 tantivy = "0.26.1"

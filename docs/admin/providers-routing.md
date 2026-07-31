@@ -94,11 +94,15 @@ endpoint cannot mask a generation or tool-schema incompatibility. Text-only prof
 tools. Probe response content is not printed. This separation distinguishes connection
 failures from an invalid model ID, generation response contract, or capability mismatch.
 
-The Chat Completions adapter omits `maxLength` annotations from the provider-facing tool
-schema because grammar-compiling compatible servers can reject otherwise valid large
-string bounds before generation. Colossus retains the canonical schema and enforces every
-original bound before a tool can execute; this projection changes provider guidance, not
-runtime authority or validation.
+Both network adapters require each canonical function-tool schema to declare
+`type: object` at its root before transport. They clone the schema and omit root-level
+`oneOf`, `anyOf`, `allOf`, `enum`, and `const` keywords from the provider-facing copy to
+satisfy OpenAI function-tool request rules. Responses requests set `strict` to `false`;
+Chat Completions requests omit `strict` and additionally remove `maxLength` annotations
+recursively because grammar-compiling compatible servers can reject otherwise valid
+large string bounds before generation. Colossus retains the canonical schema and
+enforces every original bound and cross-field rule before a tool can execute; this
+projection changes provider guidance, not runtime authority or validation.
 
 Colossus also projects canonical dotted tool names to portable provider function names:
 for example, `filesystem.write` is sent as `filesystem_write`. Continuation history uses

@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   decodeTerminalOutput,
+  terminalContentDimensions,
   terminalContextChanged,
   terminalDimensions,
   terminalInputChunks,
   terminalLaunchRequested,
+  terminalOpenDimensions,
+  terminalPlanSelectionInputs,
 } from "./terminal-model";
 
 function decodeChunks(chunks: readonly string[]): Uint8Array {
@@ -19,11 +22,15 @@ describe("terminal renderer bounds", () => {
   it("invalidates terminal tabs when native workspace authority changes", () => {
     const context = {
       enabled: true,
+      shellEnabled: true,
+      tuiEnabled: true,
       contextGeneration: 4,
       launchRequestId: 7,
       workspaceId: "workspace-1",
       workspaceName: "Colossus",
       requestedKind: null,
+      requestedPlanSessionId: null,
+      requestedPlanId: null,
     };
 
     expect(terminalContextChanged(null, context)).toBe(true);
@@ -41,16 +48,26 @@ describe("terminal renderer bounds", () => {
         workspaceId: null,
       }),
     ).toBe(true);
+    expect(
+      terminalContextChanged(context, {
+        ...context,
+        tuiEnabled: false,
+      }),
+    ).toBe(false);
   });
 
   it("opens the requested terminal kind without invalidating existing tabs", () => {
     const context = {
       enabled: true,
+      shellEnabled: true,
+      tuiEnabled: true,
       contextGeneration: 4,
       launchRequestId: 7,
       workspaceId: "workspace-1",
       workspaceName: "Colossus",
       requestedKind: null,
+      requestedPlanSessionId: null,
+      requestedPlanId: null,
     };
 
     expect(terminalLaunchRequested(null, context)).toBe(false);
@@ -96,6 +113,15 @@ describe("terminal renderer bounds", () => {
     }
   });
 
+  it("constructs only the fixed read-only TUI plan selection commands", () => {
+    expect(
+      terminalPlanSelectionInputs({
+        sessionId: "session-1",
+        planId: "plan-1",
+      }),
+    ).toEqual(["/session resume session-1\r", "/plan use plan-1\r"]);
+  });
+
   it("does not issue an empty native write for empty terminal input", () => {
     expect(terminalInputChunks("")).toEqual([]);
   });
@@ -121,5 +147,24 @@ describe("terminal renderer bounds", () => {
       rows: 512,
     });
     expect(terminalDimensions(840, 344)).toEqual({ cols: 100, rows: 20 });
+  });
+
+  it("excludes terminal chrome from the PTY viewport dimensions", () => {
+    expect(
+      terminalContentDimensions(840, 344, {
+        top: 8,
+        right: 9,
+        bottom: 4,
+        left: 9,
+      }),
+    ).toEqual({ cols: 97, rows: 19 });
+  });
+
+  it("opens a hidden terminal at a usable fallback size", () => {
+    expect(terminalOpenDimensions(0, 0)).toEqual({ cols: 80, rows: 24 });
+    expect(terminalOpenDimensions(840, 344)).toEqual({
+      cols: 100,
+      rows: 20,
+    });
   });
 });

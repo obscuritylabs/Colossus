@@ -5,11 +5,11 @@ use crate::{
     CredentialProvider, DownloadedArtifact, FieldViolation, GetRunRequest, GetRunResponse,
     InputContentPart, Interaction, InteractionAnswer, InteractionContent, InteractionKind,
     InteractionStatus, ListRunsRequest, ListRunsResponse, MessageContentPart, MessageRole,
-    OutcomeCertainty, PageResponse, PromptAnswer, PromptChoice, RespondInteractionRequest,
-    RespondInteractionResponse, Run, RunCancellation, RunFailure, RunMode, RunResult, RunStatus,
-    RunTerminal, RunUpdate, RunUpdateKind, RunUpdateStream, SdkError, SdkResult,
-    ServerCapabilities, SessionMessage, TlsFingerprint, TokenUsage, ToolActivity,
-    ToolActivityState, UploadArtifactRequest, WatchRunRequest,
+    OutcomeCertainty, PageResponse, PlanExecutionStrategy, PlanRunAction, PlanStatus, PromptAnswer,
+    PromptChoice, RespondInteractionRequest, RespondInteractionResponse, Run, RunCancellation,
+    RunFailure, RunMode, RunResult, RunStatus, RunTerminal, RunUpdate, RunUpdateKind,
+    RunUpdateStream, SdkError, SdkResult, ServerCapabilities, SessionMessage, TlsFingerprint,
+    TokenUsage, ToolActivity, ToolActivityState, UploadArtifactRequest, WatchRunRequest,
 };
 use async_trait::async_trait;
 use colossus_api::{RequestId, validate_public_approval_display};
@@ -17,8 +17,9 @@ use colossus_api_proto::{
     google_rpc::Status as RichStatus,
     v1alpha1::{
         self as proto, ColossusErrorDetail, agent_run_service_client::AgentRunServiceClient,
-        artifact_service_client::ArtifactServiceClient, content_part, interaction, prompt_answer,
-        respond_interaction_request, run, run_update, system_service_client::SystemServiceClient,
+        artifact_service_client::ArtifactServiceClient, content_part, interaction, plan_run_action,
+        prompt_answer, respond_interaction_request, run, run_update,
+        system_service_client::SystemServiceClient,
     },
 };
 use colossus_grpc::{PUBLIC_API_VERSION, validate_endpoint_certificate_pem};
@@ -929,6 +930,62 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
             "too many skills were selected",
         ));
     }
+    let plan_action = value
+        .plan_action
+        .map(|action| {
+            let (source_run_id, expected_revision, action) = match action {
+                PlanRunAction::Revise {
+                    source_run_id,
+                    expected_revision,
+                } => (
+                    source_run_id,
+                    expected_revision,
+                    plan_run_action::Action::Revise(proto::RevisePlanAction {}),
+                ),
+                PlanRunAction::Execute {
+                    source_run_id,
+                    expected_revision,
+                    strategy,
+                } => {
+                    let (strategy, max_goal_iterations) = match strategy {
+                        PlanExecutionStrategy::Direct => (proto::PlanExecutionStrategy::Direct, 0),
+                        PlanExecutionStrategy::Goal { max_iterations } => {
+                            if !(1..=50).contains(&max_iterations) {
+                                return Err(invalid_request(
+                                    "plan_action.strategy.max_iterations",
+                                    "Goal iterations must be in 1..=50",
+                                ));
+                            }
+                            (
+                                proto::PlanExecutionStrategy::Goal,
+                                u32::from(max_iterations),
+                            )
+                        }
+                    };
+                    (
+                        source_run_id,
+                        expected_revision,
+                        plan_run_action::Action::Execute(proto::ExecutePlanAction {
+                            strategy: strategy as i32,
+                            max_goal_iterations,
+                        }),
+                    )
+                }
+            };
+            validate_identifier(&source_run_id)?;
+            if expected_revision == 0 {
+                return Err(invalid_request(
+                    "plan_action.expected_revision",
+                    "Plan revision must be greater than zero",
+                ));
+            }
+            Ok(proto::PlanRunAction {
+                source_run_id,
+                expected_revision,
+                action: Some(action),
+            })
+        })
+        .transpose()?;
     Ok(proto::CreateRunRequest {
         input,
         session_id: value.session_id,
@@ -937,6 +994,7 @@ fn proto_create_request(value: CreateRunRequest) -> ApiResult<proto::CreateRunRe
         selected_skills: value.selected_skills,
         max_turns: value.max_turns,
         idempotency_key: value.idempotency_key.as_str().into(),
+        plan_action,
     })
 }
 
@@ -1008,6 +1066,16 @@ fn run_result_from_proto(value: proto::RunResult) -> ApiResult<RunResult> {
     if let Some(plan_id) = value.plan_id.as_deref() {
         validate_identifier(plan_id)?;
     }
+    if let Some(goal_id) = value.goal_id.as_deref() {
+        validate_identifier(goal_id)?;
+    }
+    let plan_status = plan_status_from_proto(value.plan_status)?;
+    validate_plan_lineage(
+        value.plan_id.as_deref(),
+        value.plan_revision,
+        plan_status,
+        value.goal_id.as_deref(),
+    )?;
     validate_identifier(&value.profile)?;
     validate_identifier(&value.model_profile)?;
     validate_identifier(&value.provider_profile)?;
@@ -1021,6 +1089,9 @@ fn run_result_from_proto(value: proto::RunResult) -> ApiResult<RunResult> {
     Ok(RunResult {
         output: value.output,
         plan_id: value.plan_id,
+        plan_revision: value.plan_revision,
+        plan_status,
+        goal_id: value.goal_id,
         profile: value.profile,
         model_profile: value.model_profile,
         provider_profile: value.provider_profile,
@@ -1055,11 +1126,52 @@ fn cancellation_from_proto(value: proto::RunCancellation) -> ApiResult<RunCancel
     if let Some(plan_id) = value.plan_id.as_deref() {
         validate_identifier(plan_id)?;
     }
+    if let Some(goal_id) = value.goal_id.as_deref() {
+        validate_identifier(goal_id)?;
+    }
+    let plan_status = plan_status_from_proto(value.plan_status)?;
+    validate_plan_lineage(
+        value.plan_id.as_deref(),
+        value.plan_revision,
+        plan_status,
+        value.goal_id.as_deref(),
+    )?;
     Ok(RunCancellation {
         turn: value.turn,
         message: value.message,
         plan_id: value.plan_id,
+        plan_revision: value.plan_revision,
+        plan_status,
+        goal_id: value.goal_id,
     })
+}
+
+fn plan_status_from_proto(value: i32) -> ApiResult<Option<PlanStatus>> {
+    match proto::PlanStatus::try_from(value) {
+        Ok(proto::PlanStatus::Unspecified) => Ok(None),
+        Ok(proto::PlanStatus::Draft) => Ok(Some(PlanStatus::Draft)),
+        Ok(proto::PlanStatus::Approved) => Ok(Some(PlanStatus::Approved)),
+        Ok(proto::PlanStatus::Executed) => Ok(Some(PlanStatus::Executed)),
+        Ok(proto::PlanStatus::Discarded) => Ok(Some(PlanStatus::Discarded)),
+        Err(_) => Err(protocol_error()),
+    }
+}
+
+fn validate_plan_lineage(
+    plan_id: Option<&str>,
+    plan_revision: Option<u64>,
+    plan_status: Option<PlanStatus>,
+    goal_id: Option<&str>,
+) -> ApiResult<()> {
+    let has_complete_metadata = plan_revision.is_some() && plan_status.is_some();
+    if plan_revision.is_some() != plan_status.is_some()
+        || plan_revision == Some(0)
+        || (plan_id.is_none() && (has_complete_metadata || goal_id.is_some()))
+        || (goal_id.is_some() && !has_complete_metadata)
+    {
+        return Err(protocol_error());
+    }
+    Ok(())
 }
 
 fn interaction_from_proto(value: proto::Interaction) -> ApiResult<Interaction> {
@@ -1932,6 +2044,9 @@ mod tests {
             terminal: Some(run::Terminal::Result(proto::RunResult {
                 output: "unexpected".into(),
                 plan_id: None,
+                plan_revision: None,
+                plan_status: proto::PlanStatus::Unspecified as i32,
+                goal_id: None,
                 profile: "default".into(),
                 model_profile: "default".into(),
                 provider_profile: "provider".into(),
@@ -1978,6 +2093,9 @@ mod tests {
         let error = run_result_from_proto(proto::RunResult {
             output: "answer".into(),
             plan_id: None,
+            plan_revision: None,
+            plan_status: proto::PlanStatus::Unspecified as i32,
+            goal_id: None,
             profile: "legacy-alias".into(),
             model_profile: "different-model-profile".into(),
             provider_profile: "provider".into(),
@@ -1994,6 +2112,9 @@ mod tests {
         let result = run_result_from_proto(proto::RunResult {
             output: "Plan saved".into(),
             plan_id: Some("plan-1".into()),
+            plan_revision: Some(3),
+            plan_status: proto::PlanStatus::Draft as i32,
+            goal_id: None,
             profile: "default".into(),
             model_profile: "default".into(),
             provider_profile: "provider".into(),
@@ -2006,15 +2127,56 @@ mod tests {
     }
 
     #[test]
+    fn proto_run_result_accepts_legacy_plan_identity_without_new_metadata() {
+        let result = run_result_from_proto(proto::RunResult {
+            output: "Plan saved".into(),
+            plan_id: Some("plan-legacy".into()),
+            plan_revision: None,
+            plan_status: proto::PlanStatus::Unspecified as i32,
+            goal_id: None,
+            profile: "default".into(),
+            model_profile: "default".into(),
+            provider_profile: "provider".into(),
+            model: "model".into(),
+            elapsed_seconds: 1.0,
+        })
+        .expect("older server result");
+
+        assert_eq!(result.plan_id.as_deref(), Some("plan-legacy"));
+        assert_eq!(result.plan_revision, None);
+        assert_eq!(result.plan_status, None);
+    }
+
+    #[test]
     fn proto_run_cancellation_preserves_optional_plan_identity() {
         let cancellation = cancellation_from_proto(proto::RunCancellation {
             turn: 2,
             message: "cancelled after persistence".into(),
             plan_id: Some("plan-1".into()),
+            plan_revision: Some(2),
+            plan_status: proto::PlanStatus::Draft as i32,
+            goal_id: None,
         })
         .expect("plan cancellation");
 
         assert_eq!(cancellation.plan_id.as_deref(), Some("plan-1"));
+    }
+
+    #[test]
+    fn proto_run_cancellation_accepts_legacy_plan_identity_without_new_metadata() {
+        let cancellation = cancellation_from_proto(proto::RunCancellation {
+            turn: 2,
+            message: "cancelled after persistence".into(),
+            plan_id: Some("plan-legacy".into()),
+            plan_revision: None,
+            plan_status: proto::PlanStatus::Unspecified as i32,
+            goal_id: None,
+        })
+        .expect("older server cancellation");
+
+        assert_eq!(cancellation.plan_id.as_deref(), Some("plan-legacy"));
+        assert_eq!(cancellation.plan_revision, None);
+        assert_eq!(cancellation.plan_status, None);
     }
 
     #[test]

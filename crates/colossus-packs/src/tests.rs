@@ -3,13 +3,13 @@ use super::{
     PackExecutor, PackOperation, PackService, RELEASE_TARGETS, bundle_artifact_path,
     canonical_bundle_signing_bytes, canonical_collection_signing_bytes,
     canonical_pack_signing_bytes, current_release_target, digest_hex, extract_collection_archive,
-    write_collection_archive,
+    validate_pack_references, write_collection_archive,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use colossus_contracts::{
     Actor, ActorType, BundleFileEntry, BundleManifest, CredentialReference, DecisionOutcome,
-    PackFileEntry, PackManifest, PackPathReference, PackSignature, PackStatus, PublisherTrust,
-    SkillManifest,
+    PackFileEntry, PackManifest, PackMcpServerDeclaration, PackPathReference, PackSignature,
+    PackStatus, PublisherTrust, SkillManifest,
 };
 use colossus_integrations::EventSourcedExtensionRepository;
 use colossus_policy::{BuiltInPolicy, DenyApproval, EffectGateway, SafetyKernel, effect_request};
@@ -18,6 +18,7 @@ use colossus_testkit::InMemoryEventJournal;
 use ed25519_dalek::{Signer as _, SigningKey};
 use sha2::{Digest as _, Sha256};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write as _,
     path::Path,
@@ -83,6 +84,32 @@ fn write_pack(root: &Path) -> PackManifest {
     )
     .expect("write manifest");
     manifest
+}
+
+#[test]
+fn signed_pack_mcp_servers_reject_wildcard_tool_trust() {
+    let directory = tempfile::tempdir().expect("pack directory");
+    let mut manifest = write_pack(directory.path());
+    manifest
+        .capabilities
+        .extend(["mcp_servers".into(), "binaries".into()]);
+    manifest.permissions.push("process".into());
+    manifest.binaries.push("docs/README.md".into());
+    manifest.mcp_servers.push(PackMcpServerDeclaration {
+        name: "remote-trust-is-forbidden".into(),
+        command: "docs/README.md".into(),
+        args: Vec::new(),
+        env_refs: BTreeMap::new(),
+        allowed_tools: vec!["*".into()],
+        permissions: vec!["process".into()],
+    });
+    let error = validate_pack_references(
+        directory.path(),
+        &manifest,
+        &BTreeSet::from(["docs/README.md".into()]),
+    )
+    .expect_err("pack wildcard must fail");
+    assert!(error.to_string().contains("wildcard tool allowlist"));
 }
 
 fn write_pack_with_skill_references(root: &Path, count: usize) -> PackManifest {

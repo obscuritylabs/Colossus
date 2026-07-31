@@ -50,6 +50,30 @@ fn artifact_operations_round_trip_without_artifact_bytes_or_credentials() {
 }
 
 #[test]
+fn mcp_oauth_worker_operations_carry_only_server_and_callback_metadata() {
+    let encoded = serde_json::to_value(WorkerOperation::McpAuthComplete {
+        server: "splunk".into(),
+        callback_url: "http://127.0.0.1:8787/callback?code=code&state=state".into(),
+    })
+    .expect("serialize MCP OAuth completion");
+    assert_eq!(encoded["operation"], "mcp_auth_complete");
+    assert_eq!(
+        operation_name(&WorkerOperation::McpAuthStatus {
+            server: "splunk".into(),
+        }),
+        "mcp_auth_status"
+    );
+    assert!(encoded.get("access_token").is_none());
+    assert!(encoded.get("refresh_token").is_none());
+    let decoded: WorkerOperation =
+        serde_json::from_value(encoded).expect("deserialize MCP OAuth completion");
+    assert!(matches!(
+        decoded,
+        WorkerOperation::McpAuthComplete { server, .. } if server == "splunk"
+    ));
+}
+
+#[test]
 fn model_attachment_protocol_carries_paths_without_client_read_content() {
     let operation = WorkerOperation::RunModel {
         role: "primary".into(),

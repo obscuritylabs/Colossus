@@ -7,11 +7,12 @@ use colossus_api::{
     AgentRunApi, ApiScope, ApplicationKind, ApplicationPrincipal, CallerContext, CancelRunRequest,
     ContentPart, CreateArtifactUploadRequest, CreateRunRequest, EventSourcedArtifactApi,
     EventSourcedRunRepository, GetRunRequest, IdempotencyKey, InteractionKind, InteractionResponse,
-    NewRun, OutcomeCertainty, RequestId, RespondInteractionRequest, Run, RunMode, RunRepository,
-    RunStatus, RunUpdateKind, WatchRunRequest, scopes,
+    NewRun, OutcomeCertainty, PlanRunAction, PlanStatus as PublicPlanStatus, RequestId,
+    RespondInteractionRequest, Run, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind,
+    WatchRunRequest, scopes,
 };
 use colossus_contracts::{
-    DecisionOutcome, EventEnvelope, NewEvent, PolicyDecision, PolicyObligations,
+    DecisionOutcome, EventEnvelope, NewEvent, PlanStep, PolicyDecision, PolicyObligations,
     ProjectionWorkItem, SignedCheckpoint, UserPromptRequest,
 };
 use colossus_policy::{DenyApproval, effect_request};
@@ -275,6 +276,7 @@ async fn caller_owned_text_artifacts_are_rendered_as_bounded_run_input(runtime: 
                 role: Some("primary".into()),
                 mode: RunMode::Execute,
                 skill_ids: Vec::new(),
+                plan_action: None,
                 max_turns: 1,
                 idempotency_key: IdempotencyKey::new("attachment-run").expect("run key"),
             },
@@ -296,6 +298,7 @@ fn request(idempotency_key: &str, prompt: &str) -> CreateRunRequest {
         role: Some("primary".into()),
         mode: RunMode::Execute,
         skill_ids: Vec::new(),
+        plan_action: None,
         max_turns: 1,
         idempotency_key: IdempotencyKey::new(idempotency_key).expect("idempotency key"),
     }
@@ -345,6 +348,133 @@ async fn wait_terminal(service: &RuntimeAgentRunApi, caller: &CallerContext, run
     })
     .await
     .expect("run became terminal")
+}
+
+async fn plan_continuation_is_bound_to_owner_source_session_and_exact_revision(
+    runtime: Arc<Runtime>,
+) {
+    let repository: Arc<dyn RunRepository> =
+        Arc::new(EventSourcedRunRepository::new(runtime.journal()));
+    let interactions = Arc::new(PublicInteractionRouter::new(Arc::new(DenyApproval), None));
+    let service = Arc::new(RuntimeAgentRunApi::with_repository(
+        Arc::clone(&runtime),
+        Arc::clone(&repository),
+        interactions,
+        "primary",
+        "Plan safely.",
+    ));
+    let owner = caller(
+        &format!("app:plan-owner-{}", Uuid::now_v7().simple()),
+        "plan-owner",
+    );
+    let bootstrap = service
+        .create_run(
+            &owner,
+            request("plan-session-bootstrap", "Open the Plan session"),
+        )
+        .await
+        .expect("create caller-owned session");
+    let session = wait_terminal(&service, &owner, &bootstrap.run.id).await;
+    let plan = runtime
+        .create_plan(
+            &session.session_id,
+            "Plan the release",
+            "A bounded release plan.",
+            vec![PlanStep {
+                index: 1,
+                title: "Verify".into(),
+                detail: "Run focused checks.".into(),
+                requires_mutation: false,
+            }],
+        )
+        .await
+        .expect("draft Plan");
+    let mut source_request = request("plan-source", "Create the Plan");
+    source_request.session_id = Some(session.session_id.clone());
+    source_request.mode = RunMode::Plan;
+    let new_run = NewRun::from_request(
+        "run-plan-source",
+        &session.session_id,
+        "primary",
+        &source_request,
+    )
+    .expect("source run");
+    let source = repository
+        .create_run(&owner, &source_request, &new_run)
+        .expect("create source")
+        .value;
+    let writer = RunWriter::new(
+        Arc::clone(&repository),
+        Arc::new(crate::feed::RunFeeds::default()),
+        owner.clone(),
+        &source,
+    );
+    writer
+        .append(RunUpdateKind::State {
+            status: RunStatus::Running,
+        })
+        .expect("start source");
+    writer
+        .append(RunUpdateKind::Result {
+            result: RunResult {
+                output: "Plan saved".into(),
+                plan_id: Some(plan.id.clone()),
+                plan_revision: Some(plan.revision),
+                plan_status: Some(PublicPlanStatus::Draft),
+                goal_id: None,
+                profile: "offline".into(),
+                model_profile: "offline".into(),
+                provider_profile: "offline".into(),
+                model: "offline".into(),
+                elapsed_seconds: 0.1,
+            },
+        })
+        .expect("complete source");
+
+    let mut stale = request("stale-plan-revision", "Revise the Plan");
+    stale.session_id = Some(session.session_id.clone());
+    stale.mode = RunMode::Plan;
+    stale.plan_action = Some(PlanRunAction::Revise {
+        source_run_id: source.id.clone(),
+        expected_revision: plan.revision + 1,
+    });
+    let error = service
+        .create_run(&owner, stale)
+        .await
+        .expect_err("stale visible revision");
+    assert_eq!(error.code, colossus_api::ApiErrorCode::InvalidArgument);
+
+    let other = caller(
+        &format!("app:other-plan-owner-{}", Uuid::now_v7().simple()),
+        "other-plan-owner",
+    );
+    let mut foreign = request("foreign-plan-source", "Revise the Plan");
+    foreign.session_id = Some(session.session_id.clone());
+    foreign.mode = RunMode::Plan;
+    foreign.plan_action = Some(PlanRunAction::Revise {
+        source_run_id: source.id.clone(),
+        expected_revision: plan.revision,
+    });
+    let error = service
+        .create_run(&other, foreign)
+        .await
+        .expect_err("another application cannot resolve the source");
+    assert_eq!(error.code, colossus_api::ApiErrorCode::NotFound);
+
+    let mut revise = request("valid-plan-revision", "Clarify the verification step");
+    revise.session_id = Some(session.session_id.clone());
+    revise.mode = RunMode::Plan;
+    revise.plan_action = Some(PlanRunAction::Revise {
+        source_run_id: source.id,
+        expected_revision: plan.revision,
+    });
+    let accepted = service
+        .create_run(&owner, revise)
+        .await
+        .expect("owner-bound Plan continuation");
+    assert_eq!(accepted.run.session_id, session.session_id);
+    assert_eq!(accepted.run.mode, RunMode::Plan);
+    service.request_shutdown();
 }
 
 async fn concurrent_exact_create_key_executes_the_provider_once(runtime: Arc<Runtime>) {
@@ -842,6 +972,10 @@ fn runtime_service_conformance() {
             orphan_recovery_above_the_application_cap_drains_in_order(Arc::clone(&fixture.runtime))
                 .await;
             caller_owned_text_artifacts_are_rendered_as_bounded_run_input(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
+            plan_continuation_is_bound_to_owner_source_session_and_exact_revision(Arc::clone(
                 &fixture.runtime,
             ))
             .await;

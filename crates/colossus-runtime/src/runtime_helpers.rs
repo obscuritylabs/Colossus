@@ -118,6 +118,11 @@ pub(super) async fn discover_mcp_tools(
                         tool.name
                     )));
                 }
+                if server_names.len() > MAX_MCP_TOOLS {
+                    return Err(RuntimeError::Config(format!(
+                        "MCP server {server} exceeded {MAX_MCP_TOOLS} discovered tools"
+                    )));
+                }
                 tools.push(tool);
                 if tools.len() > MAX_MCP_TOOLS.saturating_mul(executor.server_names().len().max(1))
                 {

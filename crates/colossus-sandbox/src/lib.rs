@@ -39,7 +39,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream, lookup_host},
+    net::{TcpListener, TcpStream},
     process::Command as TokioCommand,
     sync::{Semaphore, oneshot},
 };

@@ -995,7 +995,51 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())?,
                 Some("MCP tools"),
             ),
-            _ => Err("/mcp expects servers or tools [SERVER]".into()),
+            arguments if arguments.starts_with("auth login ") => self.result(
+                &self
+                    .runtime
+                    .mcp_oauth_login_begin(arguments.trim_start_matches("auth login ").trim())
+                    .await
+                    .map_err(|error| error.to_string())?,
+                Some("MCP OAuth login"),
+            ),
+            arguments if arguments.starts_with("auth status ") => self.result(
+                &self
+                    .runtime
+                    .mcp_oauth_status(arguments.trim_start_matches("auth status ").trim())
+                    .await
+                    .map_err(|error| error.to_string())?,
+                Some("MCP OAuth status"),
+            ),
+            arguments if arguments.starts_with("auth logout ") => self.result(
+                &self
+                    .runtime
+                    .mcp_oauth_logout(arguments.trim_start_matches("auth logout ").trim())
+                    .await
+                    .map_err(|error| error.to_string())?,
+                Some("MCP OAuth logout"),
+            ),
+            arguments if arguments.starts_with("auth complete ") => {
+                let mut fields = arguments
+                    .trim_start_matches("auth complete ")
+                    .splitn(2, ' ');
+                let server = fields.next().unwrap_or_default();
+                let callback_url = fields.next().unwrap_or_default();
+                if server.is_empty() || callback_url.is_empty() {
+                    return Err("/mcp auth complete expects SERVER CALLBACK_URL".into());
+                }
+                self.result(
+                    &self
+                        .runtime
+                        .mcp_oauth_login_complete(server, callback_url)
+                        .await
+                        .map_err(|error| error.to_string())?,
+                    Some("MCP OAuth login"),
+                )
+            }
+            _ => Err(
+                "/mcp expects servers, tools [SERVER], or auth login|complete|status|logout".into(),
+            ),
         }
     }
 

@@ -62,7 +62,7 @@ arguments in the current runtime.
 | Telemetry | `/telemetry`, `/telemetry metrics` |
 | Skills | `/skills`, `/skill active`, `/skill use`, `/skill clear`, `/skill show`, `/skill resources`, `/skill read` |
 | Packs and distribution | `/packs list`, `/packs show`, `/packs verify`, `/packs install`, `/packs enable`, `/packs disable`, `/packs uninstall`, `/packs call`, `/packs trust list`, `/packs trust add`, `/collections verify`, `/collections install`, `/registry pull`, `/registry push`, `/bundle verify` |
-| Integrations and MCP | `/integrations`, `/integration show`, `/integration call`, `/integration disconnect`, `/mcp servers`, `/mcp tools`, `/mcp call` |
+| Integrations and MCP | `/integrations`, `/integration show`, `/integration call`, `/integration disconnect`, `/mcp servers`, `/mcp tools`, `/mcp auth login SERVER`, `/mcp auth complete SERVER CALLBACK_URL`, `/mcp auth status SERVER`, `/mcp auth logout SERVER` |
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |
 | Diagnostics | `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics on`, `/provider diagnostics off`, `/tools` |

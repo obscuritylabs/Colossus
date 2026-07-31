@@ -13,13 +13,16 @@ use colossus_api::{
     ArtifactPurpose, ArtifactState, CallerContext, CancelRunRequest, ContentPart, CreateRunRequest,
     CreateRunResponse, EventSourcedArtifactApi, EventSourcedRunRepository, GetRunRequest,
     Interaction, InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun, OutcomeCertainty,
-    RequestId, RespondInteractionRequest, Run, RunCancellation, RunExecutionRequest, RunFailure,
-    RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind, RunUpdateStream, TokenUsage,
-    ToolActivity, ToolActivityState, WatchRunRequest, scopes,
+    PlanExecutionStrategy as PublicPlanExecutionStrategy, PlanRunAction,
+    PlanStatus as PublicPlanStatus, RequestId, RespondInteractionRequest, Run, RunCancellation,
+    RunExecutionRequest, RunFailure, RunMode, RunRepository, RunResult, RunStatus, RunUpdateKind,
+    RunUpdateStream, TokenUsage, ToolActivity, ToolActivityState, WatchRunRequest, scopes,
 };
 use colossus_contracts::{
-    ActorType, AgentRunCancellation, AgentRunOutcome, AgentRunResult, ProviderEvent, RunEvent,
-    RunEventEnvelope, RunPhase,
+    ActorType, AgentRunCancellation, AgentRunMode, AgentRunOutcome, AgentRunResult,
+    ControlledAgentTerminal, GoalRunOutcome, GoalRunResult, PlanDraftTarget, PlanExecutionOutcome,
+    PlanExecutionStrategy, PlanRecord, PlanStatus, ProviderEvent, RunEvent, RunEventEnvelope,
+    RunPhase,
 };
 use colossus_ports::{ModelProviderError, RunControl, RunEventObserver, StoreError};
 use colossus_runtime::{Runtime, RuntimeError};
@@ -93,6 +96,11 @@ enum StartDecision {
 enum ExecutionAdmission {
     Fresh,
     Existing,
+}
+
+#[derive(Clone)]
+struct PlanSelection {
+    plan: PlanRecord,
 }
 
 /// Durable public agent-run facade backed by the real Colossus runtime.
@@ -455,6 +463,108 @@ impl RuntimeAgentRunApi {
         Ok(CreateDecision::Fresh { run, pending })
     }
 
+    fn plan_selection(
+        &self,
+        caller: &CallerContext,
+        request: &CreateRunRequest,
+    ) -> ApiResult<Option<PlanSelection>> {
+        let Some(action) = request.plan_action.as_ref() else {
+            return Ok(None);
+        };
+        caller.require_scope(scopes::RUNS_READ)?;
+        let source = self
+            .repository
+            .get_run(caller, action.source_run_id())?
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    ApiErrorReason::RunNotFound,
+                    "the Plan source run was not found",
+                )
+                .with_correlation_id(caller.request_id().clone())
+            })?;
+        let (plan_id, released_revision, released_status) =
+            match (source.result.as_ref(), source.cancellation.as_ref()) {
+                (Some(result), _) => (
+                    result.plan_id.as_deref(),
+                    result.plan_revision,
+                    result.plan_status,
+                ),
+                (_, Some(cancellation)) => (
+                    cancellation.plan_id.as_deref(),
+                    cancellation.plan_revision,
+                    cancellation.plan_status,
+                ),
+                _ => (None, None, None),
+            };
+        let (Some(plan_id), Some(released_revision), Some(released_status)) =
+            (plan_id, released_revision, released_status)
+        else {
+            return Err(ApiError::failed_precondition(
+                ApiErrorReason::InvalidRunTransition,
+                "the source run does not expose an actionable Plan revision",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        };
+        if request.session_id.as_deref() != Some(source.session_id.as_str()) {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "session_id",
+                "Plan continuation must remain in the source run session",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        }
+        if action.expected_revision() != released_revision {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "plan_action.expected_revision",
+                "the requested revision does not match the source run",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        }
+        if released_status != PublicPlanStatus::Draft {
+            return Err(ApiError::failed_precondition(
+                ApiErrorReason::InvalidRunTransition,
+                "only a released draft Plan can be revised or executed",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        }
+        let plan = self
+            .runtime
+            .get_plan(plan_id)
+            .map_err(|_| {
+                ApiError::failed_precondition(
+                    ApiErrorReason::InvalidRunTransition,
+                    "the selected Plan is unavailable",
+                )
+                .with_correlation_id(caller.request_id().clone())
+            })?
+            .ok_or_else(|| {
+                ApiError::failed_precondition(
+                    ApiErrorReason::InvalidRunTransition,
+                    "the selected Plan is unavailable",
+                )
+                .with_correlation_id(caller.request_id().clone())
+            })?;
+        if plan.session_id != source.session_id || plan.id != plan_id {
+            return Err(recovery_invariant(caller));
+        }
+        if plan.revision != released_revision {
+            return Err(ApiError::conflict(
+                ApiErrorReason::ConcurrentModification,
+                "the Plan changed; review its latest revision before continuing",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        }
+        if plan.status != PlanStatus::Draft {
+            return Err(ApiError::failed_precondition(
+                ApiErrorReason::InvalidRunTransition,
+                "the Plan is no longer a draft",
+            )
+            .with_correlation_id(caller.request_id().clone()));
+        }
+        Ok(Some(PlanSelection { plan }))
+    }
+
     fn spawn_execution(&self, pending: PendingExecution) {
         self.active_changed.notify_waiters();
         let PendingExecution {
@@ -811,32 +921,104 @@ impl RuntimeAgentRunApi {
             .allowed_tools()
             .map(str::to_owned)
             .collect::<Vec<_>>();
+        let selection = match self.plan_selection(&caller, &request) {
+            Ok(selection) => selection,
+            Err(error) => {
+                let _ = writer.append(plan_selection_failure(error));
+                return true;
+            }
+        };
+        let accepts_related_run_events = matches!(
+            request.plan_action.as_ref(),
+            Some(PlanRunAction::Execute {
+                strategy: PublicPlanExecutionStrategy::Goal { .. },
+                ..
+            })
+        );
         let mut observer = PublicRunObserver {
             writer: Arc::clone(&writer),
+            accepts_related_run_events,
         };
-        let execution = self.runtime.run_public_model_with_skills_stream_controlled(
-            &run.role,
-            &self.instructions,
-            &prompt,
-            max_turns,
-            &run.id,
-            &run.session_id,
-            create_session,
-            &request.skill_ids,
-            &allowed_tools,
-            request.mode == RunMode::Plan,
-            caller.actor(),
-            &mut observer,
-            &control,
-        );
-        let outcome = self
-            .interactions
-            .scope(Arc::clone(&writer), execution)
-            .await;
-        let kind = match outcome {
-            Ok(AgentRunOutcome::Completed { result }) => public_result(result),
-            Ok(AgentRunOutcome::Cancelled { result }) => public_cancellation(result),
-            Err(error) => runtime_failure(&error),
+        let kind = match request.plan_action.as_ref() {
+            Some(PlanRunAction::Execute { strategy, .. }) => {
+                let Some(selection) = selection else {
+                    let _ = writer.append(invariant_failure());
+                    return true;
+                };
+                let strategy = match strategy {
+                    PublicPlanExecutionStrategy::Direct => PlanExecutionStrategy::Direct,
+                    PublicPlanExecutionStrategy::Goal { max_iterations } => {
+                        PlanExecutionStrategy::Goal {
+                            max_iterations: *max_iterations,
+                        }
+                    }
+                };
+                let execution = self
+                    .runtime
+                    .approve_and_execute_public_plan_stream_controlled(
+                        &run.role,
+                        &run.session_id,
+                        &selection.plan.id,
+                        selection.plan.revision,
+                        strategy,
+                        max_turns,
+                        &run.id,
+                        &mut observer,
+                        &control,
+                    );
+                match self
+                    .interactions
+                    .scope(Arc::clone(&writer), execution)
+                    .await
+                {
+                    Ok(outcome) => public_plan_execution(outcome),
+                    Err(error) => runtime_failure(&error),
+                }
+            }
+            action => {
+                let mode = match (action, selection) {
+                    (Some(PlanRunAction::Revise { .. }), Some(PlanSelection { plan })) => {
+                        AgentRunMode::Plan(PlanDraftTarget::Update {
+                            plan_id: plan.id,
+                            revision: plan.revision,
+                        })
+                    }
+                    (None, None) if request.mode == RunMode::Plan => {
+                        AgentRunMode::Plan(PlanDraftTarget::Create)
+                    }
+                    (None, None) => AgentRunMode::Execute,
+                    _ => {
+                        let _ = writer.append(invariant_failure());
+                        return true;
+                    }
+                };
+                let execution = self
+                    .runtime
+                    .run_public_model_with_mode_and_skills_stream_controlled(
+                        &run.role,
+                        &self.instructions,
+                        &prompt,
+                        max_turns,
+                        &run.id,
+                        &run.session_id,
+                        create_session,
+                        &request.skill_ids,
+                        &allowed_tools,
+                        mode,
+                        caller.actor(),
+                        &mut observer,
+                        &control,
+                    );
+                match self
+                    .interactions
+                    .scope(Arc::clone(&writer), execution)
+                    .await
+                {
+                    Ok(AgentRunOutcome::Completed { result }) => public_result(result),
+                    Ok(AgentRunOutcome::Cancelled { result }) => public_cancellation(result),
+                    Err(error) => runtime_failure(&error),
+                }
+            }
         };
         if fail_terminal_append {
             return false;
@@ -885,6 +1067,12 @@ impl AgentRunApi for RuntimeAgentRunApi {
         request
             .validate()
             .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        if let Some(replay) = self.repository.resolve_create_run(caller, &request)? {
+            return Ok(CreateRunResponse {
+                run: self.recover_orphan(caller, replay)?,
+            });
+        }
+        self.plan_selection(caller, &request)?;
         self.rendered_input(caller, &request).await?;
         let role = request
             .role
@@ -1080,12 +1268,13 @@ impl AgentRunApi for RuntimeAgentRunApi {
 
 struct PublicRunObserver {
     writer: Arc<RunWriter>,
+    accepts_related_run_events: bool,
 }
 
 #[async_trait]
 impl RunEventObserver for PublicRunObserver {
     async fn observe(&mut self, envelope: RunEventEnvelope) -> Result<(), ModelProviderError> {
-        if envelope.run_id != self.writer.run_id() {
+        if !self.accepts_related_run_events && envelope.run_id != self.writer.run_id() {
             return Err(ModelProviderError::Failed(
                 "public run event identity did not match".into(),
             ));
@@ -1265,15 +1454,29 @@ fn cancelled_before_start() -> RunUpdateKind {
             turn: 0,
             message: "the run was cancelled before execution began".into(),
             plan_id: None,
+            plan_revision: None,
+            plan_status: None,
+            goal_id: None,
         },
     }
 }
 
 fn public_result(result: AgentRunResult) -> RunUpdateKind {
+    let (plan_id, plan_revision, plan_status) =
+        result.plan.as_ref().map_or((None, None, None), |plan| {
+            (
+                Some(plan.id.clone()),
+                Some(plan.revision),
+                Some(public_plan_status(plan.status)),
+            )
+        });
     RunUpdateKind::Result {
         result: RunResult {
             output: result.output,
-            plan_id: result.plan.map(|plan| plan.id),
+            plan_id,
+            plan_revision,
+            plan_status,
+            goal_id: None,
             profile: result.profile,
             model_profile: result.model_profile,
             provider_profile: result.provider_profile,
@@ -1284,11 +1487,175 @@ fn public_result(result: AgentRunResult) -> RunUpdateKind {
 }
 
 fn public_cancellation(result: AgentRunCancellation) -> RunUpdateKind {
+    let (plan_id, plan_revision, plan_status) =
+        result.plan.as_ref().map_or((None, None, None), |plan| {
+            (
+                Some(plan.id.clone()),
+                Some(plan.revision),
+                Some(public_plan_status(plan.status)),
+            )
+        });
     RunUpdateKind::Cancellation {
         cancellation: RunCancellation {
             turn: result.turn.into(),
             message: "the run was cancelled at a safe boundary".into(),
-            plan_id: result.plan.map(|plan| plan.id),
+            plan_id,
+            plan_revision,
+            plan_status,
+            goal_id: None,
+        },
+    }
+}
+
+fn public_plan_execution(outcome: PlanExecutionOutcome) -> RunUpdateKind {
+    match outcome {
+        PlanExecutionOutcome::CancelledBeforeStart { plan } => RunUpdateKind::Cancellation {
+            cancellation: RunCancellation {
+                turn: 0,
+                message: "Plan execution was cancelled before the Plan was consumed".into(),
+                plan_id: Some(plan.id),
+                plan_revision: Some(plan.revision),
+                plan_status: Some(public_plan_status(plan.status)),
+                goal_id: None,
+            },
+        },
+        PlanExecutionOutcome::Direct { plan, terminal } => match terminal {
+            ControlledAgentTerminal::Completed { mut result } => {
+                result.plan = Some(plan);
+                public_result(result)
+            }
+            ControlledAgentTerminal::Cancelled { mut result } => {
+                result.plan = Some(plan);
+                public_cancellation(result)
+            }
+            ControlledAgentTerminal::Failed {
+                message,
+                outcome_unknown,
+                ..
+            } => plan_execution_failure(message, false, outcome_unknown),
+        },
+        PlanExecutionOutcome::Goal { plan, terminal } => match terminal {
+            GoalRunOutcome::Completed { result } => public_goal_result(plan, result),
+            GoalRunOutcome::Cancelled {
+                result,
+                cancellation,
+            } => RunUpdateKind::Cancellation {
+                cancellation: RunCancellation {
+                    turn: cancellation
+                        .as_ref()
+                        .map_or(0, |value| u32::from(value.turn)),
+                    message: "Goal execution was cancelled at a safe boundary".into(),
+                    plan_id: Some(plan.id),
+                    plan_revision: Some(plan.revision),
+                    plan_status: Some(public_plan_status(plan.status)),
+                    goal_id: Some(result.goal.id),
+                },
+            },
+            GoalRunOutcome::Failed {
+                message,
+                outcome_unknown,
+                result: _,
+                run_id: _,
+            } => plan_execution_failure(message, true, outcome_unknown),
+        },
+    }
+}
+
+fn public_goal_result(plan: PlanRecord, result: GoalRunResult) -> RunUpdateKind {
+    let output = if !result.goal.summary.trim().is_empty() {
+        result.goal.summary.clone()
+    } else if let Some(iteration) = result.iterations.last() {
+        iteration.output.clone()
+    } else if result.iteration_budget_exhausted {
+        "Goal iteration budget ended before additional output was produced.".into()
+    } else {
+        "The Goal reached its current terminal state.".into()
+    };
+    RunUpdateKind::Result {
+        result: RunResult {
+            output,
+            plan_id: Some(plan.id),
+            plan_revision: Some(plan.revision),
+            plan_status: Some(public_plan_status(plan.status)),
+            goal_id: Some(result.goal.id),
+            profile: "goal".into(),
+            model_profile: "goal".into(),
+            provider_profile: "goal".into(),
+            model: "goal".into(),
+            elapsed_seconds: result.elapsed_seconds,
+        },
+    }
+}
+
+fn public_plan_status(status: PlanStatus) -> PublicPlanStatus {
+    match status {
+        PlanStatus::Draft => PublicPlanStatus::Draft,
+        PlanStatus::Approved => PublicPlanStatus::Approved,
+        PlanStatus::Executed => PublicPlanStatus::Executed,
+        PlanStatus::Discarded => PublicPlanStatus::Discarded,
+    }
+}
+
+fn plan_execution_failure(
+    message: String,
+    recoverable_if_known: bool,
+    outcome_unknown: bool,
+) -> RunUpdateKind {
+    RunUpdateKind::Failure {
+        status: if outcome_unknown {
+            RunStatus::OutcomeUnknown
+        } else {
+            RunStatus::Failed
+        },
+        failure: RunFailure {
+            code: if outcome_unknown {
+                "plan.execution_outcome_unknown"
+            } else {
+                "plan.execution_failed"
+            }
+            .into(),
+            message,
+            outcome: if outcome_unknown {
+                OutcomeCertainty::Unknown
+            } else {
+                OutcomeCertainty::Known
+            },
+            recoverable: !outcome_unknown && recoverable_if_known,
+            http_status: None,
+            retry_after_ms: None,
+        },
+    }
+}
+
+fn plan_selection_failure(error: ApiError) -> RunUpdateKind {
+    let code = if error.reason == ApiErrorReason::ConcurrentModification {
+        "plan.concurrent_modification"
+    } else {
+        "plan.selection_unavailable"
+    };
+    RunUpdateKind::Failure {
+        status: RunStatus::Failed,
+        failure: RunFailure {
+            code: code.into(),
+            message: error.message,
+            outcome: error.outcome,
+            recoverable: false,
+            http_status: None,
+            retry_after_ms: None,
+        },
+    }
+}
+
+fn invariant_failure() -> RunUpdateKind {
+    RunUpdateKind::Failure {
+        status: RunStatus::Failed,
+        failure: RunFailure {
+            code: "runtime.invariant_failed".into(),
+            message: "the Plan run could not be started safely".into(),
+            outcome: OutcomeCertainty::Known,
+            recoverable: false,
+            http_status: None,
+            retry_after_ms: None,
         },
     }
 }
@@ -1384,7 +1751,7 @@ fn released_runtime_failure(error: &RuntimeError) -> RunFailure {
             "the provider repeatedly returned invalid tool arguments",
             OutcomeCertainty::Known,
         ),
-        _ if runtime_error_outcome_unknown(error) => generic_failure(
+        _ if error.outcome_unknown() => generic_failure(
             "runtime.outcome_unknown",
             "an external effect has no trustworthy terminal outcome",
             OutcomeCertainty::Unknown,
@@ -1514,73 +1881,6 @@ fn generic_failure(code: &str, message: &str, outcome: OutcomeCertainty) -> RunF
     }
 }
 
-fn runtime_error_outcome_unknown(error: &RuntimeError) -> bool {
-    match error {
-        RuntimeError::Store(error) => store_error_outcome_unknown(error),
-        RuntimeError::Gateway(error) => gateway_error_outcome_unknown(error),
-        RuntimeError::SearchPort(colossus_ports::SearchError::OutcomeUnknown(_)) => true,
-        RuntimeError::Agent(error) => agent_error_outcome_unknown(error),
-        RuntimeError::Context(error) => context_error_outcome_unknown(error),
-        RuntimeError::Config(_)
-        | RuntimeError::Io(_)
-        | RuntimeError::Provider(_)
-        | RuntimeError::Search(_)
-        | RuntimeError::SearchPort(_)
-        | RuntimeError::ToolCatalog(_)
-        | RuntimeError::Mcp(_)
-        | RuntimeError::Pack(_)
-        | RuntimeError::Workflow(_) => false,
-    }
-}
-
-fn agent_error_outcome_unknown(error: &colossus_agent::AgentError) -> bool {
-    match error {
-        colossus_agent::AgentError::Provider(error) => {
-            matches!(error, ModelProviderError::OutcomeUnknown(_))
-        }
-        colossus_agent::AgentError::Tool(error) => {
-            matches!(error, colossus_ports::ToolError::OutcomeUnknown(_))
-        }
-        colossus_agent::AgentError::Store(error) => store_error_outcome_unknown(error),
-        colossus_agent::AgentError::Context(error) => context_error_outcome_unknown(error),
-        colossus_agent::AgentError::Configuration(_)
-        | colossus_agent::AgentError::ToolArgumentRecoveryExhausted { .. }
-        | colossus_agent::AgentError::MaxTurns { .. }
-        | colossus_agent::AgentError::EmptyTurn
-        | colossus_agent::AgentError::PlanWriteRequired
-        | colossus_agent::AgentError::Cancelled { .. } => false,
-    }
-}
-
-fn context_error_outcome_unknown(error: &colossus_ports::ContextError) -> bool {
-    match error {
-        colossus_ports::ContextError::Store(error) => store_error_outcome_unknown(error),
-        colossus_ports::ContextError::Provider(error) => {
-            matches!(error, ModelProviderError::OutcomeUnknown(_))
-        }
-        colossus_ports::ContextError::Configuration(_) => false,
-    }
-}
-
-fn gateway_error_outcome_unknown(error: &colossus_policy::GatewayError) -> bool {
-    match error {
-        colossus_policy::GatewayError::OutcomeUnknown(_) => true,
-        colossus_policy::GatewayError::Journal(error) => store_error_outcome_unknown(error),
-        colossus_policy::GatewayError::Safety(_)
-        | colossus_policy::GatewayError::Denied(_)
-        | colossus_policy::GatewayError::Approval(_)
-        | colossus_policy::GatewayError::Policy(_)
-        | colossus_policy::GatewayError::Execution(_)
-        | colossus_policy::GatewayError::RecoverableExecution { .. }
-        | colossus_policy::GatewayError::HttpStatus { .. }
-        | colossus_policy::GatewayError::Contract(_) => false,
-    }
-}
-
-fn store_error_outcome_unknown(error: &StoreError) -> bool {
-    matches!(error, StoreError::OutcomeUnknown(_))
-}
-
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -1590,7 +1890,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use colossus_contracts::{PlanRecord, PlanStatus};
+    use colossus_contracts::{GoalRecord, GoalStatus, PlanRecord, PlanStatus};
 
     fn draft_plan() -> PlanRecord {
         PlanRecord {
@@ -1605,6 +1905,36 @@ mod tests {
             updated_at: "2026-07-29T00:00:00Z".into(),
             approved_at: None,
             executed_run_id: None,
+        }
+    }
+
+    fn executed_plan() -> PlanRecord {
+        let mut plan = draft_plan();
+        plan.status = PlanStatus::Executed;
+        plan.revision = 3;
+        plan.approved_at = Some("2026-07-29T00:01:00Z".into());
+        plan.executed_run_id = Some("run-1".into());
+        plan
+    }
+
+    fn active_goal_result() -> GoalRunResult {
+        GoalRunResult {
+            goal: GoalRecord {
+                id: "goal-1".into(),
+                session_id: "session-1".into(),
+                objective: "Execute the Plan".into(),
+                source_plan_id: Some("plan-1".into()),
+                status: GoalStatus::Active,
+                summary: String::new(),
+                blocked_reason: String::new(),
+                iteration_budget: 3,
+                iterations_completed: 1,
+                created_at: "2026-07-29T00:00:00Z".into(),
+                updated_at: "2026-07-29T00:01:00Z".into(),
+            },
+            iterations: Vec::new(),
+            iteration_budget_exhausted: false,
+            elapsed_seconds: 0.25,
         }
     }
 
@@ -1665,6 +1995,48 @@ mod tests {
             panic!("result must remain terminal");
         };
         assert_eq!(result.plan_id.as_deref(), Some("plan-1"));
+    }
+
+    #[test]
+    fn direct_plan_failure_preserves_unknown_outcome_certainty() {
+        let update = public_plan_execution(PlanExecutionOutcome::Direct {
+            plan: executed_plan(),
+            terminal: ControlledAgentTerminal::Failed {
+                run_id: "run-1".into(),
+                message: "effect outcome is unknown".into(),
+                outcome_unknown: true,
+            },
+        });
+
+        let RunUpdateKind::Failure { status, failure } = update else {
+            panic!("failure must remain terminal");
+        };
+        assert_eq!(status, RunStatus::OutcomeUnknown);
+        assert_eq!(failure.outcome, OutcomeCertainty::Unknown);
+        assert!(!failure.recoverable);
+    }
+
+    #[test]
+    fn goal_plan_failure_preserves_unknown_outcome_certainty() {
+        let update = public_plan_execution(PlanExecutionOutcome::Goal {
+            plan: executed_plan(),
+            terminal: GoalRunOutcome::Failed {
+                result: active_goal_result(),
+                run_id: Some("run-1".into()),
+                message: "effect outcome is unknown".into(),
+                outcome_unknown: true,
+            },
+        });
+
+        let RunUpdateKind::Failure { status, failure } = update else {
+            panic!("failure must remain terminal");
+        };
+        assert_eq!(status, RunStatus::OutcomeUnknown);
+        assert_eq!(failure.outcome, OutcomeCertainty::Unknown);
+        assert!(
+            !failure.recoverable,
+            "unknown Goal outcomes cannot be retried"
+        );
     }
 
     #[test]

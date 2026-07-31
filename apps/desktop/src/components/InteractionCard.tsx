@@ -126,11 +126,18 @@ export function InteractionCard({
 
   const promptContent = content;
   const trimmedText = text.trim();
+  const unavailable = !interaction.respondableByCaller || submitting;
   const canSubmit =
-    interaction.respondableByCaller &&
-    !submitting &&
+    !unavailable &&
     (selectedChoice !== undefined ||
       (promptContent.allowFreeForm && trimmedText.length > 0));
+  const responseGuidance = !interaction.respondableByCaller
+    ? "Response unavailable"
+    : canSubmit
+      ? "Ready to send"
+      : promptContent.choices.length > 0
+        ? "Select one response"
+        : "Enter a response";
 
   function submitPrompt() {
     if (selectedChoice !== undefined) {
@@ -148,10 +155,10 @@ export function InteractionCard({
 
   return (
     <section
-      className="interaction-card"
+      className="interaction-card prompt-card"
       aria-labelledby={`${interaction.interactionId}-title`}
     >
-      <div className="interaction-heading">
+      <div className="interaction-heading prompt-heading">
         <div>
           <p className="eyebrow">Colossus needs your input</p>
           <h3 id={`${interaction.interactionId}-title`}>
@@ -160,52 +167,60 @@ export function InteractionCard({
         </div>
         <span className="expiry">{expiryLabel(interaction.expiresAt)}</span>
       </div>
-      {promptContent.choices.length > 0 && (
-        <fieldset className="choice-list">
-          <legend className="sr-only">Choose a response</legend>
-          {promptContent.choices.map((choice) => (
-            <label className="choice" key={choice.choiceId}>
-              <input
-                type="radio"
-                name={`choice-${interaction.interactionId}`}
-                value={choice.choiceId}
-                checked={choiceId === choice.choiceId}
-                disabled={submitting}
-                onChange={() => {
-                  setChoiceId(choice.choiceId);
-                  setText("");
-                }}
-              />
-              <span>{choice.label}</span>
-            </label>
-          ))}
-        </fieldset>
-      )}
-      {promptContent.allowFreeForm && (
-        <label className="field interaction-text">
-          <span>
-            {promptContent.choices.length > 0
-              ? "Or enter a response"
-              : "Response"}
-          </span>
-          <textarea
-            value={text}
-            maxLength={16_384}
-            rows={3}
-            disabled={submitting}
-            onChange={(event) => {
-              setText(event.target.value);
-              setChoiceId("");
-            }}
-          />
-        </label>
-      )}
-      {error !== "" && (
-        <p className="inline-error" role="alert">
-          {error}
-        </p>
-      )}
-      <div className="interaction-actions">
+      <div className="interaction-body">
+        {promptContent.choices.length > 0 && (
+          <fieldset className="choice-list">
+            <legend className="sr-only">Choose a response</legend>
+            {promptContent.choices.map((choice) => (
+              <label
+                className={`choice${choiceId === choice.choiceId ? " is-selected" : ""}`}
+                key={choice.choiceId}
+              >
+                <input
+                  type="radio"
+                  name={`choice-${interaction.interactionId}`}
+                  value={choice.choiceId}
+                  checked={choiceId === choice.choiceId}
+                  disabled={unavailable}
+                  onChange={() => {
+                    setChoiceId(choice.choiceId);
+                    setText("");
+                  }}
+                />
+                <span>{choice.label}</span>
+              </label>
+            ))}
+          </fieldset>
+        )}
+        {promptContent.allowFreeForm && (
+          <label className="field interaction-text">
+            <span>
+              {promptContent.choices.length > 0
+                ? "Or enter a response"
+                : "Response"}
+            </span>
+            <textarea
+              value={text}
+              maxLength={16_384}
+              rows={2}
+              disabled={unavailable}
+              onChange={(event) => {
+                setText(event.target.value);
+                setChoiceId("");
+              }}
+            />
+          </label>
+        )}
+        {error !== "" && (
+          <p className="inline-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+      <div className="interaction-actions prompt-actions">
+        <span className="interaction-guidance" aria-live="polite">
+          {responseGuidance}
+        </span>
         <button
           className="button primary"
           type="button"

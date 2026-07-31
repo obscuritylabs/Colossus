@@ -44,6 +44,8 @@ interface WorkSurfaceProps {
   filesPanel: ReactNode;
   filesAvailable: boolean;
   artifactsAvailable: boolean;
+  planContinuationAvailable: boolean;
+  planWorkflowAvailable: boolean;
   workNavigationOpen: boolean;
   onConnect: () => void;
   onCancel: () => void;
@@ -54,6 +56,14 @@ interface WorkSurfaceProps {
   onResume: () => void;
   onSuggestion: (suggestion: string) => void;
   onSelectArtifact: (artifactId: string) => void;
+  onOpenPlanWorkflow: (sessionId: string, planId: string) => void;
+  onRevisePlan: (sourceRunId: string, planId: string, revision: number) => void;
+  onExecutePlan: (
+    sourceRunId: string,
+    planId: string,
+    revision: number,
+    strategy: { type: "direct" } | { type: "goal"; maxIterations: number },
+  ) => Promise<void>;
   onOpenWorkNavigation: () => void;
   onCloseWorkNavigation: () => void;
 }
@@ -79,6 +89,8 @@ export function WorkSurface({
   filesPanel,
   filesAvailable,
   artifactsAvailable,
+  planContinuationAvailable,
+  planWorkflowAvailable,
   workNavigationOpen,
   onConnect,
   onCancel,
@@ -86,6 +98,9 @@ export function WorkSurface({
   onResume,
   onSuggestion,
   onSelectArtifact,
+  onOpenPlanWorkflow,
+  onRevisePlan,
+  onExecutePlan,
   onOpenWorkNavigation,
   onCloseWorkNavigation,
 }: WorkSurfaceProps) {
@@ -396,6 +411,11 @@ export function WorkSurface({
                   {conversationViews.map((conversationView) => (
                     <RunTimeline
                       view={conversationView}
+                      planContinuationAvailable={planContinuationAvailable}
+                      planWorkflowAvailable={planWorkflowAvailable}
+                      onOpenPlanWorkflow={onOpenPlanWorkflow}
+                      onRevisePlan={onRevisePlan}
+                      onExecutePlan={onExecutePlan}
                       key={conversationView.run.runId}
                     />
                   ))}

@@ -471,6 +471,7 @@ function SettingsView({
     (target) => target.kind === "external_daemon",
   );
   const terminalAvailable = selectedTarget?.terminalAvailable === true;
+  const shellAvailable = desktop.capabilities.shellTerminal;
   const hasManagedConfiguration =
     desktop.managedModelConfiguration.providers.length > 0 &&
     desktop.managedModelConfiguration.models.length > 0;
@@ -693,18 +694,19 @@ function SettingsView({
             ) : null}
           </div>
         </section>
-        {desktop.capabilities.tui ? (
+        {desktop.capabilities.tui || shellAvailable ? (
           <section className="settings-card settings-card-stack terminal-settings-card">
             <div className="settings-card-icon">
               <IconTerminal2 size={23} stroke={1.6} aria-hidden="true" />
             </div>
             <div>
               <p className="eyebrow">Advanced local feature</p>
-              <h3>Authenticated Colossus TUI</h3>
+              <h3>Local terminal</h3>
               <p>
-                {terminalAvailable
-                  ? "The verified bundled CLI connects only to the existing Managed Local worker. Its actions retain normal Colossus policy and audit behavior."
-                  : "The local TUI is unavailable for an external target. Select Managed Local to use its authenticated worker connection."}
+                The embedded shell runs as your macOS user outside Colossus
+                policy and audit. The separate Colossus TUI tab uses the
+                verified bundled CLI and retains normal policy and audit
+                behavior.
               </p>
             </div>
             <div className="settings-actions terminal-settings-actions">
@@ -714,7 +716,7 @@ function SettingsView({
                   checked={desktop.terminalEnabled}
                   disabled={
                     connecting ||
-                    !terminalAvailable ||
+                    (!terminalAvailable && !shellAvailable) ||
                     desktop.workspace === null
                   }
                   onChange={(event) =>
@@ -723,23 +725,35 @@ function SettingsView({
                 />
                 <span>
                   {desktop.terminalEnabled
-                    ? "Local TUI enabled"
+                    ? "Local terminal enabled"
                     : "I understand and want to enable it"}
                 </span>
               </label>
-              <button
-                className="button primary"
-                type="button"
-                disabled={
-                  !desktop.terminalEnabled ||
-                  !terminalAvailable ||
-                  localTarget === undefined ||
-                  localTarget.state !== "ready"
-                }
-                onClick={() => onOpenTerminal("colossus_tui")}
-              >
-                Open Colossus TUI
-              </button>
+              {shellAvailable ? (
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={!desktop.terminalEnabled}
+                  onClick={() => onOpenTerminal("shell")}
+                >
+                  Open Shell
+                </button>
+              ) : null}
+              {desktop.capabilities.tui ? (
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={
+                    !desktop.terminalEnabled ||
+                    !terminalAvailable ||
+                    localTarget === undefined ||
+                    localTarget.state !== "ready"
+                  }
+                  onClick={() => onOpenTerminal("colossus_tui")}
+                >
+                  Open Colossus TUI
+                </button>
+              ) : null}
             </div>
           </section>
         ) : null}

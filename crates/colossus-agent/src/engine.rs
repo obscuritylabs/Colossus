@@ -122,11 +122,11 @@ impl AgentService {
         if !route.capabilities.tool_calls {
             definitions.clear();
         }
-        let offered_tools = definitions
+        let initial_offered_tools = definitions
             .iter()
             .map(|definition| definition.name.as_str())
             .collect::<BTreeSet<_>>();
-        context.offered_tools = offered_tools
+        context.offered_tools = initial_offered_tools
             .iter()
             .map(|name| (*name).to_owned())
             .collect();
@@ -169,6 +169,25 @@ impl AgentService {
         .await?;
 
         for turn in 1..=max_turns {
+            let mut turn_definitions = definitions.clone();
+            if plan_write_recovery_attempted
+                && written_plan.is_none()
+                && let Some(target) = plan_target.as_ref()
+            {
+                let required_tool = match target {
+                    PlanDraftTarget::Create => "plan.create",
+                    PlanDraftTarget::Update { .. } => "plan.update",
+                };
+                turn_definitions.retain(|definition| definition.name == required_tool);
+            }
+            let turn_offered_tools = turn_definitions
+                .iter()
+                .map(|definition| definition.name.as_str())
+                .collect::<BTreeSet<_>>();
+            context.offered_tools = turn_offered_tools
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect();
             if control.is_some_and(RunControl::is_cancelled) {
                 return self
                     .finish_cancelled_run(
@@ -204,7 +223,7 @@ impl AgentService {
                         session_id: session_id.clone(),
                         instructions: instructions.into(),
                         messages: messages.clone(),
-                        tools: definitions.clone(),
+                        tools: turn_definitions.clone(),
                         route: route.clone(),
                         context: context.clone(),
                         force: false,
@@ -256,7 +275,7 @@ impl AgentService {
             let request = ModelRequest {
                 instructions: instructions.into(),
                 messages: prepared,
-                tools: definitions.clone(),
+                tools: turn_definitions.clone(),
                 max_output_tokens: None,
             };
             self.append(
@@ -368,7 +387,7 @@ impl AgentService {
                     }
                     messages.push(ModelMessage {
                         role: ModelMessageRole::User,
-                        content: recovery_prompt(recovery_attempts, &definitions),
+                        content: recovery_prompt(recovery_attempts, &turn_definitions),
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                     });
@@ -689,7 +708,7 @@ impl AgentService {
                         .await;
                 }
                 let tool_started = Instant::now();
-                let validation = if offered_tools.contains(call.name.as_str()) {
+                let validation = if turn_offered_tools.contains(call.name.as_str()) {
                     self.tools.validate(&call).and_then(|_| {
                         validate_plan_write_once(&call, plan_target.as_ref(), written_plan.as_ref())
                     })
@@ -699,6 +718,47 @@ impl AgentService {
                         call.name
                     )))
                 };
+                if plan_write_recovery_attempted
+                    && written_plan.is_none()
+                    && validation.is_err()
+                    && let Some(target) = plan_target.as_ref()
+                {
+                    let required_tool = match target {
+                        PlanDraftTarget::Create => "plan.create",
+                        PlanDraftTarget::Update { .. } => "plan.update",
+                    };
+                    let message = format!(
+                        "Plan Mode cannot complete until {required_tool} succeeds exactly once"
+                    );
+                    self.append(
+                        &stream_id,
+                        &mut stream_version,
+                        "plan.write.required.v1",
+                        system_actor(),
+                        &context,
+                        json!({
+                            "turn": turn,
+                            "required_tool": required_tool,
+                            "recoverable": false,
+                        }),
+                    )?;
+                    emit_run_event(
+                        &mut released_observer,
+                        &run_id,
+                        &session_id,
+                        RunEvent::Error {
+                            code: "plan.write_required".into(),
+                            message,
+                            recoverable: false,
+                            http_status: None,
+                            retry_after_ms: None,
+                            turn: Some(turn),
+                            elapsed_seconds: started.elapsed().as_secs_f64(),
+                        },
+                    )
+                    .await?;
+                    return Err(AgentError::PlanWriteRequired);
+                }
                 if validation.is_ok() {
                     self.append(
                         &stream_id,

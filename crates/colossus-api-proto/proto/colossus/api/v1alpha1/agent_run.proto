@@ -44,6 +44,36 @@ enum RunMode {
   RUN_MODE_PLAN = 2;
 }
 
+// PlanStatus is the released lifecycle of one canonical Plan revision.
+enum PlanStatus {
+  // PLAN_STATUS_UNSPECIFIED is never emitted with a Plan reference.
+  PLAN_STATUS_UNSPECIFIED = 0;
+
+  // PLAN_STATUS_DRAFT remains editable and cannot execute yet.
+  PLAN_STATUS_DRAFT = 1;
+
+  // PLAN_STATUS_APPROVED has explicit approval but has not been consumed.
+  PLAN_STATUS_APPROVED = 2;
+
+  // PLAN_STATUS_EXECUTED was consumed by direct or Goal execution.
+  PLAN_STATUS_EXECUTED = 3;
+
+  // PLAN_STATUS_DISCARDED was intentionally closed without execution.
+  PLAN_STATUS_DISCARDED = 4;
+}
+
+// PlanExecutionStrategy selects the bounded handoff for an exact Plan revision.
+enum PlanExecutionStrategy {
+  // PLAN_EXECUTION_STRATEGY_UNSPECIFIED is rejected.
+  PLAN_EXECUTION_STRATEGY_UNSPECIFIED = 0;
+
+  // PLAN_EXECUTION_STRATEGY_DIRECT consumes the Plan in one normal run.
+  PLAN_EXECUTION_STRATEGY_DIRECT = 1;
+
+  // PLAN_EXECUTION_STRATEGY_GOAL consumes the Plan into bounded Goal Mode.
+  PLAN_EXECUTION_STRATEGY_GOAL = 2;
+}
+
 // RunStatus is the durable lifecycle state of an agent run.
 enum RunStatus {
   // RUN_STATUS_UNSPECIFIED is never emitted by a conforming server.
@@ -99,6 +129,15 @@ message RunResult {
 
   // plan_id is the canonical plan written by a completed Plan Mode run.
   optional string plan_id = 7;
+
+  // plan_revision is the exact canonical revision paired with plan_id.
+  optional uint64 plan_revision = 8;
+
+  // plan_status is the released lifecycle paired with plan_id.
+  PlanStatus plan_status = 9;
+
+  // goal_id is the durable Goal created by a Plan handoff, when applicable.
+  optional string goal_id = 10;
 }
 
 // RunFailure contains a bounded user-safe terminal failure.
@@ -132,6 +171,15 @@ message RunCancellation {
 
   // plan_id is the canonical plan written before a cancelled Plan Mode run stopped.
   optional string plan_id = 3;
+
+  // plan_revision is the exact canonical revision paired with plan_id.
+  optional uint64 plan_revision = 4;
+
+  // plan_status is the released lifecycle paired with plan_id.
+  PlanStatus plan_status = 5;
+
+  // goal_id is the durable Goal created by a Plan handoff, when applicable.
+  optional string goal_id = 6;
 }
 
 // Run is the durable public run projection.
@@ -217,6 +265,39 @@ message CreateRunRequest {
 
   // idempotency_key is required and scoped to the authenticated caller.
   string idempotency_key = 7;
+
+  // plan_action optionally continues the exact Plan released by a caller-owned run.
+  PlanRunAction plan_action = 8;
+}
+
+// PlanRunAction continues the exact Plan released by a caller-owned source run.
+message PlanRunAction {
+  // source_run_id is resolved server-side to its released Plan and session.
+  string source_run_id = 1;
+
+  // expected_revision is the exact optimistic revision visible to the caller.
+  uint64 expected_revision = 2;
+
+  // action selects exactly one Plan continuation behavior.
+  oneof action {
+    // revise refines the exact draft in structurally constrained Plan Mode.
+    RevisePlanAction revise = 3;
+
+    // execute approves and consumes the exact draft.
+    ExecutePlanAction execute = 4;
+  }
+}
+
+// RevisePlanAction carries no authority beyond its enclosing exact source binding.
+message RevisePlanAction {}
+
+// ExecutePlanAction selects direct or bounded Goal execution.
+message ExecutePlanAction {
+  // strategy must be direct or Goal.
+  PlanExecutionStrategy strategy = 1;
+
+  // max_goal_iterations is required for Goal and ignored for direct execution.
+  uint32 max_goal_iterations = 2;
 }
 
 // CreateRunResponse returns the durably allocated run; execution is independent of response delivery.

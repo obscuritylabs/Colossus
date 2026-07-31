@@ -66,8 +66,10 @@ Every completed Plan Mode turn performs exactly one successful durable write:
 `plan.create` for a new Draft or `plan.update` for the runtime-bound selected Draft.
 The model cannot choose another plan ID. A second write is blocked before dispatch. If
 the model answers without writing, Colossus permits one corrective turn and then fails
-closed. A failed or cancelled turn can therefore have persisted zero or one plan; inspect
-the typed `PlanWritten` event or returned plan evidence before retrying.
+closed. That corrective turn exposes only the runtime-bound `plan.create` or
+`plan.update` tool, so it cannot be consumed by more inspection or another interactive
+question. A failed or cancelled turn can therefore have persisted zero or one plan;
+inspect the typed `PlanWritten` event or returned plan evidence before retrying.
 
 New plans start at revision 1. Existing legacy records without the field read as
 revision 0. Refinement replaces Markdown content and ordered steps while preserving the
@@ -135,10 +137,22 @@ or cancellation leaves the Goal Active. Resume only its remaining budget:
 /goal resume GOAL_ID
 ```
 
-The public `RunMode::Plan` entry point continues to mean “create a plan.” Completed
-results and cancellations expose the canonical identity as optional `plan_id` in the
-public API, protobuf contract, and SDK terminal types. A cancellation before persistence
-leaves it absent.
+The public `RunMode::Plan` entry point without a continuation continues to mean “create
+a plan.” Completed results and cancellations expose optional canonical `plan_id`,
+`plan_revision`, and `plan_status` fields in the public API, protobuf contract, and SDK
+terminal types. A cancellation before persistence leaves them absent.
+
+Colossus Desktop turns a returned Draft into an in-chat decision card:
+
+- **Revise in chat** starts another Plan Mode run bound to the source run and exact
+  visible revision.
+- **Run once** approves and consumes that exact revision in one ordinary execution run.
+- **Run as Goal** does the same with an explicit bounded iteration budget.
+- **Advanced workflow** opens the TUI for the complete lifecycle surface.
+
+The typed actions carry a source run ID and revision rather than a renderer-selected
+Plan ID. They are available only when authenticated discovery advertises
+`plans.continue`; clients fail closed when it is absent.
 
 ## Expected result
 

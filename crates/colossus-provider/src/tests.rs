@@ -260,6 +260,27 @@ fn request_output_ceiling_must_match_the_resolved_model_limit() {
     assert!(validate_model_request(&request, 0).is_err());
 }
 
+#[test]
+fn provider_tool_schemas_require_an_explicit_object_root() {
+    let mut request = model_request_with_tools(&["workspace.inspect"]);
+    assert!(validate_model_request(&request, 4_096).is_ok());
+
+    for schema in [
+        json!(null),
+        json!([]),
+        json!({}),
+        json!({"type": "array", "items": {"type": "string"}}),
+        json!({"type": ["object"]}),
+    ] {
+        request.tools[0].input_schema = schema;
+        assert!(matches!(
+            validate_model_request(&request, 4_096),
+            Err(ProviderError::Configuration(message))
+                if message.contains("schema root must declare type object")
+        ));
+    }
+}
+
 fn provider_request(profile: &ProviderProfile) -> EffectRequest {
     let mut request = effect_request(
         system_actor("provider-test"),
@@ -832,12 +853,17 @@ fn continuation_payloads_preserve_assistant_call_and_tool_result_ids() {
 }
 
 #[test]
-fn chat_tool_projection_omits_max_length_but_keeps_the_canonical_schema_strict() {
+fn openai_tool_projection_is_compatible_without_mutating_the_canonical_schema() {
     let tool = ModelToolDefinition {
         name: "workspace.inspect".into(),
         description: "Inspect bounded workspace paths.".into(),
         input_schema: json!({
             "type": "object",
+            "oneOf": [{"required": ["paths"]}, {"required": ["environment"]}],
+            "anyOf": [{"required": ["paths"]}],
+            "allOf": [{"properties": {"mode": {"type": "string"}}}],
+            "enum": [{}],
+            "const": {},
             "properties": {
                 "paths": {
                     "type": "array",
@@ -848,6 +874,10 @@ fn chat_tool_projection_omits_max_length_but_keeps_the_canonical_schema_strict()
                         "maxLength": 4096
                     }
                 },
+                "selector": {
+                    "oneOf": [{"type": "string"}, {"type": "integer"}]
+                },
+                "mode": {"type": "string", "const": "safe"},
                 "environment": {
                     "type": "object",
                     "additionalProperties": {
@@ -860,6 +890,7 @@ fn chat_tool_projection_omits_max_length_but_keeps_the_canonical_schema_strict()
             "additionalProperties": false
         }),
     };
+    let canonical_schema = tool.input_schema.clone();
     let request = ModelRequest {
         instructions: "test".into(),
         messages: vec![ModelMessage {
@@ -877,6 +908,9 @@ fn chat_tool_projection_omits_max_length_but_keeps_the_canonical_schema_strict()
         chat_payload(&request, "unit-model", 4_096, false, &tool_names).expect("chat payload");
     assert_eq!(chat["tools"][0]["function"]["name"], "workspace_inspect");
     let projected = &chat["tools"][0]["function"]["parameters"];
+    for keyword in ["oneOf", "anyOf", "allOf", "enum", "const"] {
+        assert!(projected.get(keyword).is_none(), "root {keyword} remained");
+    }
     assert!(
         !serde_json::to_string(projected)
             .expect("projected schema")
@@ -888,18 +922,90 @@ fn chat_tool_projection_omits_max_length_but_keeps_the_canonical_schema_strict()
         projected["properties"]["environment"]["additionalProperties"]["type"],
         "string"
     );
-
     assert_eq!(
-        tool.input_schema["properties"]["paths"]["items"]["maxLength"],
-        4096
+        projected["properties"]["selector"]["oneOf"][0]["type"],
+        "string"
     );
+    assert_eq!(projected["properties"]["mode"]["const"], "safe");
+    assert!(chat["tools"][0]["function"].get("strict").is_none());
+
     let responses = responses_payload(&request, "unit-model", 4_096, false, &tool_names)
         .expect("Responses payload");
     assert_eq!(responses["tools"][0]["name"], "workspace_inspect");
+    assert_eq!(responses["tools"][0]["strict"], false);
+    let response_schema = &responses["tools"][0]["parameters"];
+    for keyword in ["oneOf", "anyOf", "allOf", "enum", "const"] {
+        assert!(
+            response_schema.get(keyword).is_none(),
+            "root {keyword} remained"
+        );
+    }
     assert_eq!(
-        responses["tools"][0]["parameters"]["properties"]["paths"]["items"]["maxLength"],
+        response_schema["properties"]["paths"]["items"]["maxLength"],
         4096
     );
+    assert_eq!(
+        response_schema["properties"]["selector"]["oneOf"][1]["type"],
+        "integer"
+    );
+    assert_eq!(response_schema["properties"]["mode"]["const"], "safe");
+    assert_eq!(tool.input_schema, canonical_schema);
+}
+
+#[test]
+fn representative_builtin_schemas_project_to_openai_compatible_roots() {
+    let specs = colossus_tools::builtin_specs();
+    for (name, canonical_root_keyword, description_fragment) in [
+        ("shell.run", "oneOf", "exactly one of command or argv"),
+        ("skill.validate", "oneOf", "exactly one of"),
+        ("user.ask", "allOf", "allow_free_form is false"),
+    ] {
+        let spec = specs
+            .iter()
+            .find(|spec| spec.name == name)
+            .unwrap_or_else(|| panic!("missing {name} spec"));
+        assert_eq!(spec.input_schema["type"], "object");
+        assert!(spec.input_schema.get(canonical_root_keyword).is_some());
+        assert!(spec.description.contains(description_fragment));
+        let canonical_schema = spec.input_schema.clone();
+        let request = ModelRequest {
+            instructions: "test".into(),
+            messages: vec![ModelMessage {
+                role: ModelMessageRole::User,
+                content: "use the tool".into(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            }],
+            tools: vec![ModelToolDefinition {
+                name: spec.name.clone(),
+                description: spec.description.clone(),
+                input_schema: spec.input_schema.clone(),
+            }],
+            max_output_tokens: Some(4_096),
+        };
+        validate_model_request(&request, 4_096).expect("valid canonical tool root");
+        let tool_names = ProviderToolNames::from_request(&request).expect("provider tool names");
+        let responses = responses_payload(&request, "unit-model", 4_096, false, &tool_names)
+            .expect("Responses payload");
+        let chat = chat_payload(&request, "unit-model", 4_096, false, &tool_names)
+            .expect("Chat Completions payload");
+
+        for projected in [
+            &responses["tools"][0]["parameters"],
+            &chat["tools"][0]["function"]["parameters"],
+        ] {
+            assert_eq!(projected["type"], "object");
+            for keyword in ["oneOf", "anyOf", "allOf", "enum", "const"] {
+                assert!(
+                    projected.get(keyword).is_none(),
+                    "{name} retained root {keyword}"
+                );
+            }
+        }
+        assert_eq!(responses["tools"][0]["strict"], false);
+        assert!(chat["tools"][0]["function"].get("strict").is_none());
+        assert_eq!(request.tools[0].input_schema, canonical_schema);
+    }
 }
 
 #[test]

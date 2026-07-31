@@ -13,12 +13,11 @@ pub(crate) struct TuiAuthenticationChannel {
     pub(crate) writer: std::fs::File,
 }
 
-/// Native process authority retained for the lifetime of one verified TUI PTY.
+/// Native process authority retained for the lifetime of one local PTY.
 ///
-/// The macOS MVP deliberately exposes no arbitrary Shell process. macOS has no
-/// supported race-free descendant job primitive for an ordinary desktop app, so this
-/// owner supervises only the signed CLI's original session and never claims that a
-/// hostile process can be followed across `setsid` and reparenting.
+/// macOS has no supported race-free descendant job primitive for an ordinary desktop
+/// app. This owner therefore supervises the original process session and never claims
+/// that a hostile process can be followed across `setsid` and reparenting.
 #[derive(Clone)]
 pub(crate) struct TerminalProcessTree(Arc<Mutex<TerminalProcessTreeInner>>);
 
@@ -39,6 +38,21 @@ impl TerminalProcessTree {
             killer: child.clone_killer(),
             closed: false,
         })))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn from_spawned_macos_session(child: &dyn Child) -> Result<Self, TerminalError> {
+        let pid = child
+            .process_id()
+            .and_then(|process_id| i32::try_from(process_id).ok())
+            .map(nix::unistd::Pid::from_raw)
+            .ok_or(TerminalError::SpawnFailed)?;
+        let tree = Self::from_suspended_pid(pid, child);
+        if nix::unistd::getpgid(Some(pid)) != Ok(pid) || nix::unistd::getsid(Some(pid)) != Ok(pid) {
+            let _ = tree.force_close();
+            return Err(TerminalError::SpawnFailed);
+        }
+        Ok(tree)
     }
 
     #[cfg(target_os = "windows")]
@@ -87,7 +101,7 @@ impl TerminalProcessTree {
         tree.killer.kill().map_err(|_| TerminalError::IoFailed)
     }
 
-    /// Freeze and kill the exact signed CLI session retained by the native host.
+    /// Freeze and kill the exact process session retained by the native host.
     pub(crate) fn force_close(&self) -> Result<(), TerminalError> {
         let mut tree = self.0.lock().map_err(|_| TerminalError::Internal)?;
         if tree.closed {
@@ -177,10 +191,10 @@ pub(crate) fn spawn_verified_windows_tui(
         writer,
         child: Box::new(child),
         process_tree,
-        authentication_channel: TuiAuthenticationChannel {
+        authentication_channel: Some(TuiAuthenticationChannel {
             reader: authentication_output,
             writer: authentication_input,
-        },
+        }),
     })
 }
 

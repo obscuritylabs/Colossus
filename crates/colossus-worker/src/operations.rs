@@ -738,6 +738,28 @@ pub enum WorkerOperation {
         /// Inline JSON or a server-local `@path` reference.
         arguments_source: String,
     },
+    /// Begin an interactive MCP OAuth login.
+    McpAuthBegin {
+        /// Exact configured server.
+        server: String,
+    },
+    /// Complete a pending MCP OAuth login.
+    McpAuthComplete {
+        /// Exact configured server.
+        server: String,
+        /// Final loopback redirect URL.
+        callback_url: String,
+    },
+    /// Inspect local MCP OAuth credential status.
+    McpAuthStatus {
+        /// Exact configured server.
+        server: String,
+    },
+    /// Clear local MCP OAuth credentials.
+    McpAuthLogout {
+        /// Exact configured server.
+        server: String,
+    },
     /// List selected declarative skill summaries.
     SkillList,
     /// Read one selected declarative skill.

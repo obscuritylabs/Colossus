@@ -22,6 +22,7 @@ zeroize.workspace = true
 [dev-dependencies]
 colossus-ports.workspace = true
 colossus-testkit.workspace = true
+colossus-tools.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true

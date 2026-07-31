@@ -9,5 +9,10 @@
     "types": ["node"],
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "tests/browser"]
+  "include": [
+    "vite.config.ts",
+    "playwright.config.ts",
+    "build",
+    "tests/browser"
+  ]
 }

@@ -91,6 +91,16 @@ before they cross back into agent policy or dispatch. Unrepresentable names and 
 collisions fail closed before network execution. Diagnostic request bodies intentionally
 show the actual provider aliases because they are wire evidence, not authority records.
 
+Canonical tool schemas likewise remain the local authority. Before network execution,
+provider request validation requires every schema root to declare `type: object`. The
+adapter clones each schema and removes root-level `oneOf`, `anyOf`, `allOf`, `enum`, and
+`const` keywords from the provider copy; the Chat Completions copy also omits
+`maxLength` recursively. Responses marks the projected function as non-strict and Chat
+Completions leaves `strict` unset. These projections only shape model guidance. The tool
+registry validates model arguments against the unchanged canonical schema before policy
+or dispatch, and execution handlers independently recheck security-relevant cross-field
+invariants.
+
 ## Adapter confinement
 
 Filesystem paths are canonicalized against exact roots; read output is bounded and
@@ -121,6 +131,18 @@ semantic memory, native/Windows process proxy, and OCI proxy paths share this ma
 pin DNS results, validate TLS authority, reject ambient proxies and redirects, bound
 connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
+
+Configured stdio MCP remains a process effect. Stateful Streamable HTTP MCP is a network
+effect and uses the same exact-origin/public-wildcard matching, DNS pinning, proxy and
+redirect rejection, CA roots, permit timeouts, and bounded response path. Remote
+declarations contain only literal non-secret headers and environment credential
+references; the permit-bearing adapter resolves those references immediately before the
+request. OAuth authorization is an operator-only PKCE flow and never starts from an agent
+tool call. Tokens are server/endpoint/repository-bound in the platform credential
+namespace or a domain-separated XChaCha20-Poly1305 redb sidecar, and client secrets remain
+behind their configured references. Each discovery page and tool call uses a fresh
+initialized stateful session, disables request and expired-session retries, and treats
+an uncertain tool call as `OutcomeUnknown`.
 
 One explicit bounded PEM CA bundle may augment built-in roots across Colossus-owned
 outbound clients. It is loaded once at runtime startup and never sourced from ambient
@@ -324,22 +346,66 @@ deployment that treats peer same-UID processes as hostile must add OS process is
 or convert every effect adapter to descriptor-relative operations before relying on
 this boundary.
 
-Desktop's dedicated local Tauri window can operate only a native-owned PTY for the
-bundled TUI, using opaque window-bound sessions and fixed native-selected workspace
-context. The TUI connects to the existing worker and retains the ordinary Safety Kernel
-and audit path. The renderer cannot select a process, path, environment, or arguments.
+Desktop's dedicated local Tauri terminal window can operate native-owned PTYs using
+opaque window-bound sessions and a fixed native-selected workspace context. The main
+renderer may request that window and one of the closed terminal kinds, but it cannot
+open or control a PTY. The terminal DTO accepts only `colossus_tui` or `shell`; it
+rejects renderer-selected processes, paths, working directories, environments, and
+arguments.
 
-The macOS MVP rejects a general Shell PTY at the native DTO boundary. macOS has no
-supported race-free descendant job primitive for an ordinary desktop app that can
-guarantee cleanup after arbitrary `setsid`, double-fork, and reparenting behavior;
-`EVFILT_PROC/NOTE_TRACK` has been unsupported since macOS 10.5. Desktop therefore does
-not claim process-tree containment it cannot enforce. The bundled TUI starts suspended
-in its own session, its exact live code identity is verified against the manifest-bound
-CodeDirectory before resume, then independently opens and changes directory through the
-selected workspace descriptor and reports the same birthtime-bound identity. Only
+A completed public Plan Mode run may expose its bounded canonical Plan ID, revision,
+and status to the main renderer. The main renderer can request revision or execution
+only by returning the caller-owned source run ID and exact visible revision in a typed
+public run action; it cannot nominate a Plan ID. Server-side lookup rechecks source-run
+ownership, session identity, released metadata, canonical revision, and Draft status.
+Revision is constrained to Plan Mode; Direct or bounded Goal consumption is constrained
+to Execute mode. These actions remain ordinary durable public runs and cross the same
+interaction, policy, approval, permit, journal, audit, cancellation, and watch paths.
+Authenticated discovery advertises this behavior as `plans.continue` only with both
+run-read and run-execute scopes, and the SDK fails closed when it is absent so older
+protobuf servers cannot silently ignore the typed field.
+
+For the Managed Local advanced handoff, the main renderer may also return the Plan ID
+with the owning public session ID only to the narrow `show_terminal_window` command.
+Native code rejects missing, oversized, control-bearing, or shell-bound pairs. The
+dedicated terminal renderer can then submit only the constructed `/session resume ID`
+and `/plan use ID` selection text after opening the authenticated TUI. The main
+renderer never receives PTY write authority.
+
+The `shell` kind is a deliberately privileged local-user convenience, not an agent
+tool. Enabling local terminals for the first time requires a fixed native operating-
+system confirmation that states this authority. On macOS, native code revalidates the
+persisted object-bound Managed Local workspace, validates the root-owned non-writable
+system `/bin/zsh`, and launches exactly `/bin/zsh -l` with a native-constructed cleared
+environment and that workspace. It receives no worker authentication and its commands,
+input, output, and effects do not pass through the Safety Kernel, remote journal, or
+Colossus audit path. It remains available while the managed runtime is unavailable so
+the operator can inspect or repair the workspace directly. Consent is versioned;
+settings created for the earlier TUI-only feature cannot silently enable shell
+authority.
+
+This is a VS Code-style renderer trust decision: compromise of the dedicated terminal
+document while shell access is enabled can submit commands with the logged-in user's
+authority. The terminal document is therefore a local-only, label-bound protocol with
+its own narrow capability and CSP; remote navigation, automatic URL opening, clipboard
+writes, and general Tauri shell, filesystem, HTTP, and process plugins remain disabled.
+Compromise of the main WebView alone does not grant PTY input authority. Disabling the
+feature, closing a tab, closing the terminal window, or exiting the app kills the
+retained shell process group on a best-effort basis.
+
+macOS has no supported race-free descendant job primitive for an ordinary desktop app
+that can guarantee cleanup after arbitrary `setsid`, double-fork, and reparenting
+behavior; `EVFILT_PROC/NOTE_TRACK` has been unsupported since macOS 10.5. Desktop
+therefore explicitly does not claim containment of deliberately detached shell
+descendants. The bundled TUI has the stronger path: it starts suspended in its own
+session, its exact live code identity is verified against the manifest-bound
+CodeDirectory before resume, then independently opens and changes directory through
+the selected workspace descriptor and reports the same birthtime-bound identity. Only
 after the parent verifies that attestation does it release worker authentication
 through bounded one-use inherited anonymous pipes that are separate from the PTY.
-Closing the window or app freezes and kills that verified CLI session.
+The TUI connects to the existing worker and retains the ordinary Safety Kernel, remote
+journal, and audit path. Closing its tab, window, or app freezes and kills that verified
+CLI session.
 Platforms without equivalent pre-instruction identity binding do not expose the
 managed TUI launcher.
 

@@ -78,6 +78,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             role: "primary".to_owned(),
             mode: options.mode,
             selected_skills: Vec::new(),
+            plan_action: None,
             max_turns: 12,
             idempotency_key: next_idempotency_key("create")?,
         })

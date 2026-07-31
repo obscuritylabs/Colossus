@@ -23,6 +23,7 @@ import type {
   TerminalContext,
   TerminalEvent,
   TerminalKind,
+  TerminalPlanContext,
   OpenTerminalResponse,
   TerminalSignal,
   WatchEvent,
@@ -207,8 +208,20 @@ export function setTerminalEnabled(enabled: boolean): Promise<DesktopStatus> {
   return call("set_terminal_enabled", { enabled });
 }
 
-export function showTerminalWindow(kind: TerminalKind): Promise<void> {
-  return call("show_terminal_window", { request: { kind } });
+export function showTerminalWindow(
+  kind: TerminalKind,
+  planContext?: TerminalPlanContext,
+): Promise<void> {
+  return call("show_terminal_window", {
+    request:
+      planContext === undefined
+        ? { kind }
+        : {
+            kind,
+            sessionId: planContext.sessionId,
+            planId: planContext.planId,
+          },
+  });
 }
 
 export function terminalContext(): Promise<TerminalContext> {

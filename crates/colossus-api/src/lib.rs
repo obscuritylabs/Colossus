@@ -29,7 +29,8 @@ pub use repository::{EventSourcedRunRepository, RunRepository};
 pub use runs::{
     AgentRunApi, ApprovalRisk, CancelRunRequest, ContentPart, CreateRunRequest, CreateRunResponse,
     GetRunRequest, Idempotent, Interaction, InteractionKind, InteractionResponse,
-    InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun, ReleasedArtifactPurpose,
+    InteractionStatus, ListRunsRequest, ListRunsResponse, NewRun, PLAN_CONTINUATION_CAPABILITY,
+    PlanExecutionStrategy, PlanRunAction, PlanStatus, ReleasedArtifactPurpose,
     ReleasedArtifactReference, ReleasedArtifactState, ReleasedContentPart, ReleasedMessageRole,
     ReleasedSessionMessage, RespondInteractionRequest, Run, RunCancellation, RunExecutionRequest,
     RunExecutor, RunFailure, RunMode, RunNotice, RunResult, RunStatus, RunUpdate, RunUpdateKind,

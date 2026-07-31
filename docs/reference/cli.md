@@ -138,7 +138,7 @@ positional:
 | `registry` | `pull URL DESTINATION`, `push PATH URL` |
 | `bundle` | `key-info`, `verify PATH`, `build SOURCE DESTINATION`, `install PATH --prefix PATH` |
 | `integrations` | `list`, `show NAME`, `connect NAME`, `import-openapi NAME SPEC`, `disconnect NAME`, `call TOOL ARGUMENTS` |
-| `mcp` | `servers`, `tools`, `call SERVER TOOL ARGUMENTS` |
+| `mcp` | `servers`, `tools`, `call SERVER TOOL ARGUMENTS`, `auth login SERVER [--manual]`, `auth status SERVER`, `auth logout SERVER` |
 | Top-level execution | `run [PROMPT]`, `echo MESSAGE`, `tui`, `worker` |
 
 ## Important defaults and bounds

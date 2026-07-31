@@ -7,7 +7,7 @@ use crate::server::{
     MAX_CONNECTION_AGE, MAX_GLOBAL_CONCURRENT_REQUESTS, MAX_REQUEST_MESSAGE_BYTES,
     MAX_REQUEST_SETUP_DURATION, MAX_RESPONSE_MESSAGE_BYTES, RESERVED_UNARY_REQUEST_HEADROOM,
 };
-use colossus_api::{CallerContext, scopes};
+use colossus_api::{CallerContext, PLAN_CONTINUATION_CAPABILITY, scopes};
 use colossus_api_proto::v1alpha1::{
     ApiLimit, Capability, DeploymentMode, GetReadinessRequest, GetReadinessResponse,
     GetServerInfoRequest, GetServerInfoResponse, ReadinessCheck, ReadinessStatus, ServerInfo,
@@ -128,6 +128,12 @@ impl SystemService for SystemServiceAdapter {
             name: "agent_runs.delegation".into(),
             enabled: caller.principal().has_scope(scopes::RUNS_EXECUTE)
                 && caller.principal().allows_tool("agent.delegate"),
+            detail: String::new(),
+        }))
+        .chain(std::iter::once(Capability {
+            name: PLAN_CONTINUATION_CAPABILITY.into(),
+            enabled: caller.principal().has_scope(scopes::RUNS_EXECUTE)
+                && caller.principal().has_scope(scopes::RUNS_READ),
             detail: String::new(),
         }))
         .chain(std::iter::once(Capability {
@@ -362,6 +368,12 @@ mod tests {
             response
                 .capabilities
                 .iter()
+                .any(|capability| capability.name == "plans.continue" && !capability.enabled)
+        );
+        assert!(
+            response
+                .capabilities
+                .iter()
                 .any(|capability| capability.name == "agent_runs.create" && !capability.enabled)
         );
         assert!(response.limits.iter().any(|limit| {
@@ -405,6 +417,7 @@ mod tests {
                 GetServerInfoRequest {},
                 [
                     scopes::RUNS_EXECUTE,
+                    scopes::RUNS_READ,
                     scopes::ARTIFACTS_READ,
                     scopes::ARTIFACTS_WRITE,
                 ],
@@ -422,6 +435,7 @@ mod tests {
             .map(|capability| capability.name)
             .collect::<std::collections::BTreeSet<_>>();
         assert!(enabled.contains("agent_runs.delegation"));
+        assert!(enabled.contains("plans.continue"));
         assert!(enabled.contains("artifacts.read"));
         assert!(enabled.contains("artifacts.upload"));
         assert!(enabled.contains("attachments.run_input"));
@@ -437,14 +451,14 @@ mod tests {
             .into_inner()
             .server_info
             .expect("server info");
-        assert!(
-            without_run_scope
-                .capabilities
-                .into_iter()
-                .any(|capability| {
-                    capability.name == "agent_runs.delegation" && !capability.enabled
-                })
-        );
+        let disabled = without_run_scope
+            .capabilities
+            .into_iter()
+            .filter(|capability| !capability.enabled)
+            .map(|capability| capability.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(disabled.contains("agent_runs.delegation"));
+        assert!(disabled.contains(PLAN_CONTINUATION_CAPABILITY));
     }
 
     #[tokio::test]

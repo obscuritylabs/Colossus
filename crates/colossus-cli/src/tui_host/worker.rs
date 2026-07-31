@@ -882,7 +882,30 @@ impl WorkerInteractiveHost {
                     value if value.starts_with("tools ") => WorkerOperation::McpTools {
                         server: Some(value.trim_start_matches("tools ").trim().into()),
                     },
-                    _ => return Err("/mcp expects servers or tools [SERVER]".into()),
+                    value if value.starts_with("auth login ") => WorkerOperation::McpAuthBegin {
+                        server: value.trim_start_matches("auth login ").trim().into(),
+                    },
+                    value if value.starts_with("auth status ") => WorkerOperation::McpAuthStatus {
+                        server: value.trim_start_matches("auth status ").trim().into(),
+                    },
+                    value if value.starts_with("auth logout ") => WorkerOperation::McpAuthLogout {
+                        server: value.trim_start_matches("auth logout ").trim().into(),
+                    },
+                    value if value.starts_with("auth complete ") => {
+                        let mut fields = value
+                            .trim_start_matches("auth complete ")
+                            .splitn(2, ' ');
+                        let server = fields.next().unwrap_or_default();
+                        let callback_url = fields.next().unwrap_or_default();
+                        if server.is_empty() || callback_url.is_empty() {
+                            return Err("/mcp auth complete expects SERVER CALLBACK_URL".into());
+                        }
+                        WorkerOperation::McpAuthComplete {
+                            server: server.into(),
+                            callback_url: callback_url.into(),
+                        }
+                    }
+                    _ => return Err("/mcp expects servers, tools [SERVER], or auth login|complete|status|logout".into()),
                 };
                 self.document(operation, Some("MCP")).await
             }

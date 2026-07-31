@@ -925,6 +925,42 @@ fn registry_cli_and_tui_arguments_preserve_credential_references() {
 }
 
 #[test]
+fn mcp_oauth_cli_supports_browser_manual_status_and_logout_operations() {
+    let browser =
+        Cli::try_parse_from(["colossus", "mcp", "auth", "login", "splunk"]).expect("browser login");
+    assert!(matches!(
+        browser.command,
+        Command::Mcp(McpCommand {
+            command: McpAction::Auth(McpAuthCommand {
+                command: McpAuthAction::Login {
+                    server,
+                    manual: false,
+                },
+            }),
+        }) if server == "splunk"
+    ));
+
+    let manual = Cli::try_parse_from(["colossus", "mcp", "auth", "login", "splunk", "--manual"])
+        .expect("manual login");
+    assert!(matches!(
+        manual.command,
+        Command::Mcp(McpCommand {
+            command: McpAction::Auth(McpAuthCommand {
+                command: McpAuthAction::Login {
+                    server,
+                    manual: true,
+                },
+            }),
+        }) if server == "splunk"
+    ));
+
+    for operation in ["status", "logout"] {
+        Cli::try_parse_from(["colossus", "mcp", "auth", operation, "splunk"])
+            .expect("credential operation");
+    }
+}
+
+#[test]
 fn resume_picker_recognizes_selection_cancellation_commands_and_bad_input() {
     let sessions = vec![
         session_summary("session-one"),

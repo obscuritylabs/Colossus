@@ -5,13 +5,17 @@ import {
   IconCheck,
   IconChevronDown,
   IconCircle,
+  IconEdit,
   IconFile,
   IconInfoCircle,
   IconLoader2,
   IconMessageCircle,
+  IconPlayerPlay,
   IconPlayerStop,
+  IconTargetArrow,
   IconTerminal2,
 } from "@tabler/icons-react";
+import { useState } from "react";
 import type { ReactNode } from "react";
 
 import colossusMark from "../assets/colossus-mark.svg";
@@ -19,6 +23,7 @@ import type { RunView } from "../state";
 import type {
   MessageContentPart,
   RunFailure,
+  PlanStatus,
   RunTerminal,
   RunUpdate,
   SessionMessage,
@@ -27,6 +32,20 @@ import { MarkdownContent } from "./MarkdownContent";
 
 interface RunTimelineProps {
   view: RunView;
+  planContinuationAvailable?: boolean;
+  planWorkflowAvailable?: boolean;
+  onOpenPlanWorkflow?: (sessionId: string, planId: string) => void;
+  onRevisePlan?: (
+    sourceRunId: string,
+    planId: string,
+    revision: number,
+  ) => void;
+  onExecutePlan?: (
+    sourceRunId: string,
+    planId: string,
+    revision: number,
+    strategy: { type: "direct" } | { type: "goal"; maxIterations: number },
+  ) => Promise<void>;
 }
 
 type ToolActivityUpdate = RunUpdate & {
@@ -445,7 +464,250 @@ function TerminalSummary({ terminal }: { terminal: RunTerminal }) {
   return null;
 }
 
-export function RunTimeline({ view }: RunTimelineProps) {
+interface PlanReference {
+  planId: string;
+  revision?: number;
+  status?: PlanStatus;
+  goalId?: string;
+}
+
+function terminalPlanReference(
+  terminal: RunTerminal | null,
+): PlanReference | null {
+  if (terminal?.type === "result") {
+    const planId = terminal.result.planId;
+    return planId === undefined
+      ? null
+      : {
+          planId,
+          ...(terminal.result.planRevision === undefined
+            ? {}
+            : { revision: terminal.result.planRevision }),
+          ...(terminal.result.planStatus === undefined
+            ? {}
+            : { status: terminal.result.planStatus }),
+          ...(terminal.result.goalId === undefined
+            ? {}
+            : { goalId: terminal.result.goalId }),
+        };
+  }
+  if (terminal?.type === "cancellation") {
+    const planId = terminal.cancellation.planId;
+    return planId === undefined
+      ? null
+      : {
+          planId,
+          ...(terminal.cancellation.planRevision === undefined
+            ? {}
+            : { revision: terminal.cancellation.planRevision }),
+          ...(terminal.cancellation.planStatus === undefined
+            ? {}
+            : { status: terminal.cancellation.planStatus }),
+          ...(terminal.cancellation.goalId === undefined
+            ? {}
+            : { goalId: terminal.cancellation.goalId }),
+        };
+  }
+  return null;
+}
+
+function PlanResultCard({
+  sourceRunId,
+  plan,
+  sessionId,
+  cancelled,
+  continuationAvailable,
+  workflowAvailable,
+  onOpenWorkflow,
+  onRevise,
+  onExecute,
+}: {
+  sourceRunId: string;
+  plan: PlanReference;
+  sessionId: string;
+  cancelled: boolean;
+  continuationAvailable: boolean;
+  workflowAvailable: boolean;
+  onOpenWorkflow: ((sessionId: string, planId: string) => void) | undefined;
+  onRevise:
+    | ((sourceRunId: string, planId: string, revision: number) => void)
+    | undefined;
+  onExecute:
+    | ((
+        sourceRunId: string,
+        planId: string,
+        revision: number,
+        strategy: { type: "direct" } | { type: "goal"; maxIterations: number },
+      ) => Promise<void>)
+    | undefined;
+}) {
+  const [goalIterations, setGoalIterations] = useState(5);
+  const [busyAction, setBusyAction] = useState<"direct" | "goal" | null>(null);
+  const actionable =
+    plan.revision !== undefined &&
+    plan.status === "draft" &&
+    continuationAvailable &&
+    onRevise !== undefined &&
+    onExecute !== undefined;
+  const executed = plan.status === "executed";
+
+  async function execute(
+    strategy: { type: "direct" } | { type: "goal"; maxIterations: number },
+  ) {
+    if (plan.revision === undefined || onExecute === undefined) {
+      return;
+    }
+    setBusyAction(strategy.type);
+    try {
+      await onExecute(sourceRunId, plan.planId, plan.revision, strategy);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  return (
+    <article className="feed-entry plan-result-card">
+      <div className="feed-marker" aria-hidden="true">
+        <IconCheck size={17} stroke={2} />
+      </div>
+      <div className="feed-entry-content">
+        <header className="feed-entry-heading">
+          <strong>
+            {executed
+              ? plan.goalId === undefined
+                ? "Plan executed"
+                : "Plan started as a Goal"
+              : cancelled
+                ? "Draft saved before cancellation"
+                : "Plan ready for your decision"}
+          </strong>
+          <span>
+            {plan.revision === undefined
+              ? "Durable Plan"
+              : `Revision ${plan.revision}`}
+          </span>
+        </header>
+        <p>
+          {executed
+            ? plan.goalId === undefined
+              ? "The approved revision was consumed by a policy-bound execution run."
+              : "The approved revision was consumed by bounded Goal Mode."
+            : actionable
+              ? "Revise it in this chat, run it once, or hand it to bounded Goal Mode."
+              : "Open the advanced Plan workflow to inspect or continue this durable Plan."}
+        </p>
+        {actionable ? (
+          <div className="plan-decision-actions">
+            <button
+              className="button secondary compact"
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() =>
+                onRevise?.(sourceRunId, plan.planId, plan.revision ?? 0)
+              }
+            >
+              <IconEdit size={15} stroke={1.8} aria-hidden="true" />
+              Revise in chat
+            </button>
+            <button
+              className="button primary compact"
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() => void execute({ type: "direct" })}
+            >
+              {busyAction === "direct" ? (
+                <span className="spinner" aria-hidden="true" />
+              ) : (
+                <IconPlayerPlay size={15} stroke={1.8} aria-hidden="true" />
+              )}
+              Run once
+            </button>
+            <div className="plan-goal-action">
+              <label>
+                <span className="sr-only">Goal iteration budget</span>
+                <select
+                  aria-label="Goal iteration budget"
+                  value={goalIterations}
+                  disabled={busyAction !== null}
+                  onChange={(event) =>
+                    setGoalIterations(Number(event.target.value))
+                  }
+                >
+                  <option value={3}>3 iterations</option>
+                  <option value={5}>5 iterations</option>
+                  <option value={10}>10 iterations</option>
+                  <option value={20}>20 iterations</option>
+                </select>
+              </label>
+              <button
+                className="button secondary compact"
+                type="button"
+                disabled={busyAction !== null}
+                onClick={() =>
+                  void execute({
+                    type: "goal",
+                    maxIterations: goalIterations,
+                  })
+                }
+              >
+                {busyAction === "goal" ? (
+                  <span className="spinner" aria-hidden="true" />
+                ) : (
+                  <IconTargetArrow size={15} stroke={1.8} aria-hidden="true" />
+                )}
+                Run as Goal
+              </button>
+            </div>
+          </div>
+        ) : null}
+        <div className="plan-workflow-handoff">
+          <details>
+            <summary>Plan details</summary>
+            <dl className="plan-workflow-identifiers">
+              <div>
+                <dt>Session</dt>
+                <dd>{sessionId}</dd>
+              </div>
+              <div>
+                <dt>Plan</dt>
+                <dd>{plan.planId}</dd>
+              </div>
+              {plan.goalId === undefined ? null : (
+                <div>
+                  <dt>Goal</dt>
+                  <dd>{plan.goalId}</dd>
+                </div>
+              )}
+            </dl>
+          </details>
+          <button
+            className="button tertiary compact"
+            type="button"
+            disabled={!workflowAvailable}
+            title={
+              workflowAvailable
+                ? "Open the authenticated Colossus TUI"
+                : "Enable the local Colossus TUI in Settings to continue this plan"
+            }
+            onClick={() => onOpenWorkflow?.(sessionId, plan.planId)}
+          >
+            <IconTerminal2 size={15} stroke={1.8} aria-hidden="true" />
+            Advanced workflow
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export function RunTimeline({
+  view,
+  planContinuationAvailable = false,
+  planWorkflowAvailable = false,
+  onOpenPlanWorkflow,
+  onRevisePlan,
+  onExecutePlan,
+}: RunTimelineProps) {
   const hasTerminalFeedItem = view.updates.some(
     ({ update }) => update.type === "failure" || update.type === "cancellation",
   );
@@ -463,6 +725,7 @@ export function RunTimeline({ view }: RunTimelineProps) {
     (view.run.status === "failed" ||
       view.run.status === "outcome_unknown" ||
       view.run.terminal?.type === "failure");
+  const plan = terminalPlanReference(view.run.terminal);
 
   return (
     <div className="timeline">
@@ -529,6 +792,19 @@ export function RunTimeline({ view }: RunTimelineProps) {
       ) : null}
       {!hasTerminalFeedItem && view.run.terminal !== null ? (
         <TerminalSummary terminal={view.run.terminal} />
+      ) : null}
+      {plan !== null ? (
+        <PlanResultCard
+          sourceRunId={view.run.runId}
+          plan={plan}
+          sessionId={view.run.sessionId}
+          cancelled={view.run.terminal?.type === "cancellation"}
+          continuationAvailable={planContinuationAvailable}
+          workflowAvailable={planWorkflowAvailable}
+          onOpenWorkflow={onOpenPlanWorkflow}
+          onRevise={onRevisePlan}
+          onExecute={onExecutePlan}
+        />
       ) : null}
       {view.usage !== null ? (
         <p className="usage-summary">

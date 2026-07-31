@@ -332,6 +332,7 @@ mod tests {
             role: Some("assistant".into()),
             mode: RunMode::Execute,
             skill_ids: Vec::new(),
+            plan_action: None,
             max_turns: 1,
             idempotency_key: IdempotencyKey::new("create-key").expect("key"),
         };
@@ -469,6 +470,7 @@ mod tests {
             role: Some("assistant".into()),
             mode: RunMode::Execute,
             skill_ids: Vec::new(),
+            plan_action: None,
             max_turns: 1,
             idempotency_key: IdempotencyKey::new("outcome-unknown-create-key").expect("key"),
         };

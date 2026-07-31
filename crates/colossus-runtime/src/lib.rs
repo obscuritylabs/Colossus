@@ -44,9 +44,10 @@ use colossus_journal_redb::{
     RedbWriterLease, platform_secret,
 };
 use colossus_mcp::{
-    MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor, McpOperation,
-    McpServerConfig, McpServerSummary, McpToolSummary, McpToolsPage,
-    validate_config as validate_mcp_config, validate_tool_arguments,
+    MAX_MCP_PAGES, MAX_MCP_TOOLS, McpCallOutput, McpConfig, McpError, McpExecutor,
+    McpOAuthCredentialStoreKind, McpOAuthLogin, McpOAuthStatus, McpOperation, McpServerConfig,
+    McpServerSummary, McpToolSummary, McpToolsPage, validate_config as validate_mcp_config,
+    validate_tool_arguments,
 };
 use colossus_memory::{
     EventSourcedMemoryRepository, MemoryIndexRegistration, MemoryService, TantivyMemoryIndex,

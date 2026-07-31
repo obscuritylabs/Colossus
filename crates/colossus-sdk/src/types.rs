@@ -37,6 +37,52 @@ pub enum RunMode {
     Plan,
 }
 
+/// Released canonical Plan lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlanStatus {
+    /// The exact revision remains editable.
+    Draft,
+    /// The exact revision was approved.
+    Approved,
+    /// The approved revision was consumed.
+    Executed,
+    /// The revision was closed without execution.
+    Discarded,
+}
+
+/// Requested handoff for one exact Plan revision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlanExecutionStrategy {
+    /// Consume the Plan in one normal run.
+    Direct,
+    /// Consume the Plan into bounded Goal Mode.
+    Goal {
+        /// Maximum autonomous Goal iterations.
+        max_iterations: u16,
+    },
+}
+
+/// Typed continuation of a Plan released by a caller-owned source run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlanRunAction {
+    /// Refine one exact draft revision in Plan Mode.
+    Revise {
+        /// Caller-owned run that released the Plan reference.
+        source_run_id: String,
+        /// Exact visible Plan revision.
+        expected_revision: u64,
+    },
+    /// Approve and consume one exact draft revision.
+    Execute {
+        /// Caller-owned run that released the Plan reference.
+        source_run_id: String,
+        /// Exact visible Plan revision.
+        expected_revision: u64,
+        /// Direct or bounded Goal execution.
+        strategy: PlanExecutionStrategy,
+    },
+}
+
 /// Durable public run lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunStatus {
@@ -93,6 +139,8 @@ pub struct CreateRunRequest {
     pub mode: RunMode,
     /// Declarative skill identities; these do not grant capabilities.
     pub selected_skills: Vec<String>,
+    /// Exact Plan continuation anchored to a caller-owned source run.
+    pub plan_action: Option<PlanRunAction>,
     /// Model-turn ceiling; zero selects the configured default.
     pub max_turns: u32,
     /// Required caller-scoped idempotency key.
@@ -106,6 +154,12 @@ pub struct RunResult {
     pub output: String,
     /// Canonical plan written by a completed Plan Mode run.
     pub plan_id: Option<String>,
+    /// Exact canonical Plan revision paired with `plan_id`.
+    pub plan_revision: Option<u64>,
+    /// Released lifecycle paired with `plan_id`.
+    pub plan_status: Option<PlanStatus>,
+    /// Durable Goal created by a Plan handoff.
+    pub goal_id: Option<String>,
     /// Deprecated compatibility alias populated with the model profile.
     pub profile: String,
     /// Credential-free model profile.
@@ -144,6 +198,12 @@ pub struct RunCancellation {
     pub message: String,
     /// Canonical plan written before a cancelled Plan Mode run stopped.
     pub plan_id: Option<String>,
+    /// Exact canonical Plan revision paired with `plan_id`.
+    pub plan_revision: Option<u64>,
+    /// Released lifecycle paired with `plan_id`.
+    pub plan_status: Option<PlanStatus>,
+    /// Durable Goal created by a Plan handoff.
+    pub goal_id: Option<String>,
 }
 
 /// Exactly one terminal run payload.

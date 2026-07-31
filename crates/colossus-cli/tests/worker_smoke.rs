@@ -134,6 +134,21 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStat
     );
 }
 
+fn worker_exit_diagnostics(worker: &mut ChildGuard) -> String {
+    let Some(status) = worker.0.try_wait().expect("worker status") else {
+        return "worker process remained alive".into();
+    };
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut pipe) = worker.0.stdout.take() {
+        pipe.read_to_string(&mut stdout).expect("worker stdout");
+    }
+    if let Some(mut pipe) = worker.0.stderr.take() {
+        pipe.read_to_string(&mut stderr).expect("worker stderr");
+    }
+    format!("worker exited with {status}; stdout: {stdout}; stderr: {stderr}")
+}
+
 #[test]
 fn worker_owns_lease_routes_streams_rejects_wrong_key_and_shuts_down_cleanly() {
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
@@ -455,11 +470,13 @@ sandbox:
             "1",
         ],
     );
-    assert!(
-        goal.status.success(),
-        "{}",
-        String::from_utf8_lossy(&goal.stderr)
-    );
+    if !goal.status.success() {
+        panic!(
+            "goal command failed: {}; {}",
+            String::from_utf8_lossy(&goal.stderr),
+            worker_exit_diagnostics(&mut worker),
+        );
+    }
     let goal: Value = serde_json::from_slice(&goal.stdout).expect("goal JSON");
     assert_eq!(goal["goal"]["iteration_budget"], 1);
     let work = run(binary, &config, &["work", "--session", session_id]);

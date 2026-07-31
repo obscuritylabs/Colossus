@@ -6,8 +6,9 @@ use colossus_api::{
     Interaction as CoreInteraction, InteractionKind as CoreInteractionKind,
     InteractionResponse as CoreInteractionResponse, InteractionStatus as CoreInteractionStatus,
     ListRunsRequest as CoreListRunsRequest, OutcomeCertainty as CoreOutcomeCertainty,
-    RespondInteractionRequest as CoreRespondInteractionRequest, Run as CoreRun,
-    RunMode as CoreRunMode, RunStatus as CoreRunStatus, RunUpdate as CoreRunUpdate,
+    PlanExecutionStrategy as CorePlanExecutionStrategy, PlanRunAction as CorePlanRunAction,
+    PlanStatus as CorePlanStatus, RespondInteractionRequest as CoreRespondInteractionRequest,
+    Run as CoreRun, RunMode as CoreRunMode, RunStatus as CoreRunStatus, RunUpdate as CoreRunUpdate,
     RunUpdateKind as CoreRunUpdateKind, ToolActivityState as CoreToolActivityState,
     WatchRunRequest as CoreWatchRunRequest, validate_public_approval_display,
 };
@@ -15,12 +16,12 @@ use colossus_api_proto::v1alpha1::{
     ApprovalInteraction, ApprovalRisk, CancelRunRequest, CancelRunResponse, CreateRunRequest,
     CreateRunResponse, GetRunRequest, GetRunResponse, Interaction, InteractionKind,
     InteractionStatus, ListRunsRequest, ListRunsResponse, OutcomeCertainty, PageResponse,
-    PromptChoice, ReasoningSummary, RespondInteractionRequest, RespondInteractionResponse, Run,
-    RunCancellation, RunFailed, RunFailure, RunMode, RunNotice, RunResult, RunStateChanged,
-    RunStatus, RunUpdate, TokenUsage, ToolActivity, ToolActivityState, UserPromptInteraction,
-    VisibleOutputDelta, WatchRunRequest, WatchRunResponse,
-    agent_run_service_server::AgentRunService, content_part, interaction, prompt_answer,
-    respond_interaction_request, run, run_update,
+    PlanExecutionStrategy, PlanStatus, PromptChoice, ReasoningSummary, RespondInteractionRequest,
+    RespondInteractionResponse, Run, RunCancellation, RunFailed, RunFailure, RunMode, RunNotice,
+    RunResult, RunStateChanged, RunStatus, RunUpdate, TokenUsage, ToolActivity, ToolActivityState,
+    UserPromptInteraction, VisibleOutputDelta, WatchRunRequest, WatchRunResponse,
+    agent_run_service_server::AgentRunService, content_part, interaction, plan_run_action,
+    prompt_answer, respond_interaction_request, run, run_update,
 };
 use prost_types::Timestamp;
 use std::{
@@ -341,12 +342,60 @@ fn create_request(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let idempotency_key = idempotency_key(caller, request.idempotency_key)?;
+    let plan_action = request
+        .plan_action
+        .map(|action| {
+            validate_identifier(caller, "plan_action.source_run_id", &action.source_run_id)?;
+            let action_kind = action.action.ok_or_else(|| {
+                invalid(
+                    caller,
+                    "plan_action.action",
+                    "Plan action must select revise or execute",
+                )
+            })?;
+            match action_kind {
+                plan_run_action::Action::Revise(_) => Ok(CorePlanRunAction::Revise {
+                    source_run_id: action.source_run_id,
+                    expected_revision: action.expected_revision,
+                }),
+                plan_run_action::Action::Execute(execute) => {
+                    let strategy = match PlanExecutionStrategy::try_from(execute.strategy) {
+                        Ok(PlanExecutionStrategy::Direct) => CorePlanExecutionStrategy::Direct,
+                        Ok(PlanExecutionStrategy::Goal) => CorePlanExecutionStrategy::Goal {
+                            max_iterations: u16::try_from(execute.max_goal_iterations).map_err(
+                                |_| {
+                                    invalid(
+                                        caller,
+                                        "plan_action.execute.max_goal_iterations",
+                                        "Goal iterations must be in 1..=50",
+                                    )
+                                },
+                            )?,
+                        },
+                        Ok(PlanExecutionStrategy::Unspecified) | Err(_) => {
+                            return Err(invalid(
+                                caller,
+                                "plan_action.execute.strategy",
+                                "Plan execution strategy must be direct or Goal",
+                            ));
+                        }
+                    };
+                    Ok(CorePlanRunAction::Execute {
+                        source_run_id: action.source_run_id,
+                        expected_revision: action.expected_revision,
+                        strategy,
+                    })
+                }
+            }
+        })
+        .transpose()?;
     let request = CoreCreateRunRequest {
         input,
         session_id: request.session_id,
         role: (!request.role.is_empty()).then_some(request.role),
         mode,
         skill_ids: request.selected_skills,
+        plan_action,
         max_turns: request.max_turns,
         idempotency_key,
     };
@@ -506,6 +555,11 @@ fn proto_result(value: colossus_api::RunResult) -> RunResult {
     RunResult {
         output: value.output,
         plan_id: value.plan_id,
+        plan_revision: value.plan_revision,
+        plan_status: value
+            .plan_status
+            .map_or(PlanStatus::Unspecified, proto_plan_status) as i32,
+        goal_id: value.goal_id,
         profile: value.profile,
         model: value.model,
         elapsed_seconds: value.elapsed_seconds,
@@ -519,6 +573,20 @@ fn proto_cancellation(value: colossus_api::RunCancellation) -> RunCancellation {
         turn: value.turn,
         message: value.message,
         plan_id: value.plan_id,
+        plan_revision: value.plan_revision,
+        plan_status: value
+            .plan_status
+            .map_or(PlanStatus::Unspecified, proto_plan_status) as i32,
+        goal_id: value.goal_id,
+    }
+}
+
+fn proto_plan_status(value: CorePlanStatus) -> PlanStatus {
+    match value {
+        CorePlanStatus::Draft => PlanStatus::Draft,
+        CorePlanStatus::Approved => PlanStatus::Approved,
+        CorePlanStatus::Executed => PlanStatus::Executed,
+        CorePlanStatus::Discarded => PlanStatus::Discarded,
     }
 }
 
@@ -1003,6 +1071,7 @@ mod tests {
                     role: String::new(),
                     mode,
                     selected_skills: Vec::new(),
+                    plan_action: None,
                     max_turns: 0,
                     idempotency_key: "key-1".into(),
                 },
@@ -1024,6 +1093,7 @@ mod tests {
                 role: "assistant".into(),
                 mode: RunMode::Execute as i32,
                 selected_skills: Vec::new(),
+                plan_action: None,
                 max_turns: 1,
                 idempotency_key: "bounded-input".into(),
             },
@@ -1171,6 +1241,9 @@ mod tests {
         let result = proto_result(colossus_api::RunResult {
             output: "Plan saved".into(),
             plan_id: Some("plan-1".into()),
+            plan_revision: Some(3),
+            plan_status: Some(CorePlanStatus::Draft),
+            goal_id: None,
             profile: "default".into(),
             model_profile: "default".into(),
             provider_profile: "provider".into(),
@@ -1187,6 +1260,9 @@ mod tests {
             turn: 2,
             message: "cancelled after persistence".into(),
             plan_id: Some("plan-1".into()),
+            plan_revision: Some(2),
+            plan_status: Some(CorePlanStatus::Draft),
+            goal_id: None,
         });
 
         assert_eq!(cancellation.plan_id.as_deref(), Some("plan-1"));

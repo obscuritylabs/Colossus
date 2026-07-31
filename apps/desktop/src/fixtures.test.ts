@@ -65,6 +65,20 @@ describe("buildOperationsStudioFixture", () => {
     expect(artifacts.every(({ state }) => state === "available")).toBe(true);
   });
 
+  it("can render a deterministic user-question state", () => {
+    const fixture = buildOperationsStudioFixture("user_prompt");
+    const selected = fixture.views.get(fixture.activeRunId ?? "");
+    const interaction = selected?.pendingInteractions[0];
+
+    expect(interaction).toMatchObject({
+      kind: "user_prompt",
+      status: "pending",
+      respondableByCaller: true,
+    });
+    expect(interaction?.content.type).toBe("user_prompt");
+    expect(selected?.run.pendingInteractionCount).toBe(1);
+  });
+
   it("returns bounded fresh collections", () => {
     const first = buildOperationsStudioFixture();
     const second = buildOperationsStudioFixture();

@@ -61,9 +61,11 @@ function desktop(overrides: Partial<DesktopStatus> = {}): DesktopStatus {
     capabilities: {
       delegation: false,
       skills: false,
-      tui: true,
+      tui: false,
+      shellTerminal: false,
       files: false,
       artifacts: true,
+      planContinuation: false,
       updateAvailable: false,
       agentWorkflows: false,
       attachments: false,
@@ -115,10 +117,6 @@ function openingButtonTag(markup: string, label: string): string {
   return markup.slice(buttonIndex, markup.indexOf(">", buttonIndex) + 1);
 }
 
-function checkboxTag(markup: string): string {
-  return markup.match(/<input[^>]*type="checkbox"[^>]*>/)?.[0] ?? "";
-}
-
 describe("OperationsSurface runtime targets", () => {
   it("shows and marks the selected external target in fleet view", () => {
     const markup = renderSurface("fleet");
@@ -142,8 +140,10 @@ describe("OperationsSurface runtime targets", () => {
           delegation: true,
           skills: false,
           tui: false,
+          shellTerminal: false,
           files: false,
           artifacts: false,
+          planContinuation: false,
           updateAvailable: false,
           agentWorkflows: false,
           attachments: false,
@@ -272,13 +272,9 @@ describe("OperationsSurface runtime targets", () => {
       desktop({ terminalEnabled: true }),
     );
 
-    expect(checkboxTag(markup)).toContain("checked");
-    expect(checkboxTag(markup)).toContain("disabled");
-    expect(markup).toContain(
-      "The local TUI is unavailable for an external target.",
-    );
-    expect(markup).not.toContain("Open shell");
-    expect(openingButtonTag(markup, "Open Colossus TUI")).toContain("disabled");
+    expect(markup).not.toContain("Local terminal");
+    expect(markup).not.toContain("Open Shell");
+    expect(markup).not.toContain("Open Colossus TUI");
   });
 
   it("allows local TUI launch only for a terminal-capable selected target", () => {
@@ -294,11 +290,16 @@ describe("OperationsSurface runtime targets", () => {
         { ...externalTarget, selected: false },
       ],
       terminalEnabled: true,
+      capabilities: {
+        ...desktop().capabilities,
+        tui: true,
+        shellTerminal: true,
+      },
     });
     const markup = renderSurface("settings", enabled);
 
     expect(markup).toContain('type="checkbox" checked=""');
-    expect(markup).not.toContain("Open shell");
+    expect(openingButtonTag(markup, "Open Shell")).not.toContain("disabled");
     expect(openingButtonTag(markup, "Open Colossus TUI")).not.toContain(
       "disabled",
     );
@@ -320,10 +321,15 @@ describe("OperationsSurface runtime targets", () => {
         },
         { ...externalTarget, selected: false },
       ],
+      capabilities: {
+        ...desktop().capabilities,
+        shellTerminal: true,
+      },
     });
     const restartingMarkup = renderSurface("settings", restarting);
-    expect(openingButtonTag(restartingMarkup, "Open Colossus TUI")).toContain(
+    expect(openingButtonTag(restartingMarkup, "Open Shell")).not.toContain(
       "disabled",
     );
+    expect(restartingMarkup).not.toContain("Open Colossus TUI");
   });
 });

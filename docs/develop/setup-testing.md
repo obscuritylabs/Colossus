@@ -52,6 +52,16 @@ toolchain under `sdk/`.
     cargo test -p colossus-cli --test config_security
     ```
 
+    Maintainers with a dedicated Splunk test endpoint can also run the ignored native
+    Streamable HTTP smoke test:
+
+    ```bash
+    COLOSSUS_LIVE_SPLUNK_MCP_URL=https://splunk.example.test/services/mcp \
+    SPLUNK_MCP_TOKEN=... \
+      cargo test -p colossus-mcp --features live-splunk \
+        live_splunk_streamable_http_discovery -- --ignored
+    ```
+
 3. Run the fast development tier. It checks the diff, formatting, crate roots, and all
    workspace library tests:
 

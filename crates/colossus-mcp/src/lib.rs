@@ -6,6 +6,7 @@ use colossus_contracts::{
     Actor, CredentialReference, EffectRequest, ExecutionContext, FilesystemGrant,
     QuarantinedEffectResult,
 };
+use colossus_network::AdditionalRootCertificates;
 use colossus_policy::{EffectExecutor, ExecutionError, ExecutionPermit, effect_request};
 use colossus_sandbox::ProcessSpec;
 use rmcp::model::{
@@ -28,7 +29,10 @@ mod executor;
 use executor::resolve_path;
 pub use executor::*;
 #[cfg(test)]
-use executor::{protocol_input, redact_value};
+use executor::{
+    RemoteOperationResult, execute_remote_operation, parse_tools_result, protocol_input,
+    redact_value, remote_timeout_error, tools_page_contains_secret,
+};
 
 mod config;
 pub use config::*;
@@ -36,6 +40,19 @@ use config::{
     INITIALIZE_REQUEST_ID, MAX_PROTOCOL_LINE_BYTES, MCP_REQUEST_ID, McpEffectInput,
     environment_reference, validate_name,
 };
+
+mod http_client;
+use http_client::HardenedStreamableHttpClient;
+#[cfg(test)]
+use http_client::content_type_matches;
+
+mod oauth_store;
+use oauth_store::OAuthStoreFactory;
+#[cfg(test)]
+use oauth_store::{OAUTH_RECORDS, OAuthCredentialStore};
+
+mod oauth_http;
+use oauth_http::HardenedOAuthHttpClient;
 
 #[cfg(test)]
 mod tests;
