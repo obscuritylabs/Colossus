@@ -1188,10 +1188,19 @@ fn ensure_private_directory(path: &Path) -> Result<(), CommandErrorDto> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
             .map_err(|_| storage_error())?;
     }
-    let canonical = fs::canonicalize(path).map_err(|_| storage_error())?;
     let metadata = fs::symlink_metadata(path).map_err(|_| storage_error())?;
-    if canonical != path || !metadata.file_type().is_dir() {
+    if !metadata.file_type().is_dir() {
         return Err(storage_error());
+    }
+    // Windows canonicalization normally rewrites `C:\...` as the equivalent
+    // verbatim `\\?\C:\...` spelling. The native binding below supplies the
+    // stronger object, ancestor, reparse-point, and identity checks on that platform.
+    #[cfg(not(windows))]
+    {
+        let canonical = fs::canonicalize(path).map_err(|_| storage_error())?;
+        if canonical != path {
+            return Err(storage_error());
+        }
     }
     #[cfg(unix)]
     if metadata.uid() != rustix::process::getuid().as_raw() || metadata.mode() & 0o077 != 0 {
@@ -1311,6 +1320,25 @@ mod tests {
         let canonical_root = fs::canonicalize(&root).expect("canonical store root");
         assert_eq!(canonical_root, root);
         (parent, canonical_root, store)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn settings_store_accepts_standard_windows_path_spelling() {
+        let parent = tempfile::tempdir().expect("store parent");
+        let canonical_parent = fs::canonicalize(parent.path()).expect("canonical store parent");
+        assert_ne!(
+            canonical_parent,
+            parent.path(),
+            "the fixture must exercise Windows' ordinary versus verbatim path spellings"
+        );
+        let root = parent.path().join("store");
+
+        let store = SettingsStore::open(root).expect("open standard Windows storage path");
+        let settings = DesktopSettings::default();
+        store.save(&settings).expect("save settings");
+
+        assert_eq!(store.load().expect("load settings"), settings);
     }
 
     fn test_public_api_dir(suffix: &str) -> PathBuf {
